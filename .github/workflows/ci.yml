@@ -1,0 +1,59 @@
+name: CI
+
+# Every branch and every PR, not just main. A stacked release chain has PR N
+# targeting PR N-1's branch, and a `branches: [main]` filter runs no CI at all
+# on those — the whole stack would merge unverified.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck, lint, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned rather than `latest`: package.json engines requires >=1.4.0 and
+          # an unpinned runtime turns an upstream Bun release into a red build on
+          # an unrelated PR.
+          bun-version: 1.4.0
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck (root)
+        run: bun x tsc --noEmit
+
+      - name: Typecheck (app)
+        working-directory: app
+        run: bun x tsc --noEmit
+
+      - name: Lint
+        run: bun x eslint .
+
+      - name: Test
+        run: bun test tests/
+
+      - name: Check embedded migrations are current
+        run: bun scripts/embed-migrations.ts --check
+
+      - name: Build UI
+        working-directory: app
+        run: bun x vite build
+
+# The Playwright suite under app/ is intentionally not wired here yet. It has
+# only ever been run locally against a seeded daemon, so adding it now would
+# publish a job whose green has never been demonstrated. Wire it once it has
+# passed headless in this environment.

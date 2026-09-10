@@ -1,0 +1,13 @@
+# Bun refuses to install package versions younger than 3 days (259200 s).
+# Blocks the typical "publish-and-yank" supply-chain attack pattern, since
+# malicious releases are usually detected and removed within hours. See
+# https://bun.com/docs/pm/cli/install#minimum-release-age.
+#
+# CI installs from the lockfile; the cooldown applies during dependency
+# resolution and protects local dependency updates.
+[install]
+minimumReleaseAge = 259200
+# These transitive packages carry security fixes newer than the cooldown.
+# Keep this list narrow and remove entries after the versions in bun.lock age
+# past the default window.
+minimumReleaseAgeExcludes = ["hono", "mermaid"]
