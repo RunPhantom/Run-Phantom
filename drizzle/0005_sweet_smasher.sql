@@ -1,0 +1,1 @@
+ALTER TABLE `verification_reports` ADD `context` text;
