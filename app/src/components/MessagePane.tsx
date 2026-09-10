@@ -1,0 +1,2200 @@
+import { AlertTriangle, ArrowRight, Brain, Check, ChevronDown, ChevronLeft, Copy, ExternalLink, Folder as FolderIcon, Home, KeyRound, Loader2, Plus, Send, Terminal, Wrench, X } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type SyntheticEvent } from "react";
+import { useIsCompactWorkspace } from "../hooks/use-mobile";
+import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
+import { useDialogFocus } from "../hooks/use-dialog-focus";
+import { useRunPhantomEvent } from "../hooks/use-runphantom-ws";
+import { router } from "../router";
+import { runPath } from "../utils/navigation";
+import { isAgentProvider, providerLabel, type AgentProviderId } from "../utils/agent-provider";
+import { buildSlashItems, type SlashItem } from "./slash-items";
+import { ConnectionIndicator } from "./ConnectionIndicator";
+import { Markdown } from "./Markdown";
+import { RunPhantomMark } from "./RunPhantomMark";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+
+type Role = "user" | "assistant";
+
+interface ClaudeChatMessage {
+  id: string;
+  role: Role;
+  content: string;
+  blocks?: ClaudeChatMessageBlock[];
+  timestamp: string | null;
+  error?: string;
+}
+
+type ClaudeChatMessageBlock =
+  | { type: "text"; text: string }
+  | { type: "tool"; id: string; name: string; input_preview?: string; output_preview?: string; ok?: boolean }
+  | { type: "thinking"; text: string };
+
+interface ClaudeSessionSummary {
+  id: string;
+  created_at: string | null;
+  updated_at: string | null;
+  message_count: number;
+  last_prompt: string | null;
+  preview: string | null;
+  cwd?: string;
+}
+
+interface ClaudeSessionDetail extends ClaudeSessionSummary {
+  messages: ClaudeChatMessage[];
+}
+
+type AssistantMessageBlock =
+  | { type: "text"; text: string }
+  | { type: "tool"; id: string; name: string; input_preview?: string; output_preview?: string; ok?: boolean; state: "running" | "done" }
+  | { type: "thinking"; text: string }
+  | { type: "error"; text: string };
+
+interface ClaudeAskUserQuestion {
+  id: string;
+  session_id: string;
+  tool_use_id: string;
+  questions: ClaudeAskQuestion[];
+  created_at: string;
+}
+
+interface ClaudeAskQuestion {
+  question: string;
+  header?: string;
+  multiSelect: boolean;
+  options: Array<{ label: string; description?: string }>;
+}
+
+interface ClaudeMessageStream {
+  client_message_id?: string;
+  session_id?: string | null;
+  event?: AgentStreamEvent;
+}
+
+type AgentStreamEvent =
+  | { type: "text"; content: string }
+  | ({ type: "loadout" } & AgentLoadout)
+  | { type: "error"; content: string }
+  | { type: "tool_start"; id: string; name: string; input_preview?: string }
+  | { type: "tool_finish"; id: string; ok: boolean; output_preview?: string }
+  | { type: "thinking_delta"; content: string }
+  | { type: "subagent_start"; parent_id: string; subagent: string }
+  | { type: "provider_session"; sessionId: string }
+  | { type: "done" };
+
+interface AgentLoadout {
+  tools?: string[];
+  mcps?: string[];
+  skills?: string[];
+  plugins?: string[];
+  slash_commands?: string[];
+  model?: string;
+}
+
+interface DirectoryEntry {
+  name: string;
+  path: string;
+}
+
+interface DirectoryListing {
+  path: string;
+  parent: string | null;
+  home: string;
+  entries: DirectoryEntry[];
+}
+
+const COLLAPSED_KEY = "runphantom:messagePane:collapsed";
+const WIDTH_KEY = "runphantom:messagePane:width";
+const PROVIDER_INTRO_SEEN_KEY = "runphantom:messagePane:providerIntroSeen";
+const MIN_WIDTH = 360;
+const MAX_WIDTH = 760;
+const DEFAULT_WIDTH = 460;
+const COLLAPSE_PREVIEW_WIDTH = MIN_WIDTH - 24;
+const COLLAPSE_COMMIT_WIDTH = MIN_WIDTH - 78;
+const COLLAPSE_HOLD_MS = 220;
+const COLLAPSE_EXIT_MS = 160;
+
+function loadCollapsed(): boolean {
+  try {
+    const stored = localStorage.getItem(COLLAPSED_KEY);
+    return stored === null ? true : stored === "1";
+  } catch { return true; }
+}
+function saveCollapsed(v: boolean): void {
+  try { localStorage.setItem(COLLAPSED_KEY, v ? "1" : "0"); } catch {}
+}
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+function maxPaneWidth(): number {
+  return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, window.innerWidth - 320));
+}
+function fitWidth(width: number): number {
+  return clamp(width, MIN_WIDTH, maxPaneWidth());
+}
+function loadWidth(): number {
+  try {
+    return fitWidth(Number(localStorage.getItem(WIDTH_KEY)) || DEFAULT_WIDTH);
+  } catch {
+    return fitWidth(DEFAULT_WIDTH);
+  }
+}
+function saveWidth(width: number): void {
+  try { localStorage.setItem(WIDTH_KEY, String(width)); } catch {}
+}
+function loadProviderIntroSeen(): boolean {
+  try { return localStorage.getItem(PROVIDER_INTRO_SEEN_KEY) === "1"; } catch { return false; }
+}
+function saveProviderIntroSeen(): void {
+  try { localStorage.setItem(PROVIDER_INTRO_SEEN_KEY, "1"); } catch {}
+}
+interface MessagePaneProps {
+  /** If set, messages sent from the pane will carry this run_id. */
+  activeRunId?: string | null;
+}
+
+export function MessagePane({ activeRunId }: MessagePaneProps) {
+  const isOverlay = useIsCompactWorkspace();
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const [collapsed, setCollapsedState] = useState<boolean>(loadCollapsed);
+  const [width, setWidth] = useState<number>(loadWidth);
+  const [sessions, setSessions] = useState<ClaudeSessionSummary[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<ClaudeSessionDetail | null>(null);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [showList, setShowList] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [pendingQuestions, setPendingQuestions] = useState<ClaudeAskUserQuestion[]>([]);
+  const [liveBlocks, setLiveBlocks] = useState<AssistantMessageBlock[]>([]);
+  const [loadout, setLoadout] = useState<AgentLoadout | null>(null);
+  const [provider, setProvider] = useState<AgentProviderId>("claude");
+  const [switchingProvider, setSwitchingProvider] = useState(false);
+  const [showProviderIntro, setShowProviderIntro] = useState(() => !loadProviderIntroSeen());
+  const [terminalCommandCopied, setTerminalCommandCopied] = useState(false);
+  const [terminalCommand, setTerminalCommand] = useState("");
+  const [workspaceCwd, setWorkspaceCwd] = useState<string | null>(null);
+  const [conversationCwd, setConversationCwd] = useState<string | null>(null);
+  const [showDirectoryPicker, setShowDirectoryPicker] = useState(false);
+  const [showSlash, setShowSlash] = useState(false);
+  const [activeSlashIndex, setActiveSlashIndex] = useState(0);
+  const [collapsePreview, setCollapsePreview] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const paneRef = useRef<HTMLElement>(null);
+  const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const resizeRef = useRef<{ x: number; width: number; shouldCollapse: boolean } | null>(null);
+  const activeClientMessageIdRef = useRef<string | null>(null);
+  const liveBlocksRef = useRef<AssistantMessageBlock[]>([]);
+  const terminalCopyResetRef = useRef<number | null>(null);
+  const collapseHoldTimerRef = useRef<number | null>(null);
+  const closeTimerRef = useRef<number | null>(null);
+  const hiddenPendingQuestionIdsRef = useRef<Set<string>>(new Set());
+  const hiddenPendingSessionIdsRef = useRef<Set<string>>(new Set());
+  const suppressPendingUntilNextSendRef = useRef(false);
+  const overlayBootstrapRef = useRef(false);
+  const setCollapsed = useCallback((v: boolean) => {
+    setCollapsePreview(false);
+    setClosing(false);
+    if (collapseHoldTimerRef.current) {
+      window.clearTimeout(collapseHoldTimerRef.current);
+      collapseHoldTimerRef.current = null;
+    }
+    if (closeTimerRef.current) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+    setCollapsedState(v);
+    saveCollapsed(v);
+  }, []);
+
+  const closeFromResize = useCallback(() => {
+    if (closing || closeTimerRef.current) return;
+    resizeRef.current = null;
+    if (collapseHoldTimerRef.current) {
+      window.clearTimeout(collapseHoldTimerRef.current);
+      collapseHoldTimerRef.current = null;
+    }
+    setWidth(MIN_WIDTH);
+    setCollapsePreview(true);
+    setClosing(true);
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null;
+      setCollapsed(true);
+    }, prefersReducedMotion ? 0 : COLLAPSE_EXIT_MS);
+  }, [closing, prefersReducedMotion, setCollapsed]);
+  const closeOverlay = useCallback(() => setCollapsed(true), [setCollapsed]);
+  useDialogFocus(isOverlay && !collapsed && !closing, paneRef, closeOverlay);
+
+  function dismissProviderIntro() {
+    setShowProviderIntro(false);
+    saveProviderIntroSeen();
+  }
+
+  useEffect(() => () => {
+    if (terminalCopyResetRef.current) window.clearTimeout(terminalCopyResetRef.current);
+    if (collapseHoldTimerRef.current) window.clearTimeout(collapseHoldTimerRef.current);
+    if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (!isOverlay || overlayBootstrapRef.current) return;
+    overlayBootstrapRef.current = true;
+    setCollapsed(true);
+  }, [isOverlay, setCollapsed]);
+
+  useEffect(() => {
+    if (collapsePreview || closing) return;
+    saveWidth(width);
+  }, [width, collapsePreview, closing]);
+
+  useEffect(() => {
+    const onPointerMove = (event: PointerEvent) => {
+      const resize = resizeRef.current;
+      if (!resize) return;
+      event.preventDefault();
+      const rawWidth = resize.width - (event.clientX - resize.x);
+      const shouldPreview = rawWidth < COLLAPSE_PREVIEW_WIDTH;
+      const shouldCollapse = rawWidth < COLLAPSE_COMMIT_WIDTH;
+      resizeRef.current = { ...resize, shouldCollapse };
+      setCollapsePreview(shouldPreview);
+      if (shouldPreview) {
+        setWidth(MIN_WIDTH);
+      } else {
+        setWidth(fitWidth(rawWidth));
+      }
+      if (shouldCollapse) {
+        if (!collapseHoldTimerRef.current) {
+          collapseHoldTimerRef.current = window.setTimeout(() => {
+            collapseHoldTimerRef.current = null;
+            if (resizeRef.current?.shouldCollapse) closeFromResize();
+          }, COLLAPSE_HOLD_MS);
+        }
+      } else if (collapseHoldTimerRef.current) {
+        window.clearTimeout(collapseHoldTimerRef.current);
+        collapseHoldTimerRef.current = null;
+      }
+    };
+    const onPointerUp = () => {
+      const shouldCollapse = resizeRef.current?.shouldCollapse ?? false;
+      resizeRef.current = null;
+      if (collapseHoldTimerRef.current) {
+        window.clearTimeout(collapseHoldTimerRef.current);
+        collapseHoldTimerRef.current = null;
+      }
+      if (shouldCollapse) {
+        closeFromResize();
+      } else {
+        setCollapsePreview(false);
+      }
+    };
+    const onResize = () => setWidth((current) => fitWidth(current));
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [closeFromResize]);
+
+  const refreshSessions = useCallback(async () => {
+    const res = await fetch(apiPathWithCwd("/api/agent/sessions", conversationCwd ?? workspaceCwd));
+    if (res.ok) setSessions(await res.json());
+  }, [conversationCwd, workspaceCwd]);
+
+  const loadSession = useCallback(async (id: string, cwd?: string | null) => {
+    setError(null);
+    const targetCwd = cwd ?? conversationCwd ?? workspaceCwd;
+    const res = await fetch(apiPathWithCwd(`/api/agent/sessions/${encodeURIComponent(id)}`, targetCwd));
+    if (!res.ok) {
+      setError(`Could not load ${providerLabel(provider)} session.`);
+      return;
+    }
+    pendingQuestions.forEach((question) => {
+      if (question.session_id === id) hiddenPendingQuestionIdsRef.current.delete(question.id);
+    });
+    hiddenPendingSessionIdsRef.current.delete(id);
+    suppressPendingUntilNextSendRef.current = false;
+    const session = await res.json() as ClaudeSessionDetail;
+    setSelectedId(id);
+    setDetail(session);
+    setConversationCwd(session.cwd ?? targetCwd ?? null);
+    setShowList(false);
+  }, [conversationCwd, pendingQuestions, provider, workspaceCwd]);
+
+  useEffect(() => {
+    void refreshSessions();
+  }, [refreshSessions]);
+
+  useEffect(() => {
+    const openPane = () => {
+      setShowList(false);
+      setCollapsed(false);
+    };
+    const resetOnboarding = () => {
+      setShowProviderIntro(true);
+      setShowList(true);
+    };
+    window.addEventListener("runphantom:open-message-pane", openPane);
+    window.addEventListener("runphantom:messagePane:resetOnboarding", resetOnboarding);
+    return () => {
+      window.removeEventListener("runphantom:open-message-pane", openPane);
+      window.removeEventListener("runphantom:messagePane:resetOnboarding", resetOnboarding);
+    };
+  }, [setCollapsed]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/workspace/active");
+        if (!res.ok) return;
+        const body = await res.json().catch(() => null);
+        const cwd = typeof body?.cwd === "string" ? body.cwd : null;
+        if (!cancelled) {
+          setWorkspaceCwd(cwd);
+          setConversationCwd((current) => current ?? cwd);
+        }
+      } catch {
+        // Keep resume copy usable without a cwd if the workspace endpoint is unavailable.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    // Clear first: the loadout is provider-specific, and keeping the old one
+    // while the new fetch is in flight left the previous provider's skills and
+    // commands listed in the menu under the new provider's name.
+    setLoadout(null);
+    (async () => {
+      const res = await fetch(apiPathWithCwd("/api/agent/loadout", conversationCwd ?? workspaceCwd));
+      if (!res.ok) return;
+      const body = await res.json();
+      if (!cancelled) setLoadout(body);
+    })();
+    return () => { cancelled = true; };
+  }, [conversationCwd, provider, workspaceCwd]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [detail?.messages.length, pendingQuestions.length, liveBlocks, sending]);
+
+  useEffect(() => {
+    if (!draft.startsWith("/")) setShowSlash(false);
+  }, [draft]);
+
+  useEffect(() => {
+    setActiveSlashIndex(0);
+  }, [draft]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const res = await fetch("/api/agent/provider");
+      if (!res.ok) return;
+      const body = await res.json().catch(() => null);
+      if (!cancelled && isAgentProvider(body?.provider)) setProvider(body.provider);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useRunPhantomEvent("agent_provider", (data: { provider?: string }) => {
+    if (isAgentProvider(data.provider)) {
+      setProvider(data.provider);
+      startNewChat();
+      setShowList(true);
+      void refreshSessions();
+    }
+  });
+
+  useRunPhantomEvent("workspace_changed", (workspace: { cwd?: string | null }) => {
+    const cwd = typeof workspace?.cwd === "string" ? workspace.cwd : null;
+    setWorkspaceCwd(cwd);
+    setConversationCwd(cwd);
+    startNewChat();
+    setShowList(true);
+    void refreshSessions();
+  });
+
+  useRunPhantomEvent("claude_ask_user_question", (question: ClaudeAskUserQuestion) => {
+    setPendingQuestions((current) => current.some((item) => item.id === question.id)
+      ? current
+      : [...current, question]);
+    if (
+      suppressPendingUntilNextSendRef.current ||
+      hiddenPendingQuestionIdsRef.current.has(question.id) ||
+      hiddenPendingSessionIdsRef.current.has(question.session_id)
+    ) {
+      hiddenPendingQuestionIdsRef.current.add(question.id);
+      return;
+    }
+    if (question.session_id) setSelectedId(question.session_id);
+    setShowList(false);
+    setCollapsed(false);
+  });
+
+  useRunPhantomEvent("claude_ask_user_question_resolved", (data: { id?: string }) => {
+    if (!data?.id) return;
+    setPendingQuestions((current) => current.filter((item) => item.id !== data.id));
+  });
+
+  useRunPhantomEvent("agent_loadout", (data: AgentLoadout) => {
+    setLoadout(data);
+  });
+
+  useRunPhantomEvent("agent_message_stream", (data: ClaudeMessageStream) => {
+    if (!data?.client_message_id || data.client_message_id !== activeClientMessageIdRef.current) return;
+    if (data.session_id) setSelectedId(data.session_id);
+    const event = data.event;
+    if (!event) return;
+    if (event.type === "loadout") setLoadout(event);
+    if (event.type === "done") return;
+    if (event.type === "error") setSending(false);
+    setLiveBlocks((current) => {
+      const next = applyLiveStreamEvent(current, event);
+      liveBlocksRef.current = next;
+      return next;
+    });
+  });
+
+  async function sendMessage(overrideContent?: string) {
+    let content = (overrideContent ?? draft).trim();
+    if (!content || sending) return;
+    const commandResult = handleRunPhantomCommand(content);
+    if (commandResult === true) {
+      setDraft("");
+      setShowSlash(false);
+      return;
+    }
+    if (typeof commandResult === "string") content = commandResult;
+    suppressPendingUntilNextSendRef.current = false;
+    const clientMessageId = `client-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    activeClientMessageIdRef.current = clientMessageId;
+    liveBlocksRef.current = [];
+    setLiveBlocks([]);
+    setSending(true);
+    setError(null);
+    try {
+      const messageCwd = detail?.cwd ?? conversationCwd ?? workspaceCwd;
+      const optimistic: ClaudeChatMessage = {
+        id: `pending-${Date.now()}`,
+        role: "user",
+        content,
+        timestamp: new Date().toISOString(),
+      };
+      setDetail((current) => current
+        ? { ...current, messages: [...current.messages, optimistic] }
+        : {
+          id: "new",
+          created_at: optimistic.timestamp,
+          updated_at: optimistic.timestamp,
+          message_count: 1,
+          last_prompt: content,
+          preview: content,
+          cwd: messageCwd ?? undefined,
+          messages: [optimistic],
+        });
+      setShowList(false);
+      setDraft("");
+      setShowSlash(false);
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      const res = await fetch("/api/agent/messages", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          content,
+          session_id: selectedId,
+          run_id: activeRunId ?? null,
+          client_message_id: clientMessageId,
+          cwd: messageCwd,
+        }),
+      });
+      const body = await res.json().catch(() => null);
+      if (activeClientMessageIdRef.current !== clientMessageId) return;
+      if (!res.ok) throw new Error(body?.error ?? `${providerLabel(provider)} request failed (${res.status})`);
+      if (body?.session_id) setSelectedId(body.session_id);
+      if (body?.session) {
+        setDetail(appendLiveCompletionIfMissing(body.session, liveBlocksRef.current));
+        if (typeof body.session.cwd === "string") setConversationCwd(body.session.cwd);
+      } else if (typeof body?.text === "string") {
+        const capturedBlocks = liveBlocksRef.current.length
+          ? liveBlocksRef.current
+          : [{ type: "text" as const, text: body.text }];
+        setDetail((current) => current
+          ? appendLiveCompletionIfMissing(current, capturedBlocks)
+          : current);
+      }
+      void refreshSessions();
+    } catch (err) {
+      if (activeClientMessageIdRef.current !== clientMessageId) return;
+      setError((err as Error).message);
+    } finally {
+      if (activeClientMessageIdRef.current === clientMessageId) {
+        activeClientMessageIdRef.current = null;
+        liveBlocksRef.current = [];
+        setLiveBlocks([]);
+        setSending(false);
+      }
+    }
+  }
+
+  function startNewChat() {
+    pendingQuestions.forEach((question) => hiddenPendingQuestionIdsRef.current.add(question.id));
+    pendingQuestions.forEach((question) => hiddenPendingSessionIdsRef.current.add(question.session_id));
+    if (selectedId) hiddenPendingSessionIdsRef.current.add(selectedId);
+    suppressPendingUntilNextSendRef.current = true;
+    activeClientMessageIdRef.current = null;
+    liveBlocksRef.current = [];
+    setSelectedId(null);
+    setDetail(null);
+    setLiveBlocks([]);
+    setSending(false);
+    setDraft("");
+    setShowSlash(false);
+    setError(null);
+    setShowList(false);
+  }
+
+  async function switchProvider(next: AgentProviderId) {
+    if (next === provider || switchingProvider) return;
+    const previous = provider;
+    setProvider(next);
+    setError(null);
+    setSwitchingProvider(true);
+    try {
+      const res = await fetch("/api/agent/provider", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: next }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(body?.error ?? "Could not switch local coding agent.");
+      if (isAgentProvider(body?.provider)) setProvider(body.provider);
+      startNewChat();
+      setShowList(true);
+      // Drop the previous provider's sessions immediately so the list can't flash
+      // stale cross-provider rows in the window before refreshSessions() resolves.
+      setSessions([]);
+      void refreshSessions();
+    } catch (err) {
+      setProvider(previous);
+      setError((err as Error).message);
+    } finally {
+      setSwitchingProvider(false);
+    }
+  }
+
+  function selectProvider(next: AgentProviderId) {
+    dismissProviderIntro();
+    void switchProvider(next);
+  }
+
+  function chooseIntroProvider(next: AgentProviderId) {
+    selectProvider(next);
+  }
+
+  async function copyOpenInTerminalCommand() {
+    if (!detail || !selectedId) return;
+    const command = resumeCommandForSession(detail, workspaceCwd, provider);
+    setTerminalCommand(command);
+    if (!copyTextWithTextarea(command)) {
+      try {
+        await navigator.clipboard?.writeText(command);
+      } catch {
+        copyTextWithTextarea(command);
+      }
+    }
+    setTerminalCommandCopied(true);
+    if (terminalCopyResetRef.current) window.clearTimeout(terminalCopyResetRef.current);
+    terminalCopyResetRef.current = window.setTimeout(() => setTerminalCommandCopied(false), 1800);
+  }
+
+  function handleRunPhantomCommand(content: string): boolean | string {
+    const [cmd, ...rest] = content.split(/\s+/);
+    if (cmd === "/clear" || cmd === "/new") {
+      startNewChat();
+      return true;
+    }
+    if (cmd === "/trace" && rest[0]) {
+      void router.navigate(runPath(rest[0]));
+      return true;
+    }
+    const skillName = cmd.startsWith("/") ? cmd.slice(1) : "";
+    if (skillName && loadout?.skills?.includes(skillName)) {
+      return `Use the ${skillName} skill.${rest.length ? ` ${rest.join(" ")}` : ""}`;
+    }
+    return false;
+  }
+
+  async function answerQuestion(id: string, answers: Record<string, string>) {
+    setError(null);
+    const res = await fetch(`/api/claude/ask-user-question/${encodeURIComponent(id)}/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ answers }),
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      setError(body?.error ?? "Could not send answer.");
+      return;
+    }
+    hiddenPendingQuestionIdsRef.current.delete(id);
+    setPendingQuestions((current) => current.filter((question) => question.id !== id));
+  }
+
+  const messages = detail?.messages ?? [];
+  const visiblePendingQuestions = pendingQuestions.filter((question) => question.session_id === selectedId);
+  const visibleLiveBlocks = visibleAssistantBlocks(liveBlocks);
+  const showTraceDebugPrompt = !!activeRunId && messages.length === 0 && !sending && visibleLiveBlocks.length === 0;
+  const slashItems = useMemo(() => buildSlashItems(loadout, draft, provider), [loadout, draft, provider]);
+  const activeSlashItem = showSlash ? slashItems[activeSlashIndex] : undefined;
+  const currentCwd = detail?.cwd ?? conversationCwd ?? workspaceCwd;
+  const currentCwdDisplay = formatCwdDisplay(currentCwd);
+  const canChangeConversationCwd = !selectedId && messages.length === 0 && !sending;
+  useEffect(() => {
+    setActiveSlashIndex((index) => Math.min(index, Math.max(0, slashItems.length - 1)));
+  }, [slashItems.length]);
+
+  useEffect(() => {
+    if (!showSlash) return;
+    slashItemRefs.current[activeSlashIndex]?.scrollIntoView({ block: "nearest" });
+  }, [activeSlashIndex, showSlash]);
+
+  function selectSlash(value: string) {
+    setDraft(value);
+    setShowSlash(false);
+  }
+
+  function insertDraftNewline(textarea: HTMLTextAreaElement) {
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const next = `${draft.slice(0, start)}\n${draft.slice(end)}`;
+    setDraft(next);
+    setShowSlash(false);
+    requestAnimationFrame(() => {
+      textarea.selectionStart = start + 1;
+      textarea.selectionEnd = start + 1;
+    });
+  }
+
+  if (collapsed) {
+    return (
+      <FloatingAskButton
+        provider={provider}
+        onOpen={() => {
+          setWidth(loadWidth());
+          setShowList(showProviderIntro);
+          setCollapsed(false);
+        }}
+      />
+    );
+  }
+
+  const paneWidth = isOverlay
+    ? Math.max(0, Math.min(window.innerWidth - 24, 420))
+    : width;
+
+  return (
+    <aside
+      ref={paneRef}
+      role={isOverlay ? "dialog" : undefined}
+      aria-modal={isOverlay ? true : undefined}
+      aria-label="Coding-agent debug chat"
+      className={`${isOverlay
+        ? "fixed inset-y-3 right-3 z-40 rounded-2xl border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] shadow-[0_24px_64px_var(--rp-ink-a22)]"
+        : "relative h-screen border-l border-[color:var(--rp-border)] bg-[color:var(--rp-surface)]"
+      } flex origin-right flex-col overflow-hidden`}
+      style={{
+        width: paneWidth,
+        minWidth: paneWidth,
+        maxWidth: paneWidth,
+        opacity: closing ? 0 : collapsePreview ? 0.58 : 1,
+        transform: closing ? "translateX(12px)" : "translateX(0)",
+        transition: closing
+          ? "opacity var(--rp-motion-surface-out) var(--rp-ease-in), transform var(--rp-motion-surface-out) var(--rp-ease-in)"
+          : "opacity var(--rp-motion-state) ease",
+      }}
+      aria-hidden={closing}
+    >
+      {!isOverlay && (
+        <div
+          role="separator"
+          aria-label="Resize debug chat"
+          aria-orientation="vertical"
+          aria-valuemin={MIN_WIDTH}
+          aria-valuemax={MAX_WIDTH}
+          aria-valuenow={Math.round(width)}
+          tabIndex={0}
+          className="absolute inset-y-0 left-0 z-10 w-2 -translate-x-1 cursor-ew-resize transition-colors hover:bg-[color:var(--rp-ink-wash)]"
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            event.preventDefault();
+            const direction = event.key === "ArrowLeft" ? 1 : -1;
+            const nextWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width + direction * 24));
+            setWidth(nextWidth);
+            saveWidth(nextWidth);
+          }}
+          onPointerDown={(event) => {
+            if (closing) return;
+            resizeRef.current = { x: event.clientX, width, shouldCollapse: false };
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          title="Resize sidebar; drag smaller to hide"
+        />
+      )}
+      {!showProviderIntro && (
+        showList ? (
+          <header className="flex items-start justify-between gap-3 border-b border-[color:var(--rp-border)] px-3 py-2">
+            <div className="flex min-w-0 flex-col gap-1">
+              <ProviderDropdown
+                provider={provider}
+                busy={switchingProvider}
+                onProviderChange={selectProvider}
+              />
+              <ConnectionIndicator
+                cwd={currentCwd}
+                provider={provider}
+                onChooseFolder={() => setShowDirectoryPicker(true)}
+              />
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                onClick={() => setCollapsed(true)}
+                className="min-h-8 rounded-md px-2.5 text-xs font-medium text-[color:var(--rp-ink-soft)] transition-[transform,background-color,color] hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)] active:scale-[0.96]"
+                title="Collapse chat"
+              >
+                Collapse
+              </button>
+            </div>
+          </header>
+        ) : (
+          <header className="relative z-10 border-b border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] px-3 pb-2 pt-0.5 shadow-[0_10px_24px_var(--rp-ink-a08)]">
+            <button
+              onClick={() => { setShowList(true); void refreshSessions(); }}
+              className="mb-1 -ml-1.5 inline-flex items-center gap-0.5 rounded text-xs font-medium text-[color:var(--rp-ink-muted)] transition-colors hover:text-[color:var(--rp-ink-strong)]"
+              title="Show all chats"
+            >
+              <ChevronLeft className="h-3 w-3" />
+              All Chats
+            </button>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium text-[color:var(--rp-ink-strong)]" title={detail?.preview ?? detail?.last_prompt ?? "New chat"}>
+                  {detail?.preview ?? detail?.last_prompt ?? "New chat"}
+                </div>
+                <div className="mt-1 flex min-w-0 items-center gap-1.5 font-mono text-[10px] text-[color:var(--rp-ink-muted)]">
+                  <FolderIcon className="h-3 w-3 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate leading-snug" title={currentCwd ?? undefined}>{currentCwdDisplay}</span>
+                  {canChangeConversationCwd ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowDirectoryPicker(true)}
+                      className="shrink-0 rounded border border-[color:var(--rp-border)] px-1.5 py-0.5 text-[10px] text-[color:var(--rp-ink-muted)] transition-colors hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)]"
+                    >
+                      Change
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <div className="-mr-1 -mt-[22px] flex shrink-0 items-center gap-1">
+                {detail && selectedId && (
+                  <div className="relative">
+                    <HeaderIconTooltip label="Copy terminal command">
+                      <button
+                        onClick={() => void copyOpenInTerminalCommand()}
+                        className="grid h-7 w-7 place-items-center rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] text-[color:var(--rp-ink-soft)] transition-[transform,background-color,border-color,color] hover:border-[color:var(--rp-ink-a12)] hover:bg-[color:var(--rp-ink-wash-strong)] hover:text-[color:var(--rp-ink-strong)] active:scale-[0.96]"
+                        aria-label="Copy terminal command"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </button>
+                    </HeaderIconTooltip>
+                    {terminalCommandCopied && (
+                    <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-lg border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] px-3 py-2 text-[11px] leading-relaxed text-[color:var(--rp-ink-strong)] shadow-2xl">
+                      <div>Copied command to clipboard. Run it in your terminal.</div>
+                      <code className="mt-2 block select-all break-all rounded bg-[color:var(--rp-ink-wash)] px-2 py-1.5 font-mono text-[10px] text-[color:var(--rp-ink-strong)]">
+                        {terminalCommand}
+                      </code>
+                      </div>
+                    )}
+                  </div>
+                )}
+                <HeaderIconTooltip label="New chat">
+                  <button
+                    onClick={startNewChat}
+                    className="grid h-7 w-7 place-items-center rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] text-[color:var(--rp-ink-soft)] transition-[transform,background-color,border-color,color] hover:border-[color:var(--rp-ink-a12)] hover:bg-[color:var(--rp-ink-wash-strong)] hover:text-[color:var(--rp-ink-strong)] active:scale-[0.96]"
+                    aria-label="New chat"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                </HeaderIconTooltip>
+                <HeaderIconTooltip label="Hide">
+                  <button
+                    onClick={() => setCollapsed(true)}
+                    className="grid h-7 w-7 place-items-center rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] text-[color:var(--rp-ink-soft)] transition-[transform,background-color,border-color,color] hover:border-[color:var(--rp-ink-a12)] hover:bg-[color:var(--rp-ink-wash-strong)] hover:text-[color:var(--rp-ink-strong)] active:scale-[0.96]"
+                    aria-label="Hide chat"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </HeaderIconTooltip>
+              </div>
+            </div>
+          </header>
+        )
+      )}
+
+      {showList ? (
+        <ChatList
+          sessions={sessions}
+          selectedId={selectedId}
+          workspaceCwd={conversationCwd ?? workspaceCwd}
+          provider={provider}
+          providerError={error}
+          providerBusy={switchingProvider}
+          showProviderIntro={showProviderIntro}
+          onProviderIntroChoice={chooseIntroProvider}
+          onSelect={(id, cwd) => void loadSession(id, cwd)}
+          onNew={startNewChat}
+        />
+      ) : (
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <div ref={scrollRef} role="log" aria-live="polite" aria-label="Debug chat messages" className={`flex-1 overflow-y-auto px-3 pt-3 ${showTraceDebugPrompt ? "pb-44" : "pb-36"} space-y-3 text-sm`}>
+            {messages.map((message) => <MessageBubble key={message.id} message={message} />)}
+            {visibleLiveBlocks.length > 0 && (
+              <div className="message-arrive flex flex-col items-start gap-2">
+                <AssistantBlocks blocks={visibleLiveBlocks} isLive={true} />
+              </div>
+            )}
+            {visiblePendingQuestions.map((question) => (
+              <AskUserQuestionCard
+                key={question.id}
+                prompt={question}
+                onAnswer={(answers) => void answerQuestion(question.id, answers)}
+              />
+            ))}
+            {sending && visiblePendingQuestions.length === 0 && visibleLiveBlocks.length === 0 && <ProviderThinking provider={provider} />}
+            {error && <div role="alert" className="rounded border border-red-700/20 bg-red-700/10 px-2 py-1 text-xs text-[color:var(--rp-danger)]">{error}</div>}
+          </div>
+
+          <footer className="absolute inset-x-0 bottom-0 z-20 px-2 pb-[10px] pt-3">
+            {showTraceDebugPrompt && <TraceDebugPrompt onPrompt={(prompt) => void sendMessage(prompt)} />}
+            {showSlash && slashItems.length > 0 && (
+              <div id="claude-slash-menu" role="listbox" aria-label="Available commands" className="absolute bottom-full left-2 right-2 mb-2 max-h-64 overflow-y-auto rounded-lg border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] p-1 text-xs shadow-2xl">
+                {slashItems.map((item, index) => (
+                  <button
+                    key={`${item.value}-${item.label}`}
+                    id={`claude-slash-option-${index}`}
+                    ref={(element) => { slashItemRefs.current[index] = element; }}
+                    type="button"
+                    role="option"
+                    aria-selected={index === activeSlashIndex}
+                    onClick={() => selectSlash(item.value)}
+                    onMouseEnter={() => setActiveSlashIndex(index)}
+                    className={`flex w-full items-center justify-between gap-3 rounded px-2 py-1.5 text-left transition-[background-color,color] ${
+                      index === activeSlashIndex
+                        ? "bg-[color:var(--rp-ink-wash)] text-[color:var(--rp-ink-strong)]"
+                        : "text-[color:var(--rp-ink-strong)] hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)]"
+                    }`}
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium">{item.label}</span>
+                      {item.description && <span className="block truncate text-[10px] text-[color:var(--rp-ink-muted)]">{item.description}</span>}
+                    </span>
+                    <span className="shrink-0 truncate font-mono text-[10px] text-[color:var(--rp-ink-muted)]">{item.value}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="relative overflow-hidden rounded-xl border border-[color:var(--rp-border)] bg-[color:var(--rp-surface-raised)] shadow-[0_14px_36px_var(--rp-ink-a12)] transition-[border-color,background-color,box-shadow] focus-within:border-[color:var(--rp-border-strong)] focus-within:bg-[color:var(--rp-surface)] focus-within:shadow-[0_18px_42px_var(--rp-ink-a15)]">
+              <textarea
+                role="combobox"
+                aria-autocomplete="list"
+                aria-label={activeRunId ? "Ask about this trace" : `Ask ${providerLabel(provider)}`}
+                value={draft}
+                onChange={(e) => {
+                  setDraft(e.target.value);
+                  setShowSlash(e.target.value.startsWith("/"));
+                }}
+                onKeyDown={(e) => {
+                  if (showSlash && slashItems.length > 0 && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+                    e.preventDefault();
+                    const direction = e.key === "ArrowDown" ? 1 : -1;
+                    setActiveSlashIndex((index) => (index + direction + slashItems.length) % slashItems.length);
+                    return;
+                  }
+                  if (showSlash && slashItems.length > 0 && (e.key === "Enter" || e.key === "Tab") && !e.metaKey && !e.shiftKey) {
+                    e.preventDefault();
+                    if (activeSlashItem) selectSlash(activeSlashItem.value);
+                    return;
+                  }
+                  if (e.key === "Escape") {
+                    setShowSlash(false);
+                    return;
+                  }
+                  if (e.key === "Enter" && e.metaKey) {
+                    e.preventDefault();
+                    insertDraftNewline(e.currentTarget);
+                    return;
+                  }
+                  if (e.key === "Enter" && !e.metaKey && !e.shiftKey) {
+                    e.preventDefault();
+                    void sendMessage();
+                  }
+                }}
+                placeholder={activeRunId ? "Ask about this trace..." : `Ask ${providerLabel(provider)}...`}
+                rows={2}
+                aria-expanded={showSlash && slashItems.length > 0}
+                aria-controls="claude-slash-menu"
+                aria-activedescendant={showSlash && slashItems.length > 0 ? `claude-slash-option-${activeSlashIndex}` : undefined}
+                className="block min-h-24 w-full resize-none rounded-[11px] bg-transparent px-3 py-3 pb-12 pr-14 text-sm text-[color:var(--rp-ink-strong)] placeholder:text-[color:var(--rp-ink-soft)]"
+              />
+              <button
+                type="button"
+                aria-label={sending ? "Sending message" : "Send message"}
+                onClick={() => void sendMessage()}
+                disabled={!draft.trim() || sending}
+                className="absolute bottom-2 right-2 grid min-h-10 min-w-10 place-items-center rounded-md bg-[color:var(--rp-ink-wash)] text-[color:var(--rp-ink-strong)] transition-[transform,background-color,color,opacity] hover:bg-[color:var(--rp-ink-wash-strong)] active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-30 disabled:active:scale-100"
+                title="Send"
+              >
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            </div>
+          </footer>
+        </div>
+      )}
+      {showProviderIntro && (
+        <button
+          onClick={() => setCollapsed(true)}
+          className="absolute right-3 top-3 min-h-8 rounded-md px-2.5 text-xs font-medium text-[color:var(--rp-ink-muted)] transition-[transform,background-color,color] hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)] active:scale-[0.96]"
+          title="Hide chat"
+        >
+          Hide
+        </button>
+      )}
+      {showDirectoryPicker && (
+        <DirectoryPicker
+          currentCwd={conversationCwd ?? workspaceCwd}
+          onClose={() => setShowDirectoryPicker(false)}
+          onSelect={(cwd) => {
+            setConversationCwd(cwd);
+            startNewChat();
+            setShowDirectoryPicker(false);
+            setSessions([]);
+          }}
+        />
+      )}
+    </aside>
+  );
+}
+
+function FloatingAskButton({ provider, onOpen }: { provider: AgentProviderId; onOpen: () => void }) {
+  return (
+    <div className="rp-clipped-ring group fixed bottom-0 right-0 z-40">
+      <div className="pointer-events-none absolute -top-14 right-16 grid h-12 w-12 scale-75 place-items-center rounded-full border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] opacity-0 shadow-[0_16px_40px_var(--rp-ink-a18),0_8px_26px_var(--rp-ink-a20)] transition-[opacity,transform] duration-300 motion-reduce:transition-none group-hover:-translate-y-2 group-hover:-rotate-6 group-hover:scale-100 group-hover:opacity-100 [&>img]:brightness-0">
+        <ProviderMark provider="claude" open={true} />
+      </div>
+      <div className="pointer-events-none absolute -top-12 right-3 grid h-11 w-11 scale-75 place-items-center rounded-full border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] opacity-0 shadow-[0_16px_40px_var(--rp-ink-a18)] transition-[opacity,transform] duration-300 delay-75 motion-reduce:transition-none group-hover:-translate-y-3 group-hover:rotate-12 group-hover:scale-100 group-hover:opacity-100">
+        <ProviderMark provider="codex" open />
+      </div>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex h-11 items-center gap-2 rounded-tl-[15px] rounded-r-none rounded-bl-none border border-r-0 border-b-0 border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] px-[26px] text-sm font-medium text-[color:var(--rp-ink-strong)] shadow-[0_26px_70px_var(--rp-ink-a18),0_8px_22px_var(--rp-ink-a12)] transition-[transform,background-color,border-color,color,box-shadow] hover:-translate-y-0.5 hover:border-[color:var(--rp-border-strong)] hover:bg-[color:var(--rp-surface-raised)] hover:shadow-[0_32px_90px_var(--rp-ink-a22),0_10px_30px_var(--rp-ink-a15)] active:translate-y-0"
+        title={`Ask ${providerLabel(provider)}`}
+      >
+        <Terminal className="h-4 w-4 text-[color:var(--rp-accent)]" />
+        <span>{`Ask ${providerLabel(provider)}`}</span>
+      </button>
+    </div>
+  );
+}
+
+function DirectoryPicker({
+  currentCwd,
+  onSelect,
+  onClose,
+}: {
+  currentCwd: string | null;
+  onSelect: (cwd: string) => void;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const [listing, setListing] = useState<DirectoryListing | null>(null);
+  const [pathInput, setPathInput] = useState(currentCwd ?? "~");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useDialogFocus(true, dialogRef, onClose);
+
+  const loadDirectory = useCallback(async (targetPath: string) => {
+    const nextPath = targetPath.trim() || "~";
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/directories?path=${encodeURIComponent(nextPath)}`);
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(body?.error ?? "Could not load directory.");
+      setListing(body as DirectoryListing);
+      setPathInput(typeof body?.path === "string" ? body.path : nextPath);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadDirectory(currentCwd ?? "~");
+  }, [currentCwd, loadDirectory]);
+
+  return (
+    <div className="absolute inset-0 z-50 flex items-center justify-center bg-[color:var(--rp-scrim)] px-4 backdrop-blur-sm">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="directory-picker-title" className="max-h-[calc(100svh-32px)] w-full max-w-[440px] overflow-auto rounded-xl border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] p-3 shadow-2xl">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <h2 id="directory-picker-title" className="text-sm font-medium text-[color:var(--rp-ink-strong)]">Choose working directory</h2>
+            <div className="mt-0.5 text-[11px] text-[color:var(--rp-ink-muted)]">Browse to a folder or type a path. Select confirms your choice.</div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid h-7 w-7 place-items-center rounded-md text-[color:var(--rp-ink-muted)] transition-colors hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)]"
+            aria-label="Close directory picker"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        <form
+          className="flex items-center gap-1.5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void loadDirectory(pathInput);
+          }}
+        >
+          <input
+            autoFocus
+            aria-label="Working directory path"
+            value={pathInput}
+            onChange={(event) => setPathInput(event.target.value)}
+            className="min-w-0 flex-1 rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] px-2 py-1.5 font-mono text-xs text-[color:var(--rp-ink-strong)] placeholder:text-[color:var(--rp-ink-muted)] focus:border-[color:var(--rp-border)] focus:outline-none"
+            placeholder="~/Projects/my-agent"
+          />
+          <button
+            type="submit"
+            className="rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] px-2.5 py-1.5 text-xs text-[color:var(--rp-ink-soft)] transition-colors hover:bg-[color:var(--rp-ink-wash-strong)] hover:text-[color:var(--rp-ink-strong)]"
+          >
+            Go to path
+          </button>
+        </form>
+
+        <div className="mt-2 flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => listing?.home && void loadDirectory(listing.home)}
+            className="flex min-h-7 items-center gap-1 rounded-md border border-[color:var(--rp-border)] px-2 text-[11px] text-[color:var(--rp-ink-soft)] transition-colors hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)]"
+          >
+            <Home className="h-3 w-3" />
+            Home
+          </button>
+          <button
+            type="button"
+            disabled={!listing?.parent}
+            onClick={() => listing?.parent && void loadDirectory(listing.parent)}
+            className="flex min-h-7 items-center gap-1 rounded-md border border-[color:var(--rp-border)] px-2 text-[11px] text-[color:var(--rp-ink-soft)] transition-colors hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)] disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            <ChevronLeft className="h-3 w-3" />
+            Up
+          </button>
+        </div>
+
+        <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] p-1">
+          {loading && (
+            <div className="flex items-center justify-center gap-2 py-8 text-xs text-[color:var(--rp-ink-muted)]">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Loading directories...
+            </div>
+          )}
+          {!loading && error && (
+            <div role="alert" className="px-2 py-2 text-xs text-[color:var(--rp-danger)]">{error}</div>
+          )}
+          {!loading && !error && listing?.entries.length === 0 && (
+            <div className="px-2 py-8 text-center text-xs text-[color:var(--rp-ink-muted)]">No child directories.</div>
+          )}
+          {!loading && !error && listing?.entries.map((entry) => (
+            <button
+              key={entry.path}
+              type="button"
+              onClick={() => void loadDirectory(entry.path)}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[color:var(--rp-ink-soft)] transition-colors hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)]"
+            >
+              <FolderIcon className="h-3.5 w-3.5 shrink-0 text-[color:var(--rp-ink-muted)]" />
+              <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+            </button>
+          ))}
+        </div>
+        <div className="mt-3 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md border border-[color:var(--rp-border)] px-2.5 py-1.5 text-xs text-[color:var(--rp-ink-soft)] transition-colors hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)]"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={!listing}
+              onClick={() => listing && onSelect(listing.path)}
+              className="rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] px-2.5 py-1.5 text-xs font-medium text-[color:var(--rp-ink-strong)] transition-colors hover:bg-[color:var(--rp-ink-wash-strong)] disabled:cursor-not-allowed disabled:opacity-35"
+            >
+              Select
+            </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HeaderIconTooltip({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="bottom" align="center">
+        {label}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function ProviderGlyph({ provider, size }: { provider: AgentProviderId; size: "small" | "medium" | "large" }) {
+  const sizeClass = size === "small" ? "h-5 min-w-5 text-[7px]" : size === "large" ? "h-9 min-w-9 text-[10px]" : "h-8 min-w-8 text-[9px]";
+  return (
+    <span aria-hidden="true" className={`grid place-items-center rounded-full border border-[color:var(--rp-selected-border)] bg-[color:var(--rp-accent-soft)] px-1 font-mono font-bold tracking-[-0.05em] text-[color:var(--rp-ink-strong)] ${sizeClass}`}>
+      {provider === "claude" ? "CC" : "CX"}
+    </span>
+  );
+}
+
+function ProviderMark({ provider, open }: { provider: AgentProviderId; open: boolean }) {
+  return <span className={open ? "" : "opacity-80"}><ProviderGlyph provider={provider} size="medium" /></span>;
+}
+
+function SmallProviderIcon({ provider }: { provider: AgentProviderId }) {
+  return <ProviderGlyph provider={provider} size="small" />;
+}
+
+function LargeProviderIcon({ provider }: { provider: AgentProviderId }) {
+  return <ProviderGlyph provider={provider} size="large" />;
+}
+
+function ProviderDropdown({
+  provider,
+  busy,
+  onProviderChange,
+}: {
+  provider: AgentProviderId;
+  busy: boolean;
+  onProviderChange: (provider: AgentProviderId) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listboxRef = useRef<HTMLDivElement>(null);
+  const optionsId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    listboxRef.current?.querySelector<HTMLButtonElement>('[aria-selected="true"]')?.focus();
+    const handlePointer = (event: MouseEvent) => {
+      if (!ref.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const handleKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    document.addEventListener("mousedown", handlePointer);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handlePointer);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [open]);
+
+  const handleOptionKeys = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const options = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]:not(:disabled)'));
+    if (options.length === 0) return;
+    event.preventDefault();
+    const index = options.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? options.length - 1
+        : (Math.max(index, 0) + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
+    options[next]?.focus();
+  };
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        onKeyDown={(event) => {
+          if (!open && ["ArrowDown", "ArrowUp"].includes(event.key)) {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
+        className="flex min-h-8 items-center gap-2 rounded-md px-2 text-xs font-medium text-[color:var(--rp-ink-strong)] transition-colors hover:bg-[color:var(--rp-ink-wash)]"
+        aria-label={`Choose coding-agent provider. Current provider: ${providerLabel(provider)}`}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-controls={optionsId}
+      >
+        <SmallProviderIcon provider={provider} />
+        <span>{providerLabel(provider)}</span>
+        <ChevronDown className={`h-3.5 w-3.5 text-[color:var(--rp-ink-muted)] transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div
+          ref={listboxRef}
+          id={optionsId}
+          role="listbox"
+          aria-label="Coding-agent provider"
+          onKeyDown={handleOptionKeys}
+          className="absolute left-0 top-full z-50 mt-1 min-w-44 rounded-lg border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] p-1 text-xs shadow-2xl"
+        >
+          {(["claude", "codex"] as AgentProviderId[]).map((option) => (
+            <button
+              key={option}
+              type="button"
+              role="option"
+              aria-selected={provider === option}
+              disabled={busy}
+              onClick={() => {
+                setOpen(false);
+                onProviderChange(option);
+              }}
+              className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                provider === option ? "bg-[color:var(--rp-ink-wash)] text-[color:var(--rp-ink-strong)]" : "text-[color:var(--rp-ink-soft)] hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)]"
+              }`}
+            >
+              <SmallProviderIcon provider={option} />
+              <span>{providerLabel(option)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProviderThinking({ provider }: { provider: AgentProviderId }) {
+  if (provider === "claude") {
+    return <div className="text-xs text-[color:var(--rp-ink-muted)]">Claude Code is thinking...</div>;
+  }
+  return (
+    <div className="flex items-center gap-2 text-xs text-[color:var(--rp-ink-muted)]">
+      <span className="animate-pulse"><SmallProviderIcon provider="codex" /></span>
+      <span>Codex is working...</span>
+    </div>
+  );
+}
+
+function applyLiveStreamEvent(blocks: AssistantMessageBlock[], event: AgentStreamEvent): AssistantMessageBlock[] {
+  switch (event.type) {
+    case "text":
+      return setLiveTextBlock(blocks, event.content);
+    case "error":
+      return [...blocks, { type: "error", text: event.content }];
+    case "tool_start":
+      return upsertLiveToolBlock(blocks, {
+        type: "tool",
+        id: event.id,
+        name: event.name,
+        input_preview: event.input_preview,
+        state: "running",
+      });
+    case "tool_finish":
+      return finishLiveToolBlock(blocks, event.id, event.ok, event.output_preview);
+    case "thinking_delta":
+      return appendLiveThinkingBlock(blocks, event.content);
+    case "subagent_start":
+      return upsertLiveToolBlock(blocks, {
+        type: "tool",
+        id: event.parent_id,
+        name: `Agent: ${event.subagent}`,
+        state: "running",
+      });
+    default:
+      return blocks;
+  }
+}
+
+function setLiveTextBlock(blocks: AssistantMessageBlock[], text: string): AssistantMessageBlock[] {
+  const next = [...blocks];
+  const last = next[next.length - 1];
+  if (last?.type === "text") {
+    next[next.length - 1] = { ...last, text };
+    return next;
+  }
+  next.push({ type: "text", text });
+  return next;
+}
+
+function appendLiveThinkingBlock(blocks: AssistantMessageBlock[], content: string): AssistantMessageBlock[] {
+  if (!content) return blocks;
+  const next = [...blocks];
+  const last = next[next.length - 1];
+  if (last?.type === "thinking") {
+    next[next.length - 1] = { ...last, text: last.text + content };
+    return next;
+  }
+  next.push({ type: "thinking", text: content });
+  return next;
+}
+
+function upsertLiveToolBlock(
+  blocks: AssistantMessageBlock[],
+  block: Extract<AssistantMessageBlock, { type: "tool" }>,
+): AssistantMessageBlock[] {
+  const index = blocks.findIndex((item) => item.type === "tool" && item.id === block.id);
+  if (index < 0) return [...blocks, block];
+  const next = [...blocks];
+  next[index] = { ...(next[index] as Extract<AssistantMessageBlock, { type: "tool" }>), ...block };
+  return next;
+}
+
+function finishLiveToolBlock(
+  blocks: AssistantMessageBlock[],
+  id: string,
+  ok: boolean,
+  output_preview?: string,
+): AssistantMessageBlock[] {
+  const index = blocks.findIndex((item) => item.type === "tool" && item.id === id);
+  if (index < 0) return blocks;
+  const next = [...blocks];
+  const current = next[index] as Extract<AssistantMessageBlock, { type: "tool" }>;
+  next[index] = { ...current, ok, output_preview, state: "done" };
+  return next;
+}
+
+function visibleAssistantBlocks(blocks: AssistantMessageBlock[]): AssistantMessageBlock[] {
+  const visible: AssistantMessageBlock[] = [];
+  for (const block of blocks) {
+    if (block.type === "text" || block.type === "thinking" || block.type === "error") {
+      const text = block.text.trim();
+      if (text) visible.push({ ...block, text });
+      continue;
+    }
+    visible.push(block);
+  }
+  return visible;
+}
+
+function appendLiveCompletionIfMissing(
+  session: ClaudeSessionDetail,
+  liveBlocks: AssistantMessageBlock[],
+): ClaudeSessionDetail {
+  const blocks = visibleAssistantBlocks(liveBlocks);
+  if (!blocks.length) return session;
+
+  const lastUserIndex = findLastMessageIndex(session.messages, "user");
+  const hasAssistantAfterUser = session.messages
+    .slice(Math.max(0, lastUserIndex + 1))
+    .some((message) => message.role === "assistant" && parseAssistantBlocks(message).length > 0);
+  if (hasAssistantAfterUser) return session;
+
+  const content = assistantBlocksText(blocks);
+  if (!content.trim()) return session;
+
+  return {
+    ...session,
+    messages: [
+      ...session.messages,
+      {
+        id: `live-complete-${Date.now()}`,
+        role: "assistant",
+        content,
+        blocks: blocks.map(persistableAssistantBlock),
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  };
+}
+
+function findLastMessageIndex(messages: ClaudeChatMessage[], role: Role): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === role) return i;
+  }
+  return -1;
+}
+
+function assistantBlocksText(blocks: AssistantMessageBlock[]): string {
+  return blocks
+    .map((block) => {
+      if (block.type === "text" || block.type === "error") return block.text;
+      if (block.type === "tool") return `[tool: ${block.name}]`;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function persistableAssistantBlock(block: AssistantMessageBlock): ClaudeChatMessageBlock {
+  if (block.type === "tool") {
+    const { state: _state, ...tool } = block;
+    return tool;
+  }
+  if (block.type === "error") return { type: "text", text: block.text };
+  return block;
+}
+
+function AskUserQuestionCard({
+  prompt,
+  onAnswer,
+}: {
+  prompt: ClaudeAskUserQuestion;
+  onAnswer: (answers: Record<string, string>) => void;
+}) {
+  const [choices, setChoices] = useState<Record<number, string[]>>({});
+  const [otherText, setOtherText] = useState<Record<number, string>>({});
+
+  function toggle(questionIndex: number, label: string, multiSelect: boolean) {
+    setChoices((current) => {
+      const selected = current[questionIndex] ?? [];
+      if (!multiSelect) return { ...current, [questionIndex]: [label] };
+      return selected.includes(label)
+        ? { ...current, [questionIndex]: selected.filter((item) => item !== label) }
+        : { ...current, [questionIndex]: [...selected, label] };
+    });
+  }
+
+  const answers = prompt.questions.reduce<Record<string, string>>((acc, question, index) => {
+    const answer = [...(choices[index] ?? []), otherText[index]?.trim()]
+      .filter(Boolean)
+      .join(", ");
+    if (answer) acc[question.question] = answer;
+    return acc;
+  }, {});
+  const complete = Object.keys(answers).length === prompt.questions.length;
+
+  return (
+    <div className="message-arrive w-[90%] rounded border px-3 py-3 text-[color:var(--rp-ink-strong)]" style={{ borderColor: "color-mix(in srgb, var(--rp-warning) 24%, white 76%)", background: "color-mix(in srgb, var(--rp-warning) 7%, white 93%)" }}>
+      <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-[color:var(--rp-warning)]">Claude needs input</div>
+      <div className="space-y-3">
+        {prompt.questions.map((question, questionIndex) => {
+          const selected = choices[questionIndex] ?? [];
+          return (
+            <fieldset key={`${prompt.id}-${questionIndex}`} className="space-y-2">
+              <legend className="sr-only">{question.question}</legend>
+              <div>
+                {question.header && <div className="text-[11px] text-[color:var(--rp-ink-muted)]">{question.header}</div>}
+                <div className="text-sm text-[color:var(--rp-ink-strong)]">{question.question}</div>
+              </div>
+              <div className="grid gap-1.5">
+                {question.options.map((option) => {
+                  const active = selected.includes(option.label);
+                  return (
+                    <button
+                      key={option.label}
+                      type="button"
+                      role={question.multiSelect ? "checkbox" : "radio"}
+                      aria-checked={active}
+                      onClick={() => toggle(questionIndex, option.label, question.multiSelect)}
+                      className={`rounded border px-2 py-1.5 text-left text-[color:var(--rp-ink-strong)] transition-[background-color,border-color,color] ${active ? "border-[color:var(--rp-border-strong)] bg-[color:var(--rp-ink-wash-strong)]" : "border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] hover:bg-[color:var(--rp-ink-wash-strong)]"}`}
+                    >
+                      <div className="text-xs font-medium">{option.label}</div>
+                      {option.description && <div className="mt-0.5 text-[11px] text-[color:var(--rp-ink-muted)]">{option.description}</div>}
+                    </button>
+                  );
+                })}
+              </div>
+              <input
+                aria-label={`Other answer for ${question.question}`}
+                value={otherText[questionIndex] ?? ""}
+                onChange={(event) => setOtherText((current) => ({ ...current, [questionIndex]: event.target.value }))}
+                placeholder="Other"
+                className="w-full rounded border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] px-2 py-1.5 text-xs text-[color:var(--rp-ink-strong)] placeholder:text-[color:var(--rp-ink-muted)] focus:outline-none focus:border-[color:var(--rp-border)]"
+              />
+            </fieldset>
+          );
+        })}
+      </div>
+      <button
+        type="button"
+        disabled={!complete}
+        onClick={() => onAnswer(answers)}
+        className="mt-3 flex min-h-9 items-center justify-center gap-2 rounded border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] px-3 text-xs text-[color:var(--rp-ink-strong)] hover:bg-[color:var(--rp-ink-wash-strong)] active:scale-[0.98] transition-[transform,background-color,color] disabled:opacity-35 disabled:cursor-not-allowed disabled:active:scale-100"
+      >
+        <Send className="h-3.5 w-3.5" />
+        Send answer
+      </button>
+    </div>
+  );
+}
+
+function ChatList({
+  sessions,
+  selectedId,
+  workspaceCwd,
+  provider,
+  providerError,
+  providerBusy,
+  showProviderIntro,
+  onProviderIntroChoice,
+  onSelect,
+  onNew,
+}: {
+  sessions: ClaudeSessionSummary[];
+  selectedId: string | null;
+  workspaceCwd: string | null;
+  provider: AgentProviderId;
+  providerError: string | null;
+  providerBusy: boolean;
+  showProviderIntro: boolean;
+  onProviderIntroChoice: (provider: AgentProviderId) => void;
+  onSelect: (id: string, cwd?: string | null) => void;
+  onNew: () => void;
+}) {
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [introProvider, setIntroProvider] = useState<AgentProviderId>(provider);
+  const [introSessions, setIntroSessions] = useState<ClaudeSessionSummary[]>(sessions);
+
+  useEffect(() => {
+    if (showProviderIntro) setIntroProvider(provider);
+  }, [provider, showProviderIntro]);
+
+  useEffect(() => {
+    if (!showProviderIntro) return;
+    let cancelled = false;
+    (async () => {
+      const res = await fetch(`/api/agent/sessions?provider=${encodeURIComponent(introProvider)}`);
+      if (!res.ok) {
+        if (!cancelled) setIntroSessions([]);
+        return;
+      }
+      const body = await res.json();
+      if (cancelled) return;
+      const currentIds = sessions.map((session) => session.id).join("\n");
+      const previewIds = Array.isArray(body) ? body.map((session: ClaudeSessionSummary) => session.id).join("\n") : "";
+      setIntroSessions(introProvider !== provider && previewIds === currentIds ? [] : body);
+    })();
+    return () => { cancelled = true; };
+  }, [introProvider, provider, sessions, showProviderIntro]);
+
+  async function copyResumeCommand(event: SyntheticEvent, session: ClaudeSessionSummary, commandProvider: AgentProviderId = provider): Promise<void> {
+    event.stopPropagation();
+    const command = resumeCommandForSession(session, workspaceCwd, commandProvider);
+    setCopiedId(session.id);
+    window.setTimeout(() => setCopiedId((current) => current === session.id ? null : current), 1200);
+    if (copyTextWithTextarea(command)) return;
+    try {
+      await navigator.clipboard?.writeText(command);
+    } catch {
+      copyTextWithTextarea(command);
+    }
+  }
+
+  return (
+    <div className="flex-1 min-h-0 overflow-hidden">
+      {showProviderIntro ? (
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="flex flex-1 items-center justify-center px-6 py-8">
+            <AgentConnectCard
+              provider={provider}
+              selectedProvider={introProvider}
+              error={providerError}
+              busy={providerBusy}
+              onSelectedProviderChange={setIntroProvider}
+              onProviderChange={onProviderIntroChoice}
+            />
+          </div>
+          <div className="h-[210px] overflow-y-auto border-t border-[color:var(--rp-border)] px-4 py-3">
+            <div className="mb-2 text-[11px] text-[color:var(--rp-ink-muted)]">
+              Your Recent {providerLabel(introProvider)} Chats
+            </div>
+            <div className="space-y-1.5">
+              {introSessions.length === 0 ? (
+                <div className="flex h-[150px] items-center justify-center text-xs text-[color:var(--rp-ink-muted)]">No chats yet.</div>
+              ) : introSessions.slice(0, 4).map((session) => (
+                <ChatPreviewItem
+                  key={session.id}
+                  session={session}
+                  workspaceCwd={workspaceCwd}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="h-full overflow-y-auto p-2">
+          {providerError && (
+        <div className="mb-2 rounded-md border border-red-400/20 bg-red-500/10 px-2 py-1.5 text-xs text-[color:var(--rp-danger)]">{providerError}</div>
+      )}
+          <button
+            onClick={onNew}
+            className="mb-2 flex w-full items-center gap-2 rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] px-3 py-2 text-left text-sm text-[color:var(--rp-ink-strong)] hover:bg-[color:var(--rp-ink-wash-strong)] active:scale-[0.99] transition-[transform,background-color,color]"
+          >
+            <Plus className="h-4 w-4" />
+            New chat
+          </button>
+          <div className="space-y-1">
+            {sessions.length === 0 ? (
+              <div className="px-3 py-8 text-center text-xs text-[color:var(--rp-ink-muted)]">No {providerLabel(provider)} chats yet.</div>
+            ) : sessions.map((session) => (
+              <ChatListItem
+                key={session.id}
+                session={session}
+                selected={selectedId === session.id}
+                workspaceCwd={workspaceCwd}
+                provider={provider}
+                copied={copiedId === session.id}
+                onSelect={onSelect}
+                onCopy={copyResumeCommand}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AgentConnectCard({
+  provider,
+  selectedProvider,
+  error,
+  busy,
+  onSelectedProviderChange,
+  onProviderChange,
+}: {
+  provider: AgentProviderId;
+  selectedProvider: AgentProviderId;
+  error: string | null;
+  busy: boolean;
+  onSelectedProviderChange: (provider: AgentProviderId) => void;
+  onProviderChange: (provider: AgentProviderId) => void;
+}) {
+  return (
+    <section className="w-full max-w-[340px] text-center">
+      <div className="text-[18px] font-medium text-[color:var(--rp-ink-strong)]">Connect your coding agent</div>
+      <p className="mx-auto mt-2 max-w-[300px] text-sm leading-relaxed text-[color:var(--rp-ink-muted)]">
+        Ask questions about traces and resume chats from your terminal.
+      </p>
+      <div className="mt-5 grid grid-cols-2 gap-1.5 rounded-xl border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] p-1">
+        {(["claude", "codex"] as AgentProviderId[]).map((option) => {
+          const active = selectedProvider === option;
+          return (
+            <button
+              key={option}
+              type="button"
+              onClick={() => onSelectedProviderChange(option)}
+              disabled={busy}
+              className={`flex min-h-12 items-center justify-center gap-2 rounded-lg border px-2.5 text-xs transition-[transform,background-color,border-color,color] active:scale-[0.98] ${
+                active
+                  ? "border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] text-[color:var(--rp-ink-strong)]"
+                  // A lighter wash than the selected fill, and the border stays
+                  // transparent. Hovering used to apply the selected state's
+                  // exact background and text colour, so both segments looked
+                  // chosen and you could not tell which one you were on.
+                  : "border-transparent text-[color:var(--rp-ink-soft)] hover:bg-[color:var(--rp-ink-a04)] hover:text-[color:var(--rp-ink-strong)]"
+              } disabled:cursor-not-allowed disabled:opacity-55`}
+              aria-pressed={active}
+            >
+              <LargeProviderIcon provider={option} />
+              <span className="font-medium">{providerLabel(option)}</span>
+            </button>
+          );
+        })}
+      </div>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => onProviderChange(selectedProvider)}
+        // The hover here repeated the base border and background verbatim, so it
+        // was a guaranteed no-op; a stronger wash is what makes it read.
+        className="mt-3 flex min-h-10 w-full items-center justify-center rounded-lg border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] px-4 text-sm font-medium text-[color:var(--rp-ink-strong)] transition-[transform,background-color,border-color,opacity] hover:bg-[color:var(--rp-ink-wash-strong)] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-55"
+      >
+        {busy ? "Connecting..." : `Connect ${providerLabel(selectedProvider)}`}
+      </button>
+      {error && <div className="mt-3 rounded-lg border border-red-400/20 bg-red-500/10 px-2 py-1.5 text-xs text-[color:var(--rp-danger)]">{error}</div>}
+    </section>
+  );
+}
+
+function ChatListItem({
+  session,
+  selected,
+  workspaceCwd,
+  provider,
+  copied,
+  onSelect,
+  onCopy,
+}: {
+  session: ClaudeSessionSummary;
+  selected: boolean;
+  workspaceCwd: string | null;
+  provider: AgentProviderId;
+  copied: boolean;
+  onSelect: (id: string, cwd?: string | null) => void;
+  onCopy: (event: SyntheticEvent, session: ClaudeSessionSummary) => Promise<void>;
+}) {
+  const cwd = session.cwd ?? workspaceCwd;
+  const cwdDisplay = formatCwdDisplay(cwd);
+  return (
+    <div
+      className={`relative w-full rounded-md border text-left transition-[background-color,border-color,color] ${
+        selected
+          ? "border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] text-[color:var(--rp-ink-strong)]"
+          : "border-transparent text-[color:var(--rp-ink-soft)] hover:border-[color:var(--rp-border)] hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)]"
+      }`}
+    >
+      <button type="button" aria-current={selected ? "true" : undefined} onClick={() => onSelect(session.id, cwd)} className="block w-full rounded-md px-3 py-2 pr-10 text-left">
+        <span className="flex items-center justify-between gap-3">
+          <span className="truncate text-xs font-medium">{session.preview || "Untitled chat"}</span>
+          <span className="shrink-0 text-[10px] text-[color:var(--rp-ink-muted)]">{formatSessionTime(session.updated_at)}</span>
+        </span>
+        <span className="mt-1.5 flex min-w-0 items-center gap-1.5 font-mono text-[10px] text-[color:var(--rp-ink-muted)]">
+          <Terminal className="h-3 w-3 shrink-0" />
+          <span className="truncate" title={cwd ?? "Working directory unavailable"}>{cwdDisplay}</span>
+        </span>
+        <span className="mt-1 block font-mono text-[10px] text-[color:var(--rp-ink-muted)]">
+          {session.id.slice(0, 8)} · {session.message_count} messages
+        </span>
+      </button>
+      <button
+        type="button"
+        title={`Copy ${resumeCommandForSession(session, workspaceCwd, provider)}`}
+        aria-label={`Copy ${resumeCommandForSession(session, workspaceCwd, provider)}`}
+        onClick={(event) => void onCopy(event, session)}
+        className={`absolute bottom-2 right-2 grid min-h-7 min-w-7 place-items-center rounded transition-colors ${
+          copied ? "text-[color:var(--rp-success)]" : "text-[color:var(--rp-ink-muted)] hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)]"
+        }`}
+      >
+        {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+      </button>
+    </div>
+  );
+}
+
+function ChatPreviewItem({
+  session,
+  workspaceCwd,
+}: {
+  session: ClaudeSessionSummary;
+  workspaceCwd: string | null;
+}) {
+  const cwd = formatCwdDisplay(session.cwd ?? workspaceCwd);
+  return (
+    <div className="px-1 py-1">
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1 truncate text-xs text-[color:var(--rp-ink-strong)]">{session.preview || "Untitled chat"}</div>
+        <div className="shrink-0 text-[10px] text-[color:var(--rp-ink-muted)]">{formatSessionTime(session.updated_at)}</div>
+      </div>
+      <div className="mt-0.5 flex min-w-0 items-center gap-1.5 font-mono text-[10px] text-[color:var(--rp-ink-muted)]">
+        <Terminal className="h-3 w-3 shrink-0" />
+        <span className="truncate">{cwd}</span>
+      </div>
+    </div>
+  );
+}
+
+function formatCwdDisplay(cwd: string | null): string {
+  if (!cwd) return "Working directory unavailable";
+  return cwd.replace(/^\/Users\/[^/]+(?=\/|$)/, "~");
+}
+
+function apiPathWithCwd(apiPath: string, cwd: string | null): string {
+  if (!cwd) return apiPath;
+  return `${apiPath}${apiPath.includes("?") ? "&" : "?"}cwd=${encodeURIComponent(cwd)}`;
+}
+
+function resumeCommandForSession(session: ClaudeSessionSummary, workspaceCwd: string | null, provider: AgentProviderId = "claude"): string {
+  const cwd = session.cwd ?? workspaceCwd;
+  const resume = provider === "codex" ? `codex resume ${session.id}` : `claude --resume ${session.id}`;
+  return cwd
+    ? `cd ${shellQuote(cwd)} && ${resume}`
+    : resume;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function copyTextWithTextarea(text: string): boolean {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  return copied;
+}
+
+function TraceDebugPrompt({ onPrompt }: { onPrompt: (prompt: string) => void }) {
+  const prompts = ["What went wrong here?", "What Run Phantom tools are available?", "Annotate this run and save it for later"];
+  return (
+    <div className="mb-2 flex gap-1.5 overflow-x-auto whitespace-nowrap pb-0.5">
+      {prompts.map((prompt) => (
+        <button
+          key={prompt}
+          type="button"
+          onClick={() => onPrompt(prompt)}
+          className="min-h-8 shrink-0 rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] px-2.5 py-1 text-left text-xs text-[color:var(--rp-ink-soft)] shadow-[0_6px_18px_var(--rp-ink-a10)] transition-[transform,background-color,border-color,color] hover:border-[color:var(--rp-ink-a12)] hover:bg-[color:var(--rp-ink-wash-strong)] hover:text-[color:var(--rp-ink-strong)] active:scale-[0.96]"
+        >
+          {prompt}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function MessageBubble({ message }: { message: ClaudeChatMessage }) {
+  const isUser = message.role === "user";
+  const blocks = parseAssistantBlocks(message);
+  if (!isUser && blocks.length === 0) return null;
+  if (!isUser) {
+    return (
+      <div className="message-arrive flex flex-col items-start gap-2">
+        <AssistantBlocks blocks={blocks} isLive={false} />
+      </div>
+    );
+  }
+  return (
+    <div className="message-arrive flex flex-col items-end">
+      <div
+        className="max-w-[90%] min-w-0 overflow-hidden rounded border px-3 py-2 text-[color:var(--rp-ink-strong)]"
+        style={{ borderColor: "color-mix(in srgb, var(--rp-selected-border) 32%, transparent)", background: "var(--rp-user-surface)" }}
+        onClick={handleDeepLinkClick}
+      >
+        <MessageText text={message.content} />
+      </div>
+    </div>
+  );
+}
+
+function AssistantBlocks({ blocks, isLive }: { blocks: AssistantMessageBlock[]; isLive: boolean }) {
+  if (!blocks.length) return null;
+  return (
+    <>
+      {blocks.map((block, index) => {
+        if (block.type === "text") {
+          const wide = isWideMarkdown(block.text);
+          return (
+            <div
+              key={index}
+              className={`stream-block assistant-bubble min-w-0 overflow-hidden rounded border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] text-[color:var(--rp-ink-strong)] ${wide ? "assistant-bubble-wide w-full max-w-none px-2 py-2" : "max-w-[90%] px-3 py-2"} ${isLive ? "assistant-bubble-live" : ""}`}
+              onClick={handleDeepLinkClick}
+            >
+              <MessageText text={block.text} />
+            </div>
+          );
+        }
+        if (block.type === "error") {
+          return <div key={index} className="stream-block whitespace-pre-wrap rounded border px-2 py-1 text-[color:var(--rp-ink-strong)]" style={{ borderColor: "color-mix(in srgb, var(--rp-danger) 28%, transparent)", background: "color-mix(in srgb, var(--rp-danger) 7%, var(--rp-surface))" }}>{block.text}</div>;
+        }
+        if (block.type === "thinking") {
+          return <ThinkingActivityCard key={index} text={block.text} />;
+        }
+        if (isAskAgentTool(block.name)) {
+          return <AgentAskCard key={block.id || index} block={block} />;
+        }
+        return <ToolActivityCard key={block.id || index} block={block} />;
+      })}
+    </>
+  );
+}
+
+function ThinkingActivityCard({ text }: { text: string }) {
+  return (
+    <details
+      className="stream-block tool-card activity-inline max-w-[90%] text-[11px] text-[color:var(--rp-ink-muted)]"
+      title="thinking"
+    >
+      <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 py-0.5 outline-none">
+        <Brain className="activity-icon h-3.5 w-3.5 shrink-0 text-[color:var(--rp-info)]" />
+        <span className="activity-label min-w-0 truncate font-mono text-[11px]">thinking</span>
+        <ChevronDown className="tool-card-chevron activity-chevron h-3 w-3 shrink-0 transition-transform" />
+      </summary>
+      <div className="activity-content mt-1 pl-5">
+        <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-relaxed">{text}</pre>
+      </div>
+    </details>
+  );
+}
+
+function ToolActivityCard({ block }: { block: Extract<AssistantMessageBlock, { type: "tool" }> }) {
+  const failed = block.ok === false;
+  const running = block.state === "running";
+  const isRunPhantomTool = isRunPhantomMcpTool(block.name);
+  const displayName = compactToolName(block.name);
+  const hasPreview = Boolean(block.input_preview || block.output_preview);
+
+  return (
+    <details
+      className="stream-block tool-card activity-inline max-w-[90%] text-[11px] text-[color:var(--rp-ink-muted)]"
+      title={block.name}
+    >
+      <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 py-0.5 outline-none">
+        {isRunPhantomTool ? (
+          <RunPhantomMark
+            decorative
+            size={14}
+            className={`activity-icon shrink-0 ${running ? "animate-pulse" : ""}`}
+            style={{ color: failed ? "var(--rp-danger)" : "var(--rp-ink-soft)" }}
+          />
+        ) : (
+          <Wrench
+            className={`activity-icon h-3.5 w-3.5 shrink-0 ${running ? "animate-pulse" : ""}`}
+            style={{ color: failed ? "var(--rp-danger)" : running ? "var(--rp-warning)" : "var(--rp-info)" }}
+          />
+        )}
+        <span className={`activity-label min-w-0 truncate font-mono text-[11px] ${failed ? "activity-label-error" : ""}`}>{displayName}</span>
+        {hasPreview && <ChevronDown className="tool-card-chevron activity-chevron h-3 w-3 shrink-0 transition-transform" />}
+      </summary>
+      {hasPreview && (
+        <div className="activity-content mt-1 pl-5">
+          {block.input_preview && (
+            <div>
+              <div className="activity-kicker mb-0.5 text-[9px] font-medium uppercase tracking-[0.16em]">Input</div>
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-relaxed">{block.input_preview}</pre>
+            </div>
+          )}
+          {block.output_preview && (
+            <div className={block.input_preview ? "mt-2" : ""}>
+              <div className="activity-kicker mb-0.5 text-[9px] font-medium uppercase tracking-[0.16em]">Output</div>
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-relaxed">{block.output_preview}</pre>
+            </div>
+          )}
+        </div>
+      )}
+    </details>
+  );
+}
+
+function compactToolName(name: string): string {
+  if (!name.startsWith("mcp__")) return name;
+  const parts = name.split("__");
+  return parts.length > 2 ? parts.slice(2).join("__") : name;
+}
+
+function isRunPhantomMcpTool(name: string): boolean {
+  return name.startsWith("mcp__runphantom__") || name.startsWith("runphantom.");
+}
+
+function AgentAskCard({ block }: { block: Extract<AssistantMessageBlock, { type: "tool" }> }) {
+  const input = parseJsonObject(block.input_preview);
+  const result = parseAgentToolResult(block.output_preview);
+  const question = typeof input?.question === "string" ? input.question : null;
+  const status = result?.status;
+
+  if (block.state === "running") {
+    return (
+      <div className="stream-block w-[90%] rounded-lg border px-3 py-3 text-[color:var(--rp-ink-strong)] shadow-[0_8px_24px_var(--rp-ink-a12)]" style={{ borderColor: "color-mix(in srgb, var(--rp-info) 24%, transparent)", background: "color-mix(in srgb, var(--rp-info) 7%, var(--rp-surface))" }}>
+        <div className="text-[11px] font-medium uppercase tracking-wide text-[color:var(--rp-info)]">
+          Asking agent
+        </div>
+        {question && <div className="mt-2 text-sm text-[color:var(--rp-ink-strong)]">{question}</div>}
+        <div className="mt-2 text-xs text-[color:var(--rp-ink-muted)]">Continuing the captured agent context...</div>
+      </div>
+    );
+  }
+
+  if (!result) {
+    return (
+      <div className="stream-block w-[90%] rounded-lg border px-3 py-3 text-[color:var(--rp-ink-strong)]" style={{ borderColor: "color-mix(in srgb, var(--rp-info) 20%, transparent)", background: "color-mix(in srgb, var(--rp-info) 6%, var(--rp-surface))" }}>
+        <div className="text-[11px] font-medium uppercase tracking-wide text-[color:var(--rp-info)]">
+          Asked agent
+        </div>
+        {question && <div className="mt-2 text-sm text-[color:var(--rp-ink-strong)]">{question}</div>}
+        <div className="mt-2 text-xs text-[color:var(--rp-ink-muted)]">Run Phantom chat is talking to your agent...</div>
+      </div>
+    );
+  }
+
+  if (status === "answered") {
+    return (
+      <div className="stream-block w-[90%] rounded-lg border px-3 py-3 text-[color:var(--rp-ink-strong)] shadow-[0_8px_24px_var(--rp-ink-a12)]" style={{ borderColor: "color-mix(in srgb, var(--rp-success) 24%, transparent)", background: "color-mix(in srgb, var(--rp-success) 7%, var(--rp-surface))" }}>
+        <div className="text-[11px] font-medium uppercase tracking-wide text-[color:var(--rp-success)]">
+          Agent answered
+        </div>
+        {question && <div className="mt-2 text-xs text-[color:var(--rp-ink-muted)]">{question}</div>}
+        <div className="mt-2 text-sm leading-relaxed text-[color:var(--rp-ink-strong)]">
+          <MessageText text={String(result.answer ?? "")} />
+        </div>
+      </div>
+    );
+  }
+
+  if (status === "missing_provider_key") {
+    const envVar = typeof result.env_var === "string" ? result.env_var : "ANTHROPIC_API_KEY";
+    return (
+      <div className="stream-block w-[90%] rounded-lg border px-3 py-3 text-[color:var(--rp-ink-strong)]" style={{ borderColor: "color-mix(in srgb, var(--rp-warning) 28%, transparent)", background: "color-mix(in srgb, var(--rp-warning) 7%, var(--rp-surface))" }}>
+        <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-[color:var(--rp-warning)]">
+          <KeyRound className="h-3.5 w-3.5" />
+          Agent needs an API key
+        </div>
+        <div className="mt-2 text-sm text-[color:var(--rp-ink-strong)]">Add the key in Run Phantom Settings, or set the environment variable and restart Run Phantom.</div>
+        <code className="mt-2 block rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] px-2 py-1.5 font-mono text-[11px] text-[color:var(--rp-ink-strong)]">
+          {envVar}=...
+        </code>
+      </div>
+    );
+  }
+
+  if (status === "missing_context") {
+    return (
+      <div className="stream-block w-[90%] rounded-lg border px-3 py-3 text-[color:var(--rp-ink-strong)]" style={{ borderColor: "color-mix(in srgb, var(--rp-warning) 24%, transparent)", background: "color-mix(in srgb, var(--rp-warning) 6%, var(--rp-surface))" }}>
+        <div className="text-[11px] font-medium uppercase tracking-wide text-[color:var(--rp-warning)]">
+          Agent context unavailable
+        </div>
+        <div className="mt-2 text-sm leading-relaxed text-[color:var(--rp-ink-strong)]">{String(result.message ?? "This run does not include an LLM input payload that Run Phantom can continue.")}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="stream-block w-[90%] rounded-lg border px-3 py-3 text-[color:var(--rp-ink-strong)]" style={{ borderColor: "color-mix(in srgb, var(--rp-danger) 26%, transparent)", background: "color-mix(in srgb, var(--rp-danger) 7%, var(--rp-surface))" }}>
+      <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-[color:var(--rp-danger)]">
+        <AlertTriangle className="h-3.5 w-3.5" />
+        Agent ask failed
+      </div>
+      <div className="mt-2 whitespace-pre-wrap text-sm text-[color:var(--rp-ink-strong)]">{String(result.message ?? result.error ?? "The captured agent context did not return a usable answer.")}</div>
+    </div>
+  );
+}
+
+function isAskAgentTool(name: string): boolean {
+  return name === "ask_agent" || name === "mcp__runphantom__ask_agent" || name.endsWith("__ask_agent");
+}
+
+function parseAgentToolResult(output: string | undefined): Record<string, unknown> | null {
+  if (!output) return null;
+  const parsed = parseJsonValue(output);
+  if (isRecord(parsed) && typeof parsed.status === "string") return parsed;
+  if (Array.isArray(parsed)) {
+    const textBlock = parsed.find((item) => isRecord(item) && item.type === "text" && typeof item.text === "string");
+    if (isRecord(textBlock) && typeof textBlock.text === "string") {
+      const inner = parseJsonValue(textBlock.text);
+      if (isRecord(inner) && typeof inner.status === "string") return inner;
+    }
+  }
+  if (isRecord(parsed) && Array.isArray(parsed.content)) {
+    const textBlock = parsed.content.find((item: unknown) => isRecord(item) && item.type === "text" && typeof item.text === "string");
+    if (isRecord(textBlock) && typeof textBlock.text === "string") {
+      const inner = parseJsonValue(textBlock.text);
+      if (isRecord(inner) && typeof inner.status === "string") return inner;
+    }
+  }
+  return null;
+}
+
+function parseJsonObject(text: string | undefined): Record<string, unknown> | null {
+  const parsed = parseJsonValue(text);
+  return isRecord(parsed) ? parsed : null;
+}
+
+function parseJsonValue(text: string | undefined): unknown {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function MessageText({ text }: { text: string }) {
+  return <Markdown>{escapeEmptyOrderedListMarkers(linkifyDeepRefs(text))}</Markdown>;
+}
+
+function escapeEmptyOrderedListMarkers(text: string): string {
+  return text.replace(/^(\s*\d+)\.\s*$/gm, "$1\\.");
+}
+
+function parseAssistantBlocks(message: ClaudeChatMessage): AssistantMessageBlock[] {
+  if (message.role === "user") return [{ type: "text", text: message.content }];
+  if (message.error) return visibleAssistantBlocks([{ type: "error", text: message.content }]);
+  if (message.blocks?.length) {
+    return visibleAssistantBlocks(message.blocks.map((block): AssistantMessageBlock => {
+      if (block.type === "tool") return { ...block, state: "done" };
+      return block;
+    }));
+  }
+  return visibleAssistantBlocks([{ type: "text", text: message.content }]);
+}
+
+function isWideMarkdown(text: string): boolean {
+  const lines = text.split(/\r?\n/);
+  return lines.some((line, index) => {
+    const next = lines[index + 1];
+    return isMarkdownTableRow(line) && next !== undefined && isMarkdownTableDivider(next);
+  });
+}
+
+function isMarkdownTableRow(line: string): boolean {
+  return line.includes("|") && line.split("|").length >= 3;
+}
+
+function isMarkdownTableDivider(line: string): boolean {
+  return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+}
+
+function formatSessionTime(value: string | null): string {
+  if (!value) return "";
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return "";
+  const diff = Date.now() - time;
+  if (diff < 60_000) return "now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`;
+  return `${Math.floor(diff / 86_400_000)}d`;
+}
+
+/**
+ * Turn bare `span_id: <id>` and `trace_<id>` tokens into markdown links
+ * with a custom hash scheme. The click handler on the bubble intercepts
+ * the resulting anchor clicks and routes them to either the span-scroll
+ * event or a `/runs/:runId` navigation.
+ */
+const DEEP_LINK_RE = /(span_id:\s*)([0-9a-f]{8,64})|(trace_)([0-9a-f]{8,64})/gi;
+function linkifyDeepRefs(text: string): string {
+  if (!text) return text;
+  return text.replace(DEEP_LINK_RE, (match, sPrefix, sId, rPrefix, rId) => {
+    if (sId) return `[${sPrefix}${sId}](#wd-span-${sId})`;
+    if (rId) return `[${rPrefix}${rId}](#wd-run-${rId})`;
+    return match;
+  });
+}
+
+function handleDeepLinkClick(e: React.MouseEvent<HTMLDivElement>) {
+  const target = e.target as HTMLElement;
+  const anchor = target.closest("a") as HTMLAnchorElement | null;
+  if (!anchor) return;
+  const href = anchor.getAttribute("href") ?? "";
+  if (href.startsWith("#wd-span-")) {
+    e.preventDefault();
+    const spanId = href.slice("#wd-span-".length);
+    window.dispatchEvent(new CustomEvent("runphantom:deep-link-span", { detail: { spanId } }));
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent("runphantom:deep-link-span", { detail: { spanId } }));
+    }, 80);
+  } else if (href.startsWith("#wd-run-")) {
+    e.preventDefault();
+    const runId = href.slice("#wd-run-".length);
+    void router.navigate(runPath(runId));
+  }
+}

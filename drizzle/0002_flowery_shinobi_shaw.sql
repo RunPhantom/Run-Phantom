@@ -1,0 +1,1 @@
+ALTER TABLE `runs` ADD `display_name` text;
