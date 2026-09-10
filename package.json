@@ -1,0 +1,97 @@
+{
+  "name": "@runphantom/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Run Phantom is a local-first debugger for inspecting, replaying, and fixing AI-agent runs.",
+  "license": "MIT",
+  "maintainers": [
+    {
+      "name": "Divyam Talwar"
+    }
+  ],
+  "bin": {
+    "runphantom": "bin/runphantom-dev",
+    "runphantom-dev": "bin/runphantom-dev"
+  },
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "overrides": {
+    "@esbuild-kit/core-utils": {
+      "esbuild": "0.25.12"
+    },
+    "@hono/node-server@<1.19.15": "1.19.15",
+    "body-parser@<1.20.6": "1.20.6",
+    "body-parser@>=2.0.0 <2.3.0": "2.3.0",
+    "brace-expansion@<1.1.18": "1.1.18",
+    "brace-expansion@>=4.0.0 <5.0.9": "5.0.9",
+    "dompurify@<=3.4.12": "3.4.14",
+    "fast-uri@>=3.0.0 <3.1.5": "3.1.5",
+    "form-data@>=4.0.0 <4.0.6": "4.0.6",
+    "hono@<4.12.34": "4.13.4",
+    "ip-address@<=10.3.0": "10.5.0",
+    "mermaid@>=11.0.0-alpha.1 <11.16.1": "11.17.1",
+    "nanoid@<3.3.18": "3.3.18",
+    "postcss@<=8.5.22": "8.5.26",
+    "qs@>=6.11.1 <=6.15.1": "6.15.3",
+    "tsx": {
+      "esbuild": "0.28.2"
+    }
+  },
+  "workspaces": [
+    "app"
+  ],
+  "scripts": {
+    "build": "bun scripts/build-verification-sdk.ts --check && bun scripts/embed-migrations.ts --check && bun x tsc --noEmit && bun run build:ui",
+    "build:ui": "cd app && bun x vite build",
+    "build:bun": "bun scripts/build-bun.ts",
+    "build:bun:all": "bun scripts/build-bun.ts --all",
+    "dev": "bun run link-dev && bun --watch src/index.ts serve & (printf \"\\nRun Phantom UI: http://localhost:${RUNPHANTOM_UI_PORT:-5948}\\n\\n\" && cd app && bun x vite --force) & wait",
+    "link-dev": "ln -sf ../../bin/runphantom-dev node_modules/.bin/runphantom-dev",
+    "postinstall": "bun run link-dev",
+    "dev:server": "bun --watch src/index.ts serve",
+    "dev:ui": "cd app && bun x vite --force",
+    "dev:examples": "bun scripts/dev-all.ts",
+    "db:generate": "drizzle-kit generate && bun scripts/embed-migrations.ts",
+    "db:embed": "bun scripts/embed-migrations.ts",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
+    "setup": "bun src/index.ts setup",
+    "seed:traces": "bun scripts/seed-traces.ts",
+    "start": "bun src/index.ts serve",
+    "test": "bun test tests/",
+    "test:compiled": "bash scripts/test-compiled.sh",
+    "test:watch": "bun test tests/ --watch",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "manifest": "bun scripts/generate-manifest.ts",
+    "install:local": "bun scripts/install-local.ts"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.7.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "agent-install": "^0.0.5",
+    "drizzle-orm": "^0.45.2",
+    "express": "^4.22.2",
+    "jsonpath-plus": "^10.4.0",
+    "protobufjs": "^7.6.5",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/bun": "^1.4.0",
+    "@types/express": "^4.17.25",
+    "@types/node": "^22.20.1",
+    "@types/supertest": "^7.2.1",
+    "@types/ws": "^8.18.1",
+    "drizzle-kit": "^0.31.10",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.5.4",
+    "globals": "^17.11.0",
+    "supertest": "^7.2.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.67.0"
+  }
+}
