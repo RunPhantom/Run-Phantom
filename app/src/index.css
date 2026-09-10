@@ -1,0 +1,918 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+  /* ---------------------------------------------------------------------
+     TYPOGRAPHY
+     Avenir Next ships no `tnum` and no `zero` on any of its 12 faces, so
+     numeric columns can never align and 0/O stay ambiguous in trace IDs; it is
+     also macOS-only and this is a browser app. Inter has both features, a
+     0.546 x-height against Avenir's 0.498, and a variable opsz axis.
+     --------------------------------------------------------------------- */
+  --font-sans: "Inter Variable", "Inter", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  --font-display: var(--font-sans);
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --rp-numeric: tabular-nums slashed-zero;
+
+  --rp-text-micro: 11px;   --rp-lh-micro: 16px;   --rp-ls-micro: 0.005em;
+  --rp-text-label: 12px;   --rp-lh-label: 16px;   --rp-ls-label: 0em;
+  --rp-text-body: 13px;    --rp-lh-body: 18px;    --rp-ls-body: -0.003em;
+  --rp-lh-body-relaxed: 20px;
+  --rp-text-lg: 14px;      --rp-lh-lg: 20px;      --rp-ls-lg: -0.006em;
+  --rp-text-title: 16px;   --rp-lh-title: 22px;   --rp-ls-title: -0.011em;
+  --rp-text-display: 20px; --rp-lh-display: 26px; --rp-ls-display: -0.017em;
+  --rp-weight-regular: 400;
+  --rp-weight-medium: 500;
+  --rp-weight-semibold: 600;
+
+  /* ---------------------------------------------------------------------
+     NEUTRAL PRIMITIVES — n0..n16
+     One hue family. Hue drifts 80 -> 56 as lightness falls (Bezold-Brucke:
+     shadows read purpler, highlights yellower, so holding one hue number
+     produces a visible cast). Chroma follows a parabola peaking at 0.0165,
+     not a monotonic line — the old --rp-border sat at C 0.042 at L 63.8, and
+     saturated-mid-lightness is exactly where khaki lives.
+
+     Nothing outside this block may reference n0..n16. Components consume role
+     tokens only.
+     --------------------------------------------------------------------- */
+  --rp-n0:  #FEFCF9;  /* oklch(.992 .0050 80) */
+  --rp-n1:  #FBF8F2;  /* oklch(.979 .0080 79) */
+  --rp-n2:  #F8F4EE;  /* oklch(.969 .0090 79)  brand cream, unchanged */
+  --rp-n3:  #F5F0EA;  /* oklch(.958 .0100 78) */
+  --rp-n4:  #F1ECE5;  /* oklch(.945 .0110 77) */
+  --rp-n5:  #F0EAE2;  /* oklch(.940 .0125 75) */
+  --rp-n6:  #EEE7DE;  /* oklch(.930 .0135 72) */
+  --rp-n7:  #E8E1D8;  /* oklch(.912 .0140 75) */
+  --rp-n8:  #E5DFD6;  /* oklch(.905 .0130 74) */
+  --rp-n9:  #D8D0C7;  /* oklch(.862 .0155 72) */
+  --rp-n10: #CAC1B7;  /* oklch(.815 .0165 70) */
+  --rp-n11: #928980;  /* oklch(.640 .0160 64) */
+  --rp-n12: #877E75;  /* oklch(.598 .0170 65) */
+  --rp-n13: #706760;  /* oklch(.520 .0155 63) */
+  --rp-n14: #6B635C;  /* oklch(.505 .0150 62) */
+  --rp-n15: #59524C;  /* oklch(.443 .0140 61) */
+  --rp-n16: #48413C;  /* oklch(.380 .0130 60) */
+  --rp-n17: #36302C;  /* oklch(.315 .0115 58) */
+  --rp-n18: #27221E;  /* oklch(.255 .0100 57) */
+  --rp-n19: #191512;  /* oklch(.198 .0085 56) */
+
+  /* ---------------------------------------------------------------------
+     SURFACES — canvas darker, panels lighter (Polaris / Carbon-g10 model).
+     Chosen over the Material 3 inversion because six panels are visible at
+     1280px and a panel must read as a panel with zero shadow.
+     Deltas: canvas 1.00 -> surface 1.03 -> raised 1.07 against the canvas.
+     --------------------------------------------------------------------- */
+  --rp-canvas: var(--rp-n2);
+  --rp-surface: var(--rp-n1);
+  /* Was #F2EADF — five OKLCH-L points DARKER than the surface it claimed to sit
+     above. Now genuinely the top of the ladder, so zebra rows, tooltips and
+     nested chips all read correctly with the same token. */
+  --rp-surface-raised: var(--rp-n0);
+  --rp-surface-sunken: var(--rp-n4);   /* inputs, code wells, tree gutters */
+  --rp-surface-hover: var(--rp-n3);
+  --rp-surface-active: var(--rp-n5);
+  /* Was #F2DDD5 — 0.02 Oklab from --rp-accent-soft, so a selected run and a
+     branded surface were the same wash. Now a neutral warm step; identity is
+     carried by the 2px accent rail instead. */
+  --rp-surface-selected: var(--rp-n6);
+  --rp-selected: var(--rp-surface-selected);
+  --rp-selected-border: var(--rp-accent);
+  --rp-selected-rail: var(--rp-accent);
+  --rp-user-surface: #F5EBE0;          /* oklch(.945 .0180 72) — ink-max 13.38:1 */
+
+  /* ---------------------------------------------------------------------
+     BORDERS — four tiers, one job each.
+     WCAG 1.4.11 exempts a boundary when the control already has visible
+     content, so a table rule may sit at 1.21:1 while an input outline may not.
+     The old single #9C8870 (3.11:1) was a control-weight line used 53 times as
+     decoration; that is the whole reason the UI read as boxed-in khaki.
+     --------------------------------------------------------------------- */
+  --rp-hairline: var(--rp-n8);         /* 1.21:1 — row rules, tree guides, splits */
+  --rp-border: var(--rp-n9);           /* 1.39:1 — card and panel edges (default) */
+  --rp-border-hover: var(--rp-n10);    /* 1.62:1 — hovered container edge */
+  --rp-border-strong: var(--rp-n12);   /* 3.64:1 canvas · 3.25:1 selected — SC 1.4.11 */
+  --rp-border-heavy: var(--rp-n13);    /* 5.05:1 — pressed/active control outline */
+
+  /* ---------------------------------------------------------------------
+     INK — six distinct tiers, solved against --rp-surface-selected (#EEE7DE),
+     the darkest bed text lands on, so nothing degrades on a selected row.
+     Previously fg3/fg4/fg5 all resolved to one value and ink-soft/ink-muted
+     were 1.1 L apart: six names, three visible steps. Adjacent tiers here are
+     6-7 OKLCH-L apart and every one is AA on every surface.
+     Hue moves from 326-340 (magenta) to 56-64 (warm) — the old ink was 110
+     degrees off the canvas, which is what made every wash read dirty.
+     --------------------------------------------------------------------- */
+  --rp-ink-faint:  var(--rp-n11);  /*  3.14:1 canvas — NON-TEXT ONLY */
+  --rp-ink-muted:  var(--rp-n14);  /*  5.38:1 canvas ·  4.80:1 selected */
+  --rp-ink-soft:   var(--rp-n15);  /*  7.01:1 canvas ·  6.26:1 selected */
+  --rp-ink:        var(--rp-n16);  /*  9.14:1 canvas ·  8.16:1 selected */
+  --rp-ink-strong: var(--rp-n17);  /* 11.86:1 canvas · 10.59:1 selected */
+  --rp-ink-max:    var(--rp-n18);  /* 14.37:1 canvas · 12.84:1 selected */
+  --rp-ink-black:  var(--rp-n19);  /* 16.56:1 canvas · 14.79:1 selected */
+
+  /* ---------------------------------------------------------------------
+     WASH & SHADOW BASE
+     rgb(43 33 20) = oklch(.20 .030 68). Composited over the canvas at
+     4/8/12/18/24/55% alpha the hue drift stays within 6.4 degrees and chroma
+     is always POSITIVE. The old rgb(48 39 48) drifted -24.9 degrees and
+     REMOVED chroma at 24% — a mauve-gray smudge over cream, which is what the
+     "floating gray box" actually was.
+     --------------------------------------------------------------------- */
+  --rp-shadow-rgb: 43 33 20;
+
+  --rp-wash-1: rgb(43 33 20 / 0.030);   /* 1.06:1 — zebra, faintest fill */
+  --rp-wash-2: rgb(43 33 20 / 0.045);   /* 1.08:1 — row hover */
+  --rp-wash-3: rgb(43 33 20 / 0.065);   /* 1.13:1 — row press, chip fill */
+  --rp-wash-4: rgb(43 33 20 / 0.100);   /* 1.21:1 — active chip, inset well */
+  --rp-wash-5: rgb(43 33 20 / 0.160);   /* 1.37:1 — heaviest legal wash */
+  /* The one modal backdrop. Three dialogs each rolled their own — two used the
+     near-transparent --rp-ink-wash and one an inline alpha — so a modal barely
+     dimmed what it was blocking and none of them matched each other. */
+  --rp-scrim:  rgb(43 33 20 / 0.550);   /* 3.56:1 — modal backdrop */
+
+  --rp-ink-wash: var(--rp-wash-3);
+  --rp-ink-wash-strong: var(--rp-wash-4);
+
+  /* Legacy alpha ladder, re-based off the warm shadow ink. Values unchanged in
+     alpha so the 119 existing call sites keep their intent; only the hue moves.
+     Migrate toward --rp-wash-1..5, which are the named roles. */
+  --rp-ink-a02: rgb(43 33 20 / 0.02);
+  --rp-ink-a04: rgb(43 33 20 / 0.04);
+  --rp-ink-a06: rgb(43 33 20 / 0.06);
+  --rp-ink-a08: rgb(43 33 20 / 0.08);
+  --rp-ink-a10: rgb(43 33 20 / 0.10);
+  --rp-ink-a12: rgb(43 33 20 / 0.12);
+  --rp-ink-a15: rgb(43 33 20 / 0.15);
+  --rp-ink-a18: rgb(43 33 20 / 0.18);
+  --rp-ink-a20: rgb(43 33 20 / 0.20);
+  --rp-ink-a22: rgb(43 33 20 / 0.22);
+
+  --rp-guide: rgb(43 33 20 / 0.10);
+  --rp-guide-hover: rgb(43 33 20 / 0.22);
+  --rp-inset-hairline: rgb(43 33 20 / 0.05);
+  --rp-inset-hairline-soft: rgb(43 33 20 / 0.035);
+  --rp-grid-line: rgb(43 33 20 / 0.028);
+  --rp-accent-flash: rgb(169 67 4 / 0.12);
+  --rp-canvas-fade-0: rgb(248 244 238 / 0);
+  --rp-canvas-fade-1: rgb(248 244 238 / 0.86);
+  --rp-canvas-fade-2: rgb(248 244 238 / 1);
+
+  /* ---------------------------------------------------------------------
+     ELEVATION — two-layer physical model (tight contact + diffuse ambient),
+     ink-tinted, negative spread, hairline ring baked in as the first layer so
+     no component writes a separate `border` next to a `box-shadow`.
+     Composited darkest point runs 1.22:1 -> 1.60:1 against the canvas,
+     strictly monotonic. Capped at 10% alpha: Vercel tops out at 6%, Primer at
+     ~12%, Linear at 8%. Tailwind's shadow-2xl is 25% pure black and has no
+     place on a cream canvas.
+     --------------------------------------------------------------------- */
+  --rp-elev-0: none;
+  --rp-elev-inset:
+    inset 0 1px 2px 0 rgb(var(--rp-shadow-rgb) / 0.06),
+    inset 0 1px 1px 0 rgb(var(--rp-shadow-rgb) / 0.04);
+  --rp-elev-1:
+    0 0 0 1px rgb(var(--rp-shadow-rgb) / 0.045),
+    0 1px 1px -0.5px rgb(var(--rp-shadow-rgb) / 0.06);
+  --rp-elev-2:
+    0 0 0 1px rgb(var(--rp-shadow-rgb) / 0.05),
+    0 1px 1px -0.5px rgb(var(--rp-shadow-rgb) / 0.05),
+    0 2px 4px -2px rgb(var(--rp-shadow-rgb) / 0.05);
+  --rp-elev-3:
+    0 0 0 1px rgb(var(--rp-shadow-rgb) / 0.06),
+    0 1px 1px -0.5px rgb(var(--rp-shadow-rgb) / 0.05),
+    0 4px 8px -3px rgb(var(--rp-shadow-rgb) / 0.06);
+  --rp-elev-4:
+    0 0 0 1px rgb(var(--rp-shadow-rgb) / 0.07),
+    0 2px 3px -1px rgb(var(--rp-shadow-rgb) / 0.06),
+    0 12px 24px -8px rgb(var(--rp-shadow-rgb) / 0.08);
+  --rp-elev-5:
+    0 0 0 1px rgb(var(--rp-shadow-rgb) / 0.08),
+    0 4px 6px -2px rgb(var(--rp-shadow-rgb) / 0.07),
+    0 24px 48px -16px rgb(var(--rp-shadow-rgb) / 0.10);
+  --rp-elev-drag:
+    0 0 0 1px rgb(var(--rp-shadow-rgb) / 0.10),
+    0 2px 4px -1px rgb(var(--rp-shadow-rgb) / 0.05),
+    2px 12px 24px -8px rgb(var(--rp-shadow-rgb) / 0.12);
+
+  /* Scroll-boundary shadows: the one shadow a dense grid genuinely needs,
+     because a hairline between rows is easily missed at a scroll edge. */
+  --rp-shadow-scroll-top:    0 6px 8px -8px rgb(var(--rp-shadow-rgb) / 0.30);
+  --rp-shadow-scroll-bottom: 0 -6px 8px -8px rgb(var(--rp-shadow-rgb) / 0.30);
+  --rp-shadow-scroll-left:   6px 0 8px -8px rgb(var(--rp-shadow-rgb) / 0.30);
+  --rp-shadow-scroll-right:  -6px 0 8px -8px rgb(var(--rp-shadow-rgb) / 0.30);
+
+  --rp-ring-hairline: 0 0 0 1px rgb(var(--rp-shadow-rgb) / 0.07);
+  --rp-ring-default:  0 0 0 1px rgb(var(--rp-shadow-rgb) / 0.12);
+  --rp-ring-selected: inset 2px 0 0 0 var(--rp-selected-rail);
+  --rp-ring-focus:    0 0 0 2px var(--rp-canvas), 0 0 0 4px var(--rp-focus);
+  /* 1.02:1 on --rp-surface — invisible there. Only earns its paint on tinted
+     and accent-filled surfaces (1.13:1 raised, 3.5:1 on --rp-accent). */
+  --rp-highlight-top: inset 0 1px 0 0 rgb(255 255 255 / 0.70);
+
+  /* ---------------------------------------------------------------------
+     RADIUS — four values plus pill. Nine distinct radii were in use, which is
+     the most reliable amateur tell in a dense UI: adjacent components at
+     3/4/6/8/12/15px make every alignment look accidental.
+     --------------------------------------------------------------------- */
+  --rp-radius-sm: 4px;     /* chips, badges, inline code, flame bars */
+  --rp-radius-md: 6px;     /* buttons, inputs, rows, tool pills */
+  --rp-radius-lg: 10px;    /* cards, panels, popovers */
+  --rp-radius-xl: 14px;    /* drawers, modals, composer */
+  --rp-radius-full: 9999px;/* avatars, status dots only */
+
+  /* ---------------------------------------------------------------------
+     BRAND & STATUS
+     Every solid is solved to >= 4.83:1 on --rp-surface-selected, so all of
+     them clear AA as text on every bed, and white-on-solid clears 5.92:1.
+     Minimum pairwise Oklab dE across {accent, danger, warning, success, info}
+     is 0.103, above the 0.10 categorical floor. The old accent (H33) and
+     danger (H19) were dE 0.079 apart at identical lightness — in a trace
+     debugger, "selected" and "failed" were the same signal.
+     --------------------------------------------------------------------- */
+  --rp-accent:      #A94304;  /* oklch(.515 .148 44) — 5.49:1 canvas, white-on 6.01:1 */
+  --rp-accent-hover:#973B00;  /* 7.5:1 white-on */
+  --rp-accent-active:#851F00; /* 9.5:1 white-on */
+  --rp-accent-soft: #FCE1D7;  /* 1.13:1 canvas — accent-on-soft 4.84:1, ink-max 12.66:1 */
+  --rp-accent-soft-hover: #FBD5C6;
+  --rp-accent-border: #E9A585;
+  --rp-mark-accent: #A94304;
+
+  /* Deliberately the darkest, most saturated rust rather than a second hue.
+     8.27:1 on canvas and >= 7.2:1 on every tinted bed, so the ring is legible
+     everywhere EXCEPT directly on an accent fill (1.51:1) — which is why
+     outline-offset: 2px is mandatory: the 2px gap exposes the parent surface
+     and restores the ring against it. Use --rp-ring-focus for controls whose
+     parent is itself accent-tinted. */
+  --rp-focus: #892402;        /* oklch(.420 .142 36) */
+  --rp-focus-halo: var(--rp-canvas);
+  --rp-focus-ring-width: 2px;
+  --rp-focus-ring-offset: 2px;
+
+  /* Deep crimson, not fire-engine red. With a rust brand there is no room in
+     the conventional H24-29 error box; moving danger is the smaller change,
+     and it buys dE 0.120 from the accent plus 7.26:1 so error text outranks
+     everything else in the ramp. */
+  --rp-danger: #A20544;       /* oklch(.458 .181 8) — 7.26:1 canvas, white-on 7.95:1 */
+  --rp-danger-hover: #8E0037;
+  --rp-danger-active: #7B002A;
+  --rp-danger-soft: #FCDFE0;  /* danger-on-soft 6.35:1, ink-max 12.57:1 */
+  --rp-danger-border: #EFA3A8;
+
+  --rp-warning: #866704;  /* luminance-separated from --rp-accent, 4.85:1 canvas */
+  --rp-warning-hover: #6C5200;
+  --rp-warning-active: #5C4400;
+  --rp-warning-soft: #F9E9C9; /* warning-on-soft 4.94:1, ink-max 13.14:1 */
+  --rp-warning-border: #DCBB6B;
+
+  --rp-success: #047246;      /* oklch(.487 .113 158) — 5.48:1 canvas, white-on 6.00:1 */
+  --rp-success-hover: #006238;
+  --rp-success-active: #00522B;
+  --rp-success-soft: #D4F4E0; /* success-on-soft 5.09:1, ink-max 13.36:1 */
+  --rp-success-border: #86D3A8;
+
+  --rp-info: #0F64B0;         /* oklch(.499 .142 252) — 5.52:1 canvas, white-on 6.05:1 */
+  --rp-info-hover: #00549E;
+  --rp-info-active: #00448D;
+  --rp-info-soft: #DCECFE;    /* info-on-soft 5.04:1, ink-max 13.10:1 */
+  --rp-info-border: #93C2F1;
+
+  --rp-on-solid: #FFFFFF;     /* >= 5.92:1 on every solid above */
+
+  /* ---------------------------------------------------------------------
+     SPAN / FLAME CATEGORICAL RAMP
+     Three tiers per hue: ink (label text + bar stroke), fill (bar body),
+     wash (selected lane). Ordered by cardinality — three tools get slots
+     1/2/3, which are the three most-separated entries, not three neighbours.
+
+     Measured on #F8F4EE, CIEDE2000 over Machado severity-1.0:
+       ink contrast   4.82:1 - 9.08:1  (all AA as 10px label text)
+       first 6        min dE 0.116 normal / 0.114 deutan / 0.110 protan
+       first 8        0.077 / 0.076 / 0.079
+       all 12         0.068 / 0.036 / 0.024
+     Twelve dichromat-safe categories do not exist at any lightness; 0.024 is
+     the ceiling, which is why the span name in the label column — not the
+     color — is the identifier.
+
+     Hue 338-58 is vacant by construction: no span may read as danger or brand.
+     The old ramp was 12 hues pinned at L 43-50 with a 15-degree minimum gap and
+     an 86-degree hole, six of them silently out of sRGB gamut.
+     --------------------------------------------------------------------- */
+  --rp-span-1:  #074F5B;  /* oklch(.394 .066 213)  8.41:1 */
+  --rp-span-2:  #656F0D;  /* oklch(.516 .113 116)  5.00:1 */
+  --rp-span-3:  #323697;  /* oklch(.394 .155 275)  9.08:1 */
+  --rp-span-4:  #107676;  /* oklch(.514 .084 195)  4.95:1 */
+  --rp-span-5:  #7759C0;  /* oklch(.545 .155 294)  4.82:1 */
+  --rp-span-6:  #305206;  /* oklch(.396 .112 132)  8.21:1 */
+  --rp-span-7:  #0C6648;  /* oklch(.454 .093 164)  6.37:1 */
+  --rp-span-8:  #0B5D87;  /* oklch(.455 .098 239)  6.54:1 */
+  --rp-span-9:  #753E07;  /* oklch(.424 .098  58)  7.83:1 */
+  --rp-span-10: #801F6B;  /* oklch(.425 .155 338)  8.24:1 */
+  --rp-span-11: #793E9E;  /* oklch(.483 .140 310)  6.40:1 */
+  --rp-span-12: #0953AA;  /* oklch(.455 .155 257)  6.77:1 */
+
+  /* Bar bodies. Lightness tracks the ink tier so the pair reads as one family.
+     --rp-ink-max clears >= 7.80:1 on every fill, so bar labels use ONE text
+     color with no per-bar branching. A fill alone is 1.49-1.90:1 against the
+     surface and must always carry its ink stroke. */
+  --rp-span-1-fill:  #73C6D8;
+  --rp-span-2-fill:  #C8D292;
+  --rp-span-3-fill:  #A7B4EE;
+  --rp-span-4-fill:  #84DCDC;
+  --rp-span-5-fill:  #D2C7FB;
+  --rp-span-6-fill:  #A4C48B;
+  --rp-span-7-fill:  #8CD3B2;
+  --rp-span-8-fill:  #8DC9F2;
+  --rp-span-9-fill:  #E6AF86;
+  --rp-span-10-fill: #E1A7CF;
+  --rp-span-11-fill: #D7B7EF;
+  --rp-span-12-fill: #9EC3F8;
+
+  /* Lane tints. --rp-ink-max >= 13.19:1 on all 12. */
+  --rp-span-1-wash:  #D1F4FC;
+  --rp-span-2-wash:  #EBF1D4;
+  --rp-span-3-wash:  #E8ECFD;
+  --rp-span-4-wash:  #D1F5F5;
+  --rp-span-5-wash:  #EDEAFD;
+  --rp-span-6-wash:  #E4F3D9;
+  --rp-span-7-wash:  #D7F5E6;
+  --rp-span-8-wash:  #DDF0FD;
+  --rp-span-9-wash:  #FDE8DA;
+  --rp-span-10-wash: #FDE4F5;
+  --rp-span-11-wash: #F3E7FD;
+  --rp-span-12-wash: #E3EEFD;
+
+  --rp-span-neutral: #877E75;       /* the 13th-and-beyond bucket */
+  --rp-span-neutral-fill: #D6D0C7;
+  /* An errored span uses the danger family AND a glyph AND a hatch — never
+     hue alone. Under deuteranopia a red and a green pill are 1.40:1 apart. */
+  --rp-span-error: var(--rp-danger);
+  --rp-span-error-fill: #F2B4BC;
+  --rp-span-error-hatch: repeating-linear-gradient(45deg, transparent 0 3px, rgb(162 5 68 / 0.22) 3px 6px);
+
+  /* JSON payload syntax — bound to the span ramp so a payload viewer never
+     invents a fourth green. */
+  --rp-json-key: var(--rp-ink-strong);
+  --rp-json-string: #753E07;   /* 7.83:1 */
+  --rp-json-number: #0953AA;   /* 6.77:1 */
+  --rp-json-boolean: #0C6648;  /* 6.37:1 */
+  --rp-json-null: var(--rp-ink-muted);
+
+  /* ---------------------------------------------------------------------
+     MOTION
+     Names unchanged; values corrected. The old --rp-ease-out was easeOutExpo,
+     which reaches 97.2% of its travel at the 50% mark — on a 220ms surface
+     that is 110ms of motion followed by 110ms of transition lock during which
+     the element cannot cleanly retarget. The old --rp-ease-in was easeInExpo,
+     at 2.8% progress at the halfway point: a hold, then a teleport.
+     --------------------------------------------------------------------- */
+  --rp-motion-instant: 110ms;
+  --rp-motion-state: 160ms;
+  --rp-motion-surface-in: 200ms;
+  --rp-motion-surface-out: 140ms;   /* 0.70x the enter — exits never block */
+  --rp-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --rp-ease-in: cubic-bezier(0.3, 0, 0.8, 0.15);
+  --rp-ease-move: cubic-bezier(0.77, 0, 0.175, 1);
+  --rp-ease-decel: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --rp-ease-hover: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --rp-ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* Row hover in a virtualized list must be instant: at 60 rows/second the
+     cursor leaves a visible smear of half-lit rows behind a fade-in. */
+  --rp-motion-hover-in: 0ms;
+  --rp-motion-hover-out: 120ms;
+  --rp-motion-press: 120ms;
+  --rp-motion-tooltip: 125ms;
+  --rp-motion-dialog-in: 240ms;
+  --rp-motion-stagger: 30ms;
+
+  --rp-scale-enter: 0.97;
+  --rp-translate-enter: 4px;
+  --rp-scale-press: 0.97;
+  --rp-target-min: 24px;
+
+  /* Sidebar bridge tokens (shadcn consumes these as HSL triples). */
+  --sidebar-background: 40 53% 97%;
+  --sidebar-foreground: 24 10% 19%;
+  --sidebar-primary: 23 95% 34%;
+  --sidebar-primary-foreground: 36 71% 99%;
+  --sidebar-accent: 34 32% 90%;
+  --sidebar-accent-foreground: 27 13% 14%;
+  --sidebar-border: 36 22% 87%;
+  --sidebar-ring: 15 97% 27%;
+
+  /* ------------------------------------------------------------------
+     COMPATIBILITY LAYER
+     Tokens introduced during this revamp that the spec was authored before.
+     Aliased onto the spec's scales rather than duplicated, so there is still
+     exactly one source of truth per value.
+     ------------------------------------------------------------------ */
+  --rp-r-xs:   var(--rp-radius-sm);
+  --rp-r-sm:   var(--rp-radius-sm);
+  --rp-r-md:   var(--rp-radius-md);
+  --rp-r-lg:   var(--rp-radius-lg);
+  --rp-r-xl:   var(--rp-radius-xl);
+  --rp-r-2xl:  var(--rp-radius-xl);
+  --rp-r-full: var(--rp-radius-full);
+
+  --rp-e0: var(--rp-elev-0);
+  --rp-e1: var(--rp-elev-1);
+  --rp-e2: var(--rp-elev-2);
+  --rp-e3: var(--rp-elev-3);
+  --rp-e4: var(--rp-elev-4);
+  --rp-e-inset: var(--rp-elev-inset);
+
+  --rp-ink-a28: color-mix(in srgb, var(--rp-ink-black) 28%, transparent);
+
+  /* TRACE span hue. Solved for 10.2:1 on canvas and a grayscale gap of >=6 from
+     every semantic colour, so a root span never reads as an error or as brand. */
+  /* WCAG 1.4.1: these six are separated by LUMINANCE as well as hue, so a failed
+     span and a warning stay distinguishable under grayscale or dichromacy. Measured
+     grayscale ladder (Rec.601 Y): danger 59 · trace 69 · success 76 · info 83 ·
+     accent 90 · warning 101 — every neighbouring gap >= 7. Changing any of these
+     values without re-checking that ladder reintroduces the defect. */
+  --rp-trace: #50347C;
+  --rp-thinking-border: rgb(54 95 164 / 0.28);
+  --rp-thinking-bg: rgb(54 95 164 / 0.07);
+
+  /* Motion. Frequency-gated: an interaction repeated 100+ times a day gets 0ms,
+     because there the animation is latency rather than polish. */
+  --rp-dur-instant: 0ms;
+  --rp-dur-press: 90ms;
+  --rp-dur-hover: 120ms;
+  --rp-dur-tooltip: 125ms;
+  --rp-dur-pop: 160ms;
+  --rp-dur-panel: 220ms;
+  --rp-ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --rp-ease-panel: cubic-bezier(0.32, 0.72, 0, 1);
+  --rp-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  }
+}
+
+html {
+  color-scheme: light;
+  background-color: var(--rp-canvas);
+  background: var(--rp-canvas);
+}
+
+body {
+  margin: 0;
+  background-color: var(--rp-canvas);
+  background:
+    linear-gradient(var(--rp-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--rp-grid-line) 1px, transparent 1px),
+    var(--rp-canvas);
+  background-size: 32px 32px;
+  color: var(--rp-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100svh;
+  background-color: var(--rp-canvas);
+  color: var(--rp-ink);
+}
+
+::selection {
+  color: var(--rp-ink-strong);
+  background: var(--rp-accent-soft);
+}
+
+/*
+ * Hover fill for controls whose base background is an inline style.
+ *
+ * Tailwind's hover:bg-* is a class, and a class never beats an element's own
+ * style attribute — so every control that set `background` inline had an
+ * authored hover that could not paint. That was the run-header action bar, the
+ * save/secret popovers and the settings rows: thirteen controls with a hover
+ * state in the source and none on screen. !important is the point here, not an
+ * oversight: it is the only thing that outranks an inline declaration, and it is
+ * scoped to the hover state alone so the base colour is untouched.
+ */
+.rp-hover-wash:hover {
+  background: var(--rp-ink-wash) !important;
+}
+
+/*
+ * Off-screen span rows skip layout and paint.
+ *
+ * The span tree renders one row per span with no windowing, so a 10k-span trace
+ * put 90k DOM nodes on the page and the browser laid out and painted every one.
+ * content-visibility lets it skip the work for rows outside the viewport while
+ * keeping them in the DOM — which matters here, because selection, deep links,
+ * the meridian sync, focus restoration and browser find-in-page all address rows
+ * by id and would break under true virtualisation. contain-intrinsic-size gives
+ * the skipped rows their real height so the scrollbar stays honest.
+ */
+[data-span-row] {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 22px;
+}
+
+/* Unselected tab: the only affordance was the pointer cursor, so nothing told
+   you a tab was reachable until you clicked it. Scoped to the unselected state
+   so the active tab's own styling is left alone. */
+.rp-tab[aria-selected="false"]:hover {
+  color: var(--rp-ink-strong) !important;
+  background: var(--rp-ink-a04) !important;
+}
+
+/*
+ * The ring is drawn INSIDE the control's own box.
+ *
+ * An outset ring needs 4px of slack on all four sides, and this UI is built from
+ * dense scrollers and clipped panels where controls sit flush against a boundary:
+ * first and last list rows, tool-call pills, the split Replay button, the fixed
+ * corner Ask button, the mobile back bar. Every one of those lost at least one
+ * edge of its indicator, and tagging containers one at a time only moved the
+ * problem. Inset cannot be clipped by any ancestor at any scroll position.
+ * Still 2px of the accent at >=3:1 against both adjacent surfaces, so WCAG 2.4.11
+ * holds.
+ */
+:where(a, button, input, select, textarea, summary, [role="button"], [tabindex]):focus-visible {
+  outline: 2px solid var(--rp-focus) !important;
+  outline-offset: -2px !important;
+}
+
+.skip-link {
+  position: fixed;
+  left: 16px;
+  top: 12px;
+  z-index: 10000;
+  transform: translateY(-160%);
+  border: 2px solid var(--rp-ink-strong);
+  border-radius: 8px;
+  background: var(--rp-surface);
+  color: var(--rp-ink-strong);
+  padding: 10px 14px;
+  font-weight: 650;
+  box-shadow: 0 10px 30px var(--rp-ink-a18);
+  transition: transform 120ms ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+input.secret-input-saved:focus::placeholder {
+  color: transparent !important;
+  opacity: 0 !important;
+}
+
+@keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:.3} }
+@keyframes spin { to{transform:rotate(360deg)} }
+@keyframes bounce-dot { 0%,80%,100%{transform:scale(0)} 40%{transform:scale(1)} }
+@keyframes grid-dot-pulse { 0%,100%{opacity:.15} 50%{opacity:.8} }
+@keyframes message-arrive {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes stream-block-arrive {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes stream-caret {
+  0%, 45% { opacity: 1; }
+  46%, 100% { opacity: 0.18; }
+}
+@keyframes assistant-breathe {
+  0%, 100% { border-color: var(--rp-ink-a12); background: var(--rp-ink-a04); }
+  50% { border-color: var(--rp-thinking-border); background: var(--rp-thinking-bg); }
+}
+@keyframes tool-running {
+  0%, 100% { border-color: var(--rp-ink-a12); }
+  50% { border-color: color-mix(in srgb, var(--rp-warning) 32%, transparent); }
+}
+@keyframes tool-dot {
+  0%, 100% { opacity: 0.4; transform: scale(0.75); }
+  50% { opacity: 1; transform: scale(1); }
+}
+@keyframes thinking-sheen {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
+
+.pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+.spin { animation: spin 1s linear infinite; }
+.message-arrive { animation: message-arrive 140ms ease-out both; }
+.stream-block { animation: stream-block-arrive 160ms ease-out both; }
+.assistant-bubble {
+  transition: background 180ms ease, border-color 180ms ease;
+}
+.assistant-bubble-live {
+  animation: assistant-breathe 2.4s ease-in-out infinite;
+}
+.stream-text-live {
+  position: relative;
+}
+.stream-caret {
+  display: inline-block;
+  width: 6px;
+  height: 14px;
+  margin-left: 2px;
+  transform: translateY(2px);
+  border-radius: 1px;
+  background: var(--rp-info);
+  animation: stream-caret 1s steps(1, end) infinite;
+}
+.thinking-block-live {
+  background:
+    linear-gradient(100deg, transparent 0%, var(--rp-ink-a06) 35%, transparent 70%),
+    var(--rp-ink-a04);
+  background-size: 220% 100%, auto;
+  animation:
+    stream-block-arrive 160ms ease-out both,
+    thinking-sheen 1.7s ease-in-out infinite;
+}
+.tool-block {
+  transition: border-color 160ms ease, background 160ms ease;
+}
+.tool-card summary::-webkit-details-marker {
+  display: none;
+}
+.tool-card[open] .tool-card-chevron {
+  transform: rotate(180deg);
+}
+.activity-inline summary {
+  border-radius: 6px;
+  padding-left: 6px;
+  padding-right: 6px;
+  margin-left: -6px;
+  transition: background 140ms ease, color 140ms ease;
+}
+.activity-inline + .activity-inline {
+  margin-top: -3px;
+}
+.activity-inline summary:hover,
+.activity-inline[open] summary {
+  background: var(--rp-ink-a08);
+}
+.activity-label {
+  color: var(--rp-ink);
+  transition: color 140ms ease;
+}
+.activity-label-error {
+  color: var(--rp-danger);
+}
+.activity-icon {
+  opacity: 0.82;
+  transition: opacity 140ms ease, filter 140ms ease;
+}
+.activity-chevron {
+  color: var(--rp-ink-muted);
+  transition: color 140ms ease, transform 150ms ease;
+}
+.activity-inline summary:hover .activity-label,
+.activity-inline[open] .activity-label {
+  color: var(--rp-ink-strong);
+}
+.activity-inline summary:hover .activity-label-error,
+.activity-inline[open] .activity-label-error {
+  color: var(--rp-danger);
+}
+.activity-inline summary:hover .activity-icon,
+.activity-inline[open] .activity-icon {
+  opacity: 1;
+}
+.activity-inline summary:hover .activity-chevron,
+.activity-inline[open] .activity-chevron {
+  color: var(--rp-ink-soft);
+}
+.activity-content {
+  border-left: 1px solid transparent;
+  transition: border-color 140ms ease;
+}
+.activity-inline[open] .activity-content {
+  border-left-color: var(--rp-border);
+}
+.activity-content pre {
+  color: var(--rp-ink-soft);
+}
+.activity-kicker {
+  color: var(--rp-ink-muted);
+}
+.tool-block-running {
+  animation:
+    stream-block-arrive 160ms ease-out both,
+    tool-running 1.8s ease-in-out infinite;
+  background: color-mix(in srgb, var(--rp-warning) 6%, transparent);
+}
+.tool-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--rp-warning);
+  animation: tool-dot 1.1s ease-in-out infinite;
+}
+/* Annotation arrival — subtle fade-in + two kind-colored emphasis rings.
+   Applied only to fresh-via-WS inserts (see use-annotations `freshIds`).
+   Total duration ~2.65s; parent clears the class on ANNOTATION_ARRIVAL_MS. */
+@keyframes annotation-enter {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes annotation-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 var(--annotation-emphasis, color-mix(in srgb, var(--rp-info) 45%, transparent)); }
+  50%      { box-shadow: 0 0 0 3px var(--annotation-emphasis, color-mix(in srgb, var(--rp-info) 45%, transparent)); }
+}
+.annotation-arriving {
+  animation:
+    annotation-enter 0.25s ease-out both,
+    annotation-breathe 1.2s ease-in-out 0.25s;
+  animation-iteration-count: 1, 2;
+}
+.annotation-arriving.kind-issue { --annotation-emphasis: color-mix(in srgb, var(--rp-danger) 45%, transparent); }
+.annotation-arriving.kind-good  { --annotation-emphasis: color-mix(in srgb, var(--rp-success) 45%, transparent); }
+.annotation-arriving.kind-note  { --annotation-emphasis: color-mix(in srgb, var(--rp-info) 45%, transparent); }
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+  .message-arrive,
+  .stream-block,
+  .assistant-bubble-live,
+  .thinking-block-live,
+  .tool-block-running,
+  .tool-live-dot,
+  .stream-caret {
+    animation: none;
+  }
+  .annotation-arriving {
+    animation: none;
+    outline: 1px solid var(--annotation-emphasis, color-mix(in srgb, var(--rp-info) 40%, transparent));
+    transition: none;
+  }
+}
+
+* { scrollbar-width: thin; scrollbar-color: var(--rp-ink-a18) transparent; }
+*::-webkit-scrollbar { width: 4px; height: 4px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--rp-ink-a18); border-radius: 2px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--rp-ink-a28); }
+
+pre { white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono); }
+
+/* Durations, token counts and live timers update in place. Proportional figures
+   make the row shift horizontally on every tick, which reads as instability in a
+   dense list; tabular figures hold the column. */
+.font-mono, code, kbd, pre, [data-numeric] { font-variant-numeric: tabular-nums; }
+
+/* Run-detail metadata. The labels used to be filled chips while the values they
+   label were the lightest text on the row, so TRACE outweighed the duration
+   someone actually came to read. Labels recede; values lead. */
+/* No opacity here: these labels are meaningful text, and dimming them dropped
+   --rp-ink-muted from 5.38:1 to 2.93:1. The hierarchy against the values comes
+   from size (9px vs 11px), uppercase, and the values being --rp-ink-strong. */
+.rp-meta-label { color: var(--rp-ink-muted); }
+.rp-meta-copy {
+  /* 24x24 outright rather than leaning on 2.5.8's spacing exception: at tablet
+     width the meta row wraps and two adjacent chips land 23px apart, one pixel
+     inside the exception's threshold. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  min-width: 24px;
+  padding-inline: 4px;
+  margin-inline: -4px;
+  background: transparent;
+}
+@media (hover: hover) and (pointer: fine) {
+  .rp-meta-copy:hover { background: var(--rp-ink-wash); }
+}
+/* Identifiers are reference data, not scan targets: monospace so they read as
+   opaque strings, and one tier quieter than the metrics beside them. */
+.rp-meta-ids { font-family: var(--font-mono); font-size: 10px; }
+.rp-meta-metrics { font-variant-numeric: tabular-nums; }
+
+/* The Ask-agent button is fixed to the bottom-right corner, so the last row of a
+   scrollable list ends up underneath it and cannot be tapped. Reserve enough
+   scroll space for the button plus a margin; this only pads the scroll extent, so
+   nothing moves visually until the user reaches the end of the list. */
+.rp-list-scroll { padding-bottom: 60px; }
+
+/* ---------------------------------------------------------------------------
+   THE MERIDIAN
+   Rust is not decoration here; it is a position in trace time. Hovering a span
+   in any pane lights the same span in every other pane in the same frame, so
+   the flame chart, the span tree and the transcript read as three projections
+   of one clock rather than three widgets. Nothing else in the app is allowed a
+   solid rust rail, which is what keeps this legible.
+   --------------------------------------------------------------------------- */
+[data-meridian-key] {
+  transition: box-shadow var(--rp-motion-state) var(--rp-ease-out);
+}
+[data-span-row][data-meridian="on"],
+[data-tool-span-id][data-meridian="on"] {
+  box-shadow: inset 2px 0 0 var(--rp-accent);
+  transition-duration: var(--rp-motion-instant);
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-meridian-key] { transition: none; }
+}
+
+/* Keyboard-driven navigation collapses every state transition to zero. See
+   utils/nav-modality.ts — the attribute flips on nav keys and back on pointer use. */
+html[data-nav="key"] {
+  --rp-motion-instant: 0ms;
+  --rp-motion-state: 0ms;
+  --rp-dur-hover: 0ms;
+  --rp-dur-press: 0ms;
+  --rp-dur-pop: 0ms;
+}
+
+/* Streamdown inherits the daylight evidence palette. */
+.streamdown {
+  --border: var(--rp-ink-a15);
+  --muted: var(--rp-ink-a06);
+  --muted-foreground: var(--rp-ink-muted);
+  --foreground: var(--rp-ink);
+  --background: var(--rp-surface);
+  --primary: var(--rp-info);
+  min-width: 0;
+  max-width: 100%;
+  color: var(--rp-ink);
+  overflow-wrap: anywhere;
+}
+/* Tables stay inside the markdown container and scroll when they need width. */
+.streamdown hr { opacity: 0.35 !important; }
+.streamdown table { width: max-content !important; min-width: 100% !important; max-width: none !important; border: none !important; background: var(--rp-ink-a02) !important; }
+.streamdown th, .streamdown td { max-width: 280px !important; white-space: normal !important; overflow-wrap: anywhere !important; border: none !important; border-bottom: 1px solid var(--rp-ink-a08) !important; }
+.streamdown th { background: var(--rp-ink-a06) !important; }
+.streamdown [data-streamdown="table-wrapper"] { display: block !important; max-width: 100% !important; overflow-x: auto !important; overflow-y: hidden !important; margin-top: 4px !important; margin-bottom: 20px !important; border: none !important; padding: 0 !important; border-radius: 4px !important; background: transparent !important; }
+.assistant-bubble-wide .streamdown [data-streamdown="table-wrapper"] { margin-bottom: 0 !important; }
+.assistant-bubble-wide .streamdown th,
+.assistant-bubble-wide .streamdown td { max-width: 360px !important; }
+/* Hide table action strip (copy, download, expand) */
+.streamdown [data-streamdown="table-wrapper"] > div:first-child {
+  display: none !important;
+}
+.streamdown .rounded-md.border { background: var(--rp-surface) !important; border-color: var(--rp-ink-a15) !important; }
+.streamdown .rounded-md.border button { color: var(--rp-ink-soft) !important; }
+.streamdown .rounded-md.border button:hover { background: var(--rp-ink-a06) !important; }
+
+.timeline-bar {
+  transition:
+    transform var(--rp-motion-instant) var(--rp-ease-out),
+    box-shadow var(--rp-motion-instant) var(--rp-ease-out);
+}
+.timeline-bar:hover,
+.timeline-bar:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 2px var(--rp-surface), 0 0 0 3px var(--rp-border-strong);
+  z-index: 999 !important;
+}
+
+/* Declared after :hover deliberately — same specificity, so source order wins and
+   the meridian ring survives on the bar the pointer is actually over. */
+.timeline-bar[data-meridian="on"],
+.timeline-bar[data-meridian="on"]:hover,
+.timeline-bar[data-meridian="on"]:focus-visible {
+  box-shadow: 0 0 0 1.5px var(--rp-surface), 0 0 0 3.5px var(--rp-accent);
+  z-index: 1000 !important;
+  transition-duration: var(--rp-motion-instant);
+}
+
+/* Touch targets.
+   The previous implementation expanded the *hit* area with an ::after overlay so
+   desktop density stayed compact. Two problems, both measured: a bare `a[href]`
+   in the selector list is more specific than `.skip-link`, so `position: relative`
+   overrode the skip link's `position: fixed` and broke it; and an overlay cannot
+   see its siblings, so on a dense row pitch adjacent 44px overlays intersected —
+   which fails WCAG 2.5.8's spacing exception instead of satisfying it, and lets a
+   tap land on the wrong control.
+
+   Real layout height instead. It reflows, so overlap is impossible by
+   construction, and it only applies to coarse pointers — desktop is untouched.
+   Inline links are deliberately excluded: they appear inside transcript prose,
+   where forcing a height would wreck the paragraph flow. */
+@media (pointer: coarse) {
+  button:not(.timeline-bar),
+  [role="tab"],
+  [role="menuitem"],
+  summary,
+  select,
+  input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]),
+  textarea,
+  /* Standalone links only. A bare a[href] here would also stretch links inside
+     prose, and an earlier version of this rule outranked .skip-link and broke
+     its position: fixed. */
+  .rp-touch-target {
+    min-height: 44px;
+  }
+
+  .rp-touch-target {
+    display: inline-flex;
+    align-items: center;
+  }
+}
