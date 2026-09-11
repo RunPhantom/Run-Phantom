@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+SCRIPT="$(readlink -f "$0" 2>/dev/null || python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$0")"
+DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+export RUNPHANTOM_BIN_PATH="${RUNPHANTOM_BIN_PATH:-$SCRIPT}"
+exec bun "$DIR/src/index.ts" "$@"
