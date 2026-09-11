@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import { test, expect, connectTarget, act, assertRuntime } from "./verification-fixture";
+import { test, expect, connectTarget, act, observe, assertRuntime } from "./verification-fixture";
 import { REPO_ROOT_PATH } from "./fixtures";
 import { FIXTURE_PRIMARY_RUN_ID, seedRunPhantomFixtures } from "./helpers";
 import type { VerificationFlow, VerificationReport } from "../../src/verification/protocol";
@@ -145,4 +145,37 @@ test("runtime verification: real cross-origin SDK observes actions, fails broken
   } finally {
     await ui.close();
   }
+});
+
+test("runtime verification: capture includes XHR, routes, signals, and console errors; quiet checks await delayed errors", async ({ page, request, runPhantom, targetApp }) => {
+  const session = await connectTarget(page, request, runPhantom, targetApp.origin);
+  const xhrCursor = await act(request, runPhantom, session.id, { type: "click", selector: "#xhr" });
+  expect((await assertRuntime(request, runPhantom, session.id, { kind: "network", urlContains: "/api/details", status: 200 }, xhrCursor)).status).toBe("pass");
+  await act(request, runPhantom, session.id, { type: "click", selector: "#route" });
+  await expect(page).toHaveURL(`${targetApp.origin}/confirmed`);
+  const signalCursor = await act(request, runPhantom, session.id, { type: "click", selector: "#signal" });
+  expect((await assertRuntime(request, runPhantom, session.id, { kind: "signal", name: "checkout.confirmed" }, signalCursor)).status).toBe("pass");
+  const consoleCursor = await act(request, runPhantom, session.id, { type: "click", selector: "#console" });
+  expect((await assertRuntime(request, runPhantom, session.id, { kind: "console", level: "error", absent: false }, consoleCursor)).status).toBe("pass");
+  const events = (await observe(request, runPhantom, session.id)).events;
+  expect(events.some((event) => event.type === "route" && String(event.data.url).includes("/confirmed"))).toBe(true);
+  expect(events.some((event) => event.type === "network" && event.data.initiator === "xhr")).toBe(true);
+
+  const delayedCursor = await act(request, runPhantom, session.id, { type: "click", selector: "#late-error" });
+  expect((await assertRuntime(request, runPhantom, session.id, { kind: "console", level: "error", absent: true }, delayedCursor)).status).toBe("fail");
+  const quietCursor = await act(request, runPhantom, session.id, { type: "click", selector: "#noop" });
+  const started = Date.now();
+  expect((await assertRuntime(request, runPhantom, session.id, { kind: "console", level: "error", absent: true }, quietCursor)).status).toBe("pass");
+  expect(Date.now() - started).toBeGreaterThanOrEqual(250);
+});
+
+test("runtime verification: a prior action's delayed network response cannot satisfy the next action", async ({ page, request, runPhantom, targetApp }) => {
+  const session = await connectTarget(page, request, runPhantom, targetApp.origin);
+  await act(request, runPhantom, session.id, { type: "click", selector: "#slow" });
+  await expect.poll(async () => (await observe(request, runPhantom, session.id)).events.some((event) => event.type === "network.start" && String(event.data.url).includes("/api/late"))).toBe(true);
+  const nextCursor = await act(request, runPhantom, session.id, { type: "click", selector: "#noop" });
+  targetApp.releaseDelayed();
+  await expect.poll(async () => (await observe(request, runPhantom, session.id)).events.some((event) => event.type === "network" && String(event.data.url).includes("/api/late"))).toBe(true);
+  const report = await assertRuntime(request, runPhantom, session.id, { kind: "network", urlContains: "/api/late", status: 200 }, nextCursor);
+  expect(report.status).toBe("fail");
 });
