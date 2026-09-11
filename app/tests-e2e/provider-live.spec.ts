@@ -112,3 +112,36 @@ for (const [provider, model] of [
     expect((await comparison.json()).summary.regressions).toBe(1);
   });
 }
+
+test("live providers: cancelling model grading in the UI retains an interrupted experiment", async ({ page, request }) => {
+  await seedEvaluationRuns(request, liveUrl!);
+  const revision = await createEvaluationDataset(request, liveUrl!, Array.from({ length: 8 }, () => ({
+    kind: "rubric" as const, provider: "anthropic" as const,
+    model: process.env.RUNPHANTOM_LIVE_ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001",
+    rubric: "Score 1 if the output describes a paid checkout and 0 otherwise. Explain the observed checkout status.", threshold: 0.5,
+  })), "Live cancellable grading");
+  await page.goto(`${liveUrl}/evaluations`);
+  await page.getByRole("combobox", { name: "Dataset", exact: true }).selectOption(revision.datasetId);
+  await page.getByLabel("Experiment name", { exact: true }).fill("Live interrupted grading");
+  await page.getByRole("combobox", { name: "Candidate run for Checkout result", exact: true }).selectOption(EVALUATION_RUNS.baseline);
+  await page.getByRole("checkbox", { name: /^Allow model judges to send selected trace data to the chosen providers/ }).check();
+  const admitted = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/evaluations/experiments");
+  await page.getByRole("button", { name: "Start experiment", exact: true }).click();
+  const response = await admitted;
+  expect(response.status()).toBe(202);
+  const initial = await response.json() as Experiment;
+  await page.getByRole("button", { name: "Cancel experiment", exact: true }).click();
+  await expect.poll(async () => {
+    const current = await request.get(`${liveUrl}/api/evaluations/experiments/${initial.id}`);
+    return (await current.json() as Experiment).status;
+  }).toBe("cancelled");
+  const saved = await request.get(`${liveUrl}/api/evaluations/experiments/${initial.id}`);
+  const interrupted = await saved.json() as Experiment;
+  expect(interrupted.results[0].checks).toHaveLength(8);
+  expect(interrupted.results[0].checks.some(check => check.status === "inconclusive")).toBe(true);
+  expect(interrupted.verdict).toBe("inconclusive");
+  await page.reload();
+  await page.getByRole("combobox", { name: "View experiment", exact: true }).selectOption(initial.id);
+  await expect(page.getByRole("region", { name: "Experiment results", exact: true }).getByRole("status")).toHaveText("cancelled");
+  await expect(page.getByRole("article", { name: "Checkout result: inconclusive", exact: true })).toBeVisible();
+});
