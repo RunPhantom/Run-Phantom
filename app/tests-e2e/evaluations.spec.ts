@@ -2,8 +2,9 @@ import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { test, expect, REPO_ROOT_PATH } from "./fixtures";
 import {
-  EVALUATION_INPUT, EVALUATION_RUNS, seedEvaluationRuns,
+  createEvaluationDataset, EVALUATION_INPUT, EVALUATION_RUNS, seedEvaluationRuns,
 } from "./evaluation-fixture";
+import type { Experiment } from "../../src/evaluations/protocol";
 
 test("evaluations: user creates a regression case, compares frozen candidates, reviews results and imports an export", async ({ page, request, runPhantom }) => {
   await seedEvaluationRuns(request, runPhantom.url);
@@ -130,4 +131,42 @@ test("evaluations: user creates a regression case, compares frozen candidates, r
   await expect(review.locator("summary").filter({ hasText: /^Review history \(2\)$/ })).toBeVisible();
   await expect(results.getByRole("article", { name: "Checkout result: pass", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+});
+
+test("evaluations: user resolves ambiguous response selection and sees explicit model consent before grading", async ({ page, request, runPhantom }) => {
+  await seedEvaluationRuns(request, runPhantom.url);
+  const reference = await createEvaluationDataset(request, runPhantom.url, [{ kind: "output", operation: "equals", value: "First parallel response" }], "Response selection");
+  const rubric = await createEvaluationDataset(request, runPhantom.url, [{
+    kind: "rubric", provider: "openai", model: "fixture-model", rubric: "Describe the checkout result accurately.", threshold: 0.8,
+  }], "Visible judge consent");
+  await page.goto(`${runPhantom.url}/evaluations`);
+  await page.getByRole("combobox", { name: "Dataset", exact: true }).selectOption(reference.datasetId);
+  const controls = page.getByRole("region", { name: "Start experiment", exact: true });
+  await controls.getByRole("textbox", { name: "Experiment name", exact: true }).fill("Explicit response selection");
+  await controls.getByRole("combobox", { name: "Candidate run for Checkout result", exact: true }).selectOption(EVALUATION_RUNS.ambiguous);
+  await controls.getByRole("button", { name: "Preview candidate for Checkout result", exact: true }).click();
+  const candidate = controls.getByRole("region", { name: "Candidate snapshot", exact: true });
+  await expect(candidate.getByText("Selection: Unavailable. Response unavailable or incomplete.", { exact: true })).toBeVisible();
+  const selectedSpan = `${EVALUATION_RUNS.ambiguous.slice(-8)}00000004`;
+  await controls.getByRole("combobox", { name: /^Response span for Checkout result/ }).selectOption(selectedSpan);
+  await controls.getByRole("button", { name: "Preview candidate for Checkout result", exact: true }).click();
+  await expect(candidate.getByText("First parallel response", { exact: true })).toBeVisible();
+  await expect(candidate.getByText("Selection: Explicit response span. Complete response.", { exact: true })).toBeVisible();
+  await expect(candidate.getByRole("link", { name: "View response span", exact: true })).toHaveAttribute("href", `/runs/${EVALUATION_RUNS.ambiguous}/span/${selectedSpan}`);
+  await controls.getByRole("button", { name: "Start experiment", exact: true }).click();
+  const results = page.getByRole("region", { name: "Experiment results", exact: true });
+  await expect(results.getByRole("article", { name: "Checkout result: pass", exact: true })).toBeVisible();
+  await page.getByRole("combobox", { name: "Dataset", exact: true }).selectOption(rubric.datasetId);
+  await controls.getByRole("textbox", { name: "Experiment name", exact: true }).fill("Consent must be deliberate");
+  await controls.getByRole("combobox", { name: "Candidate run for Checkout result", exact: true }).selectOption(EVALUATION_RUNS.baseline);
+  const consent = controls.getByRole("checkbox", { name: /^Allow model judges to send selected trace data/ });
+  const start = controls.getByRole("button", { name: "Start experiment", exact: true });
+  await expect(consent).not.toBeChecked();
+  await expect(start).toBeDisabled();
+  await consent.check();
+  await expect(start).toBeEnabled();
+  await consent.uncheck();
+  await expect(start).toBeDisabled();
+  const experiments = await request.get(`${runPhantom.url}/api/evaluations/experiments`);
+  expect(await experiments.json() as Experiment[]).toHaveLength(1);
 });
