@@ -1,5 +1,6 @@
 import type { APIRequestContext } from "@playwright/test";
 import { expect } from "./fixtures";
+import type { Snapshot } from "../../src/evaluations/protocol";
 
 export const EVALUATION_INPUT = "Describe the result of this checkout.";
 export const EVALUATION_RUNS = {
@@ -62,4 +63,10 @@ export async function seedEvaluationRuns(request: APIRequestContext, daemon: str
     const response = await request.post(`${daemon}/v1/traces`, { data: traceFixture(kind) });
     expect(response.ok(), `Ingest synthetic ${kind} trace`).toBe(true);
   }
+}
+
+export async function snapshot(request: APIRequestContext, daemon: string, runId: string): Promise<Snapshot> {
+  const response = await request.get(`${daemon}/api/evaluations/runs/${runId}/snapshot`);
+  expect(response.ok(), `Read captured evaluation snapshot (HTTP ${response.status()})`).toBe(true);
+  return response.json() as Promise<Snapshot>;
 }
