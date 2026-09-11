@@ -45,4 +45,23 @@ test("compiled binary serves its embedded Run Phantom UI", async ({ page }) => {
   if (screenshotDir) {
     await page.screenshot({ path: path.join(screenshotDir, "runphantom-desktop-detail.png"), fullPage: true });
   }
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("button", { name: "Back to runs" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+  const toggleBox = await page.getByRole("button", { name: "Toggle Sidebar" }).boundingBox();
+  const backLabelBox = await page.getByText("Back to runs", { exact: true }).boundingBox();
+  expect(toggleBox).not.toBeNull();
+  expect(backLabelBox).not.toBeNull();
+  expect(backLabelBox!.x).toBeGreaterThanOrEqual(toggleBox!.x + toggleBox!.width + 4);
+  const unnamedMobileButtons = await page.locator("button:visible").evaluateAll((buttons) =>
+    buttons
+      .filter((button) => !button.getAttribute("aria-label") && !button.getAttribute("title") && !button.textContent?.trim())
+      .map((button) => button.outerHTML.slice(0, 160)),
+  );
+  expect(unnamedMobileButtons).toEqual([]);
+  if (screenshotDir) {
+    await page.screenshot({ path: path.join(screenshotDir, "runphantom-mobile.png"), fullPage: true });
+  }
+  expect(runtimeErrors).toEqual([]);
 });
