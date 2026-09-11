@@ -1,0 +1,8 @@
+{
+  "name": "runphantom-examples",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "bun --cwd openai-chat run check && bun --cwd anthropic-chat run check"
+  }
+}
