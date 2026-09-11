@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { FIXTURE_PRIMARY_RUN_ID, seedRunPhantomFixtures } from "./helpers";
+import { createEvaluationDataset, EVALUATION_RUNS, seedEvaluationRuns } from "./evaluation-fixture";
+import type { Experiment } from "../../src/evaluations/protocol";
 
 // Opt in only against an isolated daemon with synthetic traces and its own provider credentials.
 const liveUrl = process.env.RUNPHANTOM_LIVE_URL;
@@ -42,3 +44,71 @@ test("live providers: saving a synthetic run in the UI persists an Anthropic sum
   await page.reload();
   await expect(page.getByRole("button", { name: "Saved", exact: true })).toBeVisible();
 });
+
+for (const [provider, model] of [
+  ["openai", process.env.RUNPHANTOM_LIVE_OPENAI_MODEL ?? "gpt-4.1-mini"],
+  ["anthropic", process.env.RUNPHANTOM_LIVE_ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001"],
+] as const) {
+  test(`live providers: ${provider} answers from the selected trace through the backend`, async ({ request }) => {
+    await seedRunPhantomFixtures(liveUrl!);
+    const response = await request.post(`${liveUrl}/api/agents/ask`, {
+      data: { run_id: FIXTURE_PRIMARY_RUN_ID, model, question: "Summarize the user request and the observed result in one sentence. Do not execute anything." },
+      timeout: 150_000,
+    });
+    expect(response.status()).toBe(200);
+    const result = await response.json();
+    expect(result.status).toBe("answered");
+    expect(result.provider).toBe(provider);
+    expect(result.run_id).toBe(FIXTURE_PRIMARY_RUN_ID);
+    expect(typeof result.answer).toBe("string");
+    expect(result.answer?.length).toBeGreaterThan(10);
+  });
+
+  test(`live providers: ${provider} grades a captured case from the UI and rejects a failing candidate`, async ({ page, request }) => {
+    await seedEvaluationRuns(request, liveUrl!);
+    const revision = await createEvaluationDataset(request, liveUrl!, [{
+      kind: "rubric", provider, model, threshold: 0.5,
+      rubric: 'Score 1 if the candidate is a JSON object whose status is exactly "paid". Score 0 if status is anything else, including "declined". Judge only this condition. Explain the observed status briefly.',
+    }], `Live ${provider} checkout rubric`);
+    await page.goto(`${liveUrl}/evaluations`);
+    await page.getByRole("combobox", { name: "Dataset", exact: true }).selectOption(revision.datasetId);
+    await page.getByLabel("Experiment name", { exact: true }).fill(`Live ${provider} accepted checkout`);
+    await page.getByRole("combobox", { name: "Candidate run for Checkout result", exact: true }).selectOption(EVALUATION_RUNS.baseline);
+    const consent = page.getByRole("checkbox", { name: /^Allow model judges to send selected trace data to the chosen providers/ });
+    await expect(consent).not.toBeChecked();
+    await consent.check();
+    const accepted = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/evaluations/experiments");
+    await page.getByRole("button", { name: "Start experiment", exact: true }).click();
+    const admitted = await accepted;
+    expect(admitted.status()).toBe(202);
+    const initial = await admitted.json() as Experiment;
+    let complete = initial;
+    const waitForCompletion = async (id: string) => {
+      await expect.poll(async () => {
+        const response = await request.get(`${liveUrl}/api/evaluations/experiments/${id}`);
+        expect(response.ok()).toBe(true);
+        complete = await response.json() as Experiment;
+        return complete.status;
+      }, { timeout: 45_000 }).toBe("completed");
+      return complete;
+    };
+    const passed = await waitForCompletion(initial.id);
+    expect(passed.verdict, passed.results[0].checks[0].reason).toBe("pass");
+    expect(passed.results[0].checks[0]).toMatchObject({ source: "llm", evaluatorVersion: "rubric:1", status: "pass" });
+    expect(passed.results[0].checks[0].score).toBeGreaterThanOrEqual(0.5);
+    await expect(page.getByRole("article", { name: "Checkout result: pass", exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByLabel("Model judge score", { exact: true })).toBeVisible();
+
+    const rejected = await request.post(`${liveUrl}/api/evaluations/experiments`, { data: {
+      datasetId: revision.datasetId, version: revision.version, name: `Live ${provider} declined checkout`,
+      assignments: [{ caseId: revision.cases[0].id, runId: EVALUATION_RUNS.rejected }], allowModelJudges: true,
+    } });
+    expect(rejected.status()).toBe(202);
+    const failed = await waitForCompletion((await rejected.json() as Experiment).id);
+    expect(failed.verdict, failed.results[0].checks[0].reason).toBe("fail");
+    expect(failed.results[0].checks[0].score).toBeLessThan(0.5);
+    const comparison = await request.get(`${liveUrl}/api/evaluations/compare?baseline=${passed.id}&candidate=${failed.id}`);
+    expect(comparison.ok()).toBe(true);
+    expect((await comparison.json()).summary.regressions).toBe(1);
+  });
+}
