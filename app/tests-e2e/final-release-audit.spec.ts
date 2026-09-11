@@ -5,6 +5,7 @@ import {
   FIXTURE_LIVE_RUN_ID,
   FIXTURE_PRIMARY_RUN_ID,
   listRunPhantomRuns,
+  saveRunPhantomRun,
   seedRunPhantomFixtures,
 } from "./helpers";
 
@@ -205,4 +206,82 @@ test("release audit: mobile search uses a list-to-detail flow", async ({ page, r
   await expect(searchField).toBeHidden();
   await page.getByRole("button", { name: "Back to search" }).click();
   await expect(searchField).toBeVisible();
+});
+
+test("release audit: mobile saved runs use a list-to-detail flow", async ({ page, runPhantom }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await seedRunPhantomFixtures(runPhantom.url);
+  await saveRunPhantomRun(runPhantom.url, FIXTURE_PRIMARY_RUN_ID);
+
+  await page.goto(`${runPhantom.url}/saved/${FIXTURE_PRIMARY_RUN_ID}`);
+  await expect(page.getByRole("button", { name: "Back to saved runs" })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("Saved Runs", { exact: true })).toBeHidden();
+  await page.getByRole("button", { name: "Back to saved runs" }).click();
+  await expect(page.getByText("Saved Runs", { exact: true })).toBeVisible();
+});
+
+test("release audit: reduced motion freezes the empty-state signal field", async ({ page, runPhantom }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`${runPhantom.url}/runs`);
+
+  const canvas = page.locator("canvas[aria-hidden='true']");
+  await expect(canvas).toBeVisible({ timeout: 10_000 });
+  const firstFrame = await canvas.evaluate((element) => (element as HTMLCanvasElement).toDataURL());
+  await page.waitForTimeout(350);
+  const laterFrame = await canvas.evaluate((element) => (element as HTMLCanvasElement).toDataURL());
+  expect(laterFrame).toBe(firstFrame);
+});
+
+test("release audit: reduced motion disables looping status animation", async ({ page, runPhantom }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await seedRunPhantomFixtures(runPhantom.url);
+  await page.goto(`${runPhantom.url}/runs/${FIXTURE_LIVE_RUN_ID}`);
+
+  const animations = await page.evaluate(() =>
+    Array.from(document.querySelectorAll<HTMLElement>(".pulse-dot, .spin, .animate-spin, .animate-pulse"))
+      .map((element) => ({
+        className: element.className,
+        animationName: getComputedStyle(element).animationName,
+      }))
+      .filter((entry) => entry.animationName !== "none"),
+  );
+  expect(animations).toEqual([]);
+});
+
+test("release audit: optional provider routes degrade cleanly without API keys", async ({ runPhantom }) => {
+  const modelsResponse = await fetch(`${runPhantom.url}/api/models/anthropic`);
+  expect(modelsResponse.status).toBe(200);
+  expect(await modelsResponse.json()).toMatchObject({
+    models: [],
+    configured: false,
+  });
+
+  const summaryResponse = await fetch(`${runPhantom.url}/api/summarize`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content: "A local trace that needs a title." }),
+  });
+  expect(summaryResponse.status).toBe(200);
+  expect(await summaryResponse.json()).toMatchObject({
+    summary: null,
+    available: false,
+    reason: "missing_provider_key",
+  });
+});
+
+test("release audit: replay reports actionable setup state through SSE", async ({ runPhantom }) => {
+  await seedRunPhantomFixtures(runPhantom.url);
+  const response = await fetch(`${runPhantom.url}/api/replay`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runId: FIXTURE_PRIMARY_RUN_ID }),
+  });
+
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toContain("text/event-stream");
+  const body = await response.text();
+  expect(body).toContain('"type":"error"');
+  expect(body).toContain('"code":"missing_replay_agent"');
+  expect(body).toContain('"setupRequired":true');
+  expect(body).toContain("/setup-agent-replay");
 });
