@@ -24,6 +24,23 @@ function containsForbiddenIdentity(value: string): boolean {
   });
 }
 
+export type RunPhantomRunRow = {
+  id: string;
+  event_name: string | null;
+  user_id: string | null;
+  convo_id: string | null;
+};
+
+export type RunPhantomSpanRow = {
+  id: string;
+  run_id: string;
+  name: string;
+  span_type: string | null;
+  status: string | null;
+  input_payload: string | null;
+  output_payload: string | null;
+};
+
 type RunPhantomDetailResponse = {
   run: {
     id: string;
@@ -90,4 +107,54 @@ export async function readLocalStorageKeys(page: Page): Promise<string[]> {
 
 export function hasLegacyIdentityKey(keys: string[]): boolean {
   return keys.some(containsForbiddenIdentity);
+}
+
+async function fetchRunPhantomSpansViaApi(
+  runPhantomUrl: string,
+  runId: string,
+): Promise<Array<{
+  id: string;
+  name: string;
+  span_type: string | null;
+  status: string | null;
+  input_preview: string;
+  output_preview: string;
+}>> {
+  const res = await fetch(
+    `${runPhantomUrl}/api/runs/${encodeURIComponent(runId)}/spans?limit=500&payload_preview_chars=400`,
+  );
+  if (!res.ok) {
+    throw new Error(`GET /api/runs/${runId}/spans -> ${res.status} ${await res.text()}`);
+  }
+  return res.json() as Promise<Array<{
+    id: string;
+    name: string;
+    span_type: string | null;
+    status: string | null;
+    input_preview: string;
+    output_preview: string;
+  }>>;
+}
+
+export async function readRunPhantomRun(runPhantomUrl: string, runId: string): Promise<RunPhantomRunRow | null> {
+  const res = await fetch(`${runPhantomUrl}/api/runs/${encodeURIComponent(runId)}/outline?payload_preview_chars=0`);
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(`GET /api/runs/${runId}/outline -> ${res.status} ${await res.text()}`);
+  }
+  const body = (await res.json()) as { run: RunPhantomRunRow | null };
+  return body.run ?? null;
+}
+
+export async function readRunPhantomSpans(runPhantomUrl: string, runId: string): Promise<RunPhantomSpanRow[]> {
+  const spans = await fetchRunPhantomSpansViaApi(runPhantomUrl, runId);
+  return spans.map((span) => ({
+    id: span.id,
+    run_id: runId,
+    name: span.name,
+    span_type: span.span_type,
+    status: span.status,
+    input_payload: span.input_preview || null,
+    output_payload: span.output_preview || null,
+  }));
 }
