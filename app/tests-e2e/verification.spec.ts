@@ -1,9 +1,9 @@
-import { mkdirSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { test, expect, connectTarget, act, observe, assertRuntime } from "./verification-fixture";
 import { REPO_ROOT_PATH } from "./fixtures";
 import { FIXTURE_PRIMARY_RUN_ID, seedRunPhantomFixtures } from "./helpers";
-import type { VerificationFlow, VerificationReport } from "../../src/verification/protocol";
+import type { VerificationFlow, VerificationReport, SessionSummary } from "../../src/verification/protocol";
 
 test("runtime verification: user pairs an app, runs a check, and saves and replays a flow through the UI", async ({ page, context, runPhantom, targetApp }) => {
   await seedRunPhantomFixtures(runPhantom.url);
@@ -178,4 +178,100 @@ test("runtime verification: a prior action's delayed network response cannot sat
   await expect.poll(async () => (await observe(request, runPhantom, session.id)).events.some((event) => event.type === "network" && String(event.data.url).includes("/api/late"))).toBe(true);
   const report = await assertRuntime(request, runPhantom, session.id, { kind: "network", urlContains: "/api/late", status: 200 }, nextCursor);
   expect(report.status).toBe("fail");
+});
+
+test("runtime verification: target cannot mutate the daemon and fill secrets never enter evidence or saved flows", async ({ page, request, runPhantom, targetApp }) => {
+  const session = await connectTarget(page, request, runPhantom, targetApp.origin);
+  const sessionsBefore = await request.get(`${runPhantom.url}/api/verification/sessions`);
+  const rawSessions = await sessionsBefore.text();
+  expect(rawSessions.includes('"token"')).toBe(false);
+
+  const browserRead = await page.evaluate(async ({ daemon, origin }) => {
+    try {
+      const response = await fetch(`${daemon}/api/verification/sessions`, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify({ origin }) });
+      return { readable: true, status: response.status };
+    } catch {
+      return { readable: false, status: null };
+    }
+  }, { daemon: runPhantom.url, origin: targetApp.origin });
+  expect(browserRead.readable).toBe(false);
+  const forbidden = await request.post(`${runPhantom.url}/api/verification/sessions`, {
+    headers: { Origin: targetApp.origin }, data: { origin: targetApp.origin },
+  });
+  expect(forbidden.status()).toBe(403);
+  const after = await request.get(`${runPhantom.url}/api/verification/sessions`);
+  expect((await after.json() as SessionSummary[]).length).toBe(1);
+
+  const sentinel = "fixture-only-secret-a62d8";
+  await act(request, runPhantom, session.id, { type: "fill", selector: "#password", value: sentinel });
+  await expect(page.locator("#password")).toHaveValue(sentinel);
+  await act(request, runPhantom, session.id, { type: "state", store: "checkout" });
+  await act(request, runPhantom, session.id, { type: "snapshot" });
+  const observed = JSON.stringify(await observe(request, runPhantom, session.id));
+  expect(observed.includes(sentinel)).toBe(false);
+
+  const save = await request.post(`${runPhantom.url}/api/verification/flows`, { data: {
+    name: "Forbidden saved fill", origin: targetApp.origin,
+    steps: [{ command: { type: "fill", selector: "#password", value: sentinel }, predicate: { kind: "element", selector: "#status", state: "present" } }],
+  } });
+  expect(save.status()).toBe(400);
+  expect((await save.text()).includes(sentinel)).toBe(false);
+  const reports = await request.get(`${runPhantom.url}/api/verification/reports`);
+  expect((await reports.text()).includes(sentinel)).toBe(false);
+  for (const suffix of ["", "-wal"]) {
+    const file = `${runPhantom.dbPath}${suffix}`;
+    if (existsSync(file)) expect(readFileSync(file).includes(Buffer.from(sentinel))).toBe(false);
+  }
+});
+
+test("runtime verification: disconnect restores browser methods and invalidates pending checks", async ({ page, request, runPhantom, targetApp }) => {
+  const session = await connectTarget(page, request, runPhantom, targetApp.origin);
+  const cursor = await act(request, runPhantom, session.id, { type: "click", selector: "#slow" });
+  const checking = assertRuntime(request, runPhantom, session.id, { kind: "network", urlContains: "/never-arrives", status: 200 }, cursor);
+  await page.evaluate(() => window.runtime.disconnect());
+  expect((await checking).status).toBe("inconclusive");
+  expect(await page.evaluate(() => ({
+    fetch: fetch === window.originalMethods.fetch,
+    pushState: history.pushState === window.originalMethods.pushState,
+    console: console.error === window.originalMethods.error,
+    xhrOpen: XMLHttpRequest.prototype.open === window.originalMethods.xhrOpen,
+    xhrSend: XMLHttpRequest.prototype.send === window.originalMethods.xhrSend,
+  }))).toEqual({ fetch: true, pushState: true, console: true, xhrOpen: true, xhrSend: true });
+  targetApp.releaseDelayed();
+  await expect.poll(async () => (await observe(request, runPhantom, session.id)).session.connected).toBe(false);
+  expect((await assertRuntime(request, runPhantom, session.id, { kind: "console", level: "error", absent: true }, cursor)).status).toBe("inconclusive");
+});
+
+test("runtime verification: teardown preserves a browser wrapper installed after the SDK", async ({ page, request, runPhantom, targetApp }) => {
+  await connectTarget(page, request, runPhantom, targetApp.origin);
+  const preserved = await page.evaluate(async () => {
+    const captured = window.fetch.bind(window);
+    window.lateFetchWrapper = (...args) => captured(...args);
+    window.fetch = window.lateFetchWrapper;
+    window.runtime.disconnect();
+    const identityPreserved = window.fetch === window.lateFetchWrapper;
+    const response = await fetch("/api/details");
+    return identityPreserved && response.ok;
+  });
+  expect(preserved).toBe(true);
+});
+
+test("runtime verification: compiled SDK serves the exact embedded module and connects from another origin", async ({ page, request, targetApp }) => {
+  const compiledUrl = process.env.RUNPHANTOM_COMPILED_URL;
+  test.skip(!compiledUrl, "RUNPHANTOM_COMPILED_URL is required for the compiled SDK gate");
+  const daemon = { url: compiledUrl!, port: Number(new URL(compiledUrl!).port), dbPath: "" };
+  const source = await request.get(`${daemon.url}/verification/sdk.js`, { headers: { Origin: targetApp.origin } });
+  expect(source.ok()).toBe(true);
+  expect(source.headers()["content-type"]).toContain("javascript");
+  expect(source.headers()["access-control-allow-origin"]).toBe(targetApp.origin);
+  expect(await source.text()).toBe(readFileSync(path.join(REPO_ROOT_PATH, "src/verification/browser-sdk.js"), "utf8"));
+  const session = await connectTarget(page, request, daemon, targetApp.origin);
+  try {
+    const cursor = await act(request, daemon, session.id, { type: "click", selector: "#signal" });
+    const report = await assertRuntime(request, daemon, session.id, { kind: "signal", name: "checkout.confirmed" }, cursor);
+    expect(report.status).toBe("pass");
+  } finally {
+    await page.evaluate(() => window.runtime.disconnect());
+    await request.delete(`${daemon.url}/api/verification/sessions/${session.id}`);
+  }
 });
