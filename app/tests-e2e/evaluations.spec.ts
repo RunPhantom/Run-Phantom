@@ -2,9 +2,10 @@ import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { test, expect, REPO_ROOT_PATH } from "./fixtures";
 import {
-  createEvaluationDataset, EVALUATION_INPUT, EVALUATION_RUNS, seedEvaluationRuns,
+  createEvaluationDataset, EVALUATION_INPUT, EVALUATION_RUNS,
+  seedEvaluationRuns, snapshot,
 } from "./evaluation-fixture";
-import type { Experiment } from "../../src/evaluations/protocol";
+import type { Experiment, Snapshot } from "../../src/evaluations/protocol";
 
 test("evaluations: user creates a regression case, compares frozen candidates, reviews results and imports an export", async ({ page, request, runPhantom }) => {
   await seedEvaluationRuns(request, runPhantom.url);
@@ -169,4 +170,22 @@ test("evaluations: user resolves ambiguous response selection and sees explicit 
   await expect(start).toBeDisabled();
   const experiments = await request.get(`${runPhantom.url}/api/evaluations/experiments`);
   expect(await experiments.json() as Experiment[]).toHaveLength(1);
+});
+
+test("evaluations: real ingested traces preserve output provenance, measured usage and missing evidence", async ({ request, runPhantom }) => {
+  await seedEvaluationRuns(request, runPhantom.url);
+  const baseline = await snapshot(request, runPhantom.url, EVALUATION_RUNS.baseline);
+  expect(baseline.input).toBe(EVALUATION_INPUT);
+  expect(baseline.complete).toBe(true);
+  expect(baseline.output).toMatchObject({ value: '{"status":"paid"}', source: "agentRoot", complete: true });
+  expect(baseline.metrics).toEqual({ inputTokens: 80, outputTokens: 20, totalTokens: 100, durationMs: 1000, costUsd: 0.001, toolCalls: 2, errorSpans: 0 });
+  expect(baseline.models).toContainEqual(expect.objectContaining({ provider: "openai", model: "captured-response-model", inputTokens: 80, outputTokens: 20 }));
+  const missing = await snapshot(request, runPhantom.url, EVALUATION_RUNS.missing);
+  expect(missing.metrics).toMatchObject({ inputTokens: null, outputTokens: null, totalTokens: null, costUsd: null, durationMs: 1000 });
+  const ambiguous = await snapshot(request, runPhantom.url, EVALUATION_RUNS.ambiguous);
+  expect(ambiguous.output).toMatchObject({ value: null, source: "unavailable", complete: false });
+  const selectedSpan = `${EVALUATION_RUNS.ambiguous.slice(-8)}00000004`;
+  const explicit = await request.get(`${runPhantom.url}/api/evaluations/runs/${EVALUATION_RUNS.ambiguous}/snapshot?outputSpanId=${selectedSpan}`);
+  expect(explicit.ok()).toBe(true);
+  expect((await explicit.json() as Snapshot).output).toMatchObject({ value: "First parallel response", spanId: selectedSpan, source: "selected", complete: true });
 });
