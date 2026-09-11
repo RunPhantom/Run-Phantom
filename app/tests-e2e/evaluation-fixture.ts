@@ -1,6 +1,6 @@
 import type { APIRequestContext } from "@playwright/test";
 import { expect } from "./fixtures";
-import type { Snapshot } from "../../src/evaluations/protocol";
+import type { DatasetRevision, Experiment, Rule, Snapshot } from "../../src/evaluations/protocol";
 
 export const EVALUATION_INPUT = "Describe the result of this checkout.";
 export const EVALUATION_RUNS = {
@@ -69,4 +69,33 @@ export async function snapshot(request: APIRequestContext, daemon: string, runId
   const response = await request.get(`${daemon}/api/evaluations/runs/${runId}/snapshot`);
   expect(response.ok(), `Read captured evaluation snapshot (HTTP ${response.status()})`).toBe(true);
   return response.json() as Promise<Snapshot>;
+}
+
+export async function createEvaluationDataset(request: APIRequestContext, daemon: string, rules: Rule[], name = "Checkout reference"): Promise<DatasetRevision> {
+  const created = await request.post(`${daemon}/api/evaluations/datasets`, { data: { name } });
+  expect(created.status()).toBe(201);
+  const initial = await created.json() as DatasetRevision;
+  const revised = await request.put(`${daemon}/api/evaluations/datasets/${initial.datasetId}`, { data: {
+    expectedVersion: initial.version,
+    cases: [{ name: "Checkout result", sourceRunId: EVALUATION_RUNS.baseline, rules }],
+  } });
+  expect(revised.status()).toBe(201);
+  return revised.json() as Promise<DatasetRevision>;
+}
+
+export async function startEvaluation(request: APIRequestContext, daemon: string, revision: DatasetRevision, runId: string, name: string): Promise<Experiment> {
+  const response = await request.post(`${daemon}/api/evaluations/experiments`, { data: {
+    datasetId: revision.datasetId, version: revision.version, name,
+    assignments: revision.cases.map((entry) => ({ caseId: entry.id, runId })),
+  } });
+  expect(response.status(), "Evaluation accepts a fully assigned frozen experiment").toBe(202);
+  const started = await response.json() as Experiment;
+  let completed = started;
+  await expect.poll(async () => {
+    const status = await request.get(`${daemon}/api/evaluations/experiments/${started.id}`);
+    expect(status.ok()).toBe(true);
+    completed = await status.json() as Experiment;
+    return completed.status;
+  }, { timeout: 15_000 }).toBe("completed");
+  return completed;
 }
