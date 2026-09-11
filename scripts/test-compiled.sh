@@ -69,6 +69,13 @@ RUNPHANTOM_SCREENSHOT_DIR="${RUNPHANTOM_SCREENSHOT_DIR:-$STATE_DIR/shots}" \
 STATUS=$?
 cd "$REPO_ROOT"
 
+# A route can 503 while the page still renders, so the assertions alone do not
+# prove the binary is whole. Fail on any runtime resolution error in the log.
+if grep -q "ModuleNotFound" "$STATE_DIR/daemon.log"; then
+  echo "[test-compiled] binary is missing an embedded module:" >&2
+  grep -m3 "ModuleNotFound" "$STATE_DIR/daemon.log" >&2
+  exit 1
+fi
 
 echo "[test-compiled] ok"
 exit $STATUS
