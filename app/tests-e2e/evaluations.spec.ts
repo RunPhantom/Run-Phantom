@@ -3,9 +3,9 @@ import path from "node:path";
 import { test, expect, REPO_ROOT_PATH } from "./fixtures";
 import {
   createEvaluationDataset, EVALUATION_INPUT, EVALUATION_RUNS,
-  seedEvaluationRuns, snapshot,
+  seedEvaluationRuns, snapshot, startEvaluation,
 } from "./evaluation-fixture";
-import type { Experiment, Snapshot } from "../../src/evaluations/protocol";
+import type { Comparison, DatasetRevision, Experiment, Snapshot } from "../../src/evaluations/protocol";
 
 test("evaluations: user creates a regression case, compares frozen candidates, reviews results and imports an export", async ({ page, request, runPhantom }) => {
   await seedEvaluationRuns(request, runPhantom.url);
@@ -188,4 +188,58 @@ test("evaluations: real ingested traces preserve output provenance, measured usa
   const explicit = await request.get(`${runPhantom.url}/api/evaluations/runs/${EVALUATION_RUNS.ambiguous}/snapshot?outputSpanId=${selectedSpan}`);
   expect(explicit.ok()).toBe(true);
   expect((await explicit.json() as Snapshot).output).toMatchObject({ value: "First parallel response", spanId: selectedSpan, source: "selected", complete: true });
+});
+
+test("evaluations: frozen experiments distinguish regressions, unavailable telemetry and mismatched input", async ({ request, runPhantom }) => {
+  await seedEvaluationRuns(request, runPhantom.url);
+  const revision = await createEvaluationDataset(request, runPhantom.url, [
+    { kind: "output", operation: "contains", value: "paid" },
+    { kind: "budget", metric: "totalTokens", max: 100 },
+  ]);
+  const baseline = await startEvaluation(request, runPhantom.url, revision, EVALUATION_RUNS.baseline, "Measured baseline");
+  const rejected = await startEvaluation(request, runPhantom.url, revision, EVALUATION_RUNS.rejected, "Broken candidate");
+  const repaired = await startEvaluation(request, runPhantom.url, revision, EVALUATION_RUNS.repaired, "Repaired candidate");
+  expect(baseline.verdict).toBe("pass");
+  expect(rejected.verdict).toBe("fail");
+  expect(repaired.verdict).toBe("pass");
+  const unknown = await startEvaluation(request, runPhantom.url, revision, EVALUATION_RUNS.missing, "Unmeasured candidate");
+  expect(unknown.verdict).toBe("inconclusive");
+  expect(unknown.summary).toMatchObject({ total: 1, pass: 0, fail: 0, inconclusive: 1, passRate: 0 });
+  const mismatched = await startEvaluation(request, runPhantom.url, revision, EVALUATION_RUNS.mismatch, "Wrong request candidate");
+  expect(mismatched.verdict).toBe("inconclusive");
+  expect(mismatched.results[0].inputMatch).toBe("mismatch");
+  expect(mismatched.results[0].checks.every((check) => check.status === "inconclusive")).toBe(true);
+
+  const comparison = async (from: Experiment, to: Experiment): Promise<Comparison> => {
+    const response = await request.get(`${runPhantom.url}/api/evaluations/compare?baseline=${from.id}&candidate=${to.id}`);
+    expect(response.ok()).toBe(true);
+    return response.json() as Promise<Comparison>;
+  };
+  expect((await comparison(baseline, rejected)).summary.regressions).toBe(1);
+  const improvement = await comparison(rejected, repaired);
+  expect(improvement.summary.improvements).toBe(1);
+  expect(improvement.cases[0].deltas.totalTokens).toBe(-25);
+  expect(improvement.cases[0].deltas.costUsd).toBeCloseTo(-0.0003, 8);
+  const uncertain = await comparison(baseline, unknown);
+  expect(uncertain.summary.inconclusive).toBe(1);
+  expect(uncertain.cases[0].deltas.totalTokens).toBeNull();
+  expect(uncertain.cases[0].deltas.costUsd).toBeNull();
+
+  const update = await request.put(`${runPhantom.url}/api/evaluations/datasets/${revision.datasetId}`, { data: {
+    expectedVersion: revision.version,
+    cases: revision.cases.map((entry) => ({ id: entry.id, name: entry.name, sourceRunId: entry.sourceRunId, rules: [{ kind: "output", operation: "contains", value: "declined" }] })),
+  } });
+  expect(update.status()).toBe(201);
+  const changed = await update.json() as DatasetRevision;
+  const changedExperiment = await startEvaluation(request, runPhantom.url, changed, EVALUATION_RUNS.rejected, "Changed expectations");
+  expect(changedExperiment.verdict).toBe("pass");
+  const incompatible = await request.get(`${runPhantom.url}/api/evaluations/compare?baseline=${baseline.id}&candidate=${changedExperiment.id}`);
+  expect(incompatible.status()).toBe(409);
+  const oldRevision = await request.get(`${runPhantom.url}/api/evaluations/datasets/${revision.datasetId}?version=${revision.version}`);
+  expect(await oldRevision.json()).toEqual(revision);
+
+  expect((await request.delete(`${runPhantom.url}/api/runs/${EVALUATION_RUNS.baseline}`)).ok()).toBe(true);
+  expect((await request.delete(`${runPhantom.url}/api/evaluations/datasets/${revision.datasetId}`)).ok()).toBe(true);
+  const preserved = await request.get(`${runPhantom.url}/api/evaluations/experiments/${baseline.id}`);
+  expect(await preserved.json()).toEqual(baseline);
 });
