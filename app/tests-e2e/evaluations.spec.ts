@@ -243,3 +243,50 @@ test("evaluations: frozen experiments distinguish regressions, unavailable telem
   const preserved = await request.get(`${runPhantom.url}/api/evaluations/experiments/${baseline.id}`);
   expect(await preserved.json()).toEqual(baseline);
 });
+
+test("evaluations: compiled workbench stores and displays a completed evaluation", async ({ page, request }) => {
+  const daemon = process.env.RUNPHANTOM_COMPILED_URL;
+  test.skip(!daemon, "RUNPHANTOM_COMPILED_URL must identify an isolated compiled daemon");
+  await seedEvaluationRuns(request, daemon!);
+  const revision = await createEvaluationDataset(request, daemon!, [{ kind: "output", operation: "contains", value: "paid" }], "Compiled checkout dataset");
+  const experiment = await startEvaluation(request, daemon!, revision, EVALUATION_RUNS.baseline, "Compiled checkout evaluation");
+  expect(experiment.verdict).toBe("pass");
+  await page.goto(`${daemon}/evaluations`);
+  await expect(page.getByRole("heading", { name: "Evaluations", exact: true })).toBeVisible();
+  await page.getByRole("combobox", { name: "Dataset", exact: true }).selectOption(revision.datasetId);
+  await page.getByRole("combobox", { name: "View experiment", exact: true }).selectOption(experiment.id);
+  const results = page.getByRole("region", { name: "Experiment results", exact: true });
+  await expect(results.getByRole("heading", { name: "Compiled checkout evaluation", exact: true })).toBeVisible();
+  await expect(results.getByRole("article", { name: "Checkout result: pass", exact: true })).toBeVisible();
+});
+
+test("evaluations: model grading requires explicit opt-in and imported definitions remain portable", async ({ request, runPhantom }) => {
+  await seedEvaluationRuns(request, runPhantom.url);
+  const rubric = await createEvaluationDataset(request, runPhantom.url, [{
+    kind: "rubric", provider: "openai", model: "fixture-model", rubric: "The output clearly describes the checkout result.", threshold: 0.8,
+  }], "Explicit judge consent");
+  const denied = await request.post(`${runPhantom.url}/api/evaluations/experiments`, { data: {
+    datasetId: rubric.datasetId, version: rubric.version, name: "No spending authorized",
+    assignments: [{ caseId: rubric.cases[0].id, runId: EVALUATION_RUNS.baseline }],
+  } });
+  expect(denied.status()).toBe(400);
+  const experiments = await request.get(`${runPhantom.url}/api/evaluations/experiments`);
+  expect(await experiments.json()).toEqual([]);
+
+  const exportResponse = await request.get(`${runPhantom.url}/api/evaluations/datasets/${rubric.datasetId}/export?version=${rubric.version}`);
+  expect(exportResponse.ok()).toBe(true);
+  const portable = await exportResponse.json() as { format: string; name: string; cases: Array<Record<string, unknown>> };
+  expect(portable.format).toBe("runphantom-evaluations/v1");
+  expect(portable.cases[0].input).toBe(EVALUATION_INPUT);
+  expect(portable.cases[0]).not.toHaveProperty("sourceRunId");
+  const importedResponse = await request.post(`${runPhantom.url}/api/evaluations/datasets/import`, { data: portable });
+  expect(importedResponse.status()).toBe(201);
+  const imported = await importedResponse.json() as DatasetRevision;
+  expect(imported.datasetId).not.toBe(rubric.datasetId);
+  expect(imported.cases[0].id).not.toBe(rubric.cases[0].id);
+  expect(imported.cases[0]).toMatchObject({ sourceRunId: null, input: EVALUATION_INPUT, rules: rubric.cases[0].rules });
+  const executable = await request.post(`${runPhantom.url}/api/evaluations/datasets/import`, { data: {
+    ...portable, cases: [{ name: "Unsafe import", input: EVALUATION_INPUT, rules: [{ kind: "javascript", code: "process.exit(1)" }] }],
+  } });
+  expect(executable.status()).toBe(400);
+});
