@@ -1,5 +1,6 @@
-import { expect } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { REPO_ROOT_PATH } from "./fixtures";
 
 export const FIXTURE_PRIMARY_RUN_ID = "00000000000000000000000000000001";
@@ -7,6 +8,21 @@ export const FIXTURE_SAVED_SIBLING_RUN_ID = "00000000000000000000000000000002";
 export const FIXTURE_LIVE_RUN_ID = "00000000000000000000000000000003";
 export const FIXTURE_DISPLAY_NAME = "agent.turn";
 export const FIXTURE_SPAN_COUNT = 6;
+
+const FORBIDDEN_IDENTITY_HASHES = new Set([
+  "ee510d1a07ac7e6491ea191cd1918ea553ed2a358c8a0a04c1b90bd89222c314",
+  "1a89614a7ae4f0ff33ad4cf25ee6512cdf87b763d086466ac684ebc596a57e2d",
+]);
+
+function containsForbiddenIdentity(value: string): boolean {
+  const candidates = value.toLowerCase().match(/[a-z][a-z0-9._-]*/g) ?? [];
+  return candidates.some((candidate) => {
+    const namespace = candidate.split("_")[0] ?? candidate;
+    return [candidate, namespace].some((probe) =>
+      FORBIDDEN_IDENTITY_HASHES.has(createHash("sha256").update(probe).digest("hex")),
+    );
+  });
+}
 
 type RunPhantomDetailResponse = {
   run: {
@@ -61,4 +77,17 @@ export async function saveRunPhantomRun(runPhantomUrl: string, runId: string): P
     }),
   });
   expect(saveRes.ok, `PUT /api/saved-runs/events/${runId} -> ${saveRes.status}`).toBe(true);
+}
+
+export async function expectRunPhantomBranding(page: Page): Promise<void> {
+  await expect(page.getByRole("link", { name: /^Run Phantom/ }).first()).toBeVisible({ timeout: 10_000 });
+  expect(containsForbiddenIdentity(await page.locator("body").innerText())).toBe(false);
+}
+
+export async function readLocalStorageKeys(page: Page): Promise<string[]> {
+  return page.evaluate(() => Object.keys(localStorage).sort());
+}
+
+export function hasLegacyIdentityKey(keys: string[]): boolean {
+  return keys.some(containsForbiddenIdentity);
 }
