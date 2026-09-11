@@ -1,5 +1,7 @@
 import { createServer, type ServerResponse } from "node:http";
-import { expect, test as base } from "./fixtures";
+import type { APIRequestContext, Page } from "@playwright/test";
+import { expect, test as base, type RunPhantomHandle } from "./fixtures";
+import type { AppCommand, Observation, Predicate, SessionSummary, VerificationReport } from "../../src/verification/protocol";
 
 interface RuntimeHandle {
   disconnect(): void;
@@ -100,3 +102,27 @@ export const test = base.extend<{ targetApp: TargetApp }>({
 });
 
 export { expect };
+
+export async function connectTarget(
+  page: Page,
+  request: APIRequestContext,
+  daemon: RunPhantomHandle,
+  origin: string,
+  runId?: string,
+): Promise<SessionSummary> {
+  const response = await request.post(`${daemon.url}/api/verification/sessions`, { data: { origin, ...(runId ? { runId } : {}) } });
+  expect(response.ok(), "Control caller can create a runtime session").toBe(true);
+  const paired = await response.json() as SessionSummary & { token: string; sdkUrl: string };
+  await page.goto(origin);
+  await page.evaluate(async ({ url, sessionId, token, sdkUrl }) => {
+    const sdk = await import(sdkUrl) as { connect(options: { url: string; sessionId: string; token: string }): RuntimeHandle };
+    window.runtime = sdk.connect({ url, sessionId, token });
+    window.runtime.registerStore("checkout", () => window.checkoutState);
+  }, { url: daemon.url, sessionId: paired.id, token: paired.token, sdkUrl: new URL(paired.sdkUrl, daemon.url).href });
+  await expect.poll(async () => {
+    const sessions = await request.get(`${daemon.url}/api/verification/sessions`);
+    const body = await sessions.json() as SessionSummary[];
+    return body.find((session) => session.id === paired.id)?.connected;
+  }).toBe(true);
+  return { id: paired.id, origin: paired.origin, runId: paired.runId, connected: true, createdAt: paired.createdAt, coverage: paired.coverage, cursor: paired.cursor, dropped: paired.dropped };
+}
