@@ -126,3 +126,23 @@ export async function connectTarget(
   }).toBe(true);
   return { id: paired.id, origin: paired.origin, runId: paired.runId, connected: true, createdAt: paired.createdAt, coverage: paired.coverage, cursor: paired.cursor, dropped: paired.dropped };
 }
+
+export async function act(request: APIRequestContext, daemon: RunPhantomHandle, sessionId: string, command: AppCommand): Promise<number> {
+  const response = await request.post(`${daemon.url}/api/verification/sessions/${sessionId}/command`, { data: command });
+  expect(response.ok(), `Runtime ${command.type} request succeeds`).toBe(true);
+  const result = await response.json() as { ok: boolean; cursor: number };
+  expect(result.ok, `Runtime ${command.type} executes in the target page`).toBe(true);
+  return result.cursor;
+}
+
+export async function observe(request: APIRequestContext, daemon: RunPhantomHandle, sessionId: string): Promise<Observation> {
+  const response = await request.get(`${daemon.url}/api/verification/sessions/${sessionId}/events`);
+  expect(response.ok()).toBe(true);
+  return response.json() as Promise<Observation>;
+}
+
+export async function assertRuntime(request: APIRequestContext, daemon: RunPhantomHandle, sessionId: string, predicate: Predicate, since: number, name = "Browser fixture check"): Promise<VerificationReport> {
+  const response = await request.post(`${daemon.url}/api/verification/sessions/${sessionId}/assert`, { data: { predicate, since, name } });
+  expect(response.ok(), `Runtime assertion returns a report (HTTP ${response.status()})`).toBe(true);
+  return response.json() as Promise<VerificationReport>;
+}
