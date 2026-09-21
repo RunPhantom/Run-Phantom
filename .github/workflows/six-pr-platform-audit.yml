@@ -1,0 +1,71 @@
+name: Six PR platform audit
+
+on:
+  push:
+    branches: [verify/run-phantom-six-prs-20260922]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: six-pr-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  platform:
+    name: Native and browser (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env:
+      RUNPHANTOM_LIVE_TESTS: "0"
+      RUNPHANTOM_CLAUDE_CLI_CHAT: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - name: Frozen dependency installation
+        run: bun install --frozen-lockfile
+      - name: Source CLI smoke
+        run: bun x --no-install runphantom-dev --version
+      - name: Lint
+        run: bun run lint
+      - name: Root and build verification
+        run: bun run build
+      - name: Application types
+        working-directory: app
+        run: bun x tsc --noEmit
+      - name: Browser test types
+        run: bun x tsc --noEmit -p app/tests-e2e/tsconfig.json
+      - name: Native regression suite
+        run: bun run test
+      - name: Install OpenAI example dependencies
+        working-directory: examples/openai-chat
+        run: bun install --frozen-lockfile
+      - name: Install Anthropic example dependencies
+        working-directory: examples/anthropic-chat
+        run: bun install --frozen-lockfile
+      - name: Typecheck both examples
+        run: bun run --cwd examples check
+      - name: Install Chromium
+        run: bun x playwright install --with-deps chromium
+      - name: Browser journeys without retries
+        working-directory: app
+        run: bun x playwright test --project=chromium --workers=2 --retries=0
+      - name: Retain failed browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-diagnostics-${{ matrix.os }}
+          path: |
+            app/test-results/
+            app/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
