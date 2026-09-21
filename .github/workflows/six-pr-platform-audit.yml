@@ -46,6 +46,9 @@ jobs:
         run: bun x tsc --noEmit -p app/tests-e2e/tsconfig.json
       - name: Native regression suite
         run: bun run test
+      - name: Repeated Windows migration and close lifecycle
+        if: runner.os == 'Windows'
+        run: bun test tests/evaluation-migration.test.ts tests/db-close.test.ts --rerun-each=20
       - name: Install OpenAI example dependencies
         working-directory: examples/openai-chat
         run: bun install --frozen-lockfile
