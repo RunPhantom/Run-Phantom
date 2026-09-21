@@ -57,9 +57,14 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Typecheck both examples
         run: bun run --cwd examples check
-      - name: Install Chromium
+      - name: Install Chromium and POSIX dependencies
+        if: runner.os != 'Windows'
         working-directory: app
         run: bun x --no-install playwright install --with-deps chromium
+      - name: Install Chromium on Windows
+        if: runner.os == 'Windows'
+        working-directory: app
+        run: bun x --no-install playwright install chromium
       - name: Browser journeys without retries
         working-directory: app
         run: bun x --no-install playwright test --project=chromium --workers=2 --retries=0
