@@ -121,3 +121,27 @@ describe("trace query SQL structure", () => {
     expect(() => execute("SELECT 'synthetic private chat' IN 'messages'")).toThrow(/trace-safe tables/);
   });
 });
+
+
+describe("SQLite byte-order-mark token boundaries", () => {
+  test.each([
+    "SELECT content \uFEFFFROM messages",
+    "SELECT content \uFEFF\uFEFFFROM messages",
+    "SELECT content FROM runs \uFEFFJOIN messages ON 1",
+    "SELECT 'synthetic private chat' \uFEFFIN messages",
+    "SELECT content FROM (SELECT content \uFEFFFROM messages)",
+    "SELECT content /* separator */\uFEFFFROM messages",
+  ])("rejects forbidden sources after a token-leading BOM: %s", sql => {
+    expect(() => execute(sql)).toThrow(/trace-safe tables/);
+  });
+
+  test.each([
+    "SELECT \uFEFFprintf('%10s', 'x')",
+    "SELECT \uFEFF\uFEFFprintf('%10s', 'x')",
+    "SELECT \uFEFFhex('x')",
+    "SELECT \uFEFFrandomblob(1)",
+    "SELECT \uFEFFgroup_concat(id) FROM runs",
+  ])("rejects restricted functions after a token-leading BOM: %s", sql => {
+    expect(() => execute(sql)).toThrow(/amplify output size/);
+  });
+});

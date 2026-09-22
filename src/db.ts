@@ -182,7 +182,8 @@ function tokenizeSql(sql: string): SqlToken[] {
   const tokens: SqlToken[] = [];
   for (let index = 0; index < sql.length;) {
     const char = sql[index];
-    if (/[ \t\n\r\f]/.test(char)) {
+    // SQLite treats a BOM as whitespace at token start, but retains it inside identifiers.
+    if (/[ \t\n\r\f\uFEFF]/.test(char)) {
       index++;
       continue;
     }
