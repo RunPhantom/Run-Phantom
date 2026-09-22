@@ -67,7 +67,7 @@ jobs:
         run: bun x --no-install playwright install chromium
       - name: Browser journeys without retries
         working-directory: app
-        run: bun x --no-install playwright test --project=chromium --workers=2 --retries=0
+        run: bun x --no-install playwright test --project=chromium --workers=2 --retries=0 --trace=retain-on-failure
       - name: Retain failed browser diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
