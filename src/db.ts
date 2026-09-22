@@ -182,7 +182,8 @@ function tokenizeSql(sql: string): SqlToken[] {
   const tokens: SqlToken[] = [];
   for (let index = 0; index < sql.length;) {
     const char = sql[index];
-    if (/[ \t\n\r\f]/.test(char)) {
+    // SQLite treats a BOM as whitespace at token start, but retains it inside identifiers.
+    if (/[ \t\n\r\f\uFEFF]/.test(char)) {
       index++;
       continue;
     }
@@ -349,10 +350,15 @@ function maskSqlLiterals(sql: string): string {
 }
 
 function assertReadOnlyTraceQuery(sql: string): string {
-  const trimmed = stripSqlComments(sql).trim();
+  // JavaScript trim() also removes characters that SQLite retains in identifiers.
+  const trimmed = stripSqlComments(sql)
+    .replace(/^[ \t\n\r\f\uFEFF]+/, "")
+    .replace(/[ \t\n\r\f]+$/, "");
   if (!trimmed) throw new Error("sql required");
 
-  const withoutTrailingSemicolon = trimmed.replace(/;\s*$/, "").trim();
+  const withoutTrailingSemicolon = trimmed
+    .replace(/;[ \t\n\r\f\uFEFF]*$/, "")
+    .replace(/[ \t\n\r\f]+$/, "");
   // Mask literals for keyword/separator checks; token-based name checks below
   // retain quoted function and table identifiers.
   const code = maskSqlLiterals(withoutTrailingSemicolon);
