@@ -350,10 +350,15 @@ function maskSqlLiterals(sql: string): string {
 }
 
 function assertReadOnlyTraceQuery(sql: string): string {
-  const trimmed = stripSqlComments(sql).trim();
+  // JavaScript trim() also removes characters that SQLite retains in identifiers.
+  const trimmed = stripSqlComments(sql)
+    .replace(/^[ \t\n\r\f\uFEFF]+/, "")
+    .replace(/[ \t\n\r\f]+$/, "");
   if (!trimmed) throw new Error("sql required");
 
-  const withoutTrailingSemicolon = trimmed.replace(/;\s*$/, "").trim();
+  const withoutTrailingSemicolon = trimmed
+    .replace(/;[ \t\n\r\f\uFEFF]*$/, "")
+    .replace(/[ \t\n\r\f]+$/, "");
   // Mask literals for keyword/separator checks; token-based name checks below
   // retain quoted function and table identifiers.
   const code = maskSqlLiterals(withoutTrailingSemicolon);

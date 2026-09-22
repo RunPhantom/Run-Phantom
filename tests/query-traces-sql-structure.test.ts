@@ -145,3 +145,23 @@ describe("SQLite byte-order-mark token boundaries", () => {
     expect(() => execute(sql)).toThrow(/amplify output size/);
   });
 });
+
+
+describe("SQLite SQL whitespace normalization", () => {
+  test.each(["\uFEFF", "\u00A0", "\u2003"])("retains a non-ASCII identifier suffix: %s", suffix => {
+    expect(execute(`SELECT 1 AS name${suffix}`)).toEqual([{ [`name${suffix}`]: 1 }]);
+    expect(() => validate(`SELECT * FROM runs${suffix}`)).toThrow(/trace-safe tables/);
+  });
+
+  test("accepts token-leading BOM whitespace and one trailing semicolon", () => {
+    expect(execute("\uFEFFSELECT id FROM runs;\uFEFF ")).toEqual([{ id: "run" }]);
+    expect(execute("SELECT id \uFEFFFROM \uFEFFruns \uFEFF")).toEqual([{ id: "run" }]);
+    expect(execute("SELECT \uFEFFlength('run') AS value")).toEqual([{ value: 3 }]);
+  });
+
+  test("retains quoted BOM data and identifier bytes", () => {
+    expect(execute("SELECT '\uFEFF' AS value")).toEqual([{ value: "\uFEFF" }]);
+    expect(execute('SELECT 1 AS "\uFEFFname"')).toEqual([{ "\uFEFFname": 1 }]);
+    expect(() => validate('SELECT * FROM "\uFEFFruns"')).toThrow(/trace-safe tables/);
+  });
+});
