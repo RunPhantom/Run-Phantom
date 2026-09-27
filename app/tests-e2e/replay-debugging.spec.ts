@@ -164,6 +164,29 @@ test("local replay: cancel stops an in-flight endpoint request and preserves the
   expect(await exported(request, runPhantom.url, SOURCE_RUN_ID)).toEqual(original);
 });
 
+for (const outcome of ["failed", "cancelled"] as const) test(`local replay: a ${outcome} placeholder reads ${outcome} in the list and header, never live`, async ({ page, request, runPhantom, localReplayAgent }) => {
+  localReplayAgent.mode = outcome === "failed" ? "failure" : "hold";
+  await page.goto(`${runPhantom.url}/runs/${SOURCE_RUN_ID}`);
+  await page.getByRole("button", { name: "Replay", exact: true }).click();
+  await expect.poll(() => localReplayAgent.requests.length).toBe(1);
+  if (outcome === "cancelled") await page.getByRole("button", { name: "cancel", exact: true }).click();
+  const placeholderId = localReplayAgent.requests[0].replayRunId;
+  await expect.poll(async () => JSON.parse((await exported(request, runPhantom.url, placeholderId)).run.metadata).replay.error?.code)
+    .toBe(outcome === "failed" ? "agent_http_error" : "replay_cancelled");
+
+  // Checked well inside the 30 s recency window, where the span-less placeholder used to read "Run live".
+  await page.goto(`${runPhantom.url}/runs/${placeholderId}`);
+  const label = outcome === "failed" ? "Run failed" : "Run cancelled";
+  await expect(page.getByText(outcome === "failed" ? "Replay failed" : "Replay cancelled", { exact: true })).toBeVisible();
+  await expect(page.locator("[data-run-status]")).toHaveText(label);
+  await expect(page.locator("[data-run-header-title] .pulse-dot")).toHaveCount(0);
+  await expect(page.locator(`[data-run-header-title] [title="${label}"]`)).toBeVisible();
+  const listItem = page.locator(`[data-run-id="${placeholderId}"]`);
+  await expect(listItem).toContainText(label);
+  await expect(listItem).not.toContainText("Run live");
+  await expect(listItem.locator(".pulse-dot")).toHaveCount(0);
+});
+
 for (const sameSource of [false, true]) test(`registered replay attempts complete in reverse order (${sameSource ? "same" : "different"} source) without sharing evidence`, async ({ page, context, request, runPhantom, localReplayAgent }) => {
   const sourceB = sameSource ? SOURCE_RUN_ID : "b2000000000000000000000000000001";
   if (!sameSource) expect((await request.post(`${runPhantom.url}/v1/traces`, { data: replayTelemetry(sourceB) })).ok()).toBe(true);

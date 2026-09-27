@@ -616,7 +616,9 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
     if (replayError) {
       return (
         <div className="flex flex-col items-center justify-center h-48 text-sm gap-2 px-6 text-center" style={{ color: C.fg1 }}>
-          <div className="font-medium" style={{ color: C.red }}>Replay failed</div>
+          <div className="font-medium" style={{ color: replayError.code === "replay_cancelled" ? C.fg2 : C.red }}>
+            {replayError.code === "replay_cancelled" ? "Replay cancelled" : "Replay failed"}
+          </div>
           <div className="font-mono text-xs opacity-70">{replayError.code}</div>
           <div className="max-w-xl text-xs whitespace-pre-wrap">{replayError.message}</div>
         </div>
