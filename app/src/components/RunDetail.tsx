@@ -213,7 +213,13 @@ function ErrorsTooltip({ spans }: { spans: Span[] }) {
   );
 }
 
-const Dot = () => <span aria-hidden="true" style={{ color: C.fg0, opacity: 0.6 }}>&middot;</span>;
+const Dot = () => <span data-separator aria-hidden="true" style={{ color: C.fg0, opacity: 0.6 }}>&middot;</span>;
+
+// A stat wraps together with the separator after it, so a wrap can only leave
+// a separator at the end of a line, never at the start of the next one.
+function Stat({ children, last }: { children: React.ReactNode; last?: boolean }) {
+  return <span className="inline-flex items-center gap-1.5">{children}{!last && <Dot />}</span>;
+}
 
 function Badge({ label, copyValue }: { label: string; copyValue?: string }) {
   const [copied, setCopied] = useState(false);
@@ -285,19 +291,43 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
   const durSec = Math.round(liveDur / 1000);
   const durMin = Math.floor(durSec / 60);
   const durRemSec = durSec % 60;
+  const hasTokens = inTok > 0 || outTok > 0;
+  const totalCost = breakdown.reduce((sum, b) => sum + (b.breakdown?.totalCost ?? 0), 0);
+  const cost = totalCost > 0 ? fmtCost(totalCost) : null;
+
+  // Where the stats wrap, the separator after the last stat on a line has
+  // nothing to separate; index.css hides it on the stat marked here.
+  const rowRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    if (!row) return;
+    const markLineEnds = () => {
+      const items = [...row.children];
+      const boxes = items.map(item => item.getBoundingClientRect());
+      items.forEach((item, index) => {
+        const next = boxes[index + 1];
+        item.toggleAttribute("data-line-end", !next || next.top >= boxes[index].bottom);
+      });
+    };
+    markLineEnds();
+    const observer = new ResizeObserver(markLineEnds);
+    observer.observe(row);
+    for (const item of row.children) observer.observe(item);
+    return () => observer.disconnect();
+  });
 
   return (
-    <div className="rp-meta-metrics flex items-center gap-1.5 text-[11px] flex-wrap" style={{ color: C.fg3 }}>
-      {model && <><Badge label="model" copyValue={model} /><span>{model}</span><Dot /></>}
-      {stats.tools > 0 && <><span><NumberFlow value={stats.tools} /> tool{stats.tools !== 1 ? "s" : ""}</span><Dot /></>}
-      {(stats.agents ?? 0) > 0 && <><span><NumberFlow value={stats.agents!} /> sub-agent{stats.agents !== 1 ? "s" : ""}</span><Dot /></>}
-      {stats.errors > 0 && spans && <><ErrorsTooltip spans={spans} /><Dot /></>}
-      {stats.errors > 0 && !spans && <><span style={{ color: C.red }}><NumberFlow value={stats.errors} /> error{stats.errors !== 1 ? "s" : ""}</span><Dot /></>}
+    <div ref={rowRef} className="rp-meta-metrics flex items-center gap-1.5 text-[11px] flex-wrap" style={{ color: C.fg3 }}>
+      {model && <Stat><Badge label="model" copyValue={model} /><span>{model}</span></Stat>}
+      {stats.tools > 0 && <Stat><span><NumberFlow value={stats.tools} /> tool{stats.tools !== 1 ? "s" : ""}</span></Stat>}
+      {(stats.agents ?? 0) > 0 && <Stat><span><NumberFlow value={stats.agents!} /> sub-agent{stats.agents !== 1 ? "s" : ""}</span></Stat>}
+      {stats.errors > 0 && spans && <Stat><ErrorsTooltip spans={spans} /></Stat>}
+      {stats.errors > 0 && !spans && <Stat><span style={{ color: C.red }}><NumberFlow value={stats.errors} /> error{stats.errors !== 1 ? "s" : ""}</span></Stat>}
       {/* NumberFlow animates whole seconds, which reads well for a run in flight
           but rounds a 420ms run to "0s" while the span tree shows "420ms" for the
           same trace — and it has no hour unit, so a 3h run read as "205m". Keep
           the animation for the range it suits and defer to fmt() outside it. */}
-      <Badge label="duration" /><span>{
+      <Stat last={!hasTokens && !cost}><Badge label="duration" /><span>{
         !durValid
           ? "—"
           : liveDur < 1000 || liveDur >= 3_600_000
@@ -305,14 +335,10 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
             : durMin > 0
               ? <><NumberFlow value={durMin} />m <NumberFlow value={durRemSec} />s</>
               : <><NumberFlow value={durSec} />s</>
-      }</span>
-      {(inTok > 0 || outTok > 0) && <><Dot /><Badge label="tokens" /><span><NumberFlow value={inTok} {...TOKEN_NUMBER_FLOW_TIMING} /> in / <NumberFlow value={outTok} {...TOKEN_NUMBER_FLOW_TIMING} /> out</span></>}
-      {(() => {
-        const totalCost = breakdown.reduce((sum, b) => sum + (b.breakdown?.totalCost ?? 0), 0);
-        const cost = totalCost > 0 ? fmtCost(totalCost) : null;
-        return cost && (
-        <>
-          <Dot />
+      }</span></Stat>
+      {hasTokens && <Stat last={!cost}><Badge label="tokens" /><span><NumberFlow value={inTok} {...TOKEN_NUMBER_FLOW_TIMING} /> in / <NumberFlow value={outTok} {...TOKEN_NUMBER_FLOW_TIMING} /> out</span></Stat>}
+      {cost && (
+        <Stat last>
           <span ref={costRef} className="relative cursor-help"
             onMouseEnter={() => setShowCost(true)} onMouseLeave={() => setShowCost(false)}>
             {cost}
@@ -344,9 +370,8 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
               </div>
             )}
           </span>
-        </>
-      );
-      })()}
+        </Stat>
+      )}
     </div>
   );
 }

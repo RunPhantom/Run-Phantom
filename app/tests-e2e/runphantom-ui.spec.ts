@@ -197,6 +197,24 @@ test("Run Phantom UI: run ids get their own row under the run stats", async ({ p
   }
 });
 
+test("Run Phantom UI: wrapped run stats never end a line with a separator", async ({ page, runPhantom }) => {
+  await seedRunPhantomFixtures(runPhantom.url);
+  await page.addInitScript(() => {
+    localStorage.setItem("runphantom:messagePane:collapsed", "0");
+    localStorage.setItem("runphantom:messagePane:width", "460");
+  });
+
+  // With the side pane open at 1280x720 the stats wrap, and each separator was
+  // a flex item of its own: the one before TOKENS stayed behind at the end of
+  // the first line ("DURATION 3s ·").
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
+  const stats = page.locator(".rp-meta-metrics");
+  await expect(stats.getByText("tokens", { exact: true })).toBeVisible({ timeout: 10_000 });
+  expect((await stats.boundingBox())!.height, "the stats wrap beside the side pane").toBeGreaterThan(30);
+  await expect.poll(() => headerSeparatorProblems(page)).toEqual([]);
+});
+
 test("Run Phantom UI: run header actions never cover the run title or status", async ({ page, runPhantom }) => {
   await seedRunPhantomFixtures(runPhantom.url);
 
