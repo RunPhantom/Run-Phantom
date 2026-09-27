@@ -1,0 +1,162 @@
+import { expect, test } from "./fixtures";
+import { clearRunPhantom } from "./helpers";
+
+const TRACE_ID = "5ab0000000000000000000000000d005";
+const spanId = (slot: number) => `5ab00000${slot.toString(16).padStart(8, "0")}`;
+const ROOT = spanId(1);
+const PARENT_LLM = spanId(2);
+const SUB_AGENT_ROOT = spanId(3);
+const SUB_AGENT_LLM = spanId(4);
+const SUB_AGENT_FAILED_TOOL = spanId(5);
+
+type Attr = { key: string; value: { stringValue: string } };
+const str = (key: string, value: string): Attr => ({ key, value: { stringValue: value } });
+const meta = [str("ai.telemetry.metadata.runphantom.eventName", "research-agent")];
+const llm = (prompt: string, response: string) => [
+  str("ai.operationId", "ai.generateText"),
+  str("ai.model.id", "claude-sonnet-4-5"),
+  str("ai.model.provider", "anthropic"),
+  str("ai.prompt", JSON.stringify({ messages: [{ role: "user", content: prompt }] })),
+  str("ai.response.text", response),
+];
+const tool = (name: string, args: unknown, result: string) => [
+  str("ai.operationId", "ai.toolCall"),
+  str("ai.toolCall.name", name),
+  str("ai.toolCall.args", JSON.stringify(args)),
+  str("ai.toolCall.result", result),
+];
+
+type SeedSpan = { spanId: string; parentSpanId?: string; name: string; start: number; end: number; code?: number; attrs: Attr[] };
+
+async function seedTrace(url: string, traceId: string, spans: SeedSpan[], subAgentRoots: string[]): Promise<void> {
+  const t0 = Date.now() - 10_000;
+  const nano = (ms: number) => String(BigInt(t0 + ms) * 1_000_000n);
+  const res = await fetch(`${url}/v1/traces`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ resourceSpans: [{ scopeSpans: [{ spans: spans.map((span) => ({
+      traceId,
+      spanId: span.spanId,
+      parentSpanId: span.parentSpanId,
+      name: span.name,
+      kind: 1,
+      startTimeUnixNano: nano(span.start),
+      endTimeUnixNano: nano(span.end),
+      status: { code: span.code ?? 1 },
+      attributes: span.attrs,
+    })) }] }] }),
+  });
+  expect(res.ok, `POST /v1/traces -> ${res.status}`).toBe(true);
+  const detail = await (await fetch(`${url}/api/runs/detail/${traceId}`)).json() as { subAgents: Array<{ root_span_id: string }> };
+  expect(detail.subAgents.map((agent) => agent.root_span_id).sort()).toEqual([...subAgentRoots].sort());
+}
+
+// TOOL_CALL > LLM_GENERATION > TOOL_CALL is the shape src/agents.ts detects as a
+// sub-agent; the grandchild tool fails, as in a failure hidden one level down.
+async function seedSubAgentTrace(url: string): Promise<void> {
+  const spans: SeedSpan[] = [
+    { spanId: ROOT, name: "agent.turn", start: 0, end: 4000, attrs: meta },
+    { spanId: PARENT_LLM, parentSpanId: ROOT, name: "llm.generate", start: 10, end: 500,
+      attrs: [...meta, ...llm("Summarise the release notes", "Delegating to the researcher.")] },
+    { spanId: SUB_AGENT_ROOT, parentSpanId: ROOT, name: "ai.toolCall", start: 520, end: 3400,
+      attrs: [...meta, ...tool("researcher", { topic: "release notes" }, "The researcher could not read the changelog.")] },
+    { spanId: SUB_AGENT_LLM, parentSpanId: SUB_AGENT_ROOT, name: "llm.generate", start: 540, end: 1500,
+      attrs: [...meta, ...llm("Research the release notes", "Reading the changelog.")] },
+    { spanId: SUB_AGENT_FAILED_TOOL, parentSpanId: SUB_AGENT_LLM, name: "ai.toolCall", start: 1520, end: 2600, code: 2,
+      attrs: [...meta, ...tool("read_changelog", { path: "CHANGELOG.md" }, "ENOENT: CHANGELOG.md not found")] },
+    { spanId: spanId(6), parentSpanId: ROOT, name: "llm.generate", start: 3420, end: 3990,
+      attrs: [...meta, ...llm("The researcher failed", "The researcher could not read the changelog.")] },
+  ];
+  await seedTrace(url, TRACE_ID, spans, [SUB_AGENT_ROOT]);
+}
+
+test.beforeEach(async ({ runPhantom }) => {
+  await clearRunPhantom(runPhantom.url);
+  await seedSubAgentTrace(runPhantom.url);
+});
+
+test("Run Phantom UI: clicking a sub-agent's Trajectory bar in the parent view focuses that sub-agent", async ({ page, runPhantom }) => {
+  await page.goto(`${runPhantom.url}/runs/${TRACE_ID}`);
+  const chip = page.getByRole("button", { name: /^agent\s*researcher/ });
+  const details = page.getByRole("dialog", { name: "researcher sub-agent details" });
+  await expect(chip).toBeVisible();
+  await expect(details).toBeHidden();
+
+  const bar = (id: string) => page.locator(`button.timeline-bar[data-meridian-key="${id}"]`);
+  for (const id of [SUB_AGENT_FAILED_TOOL, SUB_AGENT_ROOT, SUB_AGENT_LLM]) {
+    await bar(id).click();
+    await expect(details, `bar ${id} opens the sub-agent details`).toBeVisible();
+    await expect(chip).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(details).toBeHidden();
+  }
+
+  // The parent's own LLM bars stay inspect-only.
+  await bar(PARENT_LLM).click();
+  await expect(details).toBeHidden();
+  await page.mouse.move(2, 2);
+  await expect(page.locator("[data-span-tooltip]")).toBeHidden();
+
+  // The row label jumps to the first tool of that name, which lives in the sub-agent.
+  await page.getByTitle("read_changelog - jump to first tool call").click();
+  await expect(details).toBeVisible();
+
+  await details.getByRole("button", { name: /Open Sub-Agent/ }).click();
+  await expect(page.getByRole("button", { name: /Show Parent Agent/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Expand tool call read_changelog" })).toBeVisible();
+});
+
+test("Run Phantom UI: a sub-agent's Trajectory bar opens it from the keyboard", async ({ page, runPhantom }) => {
+  await page.goto(`${runPhantom.url}/runs/${TRACE_ID}`);
+  const chip = page.getByRole("button", { name: /^agent\s*researcher/ });
+  const details = page.getByRole("dialog", { name: "researcher sub-agent details" });
+  await expect(chip).toBeVisible();
+
+  const failedBar = page.locator(`button.timeline-bar[data-meridian-key="${SUB_AGENT_FAILED_TOOL}"]`);
+  await failedBar.focus();
+  await page.keyboard.press("Enter");
+  await expect(details).toBeVisible();
+  await expect(chip).toBeFocused();
+
+  await page.keyboard.press("Tab");
+  await expect(details.getByRole("button", { name: /Open Sub-Agent/ })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: /Show Parent Agent/ })).toBeVisible();
+});
+
+test("Run Phantom UI: a nested sub-agent's Trajectory bar opens only the innermost sub-agent", async ({ page, runPhantom }) => {
+  const traceId = "5ab0000000000000000000000000d006";
+  const nestedId = (slot: number) => `5ab10000${slot.toString(16).padStart(8, "0")}`;
+  const innerRoot = nestedId(4);
+  const innerFailedTool = nestedId(6);
+  // Detection reports both the outer and the inner agent, and the outer agent's
+  // span_ids include every span of the inner one.
+  await seedTrace(runPhantom.url, traceId, [
+    { spanId: nestedId(1), name: "agent.turn", start: 0, end: 4000, attrs: meta },
+    { spanId: nestedId(2), parentSpanId: nestedId(1), name: "ai.toolCall", start: 20, end: 3800,
+      attrs: [...meta, ...tool("planner", { goal: "release notes" }, "The planner gave up.")] },
+    { spanId: nestedId(3), parentSpanId: nestedId(2), name: "llm.generate", start: 40, end: 3700,
+      attrs: [...meta, ...llm("Plan the release notes", "Asking the reader.")] },
+    { spanId: innerRoot, parentSpanId: nestedId(3), name: "ai.toolCall", start: 100, end: 3000,
+      attrs: [...meta, ...tool("reader", { path: "CHANGELOG.md" }, "The reader could not open the file.")] },
+    { spanId: nestedId(5), parentSpanId: innerRoot, name: "llm.generate", start: 120, end: 2900,
+      attrs: [...meta, ...llm("Read the changelog", "Opening the file.")] },
+    { spanId: innerFailedTool, parentSpanId: nestedId(5), name: "ai.toolCall", start: 200, end: 2000, code: 2,
+      attrs: [...meta, ...tool("open_file", { path: "CHANGELOG.md" }, "ENOENT: CHANGELOG.md not found")] },
+  ], [nestedId(2), innerRoot]);
+
+  await page.goto(`${runPhantom.url}/runs/${traceId}`);
+  const innerChip = page.getByRole("button", { name: /^agent\s*reader/ });
+  await expect(innerChip).toBeVisible();
+
+  await page.locator(`button.timeline-bar[data-meridian-key="${innerFailedTool}"]`).click();
+  await expect(page.getByRole("dialog", { name: "reader sub-agent details" })).toBeVisible();
+  await expect(innerChip).toBeFocused();
+  await expect(page.getByRole("dialog")).toHaveCount(1);
+
+  await page.keyboard.press("Escape");
+  await page.locator(`button.timeline-bar[data-meridian-key="${nestedId(2)}"]`).click();
+  await expect(page.getByRole("dialog", { name: "planner sub-agent details" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^agent\s*planner/ })).toBeFocused();
+  await expect(page.getByRole("dialog")).toHaveCount(1);
+});
