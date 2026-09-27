@@ -361,3 +361,36 @@ test("Run Phantom UI: deleting a trace via the API removes only that sidebar row
   await expect(targetRow).toHaveCount(0, { timeout: 5_000 });
   await expect.poll(async () => page.locator("[data-run-id]").count(), { timeout: 5_000 }).toBe(2);
 });
+
+test("Run Phantom UI: run ids stay distinguishable in the sidebar and whole in the header", async ({ page, runPhantom }) => {
+  const replay = await fetch(`${runPhantom.url}/api/demo-traces/replay`, { method: "POST" });
+  expect(replay.ok).toBe(true);
+
+  // Every demo id starts "demo_", and a fixed five-character slice gave all
+  // three rows the suffix "(demo_)" while the header read "demo_rev". The id
+  // now lives on the meta line so the agent name keeps the title to itself.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(`${runPhantom.url}/runs/demo_review`);
+  const expected: Record<string, { name: string; shortId: string }> = {
+    demo_triage: { name: "triage_agent", shortId: "demo_t…" },
+    demo_review: { name: "code_review_agent", shortId: "demo_rev…" },
+    demo_research: { name: "research_agent", shortId: "demo_res…" },
+  };
+  const fitsItsBox = (element: HTMLElement) => element.scrollWidth <= element.clientWidth;
+  for (const [runId, { name, shortId }] of Object.entries(expected)) {
+    const row = page.locator(`[data-run-id="${runId}"]`);
+    const nameText = row.locator("[data-run-name]");
+    const shortIdText = row.locator("[data-run-short-id]");
+    await expect.soft(nameText).toHaveText(name, { timeout: 20_000 });
+    await expect.soft(shortIdText).toHaveText(shortId);
+    await expect.soft(shortIdText).toHaveAttribute("title", runId);
+    expect.soft(await nameText.evaluate(fitsItsBox), `${name} is shown whole at 1280px`).toBe(true);
+    expect.soft(await shortIdText.evaluate(fitsItsBox), `${shortId} is shown whole at 1280px`).toBe(true);
+    await expect.soft(row.getByRole("button")).toHaveAccessibleName(new RegExp(`^${name} Run \\w+ ${shortId} `));
+  }
+
+  const traceId = page.locator(".rp-meta-ids span[title='demo_review']");
+  await expect(traceId).toHaveText("demo_review");
+  const clipped = await traceId.evaluate((element) => element.scrollWidth > element.clientWidth);
+  expect(clipped, "the full run id fits the header at 1280px").toBe(false);
+});
