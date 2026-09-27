@@ -212,6 +212,55 @@ test("Run Phantom UI: run header actions never cover the run title or status", a
   }
 });
 
+test("Run Phantom UI: Debug opens the chat with its header in a fresh profile", async ({ page, runPhantom }) => {
+  await seedRunPhantomFixtures(runPhantom.url);
+  await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
+  // A fresh profile has never dismissed the coding-agent intro. Debug opened the
+  // chat view anyway, and that view took the intro's layout: no header, and the
+  // intro's floating "Hide" button drawn over the first message.
+  expect(await page.evaluate(() => localStorage.getItem("runphantom:messagePane:providerIntroSeen"))).toBeNull();
+
+  await page.getByRole("button", { name: "Debug", exact: true }).click();
+  const pane = page.getByRole("complementary", { name: "Coding-agent debug chat" });
+  const prompt = "What went wrong here?";
+  await pane.getByRole("button", { name: prompt, exact: true }).click();
+  const firstMessage = pane.getByRole("log", { name: "Debug chat messages" }).locator(":scope > *").first().locator(":scope > *");
+  await expect(firstMessage).toHaveText(prompt);
+
+  const covering = await firstMessage.evaluate((message) => {
+    const box = message.getBoundingClientRect();
+    return Array.from(message.closest("aside")!.querySelectorAll("button"))
+      .filter((button) => !message.contains(button))
+      .filter((button) => {
+        const rect = button.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0
+          && rect.left < box.right && box.left < rect.right && rect.top < box.bottom && box.top < rect.bottom;
+      })
+      .map((button) => button.getAttribute("aria-label") || button.textContent?.trim() || "");
+  });
+  expect(covering, "buttons drawn over the first message").toEqual([]);
+
+  const header = pane.locator("header");
+  await expect(header).toBeVisible();
+  for (const name of ["All Chats", "New chat", "Hide chat"]) {
+    await expect(header.getByRole("button", { name, exact: true })).toBeVisible();
+  }
+  // The header is stacked above the intro's Hide button, so a Hide left in the
+  // chat view is out of sight but still reachable by keyboard and screen reader.
+  await expect(pane.getByRole("button", { name: "Hide", exact: true }), "intro Hide button left in the chat view").toHaveCount(0);
+  const headerBox = (await header.boundingBox())!;
+  const messageBox = (await firstMessage.boundingBox())!;
+  expect(headerBox.y + headerBox.height, "header ends above the first message").toBeLessThanOrEqual(messageBox.y);
+
+  // The intro still belongs to the floating button's first open, which has no
+  // header, so that screen keeps its own Hide control.
+  await header.getByRole("button", { name: "Hide chat", exact: true }).click();
+  await page.getByRole("button", { name: "Ask Claude Code", exact: true }).click();
+  await expect(pane.getByText("Connect your coding agent", { exact: true })).toBeVisible();
+  await pane.getByRole("button", { name: "Hide", exact: true }).click();
+  await expect(pane).toBeHidden();
+});
+
 test("Run Phantom UI: trajectory renders when the first spans arrive after live activity", async ({ page, request, runPhantom }) => {
   await seedRunPhantomFixtures(runPhantom.url);
   const detailUrl = `${runPhantom.url}/api/runs/detail/${FIXTURE_PRIMARY_RUN_ID}`;
