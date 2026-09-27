@@ -245,6 +245,9 @@ test("Run Phantom UI: Debug opens the chat with its header in a fresh profile", 
   for (const name of ["All Chats", "New chat", "Hide chat"]) {
     await expect(header.getByRole("button", { name, exact: true })).toBeVisible();
   }
+  // The header is stacked above the intro's Hide button, so a Hide left in the
+  // chat view is out of sight but still reachable by keyboard and screen reader.
+  await expect(pane.getByRole("button", { name: "Hide", exact: true }), "intro Hide button left in the chat view").toHaveCount(0);
   const headerBox = (await header.boundingBox())!;
   const messageBox = (await firstMessage.boundingBox())!;
   expect(headerBox.y + headerBox.height, "header ends above the first message").toBeLessThanOrEqual(messageBox.y);
