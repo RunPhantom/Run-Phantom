@@ -111,9 +111,11 @@ describe("Run Phantom product identity contract", () => {
     expect(css).toContain("color-scheme: light");
     expect(css).toContain("--rp-canvas:");
     expect(`${navigation}\n${emptyState}`).toContain("See the run. Find the reason.");
-    expect(favicon).toContain("#F8F4EE");
+    // The shield-and-refresh mark carries its own warm shield instead of a cream tile.
+    expect(favicon).toContain("#EEE7DE");
     expect(favicon).toContain("#C7462D");
     expect(favicon).not.toContain("linearGradient");
+    expect(favicon).not.toContain("<image");
   });
 
   test("default local state path uses the runphantom slug", () => {
