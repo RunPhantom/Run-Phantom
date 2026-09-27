@@ -215,6 +215,29 @@ test("Run Phantom UI: wrapped run stats never end a line with a separator", asyn
   await expect.poll(() => headerSeparatorProblems(page)).toEqual([]);
 });
 
+test("Run Phantom UI: run ids wrap whole beside the side pane", async ({ page, runPhantom }) => {
+  await seedRunPhantomFixtures(runPhantom.url);
+  await page.addInitScript(() => {
+    localStorage.setItem("runphantom:messagePane:collapsed", "0");
+    localStorage.setItem("runphantom:messagePane:width", "460");
+  });
+
+  // The ids row could not wrap, so beside the side pane it squeezed the ids
+  // instead: "demo-user" broke across two lines, and an id with no break
+  // point pushed the next label into it ("conv_71d3e9TRACE").
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
+  const ids = page.locator(".rp-meta-ids");
+  await expect(ids.getByRole("button", { name: "Copy trace" })).toBeVisible({ timeout: 10_000 });
+  const layout = await ids.evaluate((row) => ({
+    pairs: [...row.children].map((pair) => ({ text: pair.textContent, height: pair.getBoundingClientRect().height })),
+    squeezedLabels: [...row.querySelectorAll(".rp-meta-copy")].filter((label) => label.scrollWidth > label.clientWidth).map((label) => label.textContent),
+  }));
+  expect(layout.pairs).toHaveLength(3);
+  for (const pair of layout.pairs) expect(pair.height, `"${pair.text}" stays on one line`).toBeLessThanOrEqual(24.5);
+  expect(layout.squeezedLabels).toEqual([]);
+});
+
 test("Run Phantom UI: run header actions never cover the run title or status", async ({ page, runPhantom }) => {
   await seedRunPhantomFixtures(runPhantom.url);
 
