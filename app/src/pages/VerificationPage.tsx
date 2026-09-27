@@ -66,7 +66,7 @@ export function VerificationPage() {
   const queryClient = useQueryClient();
   const runs = useRuns();
   const sessions = useQuery({ queryKey: ["verification", "sessions"], queryFn: verificationApi.sessions, refetchInterval: 1000 });
-  const flows = useQuery({ queryKey: ["verification", "flows"], queryFn: verificationApi.flows });
+  const flows = useQuery({ queryKey: ["verification", "flows"], queryFn: verificationApi.flows, refetchInterval: 2000 });
   const reports = useQuery({ queryKey: ["verification", "reports", linkedRunId], queryFn: () => verificationApi.reports(linkedRunId || undefined), refetchInterval: 2000 });
   const [origin, setOrigin] = useState("");
   const [runId, setRunId] = useState(linkedRunId);
