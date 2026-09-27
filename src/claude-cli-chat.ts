@@ -7,6 +7,7 @@ import {
   type AgentLoadout,
   type AgentStreamEvent,
 } from "./agent-chat";
+import { PERMISSION_PROMPT_TOOL, PERMISSION_PROMPT_TOOL_ENV } from "./mcp/permission-prompt-tool";
 
 export interface ClaudeCliChatInput {
   backendUrl: string;
@@ -68,6 +69,16 @@ export function buildClaudeArgs(input: ClaudeCliChatInput): string[] {
     process.env.RUNPHANTOM_CLAUDE_PERMISSION_MODE ?? "bypassPermissions",
     "--allowedTools",
     allowedMcpTools,
+    // Claude Code (checked 2.1.281-2.1.283) offers AskUserQuestion in print
+    // mode only when a permission prompt tool is set, and exits on the first
+    // tool call if no connected MCP server serves it (buildMcpConfig enables
+    // ours). The flag also enables EnterPlanMode, which bypassPermissions
+    // grants unasked, and ExitPlanMode, which the pane can never approve, so a
+    // chat could be stuck planning; both stay off as they were before.
+    "--permission-prompt-tool",
+    `mcp__runphantom__${PERMISSION_PROMPT_TOOL}`,
+    "--disallowedTools",
+    "EnterPlanMode,ExitPlanMode",
     "--settings",
     JSON.stringify(askUserQuestionHookSettings(input.backendUrl)),
     "--append-system-prompt",
@@ -99,6 +110,7 @@ export function buildMcpConfig(
           RUNPHANTOM_URL: backendUrl,
           RUNPHANTOM_AGENT_PROVIDER: "claude",
           RUNPHANTOM_ANNOTATION_SOURCE: agentAnnotationSource("claude"),
+          [PERMISSION_PROMPT_TOOL_ENV]: "1",
         },
       },
     },
