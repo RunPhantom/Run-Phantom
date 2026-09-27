@@ -1,3 +1,5 @@
+import type { Span } from "./types";
+
 const INACTIVE_MS = 30_000;
 // Short post-finish window where the activity pulse is still shown, so a
 // run that completes between sidebar glances doesn't appear inert.
@@ -73,6 +75,17 @@ export function trunc(s: string | null | undefined, n = 300): string | null {
   if (!s) return null;
   if (s.length <= n) return s;
   return s.slice(0, n) + "\u2026";
+}
+
+export function spanErrorReason(span: Pick<Span, "output_payload" | "attributes">): string {
+  if (span.output_payload) return span.output_payload;
+  if (!span.attributes) return "";
+  try {
+    const attrs = JSON.parse(span.attributes);
+    return String(attrs["error.message"] ?? attrs["ai.response.error"] ?? attrs["exception.message"] ?? attrs["otel.status.message"] ?? "");
+  } catch {
+    return "";
+  }
 }
 
 export function tryJson(s: string | null | undefined): string | null {
