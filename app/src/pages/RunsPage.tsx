@@ -458,7 +458,7 @@ export function RunsPage() {
                                   onMouseLeave={() => setHoveredSourceId(null)}>
                                   {srcName}
                                 </button>
-                                <span className="font-mono text-[10px] ml-1.5" style={{ color: C.fg0 }}>({meta.replay.sourceRunId.slice(0, 5)})</span>
+                                <span className="font-mono text-[10px] ml-1.5" style={{ color: C.fg0 }}>({shortRunIds.get(meta.replay.sourceRunId) ?? meta.replay.sourceRunId})</span>
                               </span>
                               {!replayCompare && !isMobile && (
                                 <button
