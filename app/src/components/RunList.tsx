@@ -74,15 +74,19 @@ export function RunListItem({ run, shortRunIds, selected, highlighted, faded, on
               <span aria-hidden="true" className="text-[10px] flex-shrink-0" style={{ color: C.fg0 }}>·</span>
               <span data-run-short-id className="min-w-0 truncate text-[10px] font-mono" style={{ color: C.fg0 }} title={run.id}>{traceIdShort}</span>
               <span aria-hidden="true" className="text-[10px] flex-shrink-0" style={{ color: C.fg0 }}>·</span>
-              {isReplay && (
-                <>
-                  <RotateCcw className="size-2.5 shrink-0" style={{ color: C.fg0 }} />
-                  <span className="text-[11px]" style={{ color: C.fg0, marginLeft: -4, marginTop: -1 }}>replay of {shortRunIds.get(replayMeta!.replay.sourceRunId) ?? replayMeta!.replay.sourceRunId}</span>
-                  <span aria-hidden="true" className="text-[10px] flex-shrink-0" style={{ color: C.fg0 }}>·</span>
-                </>
-              )}
               <span className="text-[10px] flex-shrink-0" style={{ color: C.fg0 }}>{ago(run.last_updated_at)}</span>
             </div>
+            {/* A sidebar row has no room for the replay source beside the
+                status, id and age: on the meta line it wrapped over three lines
+                and squeezed the short id to nothing. */}
+            {isReplay && (
+              <div className="flex items-center gap-1 mt-0.5" style={{ color: C.fg0 }}>
+                <RotateCcw className="size-2.5 shrink-0" />
+                <span className="min-w-0 truncate text-[10px]" title={replayMeta!.replay.sourceRunId}>
+                  replay of <span className="font-mono">{shortRunIds.get(replayMeta!.replay.sourceRunId) ?? replayMeta!.replay.sourceRunId}</span>
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </button>
