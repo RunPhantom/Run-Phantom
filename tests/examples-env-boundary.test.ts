@@ -7,6 +7,7 @@ const EXAMPLES = path.resolve(import.meta.dir, "../examples");
 const KEYS = [
   "RP_ABOVE_REPO",
   "RP_ABOVE_REPO_LOCAL",
+  "RP_OUTSIDE_CWD",
   "RP_REPO_ROOT",
   "RP_EXAMPLES_LOCAL",
   "RP_EXAMPLE_DIR",
@@ -16,6 +17,7 @@ const KEYS = [
 const EXPECTED = {
   RP_ABOVE_REPO: null,
   RP_ABOVE_REPO_LOCAL: null,
+  RP_OUTSIDE_CWD: null,
   RP_REPO_ROOT: "loaded",
   RP_EXAMPLES_LOCAL: "loaded",
   RP_EXAMPLE_DIR: "loaded",
@@ -38,9 +40,10 @@ runpy.run_path(sys.argv[1], run_name="env_probe")
 print(json.dumps({key: os.environ.get(key) for key in sys.argv[2:]}))
 `;
 
-// <parent>/.env stands in for ~/Downloads/.env above a checkout at
-// ~/Downloads/<repo>: it once handed unrelated provider keys and AWS
-// credentials to every example process.
+// <parent>/.env stands in for a .env beside the checkout, such as
+// ~/Downloads/.env for a checkout at ~/Downloads/<repo>, which the unbounded
+// search once loaded into every example process. <parent>/outside/.env stands
+// in for one in whatever directory an example is started from.
 function withCheckoutBelowDecoy(run: (paths: { parent: string; repo: string }) => void): void {
   const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "rp-env-boundary-")));
   try {
@@ -51,6 +54,7 @@ function withCheckoutBelowDecoy(run: (paths: { parent: string; repo: string }) =
     fs.mkdirSync(path.join(examples, "python-chat"), { recursive: true });
     fs.writeFileSync(path.join(parent, ".env"), "RP_ABOVE_REPO=leaked\n");
     fs.writeFileSync(path.join(parent, ".env.local"), "RP_ABOVE_REPO_LOCAL=leaked\n");
+    fs.writeFileSync(path.join(parent, "outside", ".env"), "RP_OUTSIDE_CWD=leaked\n");
     fs.writeFileSync(path.join(repo, ".env"), "RP_REPO_ROOT=loaded\nRP_PRECEDENCE=repo\nRP_PRESET=file\n");
     fs.writeFileSync(path.join(examples, ".env.local"), "RP_EXAMPLES_LOCAL=loaded\nRP_PRECEDENCE=examples-local\n");
     fs.writeFileSync(path.join(examples, "openai-chat", ".env"), "RP_EXAMPLE_DIR=loaded\n");
@@ -81,10 +85,12 @@ describe("example env loaders stay inside the repository", () => {
     });
   });
 
+  // --no-env-file turns off Bun's own loading of the working directory's .env,
+  // so the loader is the only reader, as it is under tsx: Node loads no .env.
   test("TypeScript examples started from a directory outside the repository", () => {
     withCheckoutBelowDecoy(({ parent, repo }) => {
       const entry = path.join(repo, "examples", "openai-chat", "probe.ts");
-      expect(probe([process.execPath, entry], path.join(parent, "outside"))).toEqual(EXPECTED);
+      expect(probe([process.execPath, "--no-env-file", entry], path.join(parent, "outside"))).toEqual(EXPECTED);
     });
   });
 
