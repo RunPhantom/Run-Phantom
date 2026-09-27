@@ -349,6 +349,7 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
     }));
   }, [spans]);
 
+  const ticking = !!(active && startedAt);
   const liveDur = active && startedAt ? now - startedAt : stats.dur;
   const durValid = Number.isFinite(liveDur) && liveDur >= 0;
   const durSec = Math.round(liveDur / 1000);
@@ -362,14 +363,15 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
       {(stats.agents ?? 0) > 0 && <><span><NumberFlow value={stats.agents!} /> sub-agent{stats.agents !== 1 ? "s" : ""}</span><Dot /></>}
       {stats.errors > 0 && spans && <><ErrorsTooltip spans={spans} /><Dot /></>}
       {stats.errors > 0 && !spans && <><span style={{ color: C.red }}><NumberFlow value={stats.errors} /> error{stats.errors !== 1 ? "s" : ""}</span><Dot /></>}
-      {/* NumberFlow animates whole seconds, which reads well for a run in flight
-          but rounds a 420ms run to "0s" while the span tree shows "420ms" for the
-          same trace — and it has no hour unit, so a 3h run read as "205m". Keep
-          the animation for the range it suits and defer to fmt() outside it. */}
+      {/* NumberFlow animates whole seconds, which reads well for a clock ticking
+          on a run in flight. A settled duration is a measurement, though: rounded
+          to whole seconds it read "6s" beside a span tree root of "6.2s", "0s"
+          beside "420ms", and "205m" for a 3h run. Only the live tick animates;
+          everything else goes through fmt(), exactly like the span tree. */}
       <Badge label="duration" /><span>{
         !durValid
           ? "—"
-          : liveDur < 1000 || liveDur >= 3_600_000
+          : !ticking || liveDur < 1000 || liveDur >= 3_600_000
             ? fmt(liveDur)
             : durMin > 0
               ? <><NumberFlow value={durMin} />m <NumberFlow value={durRemSec} />s</>
@@ -1683,7 +1685,10 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
         title={runDisplayName(run)}
         model={model}
         active={active}
-        startedAt={run.started_at}
+        // A run stays "active" for 30s after its last live event, and the
+        // header clock kept counting wall time past the run's own end ("12s"
+        // for a 6.2s run). Once finished, the header shows the recorded span.
+        startedAt={run.finished ? undefined : run.started_at}
         anthropicModels={anthropicModels}
         stats={{
           spans: spans.length, tools: tools.length, llms: llms.length, errors: errs.length, dur,

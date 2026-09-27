@@ -443,3 +443,16 @@ test("Run Phantom UI: the span detail pane shows the whole span id", async ({ pa
   expect(overflow.textOverflow).toBe("ellipsis");
   expect(overflow.truncates).toBe(false);
 });
+
+test("Run Phantom UI: the header duration agrees with the span tree root", async ({ page, runPhantom }) => {
+  await replayFinishedDemoReview(runPhantom.url);
+
+  // The header rounded the finished 6200ms run to whole seconds ("6s") while
+  // the tree root read "6.2s" for the same trace.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(`${runPhantom.url}/runs/demo_review/spans`);
+  const rootDuration = page.locator('[data-span-row="demo_review_root"] .font-mono').last();
+  await expect(rootDuration).toHaveText("6.2s");
+  const headerDuration = page.locator(".rp-meta-metrics").getByText("duration", { exact: true }).locator("xpath=following-sibling::span[1]");
+  await expect(headerDuration).toHaveText("6.2s", { timeout: 10_000 });
+});
