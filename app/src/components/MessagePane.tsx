@@ -655,6 +655,9 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
   const currentCwd = detail?.cwd ?? conversationCwd ?? workspaceCwd;
   const currentCwdDisplay = formatCwdDisplay(currentCwd);
   const canChangeConversationCwd = !selectedId && messages.length === 0 && !sending;
+  // Debug and agent questions open the chat before the intro is dismissed, so the
+  // header and the intro's Hide button follow the card on screen, not the flag.
+  const showProviderIntroCard = showList && showProviderIntro;
   useEffect(() => {
     setActiveSlashIndex((index) => Math.min(index, Math.max(0, slashItems.length - 1)));
   }, [slashItems.length]);
@@ -746,7 +749,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
           title="Resize sidebar; drag smaller to hide"
         />
       )}
-      {!showProviderIntro && (
+      {!showProviderIntroCard && (
         showList ? (
           <header className="flex items-start justify-between gap-3 border-b border-[color:var(--rp-border)] px-3 py-2">
             <div className="flex min-w-0 flex-col gap-1">
@@ -965,7 +968,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
           </footer>
         </div>
       )}
-      {showProviderIntro && (
+      {showProviderIntroCard && (
         <button
           onClick={() => setCollapsed(true)}
           className="absolute right-3 top-3 min-h-8 rounded-md px-2.5 text-xs font-medium text-[color:var(--rp-ink-muted)] transition-[transform,background-color,color] hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)] active:scale-[0.96]"
