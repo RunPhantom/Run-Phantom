@@ -794,6 +794,9 @@ pre { white-space: pre-wrap; word-break: break-word; font-family: var(--font-mon
    opaque strings, and one tier quieter than the metrics beside them. */
 .rp-meta-ids { font-family: var(--font-mono); font-size: 10px; }
 .rp-meta-metrics { font-variant-numeric: tabular-nums; }
+/* visibility, not display: the hidden separator keeps its width, so hiding it
+   cannot let the next stat move back up and undo the wrap StatsLine measured. */
+.rp-meta-metrics > [data-line-end] > [data-separator] { visibility: hidden; }
 
 /* The Ask-agent button is fixed to the bottom-right corner, so the last row of a
    scrollable list ends up underneath it and cannot be tapped. Reserve enough

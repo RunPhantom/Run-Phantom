@@ -9,6 +9,7 @@ import {
   FIXTURE_SAVED_SIBLING_RUN_ID,
   FIXTURE_SPAN_COUNT,
   hasLegacyIdentityKey,
+  headerSeparatorProblems,
   listRunPhantomRuns,
   readLocalStorageKeys,
   readRunPhantomRun,
@@ -170,6 +171,71 @@ test("Run Phantom UI: span tree and side panel render the seeded trace", async (
   await expect(page.getByText(/^Input$/).first()).toBeVisible({ timeout: 5_000 });
   await expect(page.getByText(/^Output$/).first()).toBeVisible({ timeout: 5_000 });
   await expect(page.getByText(/Fix the typo in README\.md/).first()).toBeVisible({ timeout: 5_000 });
+});
+
+test("Run Phantom UI: run ids get their own row under the run stats", async ({ page, runPhantom }) => {
+  await seedRunPhantomFixtures(runPhantom.url);
+
+  // The ids shared one wrapping row with the stats, joined by a separator. At
+  // 1280x720 they wrapped to a second line and left that separator dangling at
+  // the end of the first ("TOKENS 4,936 in / 428 out ·").
+  for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
+
+    const stats = page.locator(".rp-meta-metrics");
+    const ids = page.locator(".rp-meta-ids");
+    await expect(stats.getByText("tokens", { exact: true })).toBeVisible({ timeout: 10_000 });
+    for (const label of ["user", "conversation", "trace"]) {
+      await expect(ids.getByRole("button", { name: `Copy ${label}` })).toBeVisible();
+    }
+    const statsBox = (await stats.boundingBox())!;
+    const idsBox = (await ids.boundingBox())!;
+    expect(idsBox.y, `the ids start below the stats at ${viewport.width}px`).toBeGreaterThanOrEqual(statsBox.y + statsBox.height);
+    expect(Math.abs(idsBox.x - statsBox.x), `the ids line up with the stats at ${viewport.width}px`).toBeLessThanOrEqual(1);
+    await expect.poll(() => headerSeparatorProblems(page), { message: `separators at ${viewport.width}px` }).toEqual([]);
+  }
+});
+
+test("Run Phantom UI: wrapped run stats never end a line with a separator", async ({ page, runPhantom }) => {
+  await seedRunPhantomFixtures(runPhantom.url);
+  await page.addInitScript(() => {
+    localStorage.setItem("runphantom:messagePane:collapsed", "0");
+    localStorage.setItem("runphantom:messagePane:width", "460");
+  });
+
+  // With the side pane open at 1280x720 the stats wrap, and each separator was
+  // a flex item of its own: the one before TOKENS stayed behind at the end of
+  // the first line ("DURATION 3s ·").
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
+  const stats = page.locator(".rp-meta-metrics");
+  await expect(stats.getByText("tokens", { exact: true })).toBeVisible({ timeout: 10_000 });
+  expect((await stats.boundingBox())!.height, "the stats wrap beside the side pane").toBeGreaterThan(30);
+  await expect.poll(() => headerSeparatorProblems(page)).toEqual([]);
+});
+
+test("Run Phantom UI: run ids wrap whole beside the side pane", async ({ page, runPhantom }) => {
+  await seedRunPhantomFixtures(runPhantom.url);
+  await page.addInitScript(() => {
+    localStorage.setItem("runphantom:messagePane:collapsed", "0");
+    localStorage.setItem("runphantom:messagePane:width", "460");
+  });
+
+  // The ids row could not wrap, so beside the side pane it squeezed the ids
+  // instead: "demo-user" broke across two lines, and an id with no break
+  // point pushed the next label into it ("conv_71d3e9TRACE").
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
+  const ids = page.locator(".rp-meta-ids");
+  await expect(ids.getByRole("button", { name: "Copy trace" })).toBeVisible({ timeout: 10_000 });
+  const layout = await ids.evaluate((row) => ({
+    pairs: [...row.children].map((pair) => ({ text: pair.textContent, height: pair.getBoundingClientRect().height })),
+    squeezedLabels: [...row.querySelectorAll(".rp-meta-copy")].filter((label) => label.scrollWidth > label.clientWidth).map((label) => label.textContent),
+  }));
+  expect(layout.pairs).toHaveLength(3);
+  for (const pair of layout.pairs) expect(pair.height, `"${pair.text}" stays on one line`).toBeLessThanOrEqual(24.5);
+  expect(layout.squeezedLabels).toEqual([]);
 });
 
 test("Run Phantom UI: run header actions never cover the run title or status", async ({ page, runPhantom }) => {
