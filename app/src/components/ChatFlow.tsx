@@ -74,6 +74,7 @@ function SubAgentBlock({ agent, spans, onDiveIn }: { agent: SubAgent; spans: Spa
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [focusRequest, setFocusRequest] = useState(0);
   const a = agent;
 
   const agentSpanSet = new Set(a.span_ids);
@@ -91,7 +92,24 @@ function SubAgentBlock({ agent, spans, onDiveIn }: { agent: SubAgent; spans: Spa
       const spaceBelow = window.innerHeight - rect.bottom - 8;
       setPos({ top: spaceBelow >= popH ? rect.bottom + 4 : Math.max(4, rect.top - popH - 4), left: rect.left });
     }
-  }, [open]);
+  }, [open, focusRequest]);
+
+  // The parent transcript renders none of this sub-agent's spans, so Trajectory
+  // focus requests for any of them land on this chip. The scroll is instant
+  // because the popover is fixed-positioned from the chip's settled rect.
+  useEffect(() => {
+    const spanIds = new Set(a.span_ids);
+    const handler = (e: Event) => {
+      const spanId = (e as CustomEvent<{ spanId?: string }>).detail?.spanId;
+      if (!spanId || !spanIds.has(spanId) || !btnRef.current) return;
+      btnRef.current.scrollIntoView({ behavior: "instant", block: "center" });
+      btnRef.current.focus({ preventScroll: true });
+      setOpen(true);
+      setFocusRequest(n => n + 1);
+    };
+    document.addEventListener("runphantom:focus-tool", handler);
+    return () => document.removeEventListener("runphantom:focus-tool", handler);
+  }, [a.span_ids]);
 
   useEffect(() => {
     if (!open) return;
@@ -646,7 +664,7 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
 
   return (
     <div ref={scrollRef} className="space-y-1.5 py-2 pb-24">
-      <div className="px-3"><FlameTimeline spans={spans} /></div>
+      <div className="px-3"><FlameTimeline spans={spans} subAgents={subAgents} /></div>
       {(() => { let seenLLM = false; return items.map((item, i) => {
         const isFirstLLM = hasLLMOutput && item.type === "llm_out" && !seenLLM;
         if (item.type === "llm_out") seenLLM = true;
