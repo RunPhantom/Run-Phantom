@@ -43,7 +43,7 @@ import { useAnnotations } from "../hooks/use-annotations";
 import type { Annotation, AnnotationKind } from "../hooks/use-annotations";
 import { useAgentForEvent } from "../hooks/use-agents";
 import { useRunPhantomEvent } from "../hooks/use-runphantom-ws";
-import { getCostBreakdown, fmtCost } from "../utils/costs";
+import { getCostBreakdown, fmtCost, fmtRate } from "../utils/costs";
 import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
 import { useDialogFocus } from "../hooks/use-dialog-focus";
 
@@ -326,11 +326,11 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
                     {b.breakdown && (
                       <div className="text-[9px] space-y-0.5" style={{ color: C.fg0 }}>
                         <div className="flex justify-between gap-4">
-                          <span>{b.inTok.toLocaleString()} input @ ${b.breakdown.inRate}/M</span>
+                          <span>{b.inTok.toLocaleString()} input @ {fmtRate(b.breakdown.inRate)}/M</span>
                           <span style={{ color: C.fg1 }}>{fmtCost(b.breakdown.inCost)}</span>
                         </div>
                         <div className="flex justify-between gap-4">
-                          <span>{b.outTok.toLocaleString()} output @ ${b.breakdown.outRate}/M</span>
+                          <span>{b.outTok.toLocaleString()} output @ {fmtRate(b.breakdown.outRate)}/M</span>
                           <span style={{ color: C.fg1 }}>{fmtCost(b.breakdown.outCost)}</span>
                         </div>
                         <div className="flex justify-between gap-4 pt-0.5" style={{ borderTop: `1px solid ${C.border}` }}>
