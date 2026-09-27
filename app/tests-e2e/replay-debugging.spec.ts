@@ -1,4 +1,4 @@
-import type { APIRequestContext } from "@playwright/test";
+import type { APIRequestContext, Locator } from "@playwright/test";
 import { test, expect, replayTelemetry, SOURCE_RUN_ID, SOURCE_TOOL_ID, SOURCE_MESSAGE, SOURCE_OUTPUT, REPLAY_OUTPUT } from "./replay-debugging-fixture";
 
 async function exported(request: APIRequestContext, url: string, runId: string) {
@@ -192,4 +192,45 @@ for (const sameSource of [false, true]) test(`registered replay attempts complet
     expect(JSON.parse((await exported(request, runPhantom.url, aId)).run.metadata).replay.sourceRunId).toBe(SOURCE_RUN_ID);
     expect(JSON.parse((await exported(request, runPhantom.url, bId)).run.metadata).replay.sourceRunId).toBe(sourceB);
   } finally { await other.close(); }
+});
+
+test("local replay: sidebar rows keep each part on one unclipped line at laptop widths", async ({ page, runPhantom, localReplayAgent }) => {
+  localReplayAgent.mode = "failure";
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(`${runPhantom.url}/runs/${SOURCE_RUN_ID}`);
+  await page.getByRole("button", { name: "Replay", exact: true }).click();
+  await expect(page.getByText("Agent endpoint returned HTTP 503: Fixture blocked unsafe checkout", { exact: true })).toBeVisible();
+  const placeholderId = localReplayAgent.requests[0].replayRunId;
+  const replayRow = page.locator(`[data-run-id="${placeholderId}"]`);
+  await expect(replayRow.locator("[data-run-short-id]")).toHaveText(`${placeholderId.slice(0, 5)}…`);
+  await expect(replayRow.getByText("replay of b1000…", { exact: true })).toBeVisible();
+
+  // The replay link used to share the meta line with the status, short id and
+  // age. In the 248px list "replay of <id>" wrapped over three lines and
+  // squeezed the short id to zero width; with a longer status the age was cut
+  // off too.
+  const middle = async (locator: Locator) => { const box = (await locator.boundingBox())!; return box.y + box.height / 2; };
+  for (const width of [1280, 1024]) {
+    await page.setViewportSize({ width, height: 720 });
+    for (const row of await page.locator("[data-run-id]").all()) {
+      const label = `row ${await row.getAttribute("data-run-id")} at ${width}px`;
+      const parts = await row.evaluate((rowElement) => Array.from(rowElement.querySelectorAll("*")).flatMap((element) => {
+        const ownText = Array.from(element.childNodes).filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent).join("").trim();
+        if (!ownText) return [];
+        const box = element.getBoundingClientRect();
+        let clipped = element.scrollWidth > element.clientWidth;
+        for (let ancestor = element.parentElement; ancestor && !clipped; ancestor = ancestor.parentElement) {
+          if (getComputedStyle(ancestor).overflow === "visible") continue;
+          const bounds = ancestor.getBoundingClientRect();
+          clipped = box.left < bounds.left - 0.5 || box.right > bounds.right + 0.5 || box.top < bounds.top - 0.5 || box.bottom > bounds.bottom + 0.5;
+        }
+        return [{ text: element.textContent!.trim(), lines: Math.round(box.height / parseFloat(getComputedStyle(element).lineHeight)), clipped }];
+      }));
+      expect(parts.filter((part) => part.lines !== 1 || part.clipped), `parts of ${label} that wrap or are cut off`).toEqual([]);
+
+      const status = await middle(row.getByText(/^Run \w+$/));
+      expect(Math.abs(await middle(row.locator("[data-run-short-id]")) - status), `short id sits on the meta line of ${label}`).toBeLessThan(1);
+      expect(Math.abs(await middle(row.getByText(/^(?:just now|\d+\w+ ago)$/)) - status), `age sits on the meta line of ${label}`).toBeLessThan(1);
+    }
+  }
 });

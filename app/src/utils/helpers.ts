@@ -69,6 +69,30 @@ export function runDisplayName(
     || run.id.slice(0, fallbackLength);
 }
 
+/**
+ * Maps each id to the shortest prefix of at least `minLength` characters that no
+ * other id in `ids` shares, with "…" appended when the prefix is shorter than the
+ * id. A fixed-length slice cannot do this: every demo id starts "demo_".
+ */
+export function uniqueRunIdPrefixes(ids: readonly string[], minLength = 5): Map<string, string> {
+  const sorted = [...new Set(ids)].sort();
+  const commonPrefix = (a: string | undefined, b: string) => {
+    if (a === undefined) return 0;
+    let i = 0;
+    while (i < a.length && i < b.length && a[i] === b[i]) i++;
+    return i;
+  };
+  const prefixes = new Map<string, string>();
+  // In sorted order an id shares its longest common prefix with a neighbour,
+  // so checking the two neighbours is enough.
+  sorted.forEach((id, index) => {
+    const shared = Math.max(commonPrefix(sorted[index - 1], id), commonPrefix(sorted[index + 1], id));
+    const length = Math.min(id.length, Math.max(minLength, shared + 1));
+    prefixes.set(id, length < id.length ? `${id.slice(0, length)}…` : id);
+  });
+  return prefixes;
+}
+
 export function trunc(s: string | null | undefined, n = 300): string | null {
   if (!s) return null;
   if (s.length <= n) return s;
