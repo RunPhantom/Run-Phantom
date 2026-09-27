@@ -983,10 +983,10 @@ function ViewHeader({
             {run && (run.id || run.user_id || run.convo_id) && (
               <>
                 <Dot />
-                <span className="rp-meta-ids flex items-center gap-1.5" style={{ color: C.fg0 }}>
+                <span className="rp-meta-ids flex min-w-0 max-w-full items-center gap-1.5" style={{ color: C.fg0 }}>
                   {run.user_id && <span className="inline-flex items-center gap-1" title={run.user_id}><Badge label="user" copyValue={run.user_id} />{run.user_id.length > 12 ? run.user_id.slice(0, 12) + "…" : run.user_id}</span>}
                   {run.convo_id && <span className="inline-flex items-center gap-1" title={run.convo_id}><Badge label="conversation" copyValue={run.convo_id} />{run.convo_id.length > 12 ? run.convo_id.slice(0, 12) + "…" : run.convo_id}</span>}
-                  <span className="inline-flex items-center gap-1" title={run.id}><Badge label="trace" copyValue={run.id} />{run.id.slice(0, 8)}</span>
+                  <span className="inline-flex min-w-0 items-center gap-1"><Badge label="trace" copyValue={run.id} /><span className="min-w-0 truncate" title={run.id}>{run.id}</span></span>
                 </span>
               </>
             )}

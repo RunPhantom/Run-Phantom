@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Search, Upload, X } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { RunDetail } from "../components/RunDetail";
-import { RunListItem } from "../components/RunList";
+import { RunListItem, useShortRunIds } from "../components/RunList";
 import { searchRuns, type RunSearchResult } from "../api/runs";
 import { useRunPhantomMessage } from "../hooks/use-runphantom-ws";
 import { C } from "../utils/colors";
@@ -54,6 +54,7 @@ export function SearchPage() {
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentResult = result?.key === filterKey ? result : null;
   const runs = currentResult?.runs ?? [];
+  const shortRunIds = useShortRunIds(currentResult?.runs);
 
   useEffect(() => {
     const generation = ++generationRef.current;
@@ -268,7 +269,7 @@ export function SearchPage() {
             <p className="mt-2 text-[11px] leading-5" style={{ color: C.fg1 }}>{hasFilters ? "Try a shorter phrase or clear the filters to browse all captured runs." : "Capture a local agent run or load demo traces to start searching."}</p>
             {!hasFilters && <button type="button" disabled={demoLoading} onClick={() => void loadDemoTraces()} className="mt-3 text-[12px] underline underline-offset-4 disabled:opacity-60" style={{ color: C.fg3 }}>{demoLoading ? "Loading demo traces…" : "Load demo traces"}</button>}
           </div>}
-          {runs.map((run) => <RunListItem key={run.id} run={run} selected={selectedId === run.id} onClick={() => navigate(`${tracePath("/search", run.id)}${querySuffix}`)} />)}
+          {runs.map((run) => <RunListItem key={run.id} run={run} shortRunIds={shortRunIds} selected={selectedId === run.id} onClick={() => navigate(`${tracePath("/search", run.id)}${querySuffix}`)} />)}
           {currentResult?.hasMore && <button type="button" onClick={() => void loadMore()} disabled={loading || loadingMore} className="w-full rounded-lg border px-3 py-2 text-[12px] disabled:opacity-60" style={controlStyle}>{loadingMore ? "Loading more…" : "Load more runs"}</button>}
         </div>
       </div>

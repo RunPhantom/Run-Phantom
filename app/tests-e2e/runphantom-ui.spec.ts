@@ -361,3 +361,26 @@ test("Run Phantom UI: deleting a trace via the API removes only that sidebar row
   await expect(targetRow).toHaveCount(0, { timeout: 5_000 });
   await expect.poll(async () => page.locator("[data-run-id]").count(), { timeout: 5_000 }).toBe(2);
 });
+
+test("Run Phantom UI: run ids stay distinguishable in the sidebar and whole in the header", async ({ page, runPhantom }) => {
+  const replay = await fetch(`${runPhantom.url}/api/demo-traces/replay`, { method: "POST" });
+  expect(replay.ok).toBe(true);
+
+  // Every demo id starts "demo_", and a fixed five-character slice gave all
+  // three rows the suffix "(demo_)" while the header read "demo_rev".
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(`${runPhantom.url}/runs/demo_review`);
+  const expected: Record<string, string> = {
+    demo_triage: "(demo_t…)",
+    demo_review: "(demo_rev…)",
+    demo_research: "(demo_res…)",
+  };
+  for (const [runId, suffix] of Object.entries(expected)) {
+    await expect.soft(page.locator(`[data-run-id="${runId}"]`)).toContainText(suffix, { timeout: 20_000 });
+  }
+
+  const traceId = page.locator(".rp-meta-ids span[title='demo_review']");
+  await expect(traceId).toHaveText("demo_review");
+  const clipped = await traceId.evaluate((element) => element.scrollWidth > element.clientWidth);
+  expect(clipped, "the full run id fits the header at 1280px").toBe(false);
+});

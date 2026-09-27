@@ -1,12 +1,31 @@
+import { useMemo } from "react";
 import { Star, RotateCcw } from "lucide-react";
 import { C } from "../utils/colors";
-import { ago, isActive, runDisplayName } from "../utils/helpers";
+import { ago, isActive, runDisplayName, uniqueRunIdPrefixes } from "../utils/helpers";
 import { useSavedEvent } from "../api/saved-runs";
 import { parseReplayMetadata } from "../utils/types";
 import type { Run } from "../utils/types";
 
-export function RunListItem({ run, selected, highlighted, faded, onClick }: {
+/**
+ * Short ids for a list of runs, unique within that list. Replay sources are
+ * included because a replay row names its source run by the same short id.
+ */
+export function useShortRunIds(runs: readonly Run[] | undefined): ReadonlyMap<string, string> {
+  return useMemo(() => {
+    const ids: string[] = [];
+    for (const run of runs ?? []) {
+      ids.push(run.id);
+      const sourceRunId = parseReplayMetadata(run)?.replay.sourceRunId;
+      if (sourceRunId) ids.push(sourceRunId);
+    }
+    return uniqueRunIdPrefixes(ids);
+  }, [runs]);
+}
+
+export function RunListItem({ run, shortRunIds, selected, highlighted, faded, onClick }: {
   run: Run;
+  /** From `useShortRunIds` over the list this row belongs to. */
+  shortRunIds: ReadonlyMap<string, string>;
   selected: boolean;
   highlighted?: boolean;
   faded?: boolean;
@@ -19,7 +38,7 @@ export function RunListItem({ run, selected, highlighted, faded, onClick }: {
   const statusLabel = active ? "Run live" : (run.error_count ?? 0) > 0 ? "Run failed" : "Run finished";
 
   const baseName = runDisplayName(run, 5);
-  const traceIdShort = run.id.slice(0, 5);
+  const traceIdShort = shortRunIds.get(run.id) ?? run.id;
   const displayTitle = `${baseName} (${traceIdShort})`;
 
   return (
@@ -52,7 +71,7 @@ export function RunListItem({ run, selected, highlighted, faded, onClick }: {
               {isReplay && (
                 <>
                   <RotateCcw className="size-2.5 shrink-0" style={{ color: C.fg0 }} />
-                  <span className="text-[11px]" style={{ color: C.fg0, marginLeft: -4, marginTop: -1 }}>replay of {replayMeta!.replay.sourceRunId.slice(0, 5)}</span>
+                  <span className="text-[11px]" style={{ color: C.fg0, marginLeft: -4, marginTop: -1 }}>replay of {shortRunIds.get(replayMeta!.replay.sourceRunId) ?? replayMeta!.replay.sourceRunId}</span>
                 </>
               )}
               <span className="text-[10px] flex-shrink-0" style={{ color: C.fg0 }}>{ago(run.last_updated_at)}</span>
