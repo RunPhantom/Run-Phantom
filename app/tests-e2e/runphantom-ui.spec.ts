@@ -367,40 +367,26 @@ test("Run Phantom UI: run ids stay distinguishable in the sidebar and whole in t
   expect(replay.ok).toBe(true);
 
   // Every demo id starts "demo_", and a fixed five-character slice gave all
-  // three rows the suffix "(demo_)" while the header read "demo_rev".
+  // three rows the suffix "(demo_)" while the header read "demo_rev". The id
+  // now lives on the meta line so the agent name keeps the title to itself.
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto(`${runPhantom.url}/runs/demo_review`);
-  const expected: Record<string, string> = {
-    demo_triage: "(demo_t…)",
-    demo_review: "(demo_rev…)",
-    demo_research: "(demo_res…)",
+  const expected: Record<string, { name: string; shortId: string }> = {
+    demo_triage: { name: "triage_agent", shortId: "demo_t…" },
+    demo_review: { name: "code_review_agent", shortId: "demo_rev…" },
+    demo_research: { name: "research_agent", shortId: "demo_res…" },
   };
-  for (const [runId, suffix] of Object.entries(expected)) {
+  const fitsItsBox = (element: HTMLElement) => element.scrollWidth <= element.clientWidth;
+  for (const [runId, { name, shortId }] of Object.entries(expected)) {
     const row = page.locator(`[data-run-id="${runId}"]`);
-    await expect.soft(row).toContainText(suffix, { timeout: 20_000 });
-    // At 1280px "code_review_agent (demo_rev…)" is wider than the sidebar, and
-    // the title's ellipsis used to swallow the suffix, which is the only part
-    // that tells the rows apart.
-    const suffixVisible = await row.evaluate((element, text) => {
-      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        const at = node.textContent?.indexOf(text) ?? -1;
-        if (at < 0) continue;
-        const range = document.createRange();
-        range.setStart(node, at);
-        range.setEnd(node, at + text.length);
-        const box = range.getBoundingClientRect();
-        for (let clip = node.parentElement; clip && clip !== element.parentElement; clip = clip.parentElement) {
-          const style = getComputedStyle(clip);
-          if (style.overflow === "visible" && style.overflowX === "visible") continue;
-          const bounds = clip.getBoundingClientRect();
-          if (box.left < bounds.left - 0.5 || box.right > bounds.right + 0.5) return false;
-        }
-        return true;
-      }
-      return false;
-    }, suffix);
-    expect.soft(suffixVisible, `${suffix} is not clipped in the ${runId} row`).toBe(true);
+    const nameText = row.locator("[data-run-name]");
+    const shortIdText = row.locator("[data-run-short-id]");
+    await expect.soft(nameText).toHaveText(name, { timeout: 20_000 });
+    await expect.soft(shortIdText).toHaveText(shortId);
+    await expect.soft(shortIdText).toHaveAttribute("title", runId);
+    expect.soft(await nameText.evaluate(fitsItsBox), `${name} is shown whole at 1280px`).toBe(true);
+    expect.soft(await shortIdText.evaluate(fitsItsBox), `${shortId} is shown whole at 1280px`).toBe(true);
+    await expect.soft(row.getByRole("button")).toHaveAccessibleName(new RegExp(`^${name} Run \\w+ ${shortId} `));
   }
 
   const traceId = page.locator(".rp-meta-ids span[title='demo_review']");

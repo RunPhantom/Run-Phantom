@@ -37,7 +37,7 @@ export function RunListItem({ run, shortRunIds, selected, highlighted, faded, on
   const isReplay = !!replayMeta;
   const statusLabel = active ? "Run live" : (run.error_count ?? 0) > 0 ? "Run failed" : "Run finished";
 
-  const baseName = runDisplayName(run, 5);
+  const baseName = runDisplayName(run);
   const traceIdShort = shortRunIds.get(run.id) ?? run.id;
 
   return (
@@ -58,13 +58,8 @@ export function RunListItem({ run, shortRunIds, selected, highlighted, faded, on
           {!active && <div className="size-2 flex-shrink-0" />}
           <div className="min-w-0 flex-1 overflow-hidden">
             <div className="flex items-center gap-1.5">
-              {/* The id suffix is what tells apart runs with the same name, so the
-                  name truncates first. The cap only matters for ids that share a
-                  long prefix (e.g. zero-padded counters), where the unique prefix
-                  is the whole id and would otherwise squeeze the name to nothing. */}
-              <span className="flex min-w-0 text-sm font-medium" style={{ color: C.fg4, opacity: saved ? 1 : 0.9 }}>
-                <span className="truncate">{baseName}</span>
-                <span className="max-w-[60%] shrink-0 truncate" title={run.id}>{`\u00a0(${traceIdShort})`}</span>
+              <span data-run-name className="text-sm font-medium truncate" style={{ color: C.fg4, opacity: saved ? 1 : 0.9 }}>
+                {baseName}
               </span>
               {saved && <span className="shrink-0 flex items-center justify-center size-5 rounded-full" style={{ background: "var(--rp-accent)" }}><Star className="size-3" style={{ color: "var(--rp-canvas)", fill: "var(--rp-canvas)" }} /></span>}
             </div>
@@ -72,10 +67,18 @@ export function RunListItem({ run, shortRunIds, selected, highlighted, faded, on
               <span className="text-[10px] flex-shrink-0 font-medium" style={{ color: active ? C.green : C.fg1 }}>
                 {statusLabel}
               </span>
+              {/* The id tells apart runs that share a name. It sits here rather
+                  than in the title so a long agent name never has to give up
+                  space for it, and it follows the status so the row button's
+                  accessible name reads name, status, id. */}
+              <span aria-hidden="true" className="text-[10px] flex-shrink-0" style={{ color: C.fg0 }}>·</span>
+              <span data-run-short-id className="min-w-0 truncate text-[10px] font-mono" style={{ color: C.fg0 }} title={run.id}>{traceIdShort}</span>
+              <span aria-hidden="true" className="text-[10px] flex-shrink-0" style={{ color: C.fg0 }}>·</span>
               {isReplay && (
                 <>
                   <RotateCcw className="size-2.5 shrink-0" style={{ color: C.fg0 }} />
                   <span className="text-[11px]" style={{ color: C.fg0, marginLeft: -4, marginTop: -1 }}>replay of {shortRunIds.get(replayMeta!.replay.sourceRunId) ?? replayMeta!.replay.sourceRunId}</span>
+                  <span aria-hidden="true" className="text-[10px] flex-shrink-0" style={{ color: C.fg0 }}>·</span>
                 </>
               )}
               <span className="text-[10px] flex-shrink-0" style={{ color: C.fg0 }}>{ago(run.last_updated_at)}</span>
