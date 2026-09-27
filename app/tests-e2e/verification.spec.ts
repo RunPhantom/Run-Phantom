@@ -274,3 +274,33 @@ test("runtime verification: compiled SDK serves the exact embedded module and co
     await request.delete(`${daemon.url}/api/verification/sessions/${session.id}`);
   }
 });
+
+test("runtime verification: a refused action is reported beside the form that caused it", async ({ page, context, request, runPhantom, targetApp }) => {
+  const app = await context.newPage();
+  try {
+    await connectTarget(app, request, runPhantom, targetApp.origin);
+    await page.goto(`${runPhantom.url}/verification`);
+    await expect(page.getByText("Connected", { exact: true }).first()).toBeVisible();
+
+    const exercise = page.getByRole("region", { name: "1. Exercise the app", exact: true });
+    await exercise.getByRole("combobox", { name: "Action", exact: true }).selectOption("click");
+    await exercise.getByLabel(/^Action selector/).fill("button");
+    await exercise.getByRole("button", { name: "Run action", exact: true }).click();
+    const refusal = exercise.getByRole("alert");
+    await expect(refusal).toHaveText("Selector matched multiple elements; use a unique selector");
+    await expect(refusal).toBeFocused();
+    await expect(page.getByRole("alert")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Retry refresh", exact: true })).toHaveCount(0);
+
+    await exercise.getByRole("combobox", { name: "Action", exact: true }).selectOption("fill");
+    const draft = page.getByRole("region", { name: "3. Save a repeatable flow", exact: true });
+    await draft.getByLabel("Include current action in step", { exact: true }).check();
+    await draft.getByRole("button", { name: "Add step to flow", exact: true }).click();
+    const flowRefusal = draft.getByRole("alert");
+    await expect(flowRefusal).toHaveText(/^Saved flows cannot contain fill actions/);
+    await expect(flowRefusal).toBeFocused();
+    await expect(page.getByRole("alert")).toHaveCount(1);
+  } finally {
+    await app.close();
+  }
+});
