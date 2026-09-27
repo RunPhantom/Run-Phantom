@@ -978,17 +978,16 @@ function ViewHeader({
               </div>
             )}
           </div>
-          <div className="flex items-center gap-1.5 text-[11px] flex-wrap">
+          {/* Not on the stats row after a separator: at laptop widths the ids
+              wrapped and left the separator dangling at the end of the stats. */}
+          <div className="flex flex-col gap-1.5 text-[11px]">
             <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
             {run && (run.id || run.user_id || run.convo_id) && (
-              <>
-                <Dot />
-                <span className="rp-meta-ids flex items-center gap-1.5" style={{ color: C.fg0 }}>
-                  {run.user_id && <span className="inline-flex items-center gap-1" title={run.user_id}><Badge label="user" copyValue={run.user_id} />{run.user_id.length > 12 ? run.user_id.slice(0, 12) + "…" : run.user_id}</span>}
-                  {run.convo_id && <span className="inline-flex items-center gap-1" title={run.convo_id}><Badge label="conversation" copyValue={run.convo_id} />{run.convo_id.length > 12 ? run.convo_id.slice(0, 12) + "…" : run.convo_id}</span>}
-                  <span className="inline-flex items-center gap-1" title={run.id}><Badge label="trace" copyValue={run.id} />{run.id.slice(0, 8)}</span>
-                </span>
-              </>
+              <span className="rp-meta-ids flex items-center gap-1.5" style={{ color: C.fg0 }}>
+                {run.user_id && <span className="inline-flex items-center gap-1" title={run.user_id}><Badge label="user" copyValue={run.user_id} />{run.user_id.length > 12 ? run.user_id.slice(0, 12) + "…" : run.user_id}</span>}
+                {run.convo_id && <span className="inline-flex items-center gap-1" title={run.convo_id}><Badge label="conversation" copyValue={run.convo_id} />{run.convo_id.length > 12 ? run.convo_id.slice(0, 12) + "…" : run.convo_id}</span>}
+                <span className="inline-flex items-center gap-1" title={run.id}><Badge label="trace" copyValue={run.id} />{run.id.slice(0, 8)}</span>
+              </span>
             )}
           </div>
         </>

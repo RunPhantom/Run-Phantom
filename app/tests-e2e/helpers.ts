@@ -101,6 +101,50 @@ export async function expectRunPhantomBranding(page: Page): Promise<void> {
   expect(containsForbiddenIdentity(await page.locator("body").innerText())).toBe(false);
 }
 
+/**
+ * Separators ("·", "|") in a run header's wrapping rows that start or end a
+ * line, where they separate nothing, or that are hidden between two items on
+ * the same line, where one is needed.
+ */
+export async function headerSeparatorProblems(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const isSeparator = (element: Element) => element.children.length === 0 && ["·", "|"].includes(element.textContent?.trim() ?? "");
+    const shown = (element: Element) => {
+      const box = element.getBoundingClientRect();
+      return box.width > 0 && box.height > 0 && getComputedStyle(element).visibility !== "hidden";
+    };
+    const hasText = (element: Element) =>
+      [...element.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && !!node.textContent?.trim());
+    const problems: string[] = [];
+    for (const separator of document.querySelectorAll("span")) {
+      if (!isSeparator(separator)) continue;
+      const line = separator.getBoundingClientRect();
+      if (line.width === 0 || line.height === 0) continue;
+      let row = separator.parentElement;
+      while (row && getComputedStyle(row).flexWrap !== "wrap") row = row.parentElement;
+      if (!row || !(row.matches(".rp-meta-metrics") || row.querySelector(".rp-meta-metrics"))) continue;
+      let before = false;
+      let after = false;
+      for (const element of row.querySelectorAll("*")) {
+        if (isSeparator(element) || !shown(element) || !hasText(element)) continue;
+        const box = element.getBoundingClientRect();
+        if (box.bottom <= line.top || box.top >= line.bottom) continue;
+        if (box.right <= line.left) before = true;
+        if (box.left >= line.right) after = true;
+      }
+      const text = separator.textContent?.trim();
+      const context = row.textContent?.replace(/\s+/g, " ").trim();
+      if (getComputedStyle(separator).visibility === "hidden") {
+        if (before && after) problems.push(`"${text}" is hidden mid-line in "${context}"`);
+        continue;
+      }
+      if (!before) problems.push(`"${text}" starts a line in "${context}"`);
+      if (!after) problems.push(`"${text}" ends a line in "${context}"`);
+    }
+    return problems;
+  });
+}
+
 export async function readLocalStorageKeys(page: Page): Promise<string[]> {
   return page.evaluate(() => Object.keys(localStorage).sort());
 }

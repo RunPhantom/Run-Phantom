@@ -9,6 +9,7 @@ import {
   FIXTURE_SAVED_SIBLING_RUN_ID,
   FIXTURE_SPAN_COUNT,
   hasLegacyIdentityKey,
+  headerSeparatorProblems,
   listRunPhantomRuns,
   readLocalStorageKeys,
   readRunPhantomRun,
@@ -170,6 +171,30 @@ test("Run Phantom UI: span tree and side panel render the seeded trace", async (
   await expect(page.getByText(/^Input$/).first()).toBeVisible({ timeout: 5_000 });
   await expect(page.getByText(/^Output$/).first()).toBeVisible({ timeout: 5_000 });
   await expect(page.getByText(/Fix the typo in README\.md/).first()).toBeVisible({ timeout: 5_000 });
+});
+
+test("Run Phantom UI: run ids get their own row under the run stats", async ({ page, runPhantom }) => {
+  await seedRunPhantomFixtures(runPhantom.url);
+
+  // The ids shared one wrapping row with the stats, joined by a separator. At
+  // 1280x720 they wrapped to a second line and left that separator dangling at
+  // the end of the first ("TOKENS 4,936 in / 428 out ·").
+  for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
+
+    const stats = page.locator(".rp-meta-metrics");
+    const ids = page.locator(".rp-meta-ids");
+    await expect(stats.getByText("tokens", { exact: true })).toBeVisible({ timeout: 10_000 });
+    for (const label of ["user", "conversation", "trace"]) {
+      await expect(ids.getByRole("button", { name: `Copy ${label}` })).toBeVisible();
+    }
+    const statsBox = (await stats.boundingBox())!;
+    const idsBox = (await ids.boundingBox())!;
+    expect(idsBox.y, `the ids start below the stats at ${viewport.width}px`).toBeGreaterThanOrEqual(statsBox.y + statsBox.height);
+    expect(Math.abs(idsBox.x - statsBox.x), `the ids line up with the stats at ${viewport.width}px`).toBeLessThanOrEqual(1);
+    await expect.poll(() => headerSeparatorProblems(page), { message: `separators at ${viewport.width}px` }).toEqual([]);
+  }
 });
 
 test("Run Phantom UI: run header actions never cover the run title or status", async ({ page, runPhantom }) => {
