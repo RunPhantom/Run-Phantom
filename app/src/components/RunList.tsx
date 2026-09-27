@@ -39,7 +39,6 @@ export function RunListItem({ run, shortRunIds, selected, highlighted, faded, on
 
   const baseName = runDisplayName(run, 5);
   const traceIdShort = shortRunIds.get(run.id) ?? run.id;
-  const displayTitle = `${baseName} (${traceIdShort})`;
 
   return (
     <div data-run-id={run.id} style={{ opacity: faded ? 0.4 : 1, transition: "opacity 150ms" }}>
@@ -59,8 +58,13 @@ export function RunListItem({ run, shortRunIds, selected, highlighted, faded, on
           {!active && <div className="size-2 flex-shrink-0" />}
           <div className="min-w-0 flex-1 overflow-hidden">
             <div className="flex items-center gap-1.5">
-              <span className="text-sm font-medium truncate" style={{ color: C.fg4, opacity: saved ? 1 : 0.9 }}>
-                {displayTitle}
+              {/* The id suffix is what tells apart runs with the same name, so the
+                  name truncates first. The cap only matters for ids that share a
+                  long prefix (e.g. zero-padded counters), where the unique prefix
+                  is the whole id and would otherwise squeeze the name to nothing. */}
+              <span className="flex min-w-0 text-sm font-medium" style={{ color: C.fg4, opacity: saved ? 1 : 0.9 }}>
+                <span className="truncate">{baseName}</span>
+                <span className="max-w-[60%] shrink-0 truncate" title={run.id}>{`\u00a0(${traceIdShort})`}</span>
               </span>
               {saved && <span className="shrink-0 flex items-center justify-center size-5 rounded-full" style={{ background: "var(--rp-accent)" }}><Star className="size-3" style={{ color: "var(--rp-canvas)", fill: "var(--rp-canvas)" }} /></span>}
             </div>

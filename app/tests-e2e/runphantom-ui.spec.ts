@@ -376,7 +376,31 @@ test("Run Phantom UI: run ids stay distinguishable in the sidebar and whole in t
     demo_research: "(demo_res…)",
   };
   for (const [runId, suffix] of Object.entries(expected)) {
-    await expect.soft(page.locator(`[data-run-id="${runId}"]`)).toContainText(suffix, { timeout: 20_000 });
+    const row = page.locator(`[data-run-id="${runId}"]`);
+    await expect.soft(row).toContainText(suffix, { timeout: 20_000 });
+    // At 1280px "code_review_agent (demo_rev…)" is wider than the sidebar, and
+    // the title's ellipsis used to swallow the suffix, which is the only part
+    // that tells the rows apart.
+    const suffixVisible = await row.evaluate((element, text) => {
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const at = node.textContent?.indexOf(text) ?? -1;
+        if (at < 0) continue;
+        const range = document.createRange();
+        range.setStart(node, at);
+        range.setEnd(node, at + text.length);
+        const box = range.getBoundingClientRect();
+        for (let clip = node.parentElement; clip && clip !== element.parentElement; clip = clip.parentElement) {
+          const style = getComputedStyle(clip);
+          if (style.overflow === "visible" && style.overflowX === "visible") continue;
+          const bounds = clip.getBoundingClientRect();
+          if (box.left < bounds.left - 0.5 || box.right > bounds.right + 0.5) return false;
+        }
+        return true;
+      }
+      return false;
+    }, suffix);
+    expect.soft(suffixVisible, `${suffix} is not clipped in the ${runId} row`).toBe(true);
   }
 
   const traceId = page.locator(".rp-meta-ids span[title='demo_review']");
