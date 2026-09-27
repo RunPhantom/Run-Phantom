@@ -738,14 +738,17 @@ function ViewHeader({
           </div>
         </>
       ) : isReplay ? (
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[12px] font-medium" style={{ color: C.fg3 }}>{displayTitle}</span>
-            {model && <span className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: "var(--rp-ink-a04)", color: C.fg0 }}>{model}</span>}
-            <span style={{ color: C.fg0, opacity: 0.4 }}>|</span>
-            <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
+        // Not on the title row after a "|": in the side-by-side compare view
+        // the stats wrapped below the title and left the "|" dangling.
+        <div className="flex flex-col gap-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[12px] font-medium" style={{ color: C.fg3 }}>{displayTitle}</span>
+              {model && <span className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: "var(--rp-ink-a04)", color: C.fg0 }}>{model}</span>}
+            </div>
+            <MoreMenu runId={run?.id} />
           </div>
-          <MoreMenu runId={run?.id} />
+          <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
         </div>
       ) : (
         <>

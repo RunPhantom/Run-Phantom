@@ -1,5 +1,6 @@
 import type { APIRequestContext } from "@playwright/test";
 import { test, expect, replayTelemetry, SOURCE_RUN_ID, SOURCE_TOOL_ID, SOURCE_MESSAGE, SOURCE_OUTPUT, REPLAY_OUTPUT } from "./replay-debugging-fixture";
+import { headerSeparatorProblems } from "./helpers";
 
 async function exported(request: APIRequestContext, url: string, runId: string) {
   const response = await request.get(`${url}/api/runs/${runId}/export`);
@@ -125,6 +126,22 @@ test("local replay: inspect a failure, edit the input, execute the registered fi
   await expect(page.getByText(REPLAY_OUTPUT, { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: "compare", exact: true }).click();
   await expect(page.getByText(SOURCE_OUTPUT, { exact: true }).first()).toBeVisible();
+});
+
+test("local replay: replay and original headers keep separators off line ends at 1280x720", async ({ page, runPhantom, localReplayAgent }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(`${runPhantom.url}/runs/${SOURCE_RUN_ID}`);
+  await page.getByRole("button", { name: "Replay", exact: true }).click();
+  await expect.poll(() => localReplayAgent.traceIds.length).toBe(1);
+  await expect(page.getByText(REPLAY_OUTPUT, { exact: true }).first()).toBeVisible();
+  await expect(page.locator(".rp-meta-metrics")).toHaveCount(1);
+  await expect.poll(() => headerSeparatorProblems(page)).toEqual([]);
+
+  // Side by side, the replay header's "|" stayed at the end of the title line
+  // once its stats wrapped below it.
+  await page.getByRole("button", { name: "compare", exact: true }).click();
+  await expect(page.locator(".rp-meta-metrics")).toHaveCount(2);
+  await expect.poll(() => headerSeparatorProblems(page)).toEqual([]);
 });
 
 test("local replay: endpoint failure retains actionable evidence and a browser retry completes", async ({ page, request, runPhantom, localReplayAgent }) => {
