@@ -102,25 +102,36 @@ test("the permission prompt tool is served only to the side pane and never grant
   });
 });
 
-test("a stub Claude CLI receives a permission prompt tool that its MCP server serves", async () => {
+function stubClaude(script: (directory: string) => string[]) {
   const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "runphantom-claude-stub-")));
-  const argvFile = path.join(directory, "argv.json");
   const stub = path.join(directory, "claude-stub.ts");
   const bin = path.join(directory, "claude");
-  writeFileSync(stub, [
-    `import fs from "node:fs";`,
-    `fs.writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)));`,
-    `console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "stub-session", tools: [] }));`,
-    `console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "stub reply", usage: { input_tokens: 1, output_tokens: 1 } }));`,
-  ].join("\n"));
+  writeFileSync(stub, script(directory).join("\n"));
   writeFileSync(bin, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(stub)} "$@"\n`, { mode: 0o700 });
   const previousBin = process.env.RUNPHANTOM_CLAUDE_BIN;
   process.env.RUNPHANTOM_CLAUDE_BIN = bin;
+  return {
+    directory,
+    restore() {
+      if (previousBin === undefined) delete process.env.RUNPHANTOM_CLAUDE_BIN;
+      else process.env.RUNPHANTOM_CLAUDE_BIN = previousBin;
+      rmSync(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+test.skipIf(process.platform === "win32")("a stub Claude CLI receives a permission prompt tool that its MCP server serves", async () => {
+  const claude = stubClaude((directory) => [
+    `import fs from "node:fs";`,
+    `fs.writeFileSync(${JSON.stringify(path.join(directory, "argv.json"))}, JSON.stringify(process.argv.slice(2)));`,
+    `console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "stub-session", tools: [] }));`,
+    `console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "stub reply", usage: { input_tokens: 1, output_tokens: 1 } }));`,
+  ]);
   let client: Client | undefined;
   try {
     const sessions: string[] = [];
     let text = "";
-    const result = await runClaudeCliChat({ backendUrl: UNREACHABLE_DAEMON, content: "Ask me which fixes to prioritise.", cwd: directory }, {
+    const result = await runClaudeCliChat({ backendUrl: UNREACHABLE_DAEMON, content: "Ask me which fixes to prioritise.", cwd: claude.directory }, {
       onClaudeSession: (sessionId) => sessions.push(sessionId),
       onText: (content) => { text = content; },
       onStatus() {},
@@ -129,7 +140,7 @@ test("a stub Claude CLI receives a permission prompt tool that its MCP server se
     expect(sessions).toEqual(["stub-session"]);
     expect(text).toBe("stub reply");
 
-    const argv = JSON.parse(readFileSync(argvFile, "utf8")) as string[];
+    const argv = JSON.parse(readFileSync(path.join(claude.directory, "argv.json"), "utf8")) as string[];
     expect(argv[0]).toBe("-p");
     expect(flagValue(argv, "--permission-prompt-tool")).toBe(PROMPT_TOOL);
     const server = runPhantomServer(argv);
@@ -146,8 +157,30 @@ test("a stub Claude CLI receives a permission prompt tool that its MCP server se
       .toEqual({ behavior: "deny", message: expect.stringContaining("Bash") });
   } finally {
     await client?.close();
-    if (previousBin === undefined) delete process.env.RUNPHANTOM_CLAUDE_BIN;
-    else process.env.RUNPHANTOM_CLAUDE_BIN = previousBin;
-    rmSync(directory, { recursive: true, force: true });
+    claude.restore();
   }
 }, 20_000);
+
+// Claude Code 2.1.283 printed this and exited at the first tool call when the
+// project had `/mcp disable runphantom`; before the prompt tool, the pane ran
+// without Run Phantom's tools instead.
+test.skipIf(process.platform === "win32")("a side pane without its runphantom MCP server says how to fix it", async () => {
+  const claude = stubClaude(() => [
+    `console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "stub-session", tools: [] }));`,
+    `console.error(${JSON.stringify(`Error: MCP tool ${PROMPT_TOOL} (passed via --permission-prompt-tool) not found. Available MCP tools: none`)});`,
+    `process.exitCode = 1;`,
+  ]);
+  try {
+    const result = await runClaudeCliChat({ backendUrl: UNREACHABLE_DAEMON, content: "Run the tests.", cwd: claude.directory }, {
+      onClaudeSession() {},
+      onText() {},
+      onStatus() {},
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toStartWith("Claude Code stopped because Run Phantom's MCP server (runphantom) was not connected");
+    expect(result.stderr).toContain("disabled for this project (/mcp in Claude Code) or listed in deniedMcpServers");
+    expect(result.stderr).not.toContain("--permission-prompt-tool");
+  } finally {
+    claude.restore();
+  }
+});

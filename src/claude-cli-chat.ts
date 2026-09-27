@@ -34,7 +34,15 @@ export interface ClaudeCliChatResult {
   stderr: string;
 }
 
-export function runClaudeCliChat(
+// Claude Code (checked 2.1.281-2.1.283) prints this and exits when no connected
+// MCP server serves the prompt tool, for example after `/mcp disable runphantom`
+// in the project or a deniedMcpServers entry for runphantom.
+const PROMPT_TOOL_NOT_SERVED = "(passed via --permission-prompt-tool) not found";
+const RUNPHANTOM_MCP_NOT_CONNECTED =
+  "Claude Code stopped because Run Phantom's MCP server (runphantom) was not connected, and the side pane needs it. " +
+  "If runphantom is disabled for this project (/mcp in Claude Code) or listed in deniedMcpServers, enable it and send your message again.";
+
+export async function runClaudeCliChat(
   input: ClaudeCliChatInput,
   handlers: ClaudeCliChatHandlers,
 ): Promise<ClaudeCliChatResult> {
@@ -47,7 +55,10 @@ export function runClaudeCliChat(
     if (input.abortSignal.aborted) child.kill("SIGINT");
     input.abortSignal.addEventListener("abort", () => child.kill("SIGINT"), { once: true });
   }
-  return consumeClaudeStream(child, handlers);
+  const result = await consumeClaudeStream(child, handlers);
+  return result.stderr.includes(PROMPT_TOOL_NOT_SERVED)
+    ? { ...result, stderr: RUNPHANTOM_MCP_NOT_CONNECTED }
+    : result;
 }
 
 export function buildClaudeArgs(input: ClaudeCliChatInput): string[] {
