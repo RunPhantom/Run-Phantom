@@ -422,3 +422,24 @@ test("Run Phantom UI: the errors tooltip shows its last line whole and signals o
   await page.keyboard.press("Escape");
   await expect(region).toHaveCount(0);
 });
+
+test("Run Phantom UI: the span detail pane shows the whole span id", async ({ page, runPhantom }) => {
+  await replayFinishedDemoReview(runPhantom.url);
+
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(`${runPhantom.url}/runs/demo_review/spans`);
+  await page.locator('[data-span-row="demo_review_tool-1"]').click();
+  // `span.id.slice(-12)` rendered "eview_tool-1", which reads as a mangled
+  // word rather than an id.
+  const idCell = page.getByText("span id", { exact: true }).locator("xpath=following-sibling::*[1]");
+  await expect(idCell).toHaveText("demo_review_tool-1");
+  await expect(idCell).toHaveRole("button");
+  await expect(idCell).toHaveAccessibleName("Copy span id demo_review_tool-1");
+  await expect(idCell).toHaveAttribute("title", "demo_review_tool-1");
+  const overflow = await idCell.evaluate((element) => ({
+    truncates: element.scrollWidth > element.clientWidth,
+    textOverflow: getComputedStyle(element).textOverflow,
+  }));
+  expect(overflow.textOverflow).toBe("ellipsis");
+  expect(overflow.truncates).toBe(false);
+});

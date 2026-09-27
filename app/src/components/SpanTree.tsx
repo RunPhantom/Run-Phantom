@@ -153,6 +153,37 @@ function SpanRow({ span, depth, minTime, totalDur, selected, flashing, onClick, 
   );
 }
 
+// The last 12 characters turned "demo_review_tool-1" into "eview_tool-1",
+// which reads as a mangled word. Show the whole id and let CSS add the
+// ellipsis when the column is genuinely too narrow.
+function SpanIdCopy({ id }: { id: string }) {
+  const [copied, setCopied] = useState(false);
+  const resetRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (resetRef.current) window.clearTimeout(resetRef.current);
+  }, []);
+
+  return (
+    <button
+      type="button"
+      className="w-full min-w-0 truncate rounded text-left transition-colors"
+      style={{ color: copied ? C.green : C.fg0 }}
+      title={id}
+      aria-label={`Copy span id ${id}`}
+      onClick={() => {
+        void navigator.clipboard.writeText(id).then(() => {
+          setCopied(true);
+          if (resetRef.current) window.clearTimeout(resetRef.current);
+          resetRef.current = window.setTimeout(() => setCopied(false), 1200);
+        }).catch(() => {});
+      }}
+    >
+      {id}
+    </button>
+  );
+}
+
 function SpanDetail({ span }: { span: Span }) {
   const info = typeInfo(span);
   const isErr = span.status === "ERROR";
@@ -190,7 +221,7 @@ function SpanDetail({ span }: { span: Span }) {
         <div style={{ color: C.fg0 }}>end</div>
         <div style={{ color: C.fg2 }}>{isoTimestamp(span.end_time_ms)}</div>
         <div style={{ color: C.fg0 }}>span id</div>
-        <div style={{ color: C.fg0 }}>{span.id.slice(-12)}</div>
+        <SpanIdCopy id={span.id} />
         {span.attributes && (() => { try { const a = JSON.parse(span.attributes); return a["ai.provider.baseURL"] ? <><div style={{ color: C.fg0 }}>base url</div><div style={{ color: C.fg0 }}>{a["ai.provider.baseURL"]}</div></> : null; } catch { return null; } })()}
       </div>
 
