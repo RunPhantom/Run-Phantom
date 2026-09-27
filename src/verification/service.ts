@@ -8,6 +8,11 @@ import { VERIFICATION_LIMITS as L, type Predicate, type Verdict, type Verificati
 
 export interface VerificationServiceOptions extends VerificationBridgeOptions { checkTimeoutMs?: number }
 
+export function flowPassReason(steps: number): string {
+  const scope = steps === 1 ? "1 step verified during its observed interval; it" : `${steps} steps verified during their observed intervals; each`;
+  return `${scope} completed with no tracked requests pending and at least ${L.QUIET_MS}ms quiet.`;
+}
+
 export class VerificationService {
   readonly bridge: VerificationBridge;
   constructor(private readonly options: VerificationServiceOptions) { this.bridge = new VerificationBridge(options); }
@@ -69,7 +74,7 @@ export class VerificationService {
         if (verdict.status !== "pass") return this.report(session, flow.name, flow.id,
           { ...verdict, reason: `Step ${index + 1}: ${verdict.reason}`, evidence }, checks);
       }
-      return this.report(session, flow.name, flow.id, { status: "pass", reason: `${flow.steps.length} steps verified during their observed intervals; each completed with no tracked requests pending and at least ${L.QUIET_MS}ms quiet.`, evidence }, checks);
+      return this.report(session, flow.name, flow.id, { status: "pass", reason: flowPassReason(flow.steps.length), evidence }, checks);
     });
   }
 
