@@ -150,8 +150,8 @@ function SubAgentBlock({ agent, spans, onDiveIn }: { agent: SubAgent; spans: Spa
                 <div className="flex flex-wrap gap-1">
                   {agentToolSpans.map(s => (
                     <span key={s.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono"
-                      style={{ background: "var(--rp-ink-a04)", border: `1px solid ${C.border}`, color: C.fg3 }}>
-                      <Check /> {s.name} <span style={{ color: C.fg0 }}>{fmt(s.duration_ms)}</span>
+                      style={{ background: "var(--rp-ink-a04)", border: `1px solid ${C.border}`, color: s.status === "ERROR" ? C.red : C.fg3 }}>
+                      {s.status === "ERROR" ? <AlertCircle /> : <Check />} {s.name} <span style={{ color: C.fg0 }}>{fmt(s.duration_ms)}</span>
                     </span>
                   ))}
                 </div>
@@ -168,13 +168,13 @@ function SubAgentBlock({ agent, spans, onDiveIn }: { agent: SubAgent; spans: Spa
             </div>
 
             {/* Footer — always visible */}
-            <div className="flex-shrink-0 flex items-center justify-between px-3 py-2" style={{ borderTop: `1px solid ${C.border}` }}>
+            <div className="flex-shrink-0 flex flex-wrap items-center justify-between gap-2 px-3 py-2" style={{ borderTop: `1px solid ${C.border}` }}>
               {onDiveIn ? (
-                <Button onClick={() => { setOpen(false); onDiveIn(a.root_span_id); }}>
+                <Button className="shrink-0 whitespace-nowrap" onClick={() => { setOpen(false); onDiveIn(a.root_span_id); }}>
                   Open Sub-Agent &rarr;
                 </Button>
               ) : <div />}
-              <div className="text-[10px] font-mono text-right" style={{ color: C.fg0 }}>
+              <div className="min-w-0 flex-1 break-words text-[10px] font-mono text-right" style={{ color: C.fg0 }}>
                 {a.model && <>{a.model} &middot; </>}
                 {a.llm_count} LLM &middot; {plural(a.tool_count, "tool")} &middot; {fmt(a.duration_ms)}
                 {a.total_input_tokens > 0 && <> &middot; {a.total_input_tokens.toLocaleString()} in</>}
