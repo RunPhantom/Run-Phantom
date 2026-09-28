@@ -63,6 +63,12 @@ describe("pluralisation", () => {
     expect(plural(7, "tool")).toBe("7 tools");
   });
 
+  test("evaluation case counts distinguish one case from zero or many", () => {
+    expect(plural(0, "case")).toBe("0 cases");
+    expect(plural(1, "case")).toBe("1 case");
+    expect(plural(2, "case")).toBe("2 cases");
+  });
+
   test("an irregular plural can be given explicitly", () => {
     expect(plural(1, "entry", "entries")).toBe("1 entry");
     expect(plural(3, "entry", "entries")).toBe("3 entries");
