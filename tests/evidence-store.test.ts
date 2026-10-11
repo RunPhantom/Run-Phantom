@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { EvidenceStore, EVIDENCE_STORAGE_SQL, type EvidenceStoreOptions } from "../src/evaluations/evidence-store";
-import { EVIDENCE_PREDICATE_TYPE, EVIDENCE_STATEMENT_TYPE, EvidenceError, type EvidenceCapability, type EvidenceExpectedSource, type EvidenceImportRequest, type NormalizedEvidenceSource } from "../src/evaluations/evidence-protocol";
+import { EVIDENCE_LIMITS as L, EVIDENCE_PREDICATE_TYPE, EVIDENCE_STATEMENT_TYPE, EvidenceError, type EvidenceCapability, type EvidenceExpectedSource, type EvidenceImportRequest, type NormalizedEvidenceSource } from "../src/evaluations/evidence-protocol";
 import { canonicalEvidenceJson, deriveEvidenceCounts, evidenceDigest } from "../src/evaluations/evidence-validation";
 
 let db: Database, store: EvidenceStore;
@@ -51,6 +51,27 @@ function complete(draft = request(), instance = store) {
   expect(set).not.toBeNull(); return { set: set!, admission };
 }
 const count = (table: string) => (db.query(`SELECT count(*) AS n FROM evaluation_evidence_${table}`).get() as { n: number }).n;
+function observeFileReads(database: Database) {
+  const reads: { requestBytes?: number | null; inventoryBytes?: number | null; rawBytes?: number | null; oversized?: number; storedRawBytes?: number }[] = [];
+  const nativeQuery = database.query.bind(database);
+  Object.defineProperty(database, "query", { value(sql: string) {
+    const statement = nativeQuery(sql);
+    if (!sql.startsWith("SELECT") || !sql.includes("evaluation_evidence_")) return statement;
+    const observe = (value: unknown) => {
+      if (!value || typeof value !== "object") return;
+      const row = value as Record<string, unknown>;
+      if ("request_data" in row) reads.push({ requestBytes: row.request_data === null ? null : Buffer.byteLength(row.request_data as string),
+        inventoryBytes: row.inventory_data === null ? null : Buffer.byteLength(row.inventory_data as string), oversized: row.data_oversized as number });
+      if ("bytes" in row) reads.push({ rawBytes: row.bytes === null ? null : (row.bytes as Uint8Array).byteLength, storedRawBytes: row.byte_length as number });
+    };
+    return new Proxy(statement, { get(target, key) {
+      if (key === "get") return (...bindings: SQLQueryBindings[]) => { const row = target.get(...bindings); observe(row); return row; };
+      if (key === "all") return (...bindings: SQLQueryBindings[]) => { const rows = target.all(...bindings); rows.forEach(observe); return rows; };
+      return Reflect.get(target, key, target);
+    } });
+  } });
+  return reads;
+}
 beforeEach(() => {
   capabilities = new Set(["normalized_read", "import", "inventory_edit", "raw_export", "delete"]);
   db = new Database(":memory:"); initialize(db); store = new EvidenceStore(db, scope, options());
@@ -93,6 +114,43 @@ describe("immutable evidence SQLite publication", () => {
     expect(() => store.publish(admission.job.id, admission.publicationToken, [{ sourceId: "source-1", raw: new Uint8Array([1]), normalized: normalized() }])).toThrow("exact admitted roster");
     expect(() => store.publish(admission.job.id, admission.publicationToken, [])).toThrow("entry limit");
     expect(count("artifacts")).toBe(0); expect(count("sets")).toBe(0); expect(store.getJob(admission.job.id).status).toBe("running");
+  });
+  test("publication ignores caller byte methods and species while storing exactly the quota-reserved bytes", () => {
+    let sliceCalls = 0, lengthReads = 0, speciesReads = 0;
+    class HostileBytes extends Uint8Array {
+      static get [Symbol.species]() { speciesReads++; throw new Error("Caller species must remain inert"); }
+    }
+    for (const [index, bytes] of [raw.slice(), new HostileBytes(raw)].entries()) {
+      Object.defineProperty(bytes, "byteLength", { get() { lengthReads++; return raw.byteLength; } });
+      if (!index) Object.defineProperty(bytes, "slice", { value() { sliceCalls++; return new Uint8Array(L.MAX_SOURCE_BYTES + 1); } });
+      const limited = new EvidenceStore(db, scope, options({ maxRawBytes: raw.byteLength }));
+      const admitted = limited.admit(request(`hostile-bytes-${index}`)); limited.start(admitted.job.id, admitted.publicationToken);
+      const set = limited.publish(admitted.job.id, admitted.publicationToken, [{ sourceId: "source-1", raw: bytes, normalized: normalized() }])!;
+      expect(limited.exportRaw(set.id, 1, "source-1")).toEqual(raw);
+      expect(db.query("SELECT length(bytes) AS n FROM evaluation_evidence_blobs WHERE artifact_id=?").get(set.sources[0].artifactId)).toEqual({ n: raw.byteLength });
+      expect(set.sources[0].artifactSha256).toBe(evidenceDigest(raw));
+      expect(() => limited.admit(request(`quota-after-hostile-${index}`))).toThrow("quota is full");
+      limited.removePayloads(set.id, 1, "raw_removed");
+    }
+    expect(sliceCalls).toBe(0); expect(lengthReads).toBe(0); expect(speciesReads).toBe(0);
+  });
+  test("an oversized internal typed-array length is refused before copying despite a forged own length", () => {
+    const bytes = new Uint8Array(L.MAX_SOURCE_BYTES + 1); let lengthReads = 0, copies = 0;
+    const draft = request("forged-length"); draft.sources[0].artifactSha256 = evidenceDigest(bytes);
+    Object.defineProperty(bytes, "byteLength", { get() { lengthReads++; return raw.byteLength; } });
+    Object.defineProperty(bytes, "slice", { value() { copies++; return raw; } });
+    const limited = new EvidenceStore(db, scope, options({ maxRawBytes: raw.byteLength }));
+    const admitted = limited.admit(draft); limited.start(admitted.job.id, admitted.publicationToken);
+    expect(() => limited.publish(admitted.job.id, admitted.publicationToken, [{ sourceId: "source-1", raw: bytes, normalized: normalized() }])).toThrow("byte limit");
+    expect(lengthReads).toBe(0); expect(copies).toBe(0); expect(count("blobs")).toBe(0); expect(count("artifacts")).toBe(0);
+    expect(db.query("SELECT reserved_raw_bytes AS n FROM evaluation_evidence_jobs WHERE id=?").get(admitted.job.id)).toEqual({ n: raw.byteLength });
+  });
+  test("a proxy cannot invoke caller traps while pretending to be a raw typed array", () => {
+    let traps = 0;
+    const bytes = new Proxy(raw, { get() { traps++; throw new Error("Caller trap"); }, getPrototypeOf() { traps++; throw new Error("Caller trap"); } });
+    const admitted = store.admit(request("proxy-bytes")); store.start(admitted.job.id, admitted.publicationToken);
+    expect(() => store.publish(admitted.job.id, admitted.publicationToken, [{ sourceId: "source-1", raw: bytes, normalized: normalized() }])).toThrow("genuine raw byte arrays");
+    expect(traps).toBe(0); expect(count("blobs")).toBe(0);
   });
   test("mid-transaction storage failure rolls back blobs, metadata and final publication together", () => {
     const admission = store.admit(request()); store.start(admission.job.id, admission.publicationToken);
@@ -384,6 +442,53 @@ describe("transactional evidence resource reservations", () => {
 });
 
 describe("bounded stored-evidence readers", () => {
+  test("file-backed corrupt job JSON is excluded from all read, retry and retention acquisitions", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "rp-evidence-corrupt-job-")), fileDb = new Database(path.join(directory, "evidence.db"));
+    try {
+      initialize(fileDb); fileDb.exec("PRAGMA journal_mode=WAL");
+      const fileStore = new EvidenceStore(fileDb, scope, options()), { set } = complete(request("file-control"), fileStore);
+      const inventory = fileStore.saveInventory("file-roster", 0, [expected], "prospective"), draft = request("file-append");
+      draft.inventory = { id: inventory.id, revision: 1 }; draft.target = { setId: set.id, expectedRevision: 1 };
+      const admitted = fileStore.admit(draft);
+      const original = fileDb.query("SELECT request_data,inventory_data FROM evaluation_evidence_jobs WHERE id=?").get(admitted.job.id) as { request_data: string; inventory_data: string };
+      expect(fileStore.getJob(admitted.job.id).status).toBe("queued"); expect(fileStore.admit(draft).reused).toBe(true);
+      const reads = observeFileReads(fileDb), oversized = "界".repeat(Math.floor(L.MAX_NORMALIZED_BYTES / 3) + 1);
+      expect(oversized.length).toBeLessThan(L.MAX_NORMALIZED_BYTES); expect(Buffer.byteLength(oversized)).toBeGreaterThan(L.MAX_NORMALIZED_BYTES);
+      for (const column of ["request_data", "inventory_data"] as const) {
+        reads.length = 0;
+        fileDb.query(`UPDATE evaluation_evidence_jobs SET ${column}=? WHERE id=?`).run(oversized, admitted.job.id);
+        expect(() => fileStore.getJob(admitted.job.id)).toThrow("integrity check failed");
+        expect(() => fileStore.start(admitted.job.id, admitted.publicationToken)).toThrow("integrity check failed");
+        expect(() => fileStore.cancel(admitted.job.id)).toThrow("integrity check failed");
+        expect(() => fileStore.publish(admitted.job.id, admitted.publicationToken, [{ sourceId: "source-1", raw, normalized: normalized() }])).toThrow("integrity check failed");
+        expect(() => fileStore.admit(draft)).toThrow("integrity check failed");
+        expect(() => fileStore.removePayloads(set.id, 1, "raw_removed")).toThrow("integrity check failed");
+        expect(reads.length).toBeGreaterThanOrEqual(6);
+        expect(reads.every(read => (read.requestBytes ?? 0) <= L.MAX_NORMALIZED_BYTES && (read.inventoryBytes ?? 0) <= L.MAX_NORMALIZED_BYTES)).toBe(true);
+        expect(reads.some(read => read.oversized === 1 && read[column === "request_data" ? "requestBytes" : "inventoryBytes"] === null)).toBe(true);
+        fileDb.query(`UPDATE evaluation_evidence_jobs SET ${column}=? WHERE id=?`).run(original[column], admitted.job.id);
+      }
+      expect(fileStore.getJob(admitted.job.id).status).toBe("queued"); expect(fileStore.admit(draft).reused).toBe(true);
+      expect(fileStore.exportRaw(set.id, 1, "source-1")).toEqual(raw);
+      expect(fileStore.removePayloads(set.id, 1, "raw_removed")).toBe(1);
+      expect(fileStore.getJob(admitted.job.id)).toMatchObject({ status: "failed", failureCode: "retention_changed" });
+    } finally { fileDb.close(); rmSync(directory, { recursive: true, force: true }); }
+  });
+  test("file-backed corrupt raw blobs are refused in SQL before acquisition with ordinary export controls", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "rp-evidence-corrupt-blob-")), fileDb = new Database(path.join(directory, "evidence.db"));
+    try {
+      initialize(fileDb); const fileStore = new EvidenceStore(fileDb, scope, options()), { set } = complete(request("file-raw"), fileStore);
+      expect(fileStore.exportRaw(set.id, 1, "source-1")).toEqual(raw);
+      const reads = observeFileReads(fileDb); fileDb.exec("DROP TRIGGER evaluation_evidence_blobs_immutable");
+      fileDb.query("UPDATE evaluation_evidence_blobs SET bytes=zeroblob(?) WHERE artifact_id=?").run(L.MAX_SOURCE_BYTES + 1, set.sources[0].artifactId);
+      expect(() => fileStore.exportRaw(set.id, 1, "source-1")).toThrow("Stored raw evidence integrity check failed");
+      expect(reads.some(read => read.rawBytes === null && read.storedRawBytes === L.MAX_SOURCE_BYTES + 1)).toBe(true);
+      expect(reads.every(read => (read.rawBytes ?? 0) <= L.MAX_SOURCE_BYTES)).toBe(true);
+      fileDb.query("UPDATE evaluation_evidence_blobs SET bytes=? WHERE artifact_id=?").run(raw, set.sources[0].artifactId);
+      expect(fileStore.exportRaw(set.id, 1, "source-1")).toEqual(raw);
+      expect(reads.some(read => read.rawBytes === raw.byteLength)).toBe(true);
+    } finally { fileDb.close(); rmSync(directory, { recursive: true, force: true }); }
+  });
   test("corrupted normalized bytes are refused instead of displaying a rewritten observation", () => {
     const { set } = complete(); db.exec("DROP TRIGGER evaluation_evidence_payloads_immutable");
     const source = normalized(); source.leaves[0].name = "Tampered assertion";

@@ -7,6 +7,23 @@ import { EVIDENCE_LIMITS as L, EVIDENCE_VERSION, EvidenceError, type EvidenceAtt
 import { canonicalEvidenceJson, evidenceArray, evidenceDigest, evidenceInteger, evidenceObject, evidenceSha256, evidenceText,
   parseEvidenceExpectedSources, parseEvidenceImportRequest, parseEvidenceScope, parseNormalizedEvidence } from "./evidence-validation";
 
+const byteLengthDescriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), "byteLength")!;
+const byteTypeDescriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), Symbol.toStringTag)!;
+const copyBytesDescriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), "set")!;
+function boundedByteCopy(value: unknown): Uint8Array {
+  let length: number;
+  try {
+    length = byteLengthDescriptor.get!.call(value);
+    if (byteTypeDescriptor.get!.call(value) !== "Uint8Array") throw new Error("Not an octet array");
+  } catch { throw new EvidenceError("Publication requires genuine raw byte arrays"); }
+  if (length > L.MAX_SOURCE_BYTES) throw new EvidenceError("Raw evidence exceeds its source byte limit", 413);
+  try {
+    const bytes = new Uint8Array(length);
+    copyBytesDescriptor.value.call(bytes, value as Uint8Array);
+    return bytes;
+  } catch { throw new EvidenceError("Publication requires genuine raw byte arrays"); }
+}
+
 /** Inactive DDL: only the migration coordinator may install this in an application database. */
 export const EVIDENCE_STORAGE_SQL = `
 CREATE TABLE evaluation_evidence_scopes (
@@ -76,9 +93,15 @@ export interface EvidenceStoreOptions {
   maxRevisions?: number;
 }
 interface JobRow {
-  id: string; scope_generation: number; request_digest: string; request_data: string; inventory_data: string | null;
+  id: string; scope_generation: number; request_digest: string; request_data: string | null; inventory_data: string | null; data_oversized: number;
   status: EvidenceJob["status"]; job_token: string; admitted_at: number; deadline_at: number; set_id: string | null; failure_code: EvidenceJob["failureCode"];
 }
+const jobColumns = `id,scope_generation,request_digest,
+  CASE WHEN typeof(request_data)='text' AND length(cast(request_data AS BLOB))<=? THEN request_data ELSE NULL END AS request_data,
+  CASE WHEN typeof(inventory_data)='text' AND length(cast(inventory_data AS BLOB))<=? THEN inventory_data ELSE NULL END AS inventory_data,
+  CASE WHEN typeof(request_data)!='text' OR length(cast(request_data AS BLOB))>? OR
+    (inventory_data IS NOT NULL AND (typeof(inventory_data)!='text' OR length(cast(inventory_data AS BLOB))>?)) THEN 1 ELSE 0 END AS data_oversized,
+  status,job_token,admitted_at,deadline_at,set_id,failure_code`;
 export class EvidenceStore {
   readonly #db: Database;
   readonly #scope: EvidenceScope;
@@ -110,9 +133,16 @@ export class EvidenceStore {
     return evidenceInteger(scope.generation, "stored scope generation", Number.MAX_SAFE_INTEGER, 1);
   }
   #job(id: string): JobRow {
-    const job = this.#get<JobRow>("SELECT * FROM evaluation_evidence_jobs WHERE scope_key=? AND id=?", this.#key, evidenceText(id, "job ID"));
+    const job = this.#jobs("scope_key=? AND id=?", this.#key, evidenceText(id, "job ID"))[0];
     if (!job) throw new EvidenceError("Evidence job not found", 404);
     return job;
+  }
+  #jobs(where: string, ...bindings: SQLQueryBindings[]): JobRow[] {
+    return this.#all<JobRow>(`SELECT ${jobColumns} FROM evaluation_evidence_jobs WHERE ${where}`,
+      L.MAX_NORMALIZED_BYTES, L.MAX_NORMALIZED_BYTES, L.MAX_NORMALIZED_BYTES, L.MAX_NORMALIZED_BYTES, ...bindings).map(job => {
+      if (job.data_oversized !== 0 || typeof job.request_data !== "string" || job.inventory_data !== null && typeof job.inventory_data !== "string") throw new EvidenceError("Stored evidence integrity check failed", 409);
+      return job;
+    });
   }
   #jobView(row: JobRow): EvidenceJob {
     return { id: row.id, scopeGeneration: row.scope_generation, requestDigest: row.request_digest, status: row.status,
@@ -120,7 +150,7 @@ export class EvidenceStore {
   }
   #json<T>(data: string | null): T {
     try {
-      if (data === null || Buffer.byteLength(data) > L.MAX_NORMALIZED_BYTES) throw new Error("Oversized stored JSON");
+      if (typeof data !== "string" || Buffer.byteLength(data) > L.MAX_NORMALIZED_BYTES) throw new Error("Oversized stored JSON");
       const value: unknown = JSON.parse(data);
       if (canonicalEvidenceJson(value) !== data) throw new Error("Noncanonical stored JSON");
       return value as T;
@@ -136,7 +166,7 @@ export class EvidenceStore {
   #request(job: JobRow): EvidenceImportRequest {
     try {
       const request = parseEvidenceImportRequest(this.#json(job.request_data));
-      const inventory = job.inventory_data ? this.#json<EvidenceInventoryRevision>(job.inventory_data) : null;
+      const inventory = job.inventory_data !== null ? this.#json<EvidenceInventoryRevision>(job.inventory_data) : null;
       const digest = evidenceDigest(canonicalEvidenceJson({ scope: this.#scope, generation: job.scope_generation, request, inventoryDigest: inventory?.digest ?? null }));
       if (digest !== job.request_digest) throw new Error("Stored request identity mismatch");
       return request;
@@ -185,9 +215,10 @@ export class EvidenceStore {
       this.#authorize("import", request.attachment); const generation = this.#generation();
       const inventory = request.inventory ? this.#inventory(request.inventory.id, request.inventory.revision) : null;
       const requestDigest = evidenceDigest(canonicalEvidenceJson({ scope: this.#scope, generation, request, inventoryDigest: inventory?.digest ?? null }));
-      const existing = this.#get<JobRow>("SELECT * FROM evaluation_evidence_jobs WHERE scope_key=? AND scope_generation=? AND operation_key=?", this.#key, generation, request.operationKey);
+      const existing = this.#jobs("scope_key=? AND scope_generation=? AND operation_key=?", this.#key, generation, request.operationKey)[0];
       if (existing) {
         if (existing.request_digest !== requestDigest) throw new EvidenceError("Operation key already identifies different bytes or configuration", 409);
+        this.#request(existing);
         return { job: this.#jobView(existing), publicationToken: existing.job_token, reused: true };
       }
       if (request.target) {
@@ -250,14 +281,15 @@ export class EvidenceStore {
       let leaves = 0, normalizedBytes = 0;
       const parsed = request.sources.map((descriptor, index) => {
         const source = evidenceObject(supplied[index], ["sourceId", "raw", "normalized"], "publication source");
-        if (source.sourceId !== descriptor.sourceId || !(source.raw instanceof Uint8Array) || source.raw.byteLength !== descriptor.byteLength || evidenceDigest(source.raw) !== descriptor.artifactSha256) throw new EvidenceError("Publication raw bytes do not match the exact admitted roster");
+        const raw = boundedByteCopy(source.raw);
+        if (source.sourceId !== descriptor.sourceId || raw.byteLength !== descriptor.byteLength || evidenceDigest(raw) !== descriptor.artifactSha256) throw new EvidenceError("Publication raw bytes do not match the exact admitted roster");
         const normalized = parseNormalizedEvidence(source.normalized, descriptor.kind);
         if (normalized.sourceId !== descriptor.sourceId) throw new EvidenceError("Normalized source identity does not match its admitted source");
         const data = canonicalEvidenceJson(normalized); normalizedBytes += Buffer.byteLength(data); leaves += normalized.leaves.length;
         if (normalizedBytes > L.MAX_NORMALIZED_BYTES || leaves > L.MAX_LEAVES) throw new EvidenceError("Publication exceeds normalized byte or leaf limits", 413);
-        return { descriptor, raw: source.raw.slice(), normalized, data, normalizedSha256: evidenceDigest(data), artifactId: randomUUID(), interpretationId: randomUUID() };
+        return { descriptor, raw, normalized, data, normalizedSha256: evidenceDigest(data), artifactId: randomUUID(), interpretationId: randomUUID() };
       });
-      const inventory = job.inventory_data ? this.#json<EvidenceInventoryRevision>(job.inventory_data) : null;
+      const inventory = job.inventory_data !== null ? this.#json<EvidenceInventoryRevision>(job.inventory_data) : null;
       if (inventory) this.#record<EvidenceInventoryRevision>(job.inventory_data, inventory.digest);
       const coverage = accountEvidenceInventory(inventory, parsed.map(source => ({ descriptor: source.descriptor, normalized: source.normalized })));
       const references = parsed.map(source => (source.normalized.attestation?.reportReferences ?? []).map(reference => {
@@ -321,10 +353,14 @@ export class EvidenceStore {
     return this.#transaction(() => {
       this.#authorize("raw_export", null); const set = this.#set(id, revision); this.#authorize("raw_export", set.attachment); this.#generation();
       const source = set.sources.find(source => source.sourceId === sourceId);
-      const blob = source && this.#get<{ bytes: Uint8Array }>("SELECT bytes FROM evaluation_evidence_blobs WHERE scope_key=? AND artifact_id=?", this.#key, source.artifactId);
+      const blob = source && this.#get<{ bytes: Uint8Array | null; byte_length: number }>(`SELECT
+        CASE WHEN typeof(bytes)='blob' AND length(bytes)<=? AND length(bytes)=? THEN bytes ELSE NULL END AS bytes,
+        length(cast(bytes AS BLOB)) AS byte_length FROM evaluation_evidence_blobs WHERE scope_key=? AND artifact_id=?`, L.MAX_SOURCE_BYTES, source.byteLength, this.#key, source.artifactId);
       if (!blob) throw new EvidenceError("Raw evidence is unavailable", 404);
-      if (blob.bytes.byteLength !== source.byteLength || evidenceDigest(blob.bytes) !== source.artifactSha256) throw new EvidenceError("Stored raw evidence integrity check failed", 409);
-      return blob.bytes.slice();
+      if (blob.bytes === null || blob.byte_length !== source.byteLength) throw new EvidenceError("Stored raw evidence integrity check failed", 409);
+      const bytes = boundedByteCopy(blob.bytes);
+      if (evidenceDigest(bytes) !== source.artifactSha256) throw new EvidenceError("Stored raw evidence integrity check failed", 409);
+      return bytes;
     });
   }
   removePayloads(id: string, revision: number, kind: "raw_removed" | "normalized_removed"): number {
@@ -332,7 +368,7 @@ export class EvidenceStore {
     if (kind !== "raw_removed" && kind !== "normalized_removed") throw new EvidenceError("Unsupported retention event");
     return this.#transaction(() => {
       this.#authorize("delete", null); const set = this.#set(id, revision), actorId = this.#authorize("delete", set.attachment); this.#generation(); let removed = 0;
-      for (const job of this.#all<JobRow>("SELECT * FROM evaluation_evidence_jobs WHERE scope_key=? AND status IN ('queued','running')", this.#key)) {
+      for (const job of this.#jobs("scope_key=? AND status IN ('queued','running')", this.#key)) {
         if (this.#request(job).target?.setId === id) this.#finish(job, "failed", "retention_changed");
       }
       for (const source of set.sources) {
