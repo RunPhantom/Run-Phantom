@@ -112,4 +112,21 @@ describe("real bounded report byte interpretation", () => {
     expect(read(" ".repeat(2 * 1024 * 1024 + 1)).reasonCodes).toContain("source_limit");
     expect(read('<testsuite>' + '<testcase/>'.repeat(50_001) + '</testsuite>').reasonCodes).toContain("source_limit");
   });
+  test("unregistered XML versions and unexpected mixed content cannot look complete", () => {
+    expect(read('<?xml version="1.1"?><testsuite><testcase name="one"/></testsuite>').reasonCodes).toContain("unsupported_schema");
+    expect(read('<testsuite>unrecognized outcome<testcase name="one"/></testsuite>').reportOutcome).toBe("unknown");
+    expect(read('<testsuite><testcase name="one">FAILED</testcase></testsuite>').reportOutcome).toBe("unknown");
+  });
+  test("the real byte parser never resolves a report-supplied external resource", async () => {
+    let requests = 0;
+    const server = Bun.serve({ port: 0, fetch() { requests++; return new Response("synthetic-resource"); } });
+    try {
+      await fetch(`http://127.0.0.1:${server.port}/monitor-control`);
+      expect(requests).toBe(1); requests = 0;
+      const malicious = `<!DOCTYPE testsuite [<!ENTITY x SYSTEM "http://127.0.0.1:${server.port}/must-not-resolve">]><testsuite><testcase name="one"/><system-out>&x;</system-out></testsuite>`;
+      expect(read(malicious).parseState).toBe("rejected");
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect(requests).toBe(0);
+    } finally { await server.stop(true); }
+  });
 });

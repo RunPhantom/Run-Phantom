@@ -83,6 +83,7 @@ export class EvidenceSupervisor {
   get state(): { active: number; queued: number; closed: boolean } { return { active: this.#active, queued: this.#queue.length, closed: this.#closed }; }
   submit(request: ReaderOperation): { result: Promise<ReaderOperationResult>; cancel: () => void } {
     if (this.#closed) throw new EvidenceSupervisorError("shutdown");
+    if (this.#queue.length >= L.MAX_QUEUED) throw new EvidenceSupervisorError("queue_full");
     evidenceText(request.jobId, "job ID"); evidenceText(request.publicationToken, "publication token");
     if (!Number.isSafeInteger(request.scopeGeneration) || request.scopeGeneration < 0 || !Array.isArray(request.sources) || !request.sources.length || request.sources.length > L.MAX_REPORTS) throw new EvidenceSupervisorError("input_limit");
     let bytes = 0; const ids = new Set<string>();
@@ -93,7 +94,6 @@ export class EvidenceSupervisor {
       if (bytes > L.MAX_IMPORT_BYTES) throw new EvidenceSupervisorError("input_limit");
       return { sourceId: source.sourceId, dialect: source.dialect, bytes: source.bytes.slice() };
     });
-    if (this.#queue.length >= L.MAX_QUEUED) throw new EvidenceSupervisorError("queue_full");
     let resolve!: Job["resolve"], reject!: Job["reject"];
     const promise = new Promise<ReaderOperationResult>((yes, no) => { resolve = yes; reject = no; });
     const job: Job = { request: { ...request, sources }, admitted: performance.now(), controller: new AbortController(), failure: null, started: false,

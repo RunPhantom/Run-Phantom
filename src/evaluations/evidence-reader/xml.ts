@@ -20,6 +20,7 @@ export function strictEvidenceXml(text: string, limits: ReaderLimits): EvidenceX
       if (end < 0) throw new ReaderRefusal("source_unparsed", false);
       const declaration = text.slice(at, end + 2);
       if (!/^<\?xml\s/.test(declaration) || text.slice(0, at).trim()) throw new ReaderRefusal("unsupported_schema", false);
+      if (!/^<\?xml\s+version\s*=\s*(["'])1\.0\1(?:\s|\?>)/.test(declaration)) throw new ReaderRefusal("unsupported_schema", false);
       const encoding = /\bencoding\s*=\s*(["'])(.*?)\1/.exec(declaration)?.[2];
       if (encoding && encoding.toLowerCase() !== "utf-8") throw new ReaderRefusal("unsafe_encoding");
       at = end + 2; continue;

@@ -46,7 +46,7 @@ function junit(text: string, sourceId: string, limits: ReaderLimits): Normalized
     const summary: EvidenceProducerSummary = { suiteId, parentSuiteId: parent, name: safeText(node.attributes.name ?? "", 512), counts, countsConsistent: null };
     summaries.push(summary);
     for (const child of node.children) {
-      if (typeof child === "string") { safeText(child, 4096); continue; }
+      if (typeof child === "string") { safeText(child, 4096); if (child.trim()) complete = false; continue; }
       if (!("name" in child)) continue;
       const name = localName(child.name);
       if (name === "testsuite" || name === "testsuites") { visit(child, suiteId); continue; }
@@ -55,7 +55,7 @@ function junit(text: string, sourceId: string, limits: ReaderLimits): Normalized
         const children = xmlChildren(child), terminals = children.filter(c => ["failure", "error", "skipped"].includes(localName(c.name)));
         const unexpected = children.some(c => !["failure", "error", "skipped", "flakyFailure", "flakyError", "rerunFailure", "rerunError"].includes(localName(c.name)) && !harmless.has(localName(c.name)));
         const conflicting = new Set(terminals.map(c => localName(c.name))).size > 1;
-        const incomplete = conflicting || unexpected || !terminals.length && children.some(c => ["rerunFailure", "rerunError"].includes(localName(c.name)));
+        const incomplete = conflicting || unexpected || child.children.some(content => typeof content === "string" && content.trim()) || !terminals.length && children.some(c => ["rerunFailure", "rerunError"].includes(localName(c.name)));
         let status: EvidenceLeaf["status"] = incomplete ? "unknown" : terminals.some(c => localName(c.name) === "error") ? "errored" : terminals.some(c => localName(c.name) === "failure") ? "failed" : terminals.length ? "skipped" :
           child.attributes.status?.toLowerCase() === "notrun" || ["suppressed", "skipped"].includes(child.attributes.result?.toLowerCase()) ? "disabled" : "passed";
         if (incomplete) complete = false;
