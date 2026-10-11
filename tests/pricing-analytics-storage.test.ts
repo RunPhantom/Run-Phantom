@@ -73,6 +73,7 @@ describe("actual private TeamStore cost analytics", () => {
     const viewer = f.store.acceptInvite({ tokenHash: hashTeamToken(invite.token), email: "viewer@example.test", expectedAccountId: null, passwordHash: "viewer-password", sessionHash: hashTeamToken("viewer-session") }).context;
     const stale = f.store.projectScope(viewer, f.scope.projectId);
     expect(f.store.pricingAnalytics(stale, f.request).tokens.input.completeTotal).toBe(200);
+    expect(() => f.store.pricingAnalytics({ ...stale, projectId: f.other.projectId, role: "admin" }, f.request)).toThrow("Resource not found");
     f.store.removeMember(f.scope, viewer.user.id);
     expect(() => f.store.pricingAnalytics(stale, f.request)).toThrow("Resource not found");
     f.advance(31 * 60_000);

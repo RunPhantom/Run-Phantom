@@ -49,4 +49,12 @@ describe("actual team pricing HTTP boundary", () => {
     expect(response.status).toBe(404);
     expect((await response.json()).error.code).toBe("not_found");
   });
+  test("revoked HTTP session refuses the analytics response", async () => {
+    expect((await call("/logout", {})).status).toBe(204);
+    const response = await call(`/projects/${projectId}/pricing/analytics`);
+    expect(response.status).toBe(401);
+    const body = await response.json();
+    expect(body.error.code).toBe("unauthenticated");
+    expect(body.sourceRevision).toBeUndefined();
+  });
 });
