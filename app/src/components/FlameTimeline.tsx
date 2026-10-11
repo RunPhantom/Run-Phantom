@@ -1,19 +1,19 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, X } from "lucide-react";
 import { C, spanColor } from "../utils/colors";
 import { displayPayload, fmt, plural, tryJson } from "../utils/helpers";
 import { setMeridian, clearMeridian } from "../utils/meridian";
 import type { Span, SubAgent } from "../utils/types";
-import { buildCondensedTimeline, type TimelineEntry } from "../utils/condensed-timeline";
+import { buildCondensedTimeline, hasTimelineInterval, type TimelineEntry } from "../utils/condensed-timeline";
 import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
 
-// Half the width of the widest axis label ("1.0s"/"10.0s" at 9px mono). A label
+// Half the width of a typical axis label at 12px mono. A label
 // whose centre falls within this of the right edge is right-aligned instead.
 const LABEL_EDGE_GUARD_PX = 30;
 const EMPTY_AGENTS: SubAgent[] = [];
 
 function timingLabel(span: Span): string {
-  return Number.isFinite(span.start_time_ms) && Number.isFinite(span.end_time_ms) && span.end_time_ms >= span.start_time_ms && Number.isFinite(span.duration_ms) && span.duration_ms >= 0
+  return hasTimelineInterval(span) && Number.isFinite(span.duration_ms) && span.duration_ms >= 0
     ? fmt(span.duration_ms) : "Time unavailable";
 }
 
@@ -86,12 +86,14 @@ function SpanTooltip({
   onPointerEnter,
   onPointerLeave,
   onOpenSpan,
+  onDismiss,
 }: {
   span: Span;
   barRect: DOMRect;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
   onOpenSpan?: () => void;
+  onDismiss: () => void;
 }) {
   const W = Math.min(320, Math.max(160, window.innerWidth - 16));
   const H = 480;
@@ -141,6 +143,9 @@ function SpanTooltip({
       }}
       onMouseEnter={onPointerEnter}
       onMouseLeave={onPointerLeave}
+      onFocusCapture={onPointerEnter}
+      onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) onPointerLeave(); }}
+      onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onDismiss(); } }}
     >
       <div className="px-3 py-2 flex items-center gap-2 flex-shrink-0" style={{ borderBottom: `1px solid ${C.border}` }}>
         <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded"
@@ -150,7 +155,8 @@ function SpanTooltip({
           }}>
           {type.label}
         </span>
-        <span className="text-[11px] font-mono font-medium truncate" style={{ color: C.fg4 }}>{span.name}</span>
+        <span className="text-[11px] font-mono font-medium truncate flex-1" style={{ color: C.fg4 }}>{span.name}</span>
+        <button type="button" aria-label="Close span details" className="min-h-11 min-w-11 flex items-center justify-center flex-shrink-0 rounded rp-hover-wash" style={{ color: C.fg2 }} onClick={onDismiss}><X className="size-4" /></button>
       </div>
       <div className="px-3 py-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] font-mono flex-shrink-0" style={{ borderBottom: `1px solid ${C.border}` }}>
         <span style={{ color: C.fg2 }}>{timingLabel(span)}</span>
@@ -186,7 +192,8 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
   const prefersReducedMotion = usePrefersReducedMotion();
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerW, setContainerW] = useState(0);
-  const [hovered, setHovered] = useState<{ entry: TimelineEntry; rect: DOMRect } | null>(null);
+  const [hovered, setHovered] = useState<{ entry: TimelineEntry; rect: DOMRect; trigger: HTMLElement } | null>(null);
+  const dismissedFocusRef = useRef<HTMLElement | null>(null);
   const [hoveredLabelName, setHoveredLabelName] = useState<string | null>(null);
   const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -215,16 +222,28 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
   }, [hasVizSpans]);
 
   const handleBarEnter = useCallback((entry: TimelineEntry, e: React.SyntheticEvent<HTMLElement>) => {
+    if (e.type === "focus" && dismissedFocusRef.current === e.currentTarget) { dismissedFocusRef.current = null; return; }
     cancelTooltipDismiss();
     if (entry.identityAvailable) setMeridian(entry.span.id);
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    setHovered({ entry, rect });
+    setHovered({ entry, rect, trigger: e.currentTarget });
   }, [cancelTooltipDismiss]);
 
   const handleBarLeave = useCallback(() => {
     clearMeridian();
     scheduleTooltipDismiss();
   }, [scheduleTooltipDismiss]);
+
+  const dismissTooltip = () => {
+    cancelTooltipDismiss();
+    setHovered(null);
+    clearMeridian();
+    if (hovered?.trigger.isConnected && document.activeElement !== hovered.trigger) {
+      dismissedFocusRef.current = hovered.trigger;
+      hovered.trigger.focus({ preventScroll: true });
+      hovered.trigger.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+    }
+  };
 
   if (!hasVizSpans) return null;
 
@@ -274,6 +293,8 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
   const MIN_CHART_W = 480;
   // Short spans must still read as bars, not uniform dots.
   const MIN_BAR_W = 3;
+  const ERROR_MARKER_W = 14;
+  const minimumPaintWidth = layout.entries.some(entry => entry.timingAvailable && entry.span.status === "ERROR") ? ERROR_MARKER_W : MIN_BAR_W;
 
   const longestNameLen = toolNames.reduce((m, n) => Math.max(m, n.length), 0);
   const widthFromContent = Math.ceil(longestNameLen * LABEL_CHAR_PX + LABEL_PAD);
@@ -287,9 +308,9 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
     return entry.timingAvailable && duration > 0 ? Math.min(shortest, duration) : shortest;
   }, Infinity);
   const scrollViewportW = Math.max((containerW || 300) - labelW, 160);
-  const chartW = Math.min(12_000, Math.max(scrollViewportW, dur * MIN_PX_PER_MS, MIN_CHART_W, compact && shortestInterval !== Infinity ? (dur / shortestInterval) * MIN_BAR_W : 0));
+  const chartW = Math.min(12_000, Math.max(scrollViewportW, dur * MIN_PX_PER_MS, MIN_CHART_W, compact && shortestInterval !== Infinity ? (dur / shortestInterval) * minimumPaintWidth : 0));
   // Paint bounds participate in compact packing, so the minimum visible bar never covers its neighbour.
-  const packed = compact ? buildCondensedTimeline(vizSpans, subAgents, (MIN_BAR_W * dur) / chartW) : layout;
+  const packed = compact ? buildCondensedTimeline(vizSpans, subAgents, (minimumPaintWidth * dur) / chartW) : layout;
   const rowOf = (entry: TimelineEntry) => compact ? packed.entries[entry.sourceIndex].row : unknownRows.get(entry.key) ?? namedRows.get(entry.span.name)!;
   const rows = new Map<number, TimelineEntry[]>();
   for (const entry of layout.entries) {
@@ -330,7 +351,7 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
       </div>}
 
       {containerW > 0 && (
-      <div role="region" aria-label="Trace timeline" tabIndex={0} style={{ maxHeight: 320, overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain" }}>
+      <div role="region" aria-label="Trace timeline" tabIndex={0} className="max-h-80 max-[360px]:max-h-32" style={{ overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain" }}>
       <div style={{ display: "flex", height: totalH }}>
         <div style={{ width: labelW, flexShrink: 0 }}>
           {Array.from({ length: rowCount }, (_, row) => {
@@ -435,7 +456,7 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
             };
             if (!entry.timingAvailable) return <button key={entry.key} type="button" className="timeline-bar absolute text-xs px-2 rounded rp-hover-wash" data-timeline-span-id={span.id} data-timeline-key={entry.key} style={{ left: 0, top: row * ROW, minHeight: ROW, color: C.fg2, border: `1px dashed ${C.border}`, background: C.surface }} aria-label={`Inspect ${span.name}, time unavailable`} onMouseEnter={e => handleBarEnter(entry, e)} onMouseLeave={handleBarLeave} onFocus={e => handleBarEnter(entry, e)} onBlur={handleBarLeave} onClick={e => { handleBarEnter(entry, e); focusBarTool(); }}>Time unavailable</button>;
             if (isErr && w < 40) {
-              const triSize = 14;
+              const triSize = ERROR_MARKER_W;
               return (
                 <button
                   key={entry.key}
@@ -511,6 +532,7 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
           onPointerEnter={cancelTooltipDismiss}
           onPointerLeave={scheduleTooltipDismiss}
           onOpenSpan={hovered.entry.identityAvailable ? () => openSpan(hovered.entry) : undefined}
+          onDismiss={dismissTooltip}
         />
       )}
     </div>

@@ -2,6 +2,49 @@ import { test, expect } from "./fixtures";
 import { FIXTURE_PRIMARY_RUN_ID, seedRunPhantomFixtures } from "./helpers";
 import type { Span } from "../src/utils/types";
 
+const faults = new WeakMap<import("@playwright/test").Page, string[]>();
+test.beforeEach(async ({ page }) => {
+  const observed: string[] = []; faults.set(page, observed);
+  page.on("pageerror", error => observed.push(error.message));
+  page.on("console", message => { if (message.type() === "error") observed.push(message.text()); });
+  page.on("response", response => { if (response.status() >= 400) observed.push(`${response.status()} ${response.url()}`); });
+  page.on("requestfailed", request => observed.push(`${request.method()} ${request.url()} ${request.failure()?.errorText}`));
+});
+test.afterEach(async ({ page }) => { expect(faults.get(page) ?? []).toEqual([]); faults.delete(page); });
+
+const COMPACT_RUN = "26000000000000000000000000000001";
+const spanId = (slot: number) => slot.toString(16).padStart(16, "0");
+const ROOT = spanId(1), INVOKE_A = spanId(200), INVOKE_B = spanId(210);
+
+async function seedCompactRun(url: string, overlappingTools = 0): Promise<{ spans: Span[]; subAgents: Array<{ root_span_id: string; span_ids: string[] }> }> {
+  const origin = 1_777_000_000_000;
+  const attribute = (key: string, value: string) => ({ key, value: { stringValue: value } });
+  const otlp = (slot: number, start: number, end: number, parent: number | null, name: string, operation: string, output: string) => ({
+    traceId: COMPACT_RUN, spanId: spanId(slot), parentSpanId: parent === null ? undefined : spanId(parent), name,
+    startTimeUnixNano: String(BigInt(origin + start) * 1_000_000n), endTimeUnixNano: String(BigInt(origin + end) * 1_000_000n), status: { code: 1 },
+    attributes: [attribute("ai.operationId", operation), attribute("ai.telemetry.metadata.runphantom.eventName", "timeline-fixture"),
+      ...(operation === "ai.toolCall" ? [attribute("ai.toolCall.name", name), attribute("ai.toolCall.args", '{"prompt":"identical captured prompt"}'), attribute("ai.toolCall.result", output)]
+        : [attribute("ai.prompt", '{"messages":[{"role":"user","content":"identical captured prompt"}]}'), attribute("ai.response.text", output), attribute("ai.model.id", "fixture-model")])],
+  });
+  const spans = [otlp(1, 0, 500, null, "llm.generate", "ai.generateText", "Main captured output"),
+    ...Array.from({ length: 100 }, (_, i) => otlp(i + 2, i + 1, i + 2, 1, `serial-tool-${i}`, "ai.toolCall", `serial-result-${i}`)),
+    otlp(150, 150, 190, 1, "parallel-tool", "ai.toolCall", "Parallel A"), otlp(151, 150, 190, 1, "parallel-tool", "ai.toolCall", "Parallel B"),
+    otlp(200, 240, 300, 1, "reviewAgent", "ai.toolCall", "Invocation A finished"), otlp(201, 245, 260, 200, "agent.subagent", "ai.generateText", "Invocation A first output"), otlp(202, 270, 290, 200, "agent.subagent", "ai.generateText", "Invocation A final output"),
+    otlp(210, 340, 400, 1, "reviewAgent", "ai.toolCall", "Invocation B finished"), otlp(211, 345, 360, 210, "agent.subagent", "ai.generateText", "Invocation B first output"), otlp(212, 370, 390, 210, "agent.subagent", "ai.generateText", "Invocation B final output"),
+    ...Array.from({ length: overlappingTools }, (_, i) => otlp(400 + i, 0, 500, 1, `touch-overlap-${i}`, "ai.toolCall", `touch-result-${i}`))];
+  const response = await fetch(`${url}/v1/traces`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ resourceSpans: [{ scopeSpans: [{ spans }] }] }) });
+  expect(response.ok, `actual OTLP ingestion returned ${response.status}`).toBe(true);
+  const detail = await fetch(`${url}/api/runs/detail/${COMPACT_RUN}`);
+  expect(detail.ok).toBe(true);
+  return await detail.json();
+}
+
+async function screenshot(page: import("@playwright/test").Page, info: import("@playwright/test").TestInfo, name: string) {
+  const path = info.outputPath(`${name}.png`);
+  await page.screenshot({ path });
+  await info.attach(name, { path, contentType: "image/png" });
+}
+
 test("timeline baseline: exact span population, tool action and captured output survive layout work", async ({ page, request, runPhantom }, testInfo) => {
   await seedRunPhantomFixtures(runPhantom.url);
   const detailUrl = `${runPhantom.url}/api/runs/detail/${FIXTURE_PRIMARY_RUN_ID}`;
@@ -37,4 +80,235 @@ test("timeline baseline: exact span population, tool action and captured output 
   }
   expect((await (await request.get(detailUrl)).json()).spans).toEqual(before.spans);
   expect(errors).toEqual([]);
+});
+
+test("compact timeline: actual serial spans pack, equal-name overlaps separate and legacy population is retained", async ({ page, request, runPhantom }, info) => {
+  const before = await seedCompactRun(runPhantom.url);
+  expect(before.spans).toHaveLength(109);
+  const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${runPhantom.url}/runs/${COMPACT_RUN}`);
+  const timeline = page.locator("[data-trace-timeline]");
+  await expect(timeline).toHaveAttribute("data-layout", "named");
+  const bars = timeline.locator("[data-timeline-span-id]");
+  await expect(bars).toHaveCount(before.spans.length);
+  await timeline.getByRole("button", { name: "Compact layout", exact: true }).click();
+  await expect(timeline).toHaveAttribute("data-layout", "compact");
+  const rows = await bars.evaluateAll(elements => Object.fromEntries(elements.map(element => [element.getAttribute("data-timeline-span-id")!, element.getAttribute("data-timeline-row")])));
+  expect(new Set(Array.from({ length: 100 }, (_, i) => rows[spanId(i + 2)]))).toEqual(new Set(["1"]));
+  expect(rows[spanId(150)]).not.toBe(rows[spanId(151)]);
+  expect(Number(rows[INVOKE_A])).toBeGreaterThan(Number(rows[ROOT]));
+  expect(Number(rows[spanId(201)])).toBeGreaterThan(Number(rows[INVOKE_A]));
+  const serialRects = await bars.evaluateAll((elements, ids) => elements.filter(element => ids.includes(element.getAttribute("data-timeline-span-id")!)).map(element => {
+    const box = element.getBoundingClientRect(); return { left: box.left, right: box.right };
+  }).sort((a, b) => a.left - b.left), Array.from({ length: 100 }, (_, i) => spanId(i + 2)));
+  expect(serialRects).toHaveLength(100);
+  expect(serialRects.every((rect, index) => index === 0 || rect.left >= serialRects[index - 1].right - 0.05)).toBe(true);
+  const ids = await bars.evaluateAll(elements => elements.map(element => element.getAttribute("data-timeline-span-id")));
+  expect(ids.sort()).toEqual(before.spans.map(span => span.id).sort());
+  await timeline.scrollIntoViewIfNeeded();
+  await screenshot(page, info, "compact-serial-desktop");
+  await timeline.getByRole("button", { name: "Compact layout", exact: true }).click();
+  await expect(timeline).toHaveAttribute("data-layout", "named");
+  await expect(bars).toHaveCount(109);
+  expect((await (await request.get(`${runPhantom.url}/api/runs/detail/${COMPACT_RUN}`)).json()).spans).toEqual(before.spans);
+  expect(errors).toEqual([]);
+});
+
+test("compact timeline: two equal-prompt invocations open only their real captured identity", async ({ page, request, runPhantom }, info) => {
+  const before = await seedCompactRun(runPhantom.url);
+  expect(before.subAgents.map(agent => agent.root_span_id).sort()).toEqual([INVOKE_A, INVOKE_B]);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`${runPhantom.url}/runs/${COMPACT_RUN}`);
+  const timeline = page.locator("[data-trace-timeline]");
+  await timeline.getByRole("button", { name: "Compact layout", exact: true }).click();
+  const invocations = timeline.locator('div[aria-label="Captured agent invocations"] button');
+  await expect(invocations).toHaveCount(2);
+  await timeline.locator(`button[data-invocation-root="${INVOKE_B}"]`).first().click();
+  await expect(page.getByText("Invocation B first output", { exact: true })).toBeVisible();
+  await expect(page.getByText("Invocation B final output", { exact: true })).toBeVisible();
+  await expect(page.getByText("Invocation A final output", { exact: true })).toHaveCount(0);
+  await screenshot(page, info, "compact-exact-invocation-b");
+  expect((await (await request.get(`${runPhantom.url}/api/runs/detail/${COMPACT_RUN}`)).json()).spans).toEqual(before.spans);
+});
+
+test("compact timeline: exact tool expansion and keyboard span deep link retain captured outputs after reload", async ({ page, request, runPhantom }, info) => {
+  const before = await seedCompactRun(runPhantom.url);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`${runPhantom.url}/runs/${COMPACT_RUN}`);
+  const timeline = page.locator("[data-trace-timeline]");
+  await timeline.getByRole("button", { name: "Compact layout", exact: true }).click();
+  const tool = timeline.locator(`[data-timeline-span-id="${spanId(101)}"]`);
+  await tool.scrollIntoViewIfNeeded(); await tool.click();
+  const pill = page.locator(`[data-tool-span-id="${spanId(101)}"]`);
+  await expect(pill.getByRole("button").first()).toHaveAttribute("aria-expanded", "true");
+  await expect(pill).toContainText("serial-result-99");
+  await tool.hover();
+  const closeDetails = page.getByRole("button", { name: "Close span details", exact: true });
+  await closeDetails.focus();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("[data-span-tooltip]")).toBeHidden();
+  await expect(tool).toBeFocused();
+  await page.mouse.move(2, 2); await expect(page.locator("[data-span-tooltip]")).toBeHidden();
+  const open = timeline.getByRole("button", { name: "Open selected span in tree", exact: true });
+  await open.focus();
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Shift+Tab");
+  await expect(open).toBeFocused();
+  expect(await open.evaluate(element => { const style = getComputedStyle(element); return style.outlineStyle !== "none" && parseFloat(style.outlineWidth) >= 2; })).toBe(true);
+  await screenshot(page, info, "compact-keyboard-selection");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`/runs/${COMPACT_RUN}/span/${spanId(101)}$`));
+  await expect(page.getByText("serial-result-99", { exact: true }).first()).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("serial-result-99", { exact: true }).first()).toBeVisible();
+  expect((await (await request.get(`${runPhantom.url}/api/runs/detail/${COMPACT_RUN}`)).json()).spans).toEqual(before.spans);
+});
+
+test("compact timeline: responsive time-axis scrolling stays local and controls remain visible", async ({ page, runPhantom }, info) => {
+  await seedCompactRun(runPhantom.url);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 800 }, { width: 1024, height: 768 }, { width: 768, height: 1024 }, { width: 390, height: 844 }, { width: 320, height: 740 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto(`${runPhantom.url}/runs/${COMPACT_RUN}`);
+    const timeline = page.locator("[data-trace-timeline]");
+    const compact = timeline.getByRole("button", { name: "Compact layout", exact: true });
+    await compact.click();
+    await expect(compact).toHaveAttribute("aria-pressed", "true");
+    await timeline.scrollIntoViewIfNeeded();
+    const axis = timeline.getByRole("region", { name: "Trace time axis", exact: true });
+    if (viewport.width <= 768) {
+      expect(await axis.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+      await axis.focus(); await page.keyboard.press("ArrowRight");
+      await expect.poll(() => axis.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
+    }
+    if (viewport.width <= 360) {
+      const vertical = timeline.getByRole("region", { name: "Trace timeline", exact: true });
+      expect(await vertical.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
+      await vertical.focus(); await page.keyboard.press("End");
+      await expect.poll(() => vertical.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+      const last = timeline.locator(`[data-timeline-span-id="${spanId(212)}"]`);
+      await last.scrollIntoViewIfNeeded();
+      expect(await last.evaluate(element => { const box = element.getBoundingClientRect(); const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2); return hit !== null && element.contains(hit); })).toBe(true);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(viewport.width);
+    const rect = await timeline.boundingBox(); expect(rect).not.toBeNull();
+    expect(rect!.x).toBeGreaterThanOrEqual(0); expect(rect!.x + rect!.width).toBeLessThanOrEqual(viewport.width);
+    await timeline.evaluate(element => element.scrollIntoView({ block: "start", behavior: "instant" }));
+    await screenshot(page, info, `compact-responsive-${viewport.width}`);
+  }
+});
+
+test("compact timeline: actual orphan, cyclic and missing timestamp captures retain explicit coverage and outputs", async ({ page, request, runPhantom }, info) => {
+  await seedCompactRun(runPhantom.url);
+  const origin = 1_777_000_000_000;
+  const attribute = (key: string, value: string) => ({ key, value: { stringValue: value } });
+  const topology = (slot: number, parent: number | null, start: number, end: number | null, name: string, isError = false) => ({
+    traceId: COMPACT_RUN, spanId: spanId(slot), parentSpanId: parent === null ? undefined : spanId(parent), name,
+    startTimeUnixNano: String(BigInt(start) * 1_000_000n), ...(end === null ? {} : { endTimeUnixNano: String(BigInt(end) * 1_000_000n) }),
+    status: { code: isError ? 2 : end === null || start === 0 ? 0 : 1 },
+    attributes: [attribute("ai.operationId", "ai.toolCall"), attribute("ai.toolCall.name", name), attribute("ai.toolCall.result", `${name} captured output`), attribute("ai.telemetry.metadata.runphantom.eventName", "timeline-fixture")],
+  });
+  const additional = [topology(301, 999, origin + 105, origin + 110, "orphan-tool"), topology(302, 303, origin + 110, origin + 115, "cyclic-a"), topology(303, 302, origin + 110, origin + 115, "cyclic-b"), topology(304, 1, 0, 0, "absent-time"), topology(305, 1, origin + 410, null, "missing-end"), topology(306, 1, origin + 105, origin + 106, "error-tool", true), topology(307, 1, origin + 106, origin + 107, "error-tool", true)];
+  const ingest = await request.post(`${runPhantom.url}/v1/traces`, { data: { resourceSpans: [{ scopeSpans: [{ spans: additional }] }] } });
+  expect(ingest.ok()).toBe(true);
+  const detailUrl = `${runPhantom.url}/api/runs/detail/${COMPACT_RUN}`;
+  const before = await (await request.get(detailUrl)).json() as { spans: Span[] };
+  expect(before.spans).toHaveLength(116);
+  expect(before.spans.find(span => span.id === spanId(305))!.end_time_ms).toBe(0);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`${runPhantom.url}/runs/${COMPACT_RUN}`);
+  const timeline = page.locator("[data-trace-timeline]");
+  await timeline.getByRole("button", { name: "Compact layout", exact: true }).click();
+  await expect(timeline.locator("[data-timeline-span-id]")).toHaveCount(116);
+  const errorRects = await timeline.locator(`[data-timeline-span-id="${spanId(306)}"], [data-timeline-span-id="${spanId(307)}"]`).evaluateAll(elements => elements.map(element => {
+    const box = element.getBoundingClientRect(); return { left: box.left, right: box.right, top: box.top, bottom: box.bottom };
+  }));
+  expect(errorRects).toHaveLength(2);
+  expect(errorRects[0].right <= errorRects[1].left + 0.05 || errorRects[1].right <= errorRects[0].left + 0.05 || errorRects[0].bottom <= errorRects[1].top || errorRects[1].bottom <= errorRects[0].top).toBe(true);
+  const errorBar = timeline.locator(`[data-timeline-span-id="${spanId(306)}"]`);
+  await errorBar.scrollIntoViewIfNeeded();
+  expect(await errorBar.evaluate(element => { const rect = element.getBoundingClientRect(); const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2); return hit !== null && element.contains(hit); })).toBe(true);
+  await screenshot(page, info, "compact-reachable-error-markers");
+  await errorBar.click();
+  const errorPill = page.locator(`[data-tool-span-id="${spanId(306)}"]`);
+  await expect(errorPill.getByRole("button").first()).toHaveAttribute("aria-expanded", "true");
+  await expect(errorPill).toContainText("error-tool captured output");
+  await page.mouse.move(2, 2); await expect(page.locator("[data-span-tooltip]")).toBeHidden();
+  const coverage = timeline.locator("[data-timeline-coverage]");
+  await expect(coverage).toContainText("2 spans with time unavailable");
+  await expect(coverage).toContainText("2 cyclic parent links not drawn");
+  await expect(coverage).toContainText("1 parent link outside this timeline or unavailable");
+  const absent = timeline.locator(`[data-timeline-span-id="${spanId(304)}"]`);
+  await expect(absent).toHaveAccessibleName("Inspect absent-time, time unavailable");
+  await absent.scrollIntoViewIfNeeded(); await absent.click();
+  const pill = page.locator(`[data-tool-span-id="${spanId(304)}"]`);
+  await expect(pill).toContainText("absent-time captured output");
+  await page.mouse.move(2, 2); await expect(page.locator("[data-span-tooltip]")).toBeHidden();
+  await timeline.scrollIntoViewIfNeeded();
+  await screenshot(page, info, "compact-unavailable-coverage");
+  expect((await (await request.get(detailUrl)).json()).spans).toEqual(before.spans);
+});
+
+test.describe("compact timeline touch", () => {
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  test("a real coarse-pointer context scrolls lower rows locally and opens the captured invocation", async ({ page, request, runPhantom }, info) => {
+    const before = await seedCompactRun(runPhantom.url, 16);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const touch = await page.context().newCDPSession(page);
+    try {
+      for (const width of [390, 320]) {
+        await page.setViewportSize({ width, height: width === 390 ? 844 : 740 });
+        await page.goto(`${runPhantom.url}/runs/${COMPACT_RUN}`);
+        expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+        const timeline = page.locator("[data-trace-timeline]");
+        const compact = timeline.getByRole("button", { name: "Compact layout", exact: true });
+        expect((await compact.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+        await compact.tap();
+        await expect(timeline.locator("[data-timeline-span-id]")).toHaveCount(125);
+        const invocation = timeline.locator(`button[data-invocation-root="${INVOKE_A}"]`).first();
+        expect((await invocation.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+        const vertical = timeline.getByRole("region", { name: "Trace timeline", exact: true });
+        await vertical.scrollIntoViewIfNeeded();
+        expect(await vertical.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
+        const ancestorOffsets = () => vertical.evaluate(element => {
+          const offsets: number[] = [];
+          for (let parent = element.parentElement; parent; parent = parent.parentElement) offsets.push(parent.scrollTop);
+          return offsets;
+        });
+        const beforeOffsets = await ancestorOffsets();
+        const box = (await vertical.boundingBox())!;
+        await touch.send("Input.synthesizeScrollGesture", { x: box.x + 24, y: Math.min(box.y + box.height - 24, page.viewportSize()!.height - 96), yDistance: -600, speed: 800, gestureSourceType: "touch", preventFling: true });
+        await expect.poll(() => vertical.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+        expect(await ancestorOffsets()).toEqual(beforeOffsets);
+        const axis = timeline.getByRole("region", { name: "Trace time axis", exact: true });
+        const axisBox = (await axis.boundingBox())!;
+        await touch.send("Input.synthesizeScrollGesture", { x: axisBox.x + 40, y: Math.min(box.y + 40, page.viewportSize()!.height - 96), xDistance: -600, speed: 800, gestureSourceType: "touch", preventFling: true });
+        await expect.poll(() => axis.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
+        const last = timeline.locator(`[data-timeline-span-id="${spanId(212)}"]`);
+        await last.scrollIntoViewIfNeeded();
+        expect(await last.evaluate(element => { const rect = element.getBoundingClientRect(); const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2); return hit !== null && element.contains(hit); })).toBe(true);
+        await last.tap();
+        await expect(timeline.getByRole("button", { name: "Open selected span in tree", exact: true })).toBeVisible();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+        await expect(page.locator("[data-span-tooltip]")).toContainText("Invocation B final output");
+        await screenshot(page, info, `compact-coarse-pointer-details-${width}`);
+        const closeDetails = page.getByRole("button", { name: "Close span details", exact: true });
+        const closeBox = (await closeDetails.boundingBox())!;
+        expect(closeBox.height).toBeGreaterThanOrEqual(44); expect(closeBox.width).toBeGreaterThanOrEqual(44);
+        await closeDetails.tap();
+        await expect(page.locator("[data-span-tooltip]")).toBeHidden();
+        await expect(last).toBeFocused();
+        expect(await last.evaluate(element => { const rect = element.getBoundingClientRect(); const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2); return hit !== null && element.contains(hit); })).toBe(true);
+        await screenshot(page, info, `compact-coarse-pointer-${width}`);
+        await invocation.tap();
+        await expect(page.getByText("Invocation A final output", { exact: true })).toBeVisible();
+        await expect(page.getByText("Invocation B final output", { exact: true })).toHaveCount(0);
+        expect((await (await request.get(`${runPhantom.url}/api/runs/detail/${COMPACT_RUN}`)).json()).spans).toEqual(before.spans);
+      }
+    } finally {
+      await touch.detach();
+    }
+  });
 });
