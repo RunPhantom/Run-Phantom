@@ -63,7 +63,8 @@ function popLane(heap: Lane[]): Lane {
 }
 
 /** Finite occurrence-preserving layout; names/prompts never supply graph or invocation identity. */
-export function buildCondensedTimeline(spans: readonly Span[], agents: readonly Pick<SubAgent, "root_span_id" | "name" | "span_ids">[] = []): CondensedTimeline {
+export function buildCondensedTimeline(spans: readonly Span[], agents: readonly Pick<SubAgent, "root_span_id" | "name" | "span_ids">[] = [], minimumIntervalMs = 0): CondensedTimeline {
+  if (!Number.isFinite(minimumIntervalMs) || minimumIntervalMs < 0 || minimumIntervalMs > MAX_TIMELINE_WINDOW_MS) throw new RangeError("Invalid timeline paint interval");
   const omittedCount = Math.max(0, spans.length - MAX_TIMELINE_SPANS);
   const admitted = spans.slice(0, MAX_TIMELINE_SPANS);
   const counts = new Map<string, number>();
@@ -133,19 +134,29 @@ export function buildCondensedTimeline(spans: readonly Span[], agents: readonly 
   }
   const levels: TimelineEntry[][] = [];
   for (const entry of entries) (levels[entry.depth] ??= []).push(entry);
-  let totalRows = 0, startMs = Infinity, endMs = -Infinity;
+  let startMs = Infinity, endMs = -Infinity;
+  for (const entry of entries) if (entry.timingAvailable) {
+    startMs = Math.min(startMs, entry.span.start_time_ms); endMs = Math.max(endMs, entry.span.end_time_ms);
+  }
+  const hasTimes = startMs !== Infinity;
+  const rawWindow = hasTimes ? endMs - startMs : 0;
+  const windowCapped = hasTimes && (!Number.isFinite(rawWindow) || rawWindow > MAX_TIMELINE_WINDOW_MS);
+  const windowMs = windowCapped ? MAX_TIMELINE_WINDOW_MS : Math.max(rawWindow, 1);
+  const origin = hasTimes ? startMs : 0;
+  const offset = (time: number) => Math.max(0, Math.min(windowMs, time - origin));
+  let totalRows = 0;
   for (const level of levels) {
     const known = level.filter(entry => entry.timingAvailable).sort((a, b) => a.span.start_time_ms < b.span.start_time_ms ? -1 : a.span.start_time_ms > b.span.start_time_ms ? 1 : a.sourceIndex - b.sourceIndex);
     const heap: Lane[] = [];
     let lanes = 0;
     for (const entry of known) {
-      const start = entry.span.start_time_ms, end = entry.span.end_time_ms;
+      const start = windowCapped ? offset(entry.span.start_time_ms) : entry.span.start_time_ms;
+      const end = Math.max(windowCapped ? offset(entry.span.end_time_ms) : entry.span.end_time_ms, start + minimumIntervalMs);
       const first = heap[0];
       const free = first && first.end <= start && !(first.start === first.end && first.start === start);
       const lane = free ? popLane(heap).row : lanes++;
       entry.row = totalRows + lane;
       pushLane(heap, { row: lane, start, end });
-      startMs = Math.min(startMs, start); endMs = Math.max(endMs, end);
     }
     for (const entry of level) if (!entry.timingAvailable) entry.row = totalRows + lanes++;
     totalRows += lanes;
@@ -157,12 +168,7 @@ export function buildCondensedTimeline(spans: readonly Span[], agents: readonly 
       if (entry.invocationRootId) roots.get(entry.invocationRootId)!.entryKeys.push(entry.key);
     }
   }
-  const hasTimes = startMs !== Infinity;
-  const rawWindow = hasTimes ? endMs - startMs : 0;
-  const windowCapped = hasTimes && (!Number.isFinite(rawWindow) || rawWindow > MAX_TIMELINE_WINDOW_MS);
-  const windowMs = windowCapped ? MAX_TIMELINE_WINDOW_MS : Math.max(rawWindow, 1);
-  const origin = hasTimes ? startMs : 0;
-  const percent = (time: number) => Math.max(0, Math.min(100, ((time - origin) / windowMs) * 100));
+  const percent = (time: number) => (offset(time) / windowMs) * 100;
   for (const entry of entries) if (entry.timingAvailable) {
     entry.left = percent(entry.span.start_time_ms);
     entry.width = Math.max(0, percent(entry.span.end_time_ms) - entry.left);

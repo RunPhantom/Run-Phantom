@@ -87,4 +87,14 @@ describe("bounded compact timeline", () => {
     expect(layout.entries[0].row).not.toBe(layout.entries[1].row); finite(layout);
     const empty = buildCondensedTimeline([]); expect(empty.entries).toEqual([]); expect(empty.totalRows).toBe(0); expect(empty.elapsedMs).toBeNull(); finite(empty);
   });
+  test("painted minimum widths separate close intervals instead of covering other IDs", () => {
+    const spans = [span("root", 0, 1000), span("a", 1, 2, "root"), span("b", 2, 3, "root")];
+    // The third argument is the finite minimum interval represented by the UI's 3px bar.
+    const layout = buildCondensedTimeline(spans, [], 3);
+    expect(layout.entries[1].row).not.toBe(layout.entries[2].row); finite(layout);
+  });
+  test("capped late points retain separate rows rather than covering other pinned IDs", () => {
+    const capped = buildCondensedTimeline([span("first", 0, 1), span("late-a", MAX_TIMELINE_WINDOW_MS + 1, MAX_TIMELINE_WINDOW_MS + 2), span("late-b", MAX_TIMELINE_WINDOW_MS + 3, MAX_TIMELINE_WINDOW_MS + 4)]);
+    expect(capped.entries[1].row).not.toBe(capped.entries[2].row); expect(capped.windowCapped).toBe(true); finite(capped);
+  });
 });

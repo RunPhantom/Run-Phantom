@@ -245,7 +245,7 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
   }
   const toolNames: string[] = [...firstSpanByName.keys()];
   const firstToolSpanByName = new Map<string, Span>();
-  for (const { span, identityAvailable } of layout.entries) {
+  for (const { span, identityAvailable } of [...layout.entries].sort((a, b) => a.span.start_time_ms - b.span.start_time_ms)) {
     if (identityAvailable && span.span_type === "TOOL_CALL" && !firstToolSpanByName.has(span.name)) {
       firstToolSpanByName.set(span.name, span);
     }
@@ -282,16 +282,22 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
   const labelW = Math.max(MIN_LABEL_W, Math.min(widthFromContent, maxLabelByContainer));
   const namedRows = new Map(toolNames.map((name, row) => [name, row]));
   const unknownRows = new Map(layout.entries.filter(entry => !entry.timingAvailable).map((entry, index) => [entry.key, toolNames.length + index]));
-  const rowOf = (entry: TimelineEntry) => compact ? entry.row : unknownRows.get(entry.key) ?? namedRows.get(entry.span.name)!;
+  const shortestInterval = layout.entries.reduce((shortest, entry) => {
+    const duration = entry.span.end_time_ms - entry.span.start_time_ms;
+    return entry.timingAvailable && duration > 0 ? Math.min(shortest, duration) : shortest;
+  }, Infinity);
+  const scrollViewportW = Math.max((containerW || 300) - labelW, 160);
+  const chartW = Math.min(12_000, Math.max(scrollViewportW, dur * MIN_PX_PER_MS, MIN_CHART_W, compact && shortestInterval !== Infinity ? (dur / shortestInterval) * MIN_BAR_W : 0));
+  // Paint bounds participate in compact packing, so the minimum visible bar never covers its neighbour.
+  const packed = compact ? buildCondensedTimeline(vizSpans, subAgents, (MIN_BAR_W * dur) / chartW) : layout;
+  const rowOf = (entry: TimelineEntry) => compact ? packed.entries[entry.sourceIndex].row : unknownRows.get(entry.key) ?? namedRows.get(entry.span.name)!;
   const rows = new Map<number, TimelineEntry[]>();
   for (const entry of layout.entries) {
     const row = rowOf(entry), members = rows.get(row) ?? [];
     members.push(entry); rows.set(row, members);
   }
-  const rowCount = compact ? layout.totalRows : toolNames.length + unknownRows.size;
+  const rowCount = compact ? packed.totalRows : toolNames.length + unknownRows.size;
   const totalH = rowCount * ROW + AXIS_H;
-  const scrollViewportW = Math.max((containerW || 300) - labelW, 160);
-  const chartW = Math.min(12_000, Math.max(scrollViewportW, dur * MIN_PX_PER_MS, MIN_CHART_W));
   const pxPerMs = chartW / dur;
 
   const gridIntervals = [100, 250, 500, 1000, 2000, 5000, 10000, 30000, 60000, 300000, 900000, 3600000];
