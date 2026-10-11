@@ -1,0 +1,52 @@
+{
+  "feature": "F09",
+  "sourceHead": "5a378cc13efbd9f341879cfcb7d618e16871ff56",
+  "baseHead": "19b81d93f17136ddd712dd57f4c2481e0d824ea8",
+  "profile": "Controlled local HTTP/OTLP replay, SQLite and real source Chromium; no provider calls",
+  "verification": {
+    "backendPass": 682,
+    "backendPlatformSkip": 1,
+    "backendFailures": 0,
+    "sourceChromiumPass": 115,
+    "sourceChromiumExplicitSkips": 10,
+    "sourceChromiumFailures": 0,
+    "sourceChromiumFlaky": 0,
+    "copiedMacArm64ExistingSmokePass": 3,
+    "copiedMacArm64SmokeFailures": 0,
+    "lintBuildRootAppTypes": "passed"
+  },
+  "behavior": [
+    "1000-entry recent attribution cache with exact persisted event identity fallback",
+    "Cancelled and ambiguous timed-out requests never promote nearby unrelated traces",
+    "Concurrent replay, source output and persisted export identity survive actual process restart"
+  ],
+  "limitations": [
+    "Cancelled zero-span placeholder remains labelled Run live in existing sidebar although main view and persisted API are terminal; existing #38/F41 composition gate owns correction and remote-side-effect disclosure.",
+    "Source full backend/browser gates pass at clean frozen head. Three existing installed macOS UI/evaluation/embedded-SDK checks pass outside the checkout; they do not qualify installed replay attribution or the full native/Windows/platform matrix.",
+    "R46 registered execution/provider/side-effect qualification is separate; controlled replay evidence does not satisfy it. No paid provider calls or keys were used.",
+    "Seven provider journeys skipped in source full Chromium; three installed-only journeys skipped there and separately passed in the compiled smoke. Native Windows junction test skipped on macOS.",
+    "Screenshots retain the independent F00-base appearance; they do not qualify the assembled F01 UI revamp. Screenshots support visible state; HTTP/SQL/export assertions prove attribution."
+  ],
+  "providerSpendUsd": 0,
+  "liveProviderProof": false,
+  "rootFinalReview": {
+    "decision": "APPROVE bounded replay attribution fix",
+    "artifactHashesIndependentlyChecked": 42,
+    "screenshotsVisuallyInspectedByRoot": 2,
+    "cleanup": "Justified no-op",
+    "sourceAndWorktree": "Exact committed head; clean"
+  },
+  "screenshots": [
+    {
+      "name": "replay-cancelled-late.png",
+      "sha256": "9ff301f4ea7f35eee7f095a1dca817a2119cc7953a40847f60d936a35c189032",
+      "profile": "Actual source browser; synthetic fixture"
+    },
+    {
+      "name": "replay-attributed-comparison.png",
+      "sha256": "5cd9e650170f0aa49ef0f0cc18393f1d29989fed7729f858f97f6129564031ef",
+      "profile": "Actual source browser; synthetic fixture"
+    }
+  ],
+  "evidencePublication": "Feature review only; global assembled/native/provider/installer acceptance remains pending"
+}

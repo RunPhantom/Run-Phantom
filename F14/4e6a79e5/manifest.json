@@ -1,0 +1,97 @@
+{
+  "feature": "F14",
+  "sourceHead": "4e6a79e5061c29d08a9d30a8946e94f8d50a57da",
+  "baseHead": "19b81d93f17136ddd712dd57f4c2481e0d824ea8",
+  "profile": "controlled synthetic pricing responses; source daemon and copied native macOS arm64 executable",
+  "verification": {
+    "backendPass": 810,
+    "backendPlatformSkip": 1,
+    "backendFailures": 0,
+    "assertions": 4127,
+    "sourceChromiumPass": 122,
+    "sourceChromiumExplicitSkips": 10,
+    "sourceChromiumFailures": 0,
+    "copiedNativePricingPass": 8,
+    "copiedNativePricingFailures": 0,
+    "lintBuildAndThreeTypes": "passed"
+  },
+  "behavior": {
+    "knownNominalEstimateUsd": 0.0051,
+    "unavailableModelRows": 1,
+    "reportedSnapshotCostUsdBeforeAndAfter": 0.246,
+    "reportedModelMetrics": "unchanged",
+    "legitimateFreeZero": "visible",
+    "knownIncludedSubsetContradictions": "unavailable",
+    "consent": "load/revoke updates already-open detail; denied fetch blocked"
+  },
+  "screenshots": [
+    {
+      "name": "pricing-1024x768-controlled-catalogue.png",
+      "width": 1024,
+      "height": 768,
+      "sha256": "cc8b39d32903e2755313f4eb1aaffd886a282a26861d85297156e408b494c4e8",
+      "profile": "visually inspected synthetic capture"
+    },
+    {
+      "name": "pricing-1280x800-controlled-catalogue.png",
+      "width": 1280,
+      "height": 800,
+      "sha256": "e2eba808d750ac6dd5a17a286822671b0dbb724da95ae1ae4703e63947457aef",
+      "profile": "visually inspected synthetic capture"
+    },
+    {
+      "name": "pricing-1440x900-controlled-catalogue.png",
+      "width": 1440,
+      "height": 900,
+      "sha256": "34d1f6d9f063796c7f23c322cad56d80570b54e987a2625bd57e6deb0adff29f",
+      "profile": "visually inspected synthetic capture"
+    },
+    {
+      "name": "pricing-320x740-controlled-catalogue.png",
+      "width": 320,
+      "height": 740,
+      "sha256": "6004a44d55f22dcedc5dd5e9ac7afb64c015cbff0a70e072f61e5f2e7cb912ab",
+      "profile": "visually inspected synthetic capture"
+    },
+    {
+      "name": "pricing-768x1024-controlled-catalogue.png",
+      "width": 768,
+      "height": 1024,
+      "sha256": "72ada00d78156bc89cd05b580f602fdde64b9638958dde6822e42945d6c563ac",
+      "profile": "visually inspected synthetic capture"
+    },
+    {
+      "name": "pricing-mobile-free-controlled-catalogue.png",
+      "width": 390,
+      "height": 844,
+      "sha256": "04c5479a59bb99c8e27d86a34187cf6c8252cd6fd92dc336b8a0f213f7c2785e",
+      "profile": "visually inspected synthetic capture"
+    },
+    {
+      "name": "pricing-desktop-before-consent.png",
+      "width": 1280,
+      "height": 720,
+      "sha256": "be3d12ed1cf736885b96a1345eac8ba5981f011e17ef7ba866b1c3feba7d56b8",
+      "profile": "visually inspected synthetic capture"
+    },
+    {
+      "name": "pricing-desktop-controlled-catalogue.png",
+      "width": 1280,
+      "height": 720,
+      "sha256": "0225cc175d84f7f4fea4cfcfa058c0a1fce42ef538871537645477437360165b",
+      "profile": "visually inspected synthetic capture"
+    }
+  ],
+  "providerSpendUsd": 0,
+  "liveProviderOrCatalogueProof": false,
+  "qualifiedPlatform": "macOS arm64 copied binary; installer and native Windows pricing outside this proof",
+  "globalUiDesignConformance": "outside this pricing feature",
+  "rootFinalReview": {
+    "decision": "APPROVE bounded pricing feature",
+    "cleanupDelta": "Exactly fourteen deleted lines in one file; used run-detail helper unchanged",
+    "artifactHashesIndependentlyChecked": 35,
+    "screenshotsVisuallyInspectedByRoot": 8,
+    "sourceAndWorktree": "Exact committed head; clean"
+  },
+  "evidencePublication": "Feature review only; global assembled/native/provider/installer acceptance remains pending"
+}
