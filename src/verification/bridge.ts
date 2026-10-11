@@ -8,8 +8,8 @@ import { parseBrowserMessage, validateOrigin, parseFlowSteps } from "./validatio
 import { sanitizeWithReport } from "./serialization";
 import { isSensitiveKey } from "./redaction";
 import { RingBuffer } from "./ring-buffer";
-import { CAUSAL_CAPABILITY, CAUSAL_PROTOCOL_VERSION, relativeTargetKey, VERIFICATION_LIMITS as L,
-  type AppCommand, type Coverage, type RelativeTarget, type RuntimeEvent, type SessionSummary } from "./protocol";
+import { CAUSAL_CAPABILITY, PROTOCOL_VERSION, SEMANTIC_CAPABILITY, relativeTargetKey, VERIFICATION_LIMITS as L,
+  type AppCommand, type Coverage, type RelativeTarget, type RuntimeEvent, type SessionSummary, type VerificationCapability } from "./protocol";
 import { baselineScopeForTarget, captureBaselineReading, captureCausalAttribution, type BaselineReading, type CausalAttribution } from "./baseline";
 
 export class VerificationHttpError extends Error {
@@ -54,7 +54,7 @@ export interface VerificationSession {
   ws: WebSocket | null;
   generation: number;
   coverage: Coverage;
-  capabilities: Array<typeof CAUSAL_CAPABILITY>;
+  capabilities: VerificationCapability[];
   cursor: number;
   events: RingBuffer;
   dropped: number;
@@ -192,7 +192,7 @@ export class VerificationBridge {
           session.captureLost = false;
           session.lastCommandCursor = session.generationCursor;
           session.coverage = { ...msg.coverage };
-          session.capabilities = msg.version === CAUSAL_PROTOCOL_VERSION ? [...msg.capabilities] : [];
+          session.capabilities = msg.version !== PROTOCOL_VERSION ? [...msg.capabilities] : [];
           session.lastActivity = Date.now();
           generation = session.generation;
           authenticated = true;
@@ -210,8 +210,9 @@ export class VerificationBridge {
           if (pending.command.type === "causal-click" && msg.ok) this.captureDispatch(session, pending, !!msg.truncated);
           session.pending = null;
           clearTimeout(pending.timer);
-          const isAction = pending.command.type === "click" || pending.command.type === "fill" || pending.command.type === "causal-click";
-          if (isAction && !pending.boundary) {
+          const semanticAction = pending.command.type === "ref-click" || pending.command.type === "ref-fill";
+          const isAction = semanticAction || pending.command.type === "click" || pending.command.type === "fill" || pending.command.type === "causal-click";
+          if (isAction && !pending.boundary && (!semanticAction || msg.ok)) {
             pending.resolve({ ok: false, cursor: pending.cursor, error: "Application did not acknowledge the action boundary" });
             return;
           }
@@ -230,7 +231,7 @@ export class VerificationBridge {
           }
           pending.resolve({ ok: msg.ok, cursor: pending.cursor,
             // Action responses are acknowledgements; arbitrary page echoes must not persist fill input.
-            result: isAction ? { acknowledged: msg.ok } : result,
+            result: isAction ? { acknowledged: msg.ok, ...(semanticAction ? { source: "sdk-reported" } : {}) } : result,
             ...(msg.error ? { error: String(this.sanitize(session, msg.error).value).slice(0, L.MAX_REASON_LENGTH) } : {}),
             ...(!msg.ok ? { unavailable: true } : {}),
             ...(truncated ? { truncated: true } : {}) });
@@ -277,7 +278,7 @@ export class VerificationBridge {
     }
     if (event.type === "action.boundary") {
       const pending = session.pending;
-      if (!pending || pending.id !== event.actionId || !["click", "fill", "causal-click"].includes(pending.command.type) || pending.boundary
+      if (!pending || pending.id !== event.actionId || !["click", "fill", "causal-click", "ref-click", "ref-fill"].includes(pending.command.type) || pending.boundary
         || pending.command.type === "causal-click" && pending.before?.size !== pending.command.targets.length) throw new Error("invalid action boundary");
       pending.boundary = true;
       session.currentActionId = pending.id;
@@ -356,17 +357,21 @@ export class VerificationBridge {
     const cursor = this.tick(session);
     if (!session.ws || session.ws.readyState !== WebSocket.OPEN) return Promise.resolve({ ok: false, cursor, error: "Application is disconnected" });
     if (session.pending) throw new VerificationHttpError(409, "An application command is already pending");
-    if (command.type === "click" || command.type === "fill" || command.type === "causal-click") session.lastCausalResult = undefined;
+    if (["find", "semantic-snapshot", "ref-click", "ref-fill"].includes(command.type) && !session.capabilities.includes(SEMANTIC_CAPABILITY)) {
+      return Promise.resolve({ ok: false, cursor, unavailable: true,
+        error: "Application does not support semantic references; no action was executed" });
+    }
+    if (["click", "fill", "causal-click", "ref-click", "ref-fill"].includes(command.type)) session.lastCausalResult = undefined;
     if (command.type === "causal-click" && !session.capabilities.includes(CAUSAL_CAPABILITY)) {
       return Promise.resolve({ ok: false, cursor, unavailable: true,
         error: "Application does not support causal readings; no action was executed" });
     }
-    if (command.type === "fill" && command.value && !session.secrets.includes(command.value)) {
+    if ((command.type === "fill" || command.type === "ref-fill") && command.value && !session.secrets.includes(command.value)) {
       if (session.secrets.length >= 65) throw new VerificationHttpError(409, "Fill redaction capacity reached; pair a new session");
       session.secrets.push(command.value);
     }
     const id = randomUUID();
-    if (command.type === "click" || command.type === "fill" || command.type === "causal-click") session.lastCommandCursor = cursor;
+    if (["click", "fill", "causal-click", "ref-click", "ref-fill"].includes(command.type)) session.lastCommandCursor = cursor;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         if (session.pending?.id !== id) return;

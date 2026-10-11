@@ -5,6 +5,7 @@ import { CheckCircle2, CircleHelp, Copy, Play, Unplug, XCircle } from "lucide-re
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Inspection } from "../components/verification/Inspection";
+import { SemanticInspector } from "../components/verification/SemanticInspector";
 import { ReportContext } from "../components/verification/ReportContext";
 import { buildPredicate, describePredicate, emptyCheck, Field, PredicateEditor, Select, type CheckDraft } from "../components/verification/PredicateEditor";
 import { verificationApi, type AppCommand, type CommandResult, type CreatedSession, type FlowStep, type Predicate, type RuntimeEvent, type VerificationReport, type VerificationStatus } from "../api/verification";
@@ -77,7 +78,7 @@ export function VerificationPage() {
   const [setup, setSetup] = useState<CreatedSession | null>(null);
   const session = sessions.data?.find(item => item.id === selectedId) ?? sessions.data?.[0];
   const observation = useQuery({ queryKey: ["verification", "events", session?.id], queryFn: () => verificationApi.observe(session!.id), enabled: !!session, refetchInterval: 1000 });
-  const [action, setAction] = useState<AppCommand["type"]>("snapshot");
+  const [action, setAction] = useState<"snapshot" | "click" | "fill" | "state">("snapshot");
   const [selector, setSelector] = useState("");
   const [fillValue, setFillValue] = useState("");
   const [store, setStore] = useState("");
@@ -221,10 +222,11 @@ export function VerificationPage() {
 
     {session && <div className="flex flex-wrap items-start gap-8">
       <div className="min-w-0 flex-[2_1_360px] space-y-7">
+        <SemanticInspector sessionId={session.id} connected={connected} capable={(observation.data?.session.capabilities ?? session.capabilities)?.includes("semantic-refs") ?? false} disabled={!!busy} onAction={cursor => { setSince(cursor); setInspection(null); }} />
         <section aria-labelledby="action-heading" className="space-y-4">
           <h2 id="action-heading" className="text-sm font-semibold" style={{ color: C.fg3 }}>1. Exercise the app</h2>
           <fieldset disabled={!!busy || !connected} className="space-y-3">
-            <Field label="Action"><Select value={action} onChange={event => { setAction(event.target.value as AppCommand["type"]); setFillValue(""); setInspection(null); }}><option value="snapshot">Snapshot</option><option value="click">Click</option><option value="fill">Fill</option><option value="state">Read state</option></Select></Field>
+            <Field label="Action"><Select value={action} onChange={event => { setAction(event.target.value as typeof action); setFillValue(""); setInspection(null); }}><option value="snapshot">Snapshot</option><option value="click">Click</option><option value="fill">Fill</option><option value="state">Read state</option></Select></Field>
             {action === "state" ? <Field label="Registered store"><Input value={store} onChange={event => setStore(event.target.value)} placeholder="cart" /></Field> : <Field label="Action selector" hint={action === "snapshot" ? "Optional: narrow the snapshot to matching elements." : "Use a stable CSS selector for exactly one interactive element."}><Input value={selector} onChange={event => setSelector(event.target.value)} placeholder='[data-testid="checkout"]' /></Field>}
             {action === "fill" && <Field label="Fill value" hint="Used only for this live action. Cleared after sending and excluded from saved flows."><Input type="password" autoComplete="new-password" value={fillValue} onChange={event => setFillValue(event.target.value)} /></Field>}
             <Button onClick={runAction}><Play aria-hidden="true" />Run action</Button>
