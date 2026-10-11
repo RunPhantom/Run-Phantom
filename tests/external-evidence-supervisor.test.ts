@@ -103,6 +103,20 @@ test("byte admission copies mutable input and rejects source/import count excess
 test("daemon supervisor identity is shared, independent of caller or database scope", () => {
   expect(getEvidenceSupervisor()).toBe(getEvidenceSupervisor());
 });
+test("valid source workers cannot multiply the whole import's normalized-byte or leaf budget", async () => {
+  const sourceBytes = Buffer.byteLength(JSON.stringify(parseExternalEvidence(new TextEncoder().encode(xml), "junit-xml/v1", "one")));
+  for (const limits of [{ maxNormalizedBytes: sourceBytes + 128 }, { maxLeaves: 1 }]) {
+    const pids: number[] = [];
+    const supervisor = new EvidenceSupervisor({ limits, workerFactory: () => { const child = spawnEvidenceWorker(); pids.push(child.pid); return child; } });
+    try {
+      await refused(supervisor.submit(request("aggregate", { sources: ["one", "two"].map(sourceId =>
+        ({ sourceId, dialect: "junit-xml/v1", bytes: new TextEncoder().encode(xml) })) })).result, "input_limit");
+      expect(pids).toHaveLength(2);
+      for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow();
+      expect(supervisor.state.active).toBe(0);
+    } finally { await supervisor.shutdown(); }
+  }
+});
 test("shutdown cancels live and queued work and waits for actual owned process exit", async () => {
   const pids: number[] = [];
   const supervisor = new EvidenceSupervisor({ workerFactory: () => { const child = fixtureProcess("while(true) {} "); pids.push(child.pid); return child; } });

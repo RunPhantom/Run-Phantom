@@ -129,6 +129,7 @@ export class EvidenceSupervisor {
   async #run(job: Job): Promise<ReaderOperationResult> {
     const result: ReaderOperationResult = { jobId: job.request.jobId, publicationToken: job.request.publicationToken, scopeGeneration: job.request.scopeGeneration,
       sources: [], workers: [], queueMs: performance.now() - job.admitted, totalMs: 0, cpuMs: null, rssBytes: null };
+    let normalizedBytes = 0, leaves = 0;
     for (const source of job.request.sources) {
       if (job.failure) throw new EvidenceSupervisorError(job.failure);
       if (performance.now() - job.admitted >= this.#importMs) throw new EvidenceSupervisorError("import_timeout");
@@ -157,7 +158,10 @@ export class EvidenceSupervisor {
         const message = response as Record<string, unknown>;
         if (Object.keys(message).length !== 3 || message.version !== 1 || message.id !== id || !Object.hasOwn(message, "normalized")) throw new EvidenceSupervisorError("worker_protocol");
         const normalized = parseNormalizedEvidence(message.normalized, source.dialect === "junit-xml/v1" ? "junit" : "attestation");
-        if (normalized.sourceId !== source.sourceId || Buffer.byteLength(JSON.stringify(normalized)) > this.#limits.maxNormalizedBytes) throw new EvidenceSupervisorError("worker_protocol");
+        const sourceBytes = Buffer.byteLength(JSON.stringify(normalized));
+        if (normalized.sourceId !== source.sourceId || sourceBytes > this.#limits.maxNormalizedBytes) throw new EvidenceSupervisorError("worker_protocol");
+        normalizedBytes += sourceBytes; leaves += normalized.leaves.length;
+        if (normalizedBytes > this.#limits.maxNormalizedBytes || leaves > this.#limits.maxLeaves) throw new EvidenceSupervisorError("input_limit");
         result.sources.push(normalized);
       } catch (error) {
         if (job.failure) throw new EvidenceSupervisorError(job.failure);
