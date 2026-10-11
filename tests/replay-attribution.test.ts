@@ -69,8 +69,17 @@ async function qualify(scenario: string) {
     assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
     const events: ReplayEvent[] = [];
     const done = (async () => {
-      const text = await response.text();
-      for (const line of text.split("\n")) if (line.startsWith("data: ")) events.push(JSON.parse(line.slice(6)));
+      const reader = response.body!.getReader(), decoder = new TextDecoder();
+      let buffer = "";
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n"); buffer = lines.pop() ?? "";
+          for (const line of lines) if (line.startsWith("data: ")) events.push(JSON.parse(line.slice(6)));
+        }
+      } finally { reader.releaseLock(); }
     })();
     return { events, done };
   };
@@ -117,11 +126,15 @@ async function qualify(scenario: string) {
       writeFileSync(restartRecord, JSON.stringify({ scenario, exports: [source, output, unrelated] }));
       console.log(JSON.stringify({ scenario, cacheSize: _replayTraceMapSize(), cacheMiss: true, databaseIdentity: id(2),
         events: replay.events, output: output.spans[0].output_payload, unrelatedUnchanged: true, sourceUnchanged: true }));
-    } else if (scenario === "cancelled-late") {
+    } else if (scenario === "cancelled-late" || scenario === "cancelled-poll") {
       const controller = new AbortController();
       const first = await start(controller.signal); await wait(() => attempts.length === 1);
       const cancelled = attempts[0].body.replayRunId;
       const second = await start(); await wait(() => attempts.length === 2);
+      if (scenario === "cancelled-poll") {
+        release(attempts[0]);
+        await wait(() => first.events.some(event => event.type === "agent_started"));
+      }
       controller.abort(); await first.done.catch(() => {});
       for (let step = 0; step < 500; step++) {
         const placeholder = await exported(cancelled);
@@ -138,6 +151,7 @@ async function qualify(scenario: string) {
       assert.deepEqual(await exported(cancelled), stopped);
       assert.equal(stopped.spans.length, 0);
       assert.equal(JSON.parse(stopped.run.metadata).replay.error.code, "replay_cancelled");
+      assert.equal(first.events.some(event => event.type === "replay_complete"), false);
       assert.equal(second.events.find(event => event.type === "replay_complete")?.replayRunId, id(3));
       assert.deepEqual(await exported(id(3)), completed);
       const late = await exported(id(2));
@@ -153,10 +167,11 @@ async function qualify(scenario: string) {
       await ingest([span(2), span(3)]);
       const unrelated = [await exported(id(2)), await exported(id(3))];
       release(attempts[1]); release(attempts[0]);
+      await wait(() => first.events.some(event => event.type === "agent_started") && second.events.some(event => event.type === "agent_started"));
       // Only the child clock advances: real HTTP, SQLite and 500ms poll timers
       // still execute. This qualifies expiry semantics, not 120s wall latency.
-      const advance = setTimeout(() => { Date.now = () => realNow() + 120_001; }, 100);
-      await Promise.all([first.done, second.done]); clearTimeout(advance); Date.now = realNow;
+      Date.now = () => realNow() + 120_001;
+      await Promise.all([first.done, second.done]); Date.now = realNow;
       const actual = [first.events, second.events];
       console.log(JSON.stringify({ scenario, clock: "controlled deadline; real poll timers", attempts: attempts.map(item => item.body), events: actual }));
       for (const events of actual) {
@@ -187,6 +202,7 @@ if (process.argv.includes("--replay-qualification-child")) {
   for (const [scenario, title] of [
     ["capacity", "R22: actual ingest pressure evicts the cache but exact persisted identity completes the correct replay"],
     ["cancelled-late", "R23: a cancelled HTTP replay stays terminal when its delayed evidence arrives after another attempt completes"],
+    ["cancelled-poll", "R23: cancellation after endpoint acceptance interrupts real correlation polling and fences delayed evidence"],
     ["ambiguous-deadline", "R23: two expired attempts never promote nearby same-name traces without identity"],
   ]) test(title, async () => {
     const directory = mkdtempSync(path.join(realpathSync(tmpdir()), "rp-replay-attribution-"));
