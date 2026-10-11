@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { EvidenceStore, EVIDENCE_STORAGE_SQL, type EvidenceStoreOptions } from "../src/evaluations/evidence-store";
-import { EvidenceError, type EvidenceCapability, type EvidenceExpectedSource, type EvidenceImportRequest, type NormalizedEvidenceSource } from "../src/evaluations/evidence-protocol";
+import { EVIDENCE_PREDICATE_TYPE, EVIDENCE_STATEMENT_TYPE, EvidenceError, type EvidenceCapability, type EvidenceExpectedSource, type EvidenceImportRequest, type NormalizedEvidenceSource } from "../src/evaluations/evidence-protocol";
 import { canonicalEvidenceJson, deriveEvidenceCounts, evidenceDigest } from "../src/evaluations/evidence-validation";
 
 let db: Database, store: EvidenceStore;
@@ -19,8 +19,18 @@ function request(key = "operation-1"): EvidenceImportRequest {
 }
 function normalized(sourceId = "source-1"): NormalizedEvidenceSource {
   const leaves = [{ id: "leaf-1", name: "Synthetic assertion", status: "passed" as const, file: null, durationMs: 0, detail: null }];
-  return { version: 1, sourceId, parseState: "parsed", reportOutcome: "reports_pass", leafCounts: deriveEvidenceCounts(leaves), producerCounts: { tests: "1" },
-    countsConsistent: true, assertedIdentity: { runnerId: null, commit: null, sourceSha256: null }, reasonCodes: [], leaves };
+  return { version: 1, sourceId, parseState: "parsed", interpretationComplete: true, reportOutcome: "reports_pass", leafCounts: deriveEvidenceCounts(leaves), observedExecutedLowerBound: "1", producerCounts: { tests: "1" },
+    countsConsistent: true, assertedIdentity: { runnerId: null, commit: null, sourceSha256: null }, attestation: null, reasonCodes: [], leaves };
+}
+function attestation(sourceId: string, claimedReport = evidenceDigest(raw)): NormalizedEvidenceSource {
+  const source = normalized(sourceId);
+  return { ...source, leaves: [], leafCounts: { executed: null, passed: null, failed: null, errored: null, skipped: null, disabled: null, unknown: null },
+    observedExecutedLowerBound: null, countsConsistent: null, producerCounts: null, reportOutcome: "unknown", attestation: {
+      statementType: EVIDENCE_STATEMENT_TYPE, predicateType: EVIDENCE_PREDICATE_TYPE, payloadType: "application/vnd.in-toto+json", signatureCount: "2", signaturesChecked: false,
+      producerResult: "PASSED", producerTests: { passed: ["producer test assertion"], warned: null, failed: null },
+      subjects: [{ name: "unit-report.xml", digests: [{ algorithm: "sha256", value: claimedReport }] }],
+      assertedCommits: ["a".repeat(40)], reportReferences: [{ subjectName: "unit-report.xml", sha256: claimedReport }],
+    } };
 }
 function options(extra: Partial<EvidenceStoreOptions> = {}): EvidenceStoreOptions {
   return { authorize: capability => {
@@ -225,5 +235,53 @@ describe("evidence job ownership and recovery", () => {
     expect(db.query("SELECT generation FROM evaluation_evidence_scopes WHERE scope_key='local:local'").get()).toEqual({ generation: 2 });
     expect(() => store.publish(waiting.job.id, waiting.publicationToken, [{ sourceId: "source-1", raw, normalized: normalized() }])).toThrow("not found");
     const fresh = store.admit(request()); expect(fresh.job).toMatchObject({ scopeGeneration: 2, status: "queued" }); expect(fresh.job.id).not.toBe(waiting.job.id);
+  });
+});
+
+describe("immutable attestation assertions", () => {
+  function draft() {
+    const requestValue = request(); requestValue.retention = "normalized_only";
+    const assertionRaw = new TextEncoder().encode("synthetic normalized attestation fixture, not parser proof");
+    requestValue.sources.push({ sourceId: "assertion", kind: "attestation", dialect: "dsse-envelope/v1", shardId: "assertion",
+      artifactSha256: evidenceDigest(assertionRaw), byteLength: assertionRaw.byteLength });
+    return { requestValue, assertionRaw };
+  }
+  test("fake signatures and matching commits remain assertions limited to the one referenced report", () => {
+    const { requestValue, assertionRaw } = draft(); const otherRaw = new TextEncoder().encode("other synthetic report");
+    requestValue.sources.push({ ...requestValue.sources[0], sourceId: "other-report", shardId: "other", artifactSha256: evidenceDigest(otherRaw), byteLength: otherRaw.byteLength });
+    const inventory = store.saveInventory("roster", 0, [{ ...expected, constraints: { ...expected.constraints, commit: "a".repeat(40) } }], "prospective");
+    requestValue.inventory = { id: inventory.id, revision: 1 };
+    const admitted = store.admit(requestValue); store.start(admitted.job.id, admitted.publicationToken);
+    const set = store.publish(admitted.job.id, admitted.publicationToken, [{ sourceId: "source-1", raw, normalized: normalized() },
+      { sourceId: "assertion", raw: assertionRaw, normalized: attestation("assertion") }, { sourceId: "other-report", raw: otherRaw, normalized: normalized("other-report") }])!;
+    expect(set.sources[0]).toMatchObject({ reportIdentityAsserted: true, commitAssertionMatches: true, authentication: "not_checked" });
+    expect(set.sources[1]).toMatchObject({ reportOutcome: "unknown", leafCounts: { executed: null }, reportReferences: [{ linkedSourceId: "source-1", resolution: "matched" }], authentication: "not_checked" });
+    expect(set.sources[2]).toMatchObject({ reportIdentityAsserted: false, commitAssertionMatches: null, authentication: "not_checked" });
+    const retained = store.getSet(set.id).sources[1]; expect(retained.rawAvailable).toBe(false);
+    expect(retained.normalized!.attestation).toEqual(attestation("assertion").attestation);
+  });
+  test("missing report digests and identical-byte membership stay unresolved or ambiguous instead of covering siblings", () => {
+    for (const duplicate of [false, true]) {
+      const { requestValue, assertionRaw } = draft(); requestValue.operationKey = `reference-${duplicate}`;
+      if (duplicate) requestValue.sources.push({ ...requestValue.sources[0], sourceId: "duplicate" });
+      const admitted = store.admit(requestValue); store.start(admitted.job.id, admitted.publicationToken);
+      const sources = [{ sourceId: "source-1", raw, normalized: normalized() }, { sourceId: "assertion", raw: assertionRaw,
+        normalized: attestation("assertion", duplicate ? evidenceDigest(raw) : evidenceDigest("absent report")) }];
+      if (duplicate) sources.push({ sourceId: "duplicate", raw, normalized: normalized("duplicate") });
+      const set = store.publish(admitted.job.id, admitted.publicationToken, sources)!;
+      expect(set.sources[1].reportReferences[0]).toMatchObject({ linkedSourceId: null, resolution: duplicate ? "ambiguous" : "unresolved" });
+      expect(set.sources.every(source => source.reportIdentityAsserted === false)).toBe(true);
+    }
+  });
+  test("producer failure assertions do not become executed report failures, and unsupported schema stays unparsed", () => {
+    const summary = attestation("assertion"); summary.attestation!.producerResult = "FAILED";
+    summary.attestation!.producerTests.failed = ["producer failure assertion"];
+    const { requestValue, assertionRaw } = draft(); const admitted = store.admit(requestValue); store.start(admitted.job.id, admitted.publicationToken);
+    const sources = [{ sourceId: "source-1", raw, normalized: normalized() }, { sourceId: "assertion", raw: assertionRaw, normalized: summary }];
+    summary.attestation!.predicateType = "unsupported/v9";
+    expect(() => store.publish(admitted.job.id, admitted.publicationToken, sources)).toThrow("exactly supported schema");
+    summary.parseState = "unparsed"; summary.interpretationComplete = false; summary.reasonCodes = ["unsupported_schema"];
+    const set = store.publish(admitted.job.id, admitted.publicationToken, sources)!;
+    expect(set.sources[1]).toMatchObject({ parseState: "unparsed", reportOutcome: "unknown", leafCounts: { executed: null }, authentication: "not_checked" });
   });
 });

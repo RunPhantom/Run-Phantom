@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { EVIDENCE_LIMITS as L, type EvidenceImportRequest, type NormalizedEvidenceSource } from "../src/evaluations/evidence-protocol";
+import { EVIDENCE_LIMITS as L, EVIDENCE_PREDICATE_TYPE, EVIDENCE_STATEMENT_TYPE, type EvidenceImportRequest, type NormalizedEvidenceSource } from "../src/evaluations/evidence-protocol";
 import { canonicalEvidenceJson, deriveEvidenceCounts, evidenceDecimal, evidenceDigest, parseEvidenceExpectedSources,
-  parseEvidenceImportRequest, parseNormalizedEvidence } from "../src/evaluations/evidence-validation";
+  parseEvidenceImportRequest, parseNormalizedEvidence, observedExecutedLowerBound } from "../src/evaluations/evidence-validation";
 
 const raw = new TextEncoder().encode("synthetic report");
 function request(): EvidenceImportRequest {
@@ -11,9 +11,9 @@ function request(): EvidenceImportRequest {
 }
 function normalized(): NormalizedEvidenceSource {
   const leaves = [{ id: "leaf-1", name: "Synthetic assertion", status: "passed" as const, file: null, durationMs: 0, detail: null }];
-  return { version: 1, sourceId: "source-1", parseState: "parsed", reportOutcome: "reports_pass", leafCounts: deriveEvidenceCounts(leaves),
+  return { version: 1, sourceId: "source-1", parseState: "parsed", interpretationComplete: true, reportOutcome: "reports_pass", leafCounts: deriveEvidenceCounts(leaves), observedExecutedLowerBound: "1",
     producerCounts: { tests: "1", failures: "0" }, countsConsistent: true, assertedIdentity: { runnerId: null, commit: null, sourceSha256: null },
-    reasonCodes: [], leaves };
+    attestation: null, reasonCodes: [], leaves };
 }
 describe("versioned immutable evidence contracts", () => {
   test("retains exact producer counts beyond safe integer while independently deriving leaves", () => {
@@ -30,6 +30,7 @@ describe("versioned immutable evidence contracts", () => {
     expect(parseNormalizedEvidence(failed, "junit").reportOutcome).toBe("reports_fail");
     for (const status of ["unknown", "skipped", "disabled"] as const) {
       const source = normalized(); source.leaves[0].status = status; source.leafCounts = deriveEvidenceCounts(source.leaves); source.producerCounts = null;
+      source.observedExecutedLowerBound = observedExecutedLowerBound(source.leaves); source.interpretationComplete = status !== "unknown";
       source.reportOutcome = status === "unknown" ? "unknown" : "no_tests";
       expect(parseNormalizedEvidence(source, "junit").reportOutcome).toBe(source.reportOutcome);
       expect(() => parseNormalizedEvidence({ ...source, reportOutcome: "reports_pass" }, "junit")).toThrow("precedence");
@@ -41,7 +42,9 @@ describe("versioned immutable evidence contracts", () => {
     expect(() => parseNormalizedEvidence({ ...source, parseState: "unparsed" }, "junit")).toThrow("cannot assert executed");
     expect(() => parseNormalizedEvidence({ ...source, authentication: "verified" }, "junit")).toThrow("unsupported field");
     const attestation = { ...source, leaves: [], leafCounts: Object.fromEntries(Object.keys(source.leafCounts).map(key => [key, null])),
-      producerCounts: { tests: "100" }, countsConsistent: null, reportOutcome: "unknown", assertedIdentity: { ...source.assertedIdentity, commit: "asserted-commit" } };
+      observedExecutedLowerBound: null, producerCounts: { tests: "100" }, countsConsistent: null, reportOutcome: "unknown", assertedIdentity: { ...source.assertedIdentity, commit: "asserted-commit" },
+      attestation: { statementType: EVIDENCE_STATEMENT_TYPE, predicateType: EVIDENCE_PREDICATE_TYPE, payloadType: null, signatureCount: null, signaturesChecked: false,
+        producerResult: "PASSED", producerTests: { passed: ["producer claims success"], warned: null, failed: null }, subjects: [], assertedCommits: [], reportReferences: [] } };
     expect(parseNormalizedEvidence(attestation, "attestation")).toMatchObject({ reportOutcome: "unknown", producerCounts: { tests: "100" }, leafCounts: { executed: null } });
   });
   test("missing consistency and forged leaf counts cannot fabricate observed success", () => {
@@ -102,5 +105,28 @@ describe("versioned immutable evidence contracts", () => {
     const source = normalized(); source.leaves[0].detail = `Authorization: Bearer ${"s".repeat(50)}`;
     expect(() => parseNormalizedEvidence(source, "junit")).toThrow("unredacted credentials");
     expect(() => parseEvidenceImportRequest({ ...request(), operationKey: `sk-proj-${"s".repeat(50)}` })).toThrow("unredacted credentials");
+  });
+  test("unknown classification withholds exact execution while preserving observed lower bounds and definite failure", () => {
+    const source = normalized(); source.leaves.push({ ...source.leaves[0], id: "unknown", status: "unknown" });
+    source.leafCounts = deriveEvidenceCounts(source.leaves); source.interpretationComplete = false; source.reportOutcome = "unknown";
+    source.producerCounts = { tests: "2" }; source.reasonCodes = ["unknown_leaves"];
+    expect(parseNormalizedEvidence(source, "junit")).toMatchObject({ leafCounts: { executed: null, passed: "1", unknown: "1" }, observedExecutedLowerBound: "1", reportOutcome: "unknown" });
+    expect(() => parseNormalizedEvidence({ ...source, leafCounts: { ...source.leafCounts, executed: "1" } }, "junit")).toThrow("observed leaves");
+    source.leaves[0].status = "failed"; source.leafCounts = deriveEvidenceCounts(source.leaves); source.reportOutcome = "reports_fail";
+    expect(parseNormalizedEvidence(source, "junit")).toMatchObject({ leafCounts: { executed: null, failed: "1" }, reportOutcome: "reports_fail" });
+  });
+  test("an incomplete parser diagnostic cannot pass even when every retained leaf is successful", () => {
+    const source = normalized(); source.interpretationComplete = false; source.reasonCodes = ["parse_incomplete"]; source.reportOutcome = "unknown";
+    expect(parseNormalizedEvidence(source, "junit").reportOutcome).toBe("unknown");
+    expect(() => parseNormalizedEvidence({ ...source, reportOutcome: "reports_pass" }, "junit")).toThrow("precedence");
+    expect(() => parseNormalizedEvidence({ ...source, interpretationComplete: true }, "junit")).toThrow("completeness");
+  });
+  test("finite JSON and JSONL admit exact attestation dialects rather than invented test-report schemas", () => {
+    const draft = request();
+    for (const [kind, dialect] of [["json", "in-toto-statement/v1"], ["json", "dsse-envelope/v1"], ["jsonl", "dsse-envelope-jsonl/v1"]] as const) {
+      expect(parseEvidenceImportRequest({ ...draft, sources: [{ ...draft.sources[0], kind, dialect }] }).sources[0].dialect).toBe(dialect);
+    }
+    expect(() => parseEvidenceImportRequest({ ...draft, sources: [{ ...draft.sources[0], kind: "json", dialect: "test-report-json/v1" }] })).toThrow("dialect");
+    expect(() => parseNormalizedEvidence(normalized(), "json")).toThrow("cannot assert executed");
   });
 });

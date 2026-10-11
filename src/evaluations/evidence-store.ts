@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { EVIDENCE_LIMITS as L, EVIDENCE_VERSION, EvidenceError, type EvidenceAttachment, type EvidenceCapability,
   type EvidenceExpectedSource, type EvidenceImportRequest, type EvidenceInventoryRevision, type EvidenceJob,
-  type EvidencePublicationSource, type EvidenceReason, type EvidenceScope, type EvidenceSetRevision, type EvidenceSetView,
+  type EvidencePublicationSource, type EvidenceReason, type EvidenceReportReference, type EvidenceScope, type EvidenceSetRevision, type EvidenceSetView,
   type EvidenceSourceObservation, type NormalizedEvidenceSource } from "./evidence-protocol";
 import { canonicalEvidenceJson, evidenceArray, evidenceDigest, evidenceInteger, evidenceObject, evidenceText,
   parseEvidenceExpectedSources, parseEvidenceImportRequest, parseEvidenceScope, parseNormalizedEvidence } from "./evidence-validation";
@@ -230,10 +230,24 @@ export class EvidenceStore {
       });
       const inventory = job.inventory_data ? JSON.parse(job.inventory_data) as EvidenceInventoryRevision : null;
       const coverage = accountEvidenceInventory(inventory, parsed.map(source => ({ descriptor: source.descriptor, normalized: source.normalized })));
+      const references = parsed.map(source => (source.normalized.attestation?.reportReferences ?? []).map(reference => {
+        const matching = source.normalized.parseState === "parsed" ? parsed.filter(candidate => candidate.descriptor.kind === "junit" && candidate.descriptor.artifactSha256 === reference.sha256) : [];
+        return { ...reference, linkedSourceId: matching.length === 1 ? matching[0].descriptor.sourceId : null,
+          resolution: matching.length === 1 ? "matched" : matching.length ? "ambiguous" : "unresolved" } satisfies EvidenceReportReference;
+      }));
       const sources: EvidenceSourceObservation[] = parsed.map(({ descriptor, normalized, artifactId, interpretationId, normalizedSha256 }) => ({
-        ...descriptor, artifactId, interpretationId, normalizedSha256, parseState: normalized.parseState, reportOutcome: normalized.reportOutcome,
-        leafCounts: normalized.leafCounts, countsConsistent: normalized.countsConsistent,
-        identityAsserted: Object.values(normalized.assertedIdentity).some(value => value !== null), authentication: "not_checked", reasonCodes: normalized.reasonCodes,
+        ...descriptor, artifactId, interpretationId, normalizedSha256, parseState: normalized.parseState, interpretationComplete: normalized.interpretationComplete, reportOutcome: normalized.reportOutcome,
+        leafCounts: normalized.leafCounts, observedExecutedLowerBound: normalized.observedExecutedLowerBound, countsConsistent: normalized.countsConsistent,
+        reportIdentityAsserted: references.some(group => group.some(reference => reference.resolution === "matched" && reference.linkedSourceId === descriptor.sourceId)),
+        commitAssertionMatches: (() => {
+          const trustedCommit = inventory?.expected.find(source => source.shardId === descriptor.shardId)?.constraints.commit;
+          const claims = [...(normalized.assertedIdentity.commit ? [normalized.assertedIdentity.commit] : []), ...(normalized.attestation?.assertedCommits ?? [])];
+          parsed.forEach((source, index) => { if (references[index].some(reference => reference.linkedSourceId === descriptor.sourceId)) claims.push(...(source.normalized.attestation?.assertedCommits ?? [])); });
+          return trustedCommit && claims.length ? claims.every(commit => commit.toLowerCase() === trustedCommit.toLowerCase()) : null;
+        })(),
+        reportReferences: references[parsed.findIndex(source => source.descriptor.sourceId === descriptor.sourceId)],
+        authentication: "not_checked", reasonCodes: [...new Set([...normalized.reasonCodes, ...references[parsed.findIndex(source => source.descriptor.sourceId === descriptor.sourceId)]
+          .filter(reference => reference.resolution !== "matched").map(reference => reference.resolution === "ambiguous" ? "ambiguous_subject" as const : "subject_unresolved" as const)])],
       }));
       const data = { version: EVIDENCE_VERSION, id: request.target?.setId ?? randomUUID(), revision: (request.target?.expectedRevision ?? 0) + 1, jobId: id,
         scope: { ...this.#scope }, scopeGeneration: generation, attachment: request.attachment, inventory, parserVersion: request.parserVersion,

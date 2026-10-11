@@ -1,17 +1,19 @@
 import { createHash } from "node:crypto";
 import { redactText } from "../verification/serialization";
-import { EVIDENCE_LIMITS as L, EVIDENCE_VERSION, EvidenceError, type EvidenceAttachment, type EvidenceCounts,
+import { EVIDENCE_LIMITS as L, EVIDENCE_VERSION, EVIDENCE_STATEMENT_TYPE, EVIDENCE_PREDICATE_TYPE, EVIDENCE_PAYLOAD_TYPES, EvidenceError, type EvidenceAttestationSummary, type EvidenceAttachment, type EvidenceCounts,
   type EvidenceExpectedSource, type EvidenceImportRequest, type EvidenceKind, type EvidenceLeaf,
   type EvidenceReason, type EvidenceScope, type NormalizedEvidenceSource } from "./evidence-protocol";
 
 const kinds = ["junit", "json", "jsonl", "attestation"] as const;
-const dialects = { junit: ["junit-xml/v1"], json: ["test-report-json/v1"], jsonl: ["test-report-jsonl/v1"], attestation: ["in-toto-statement/v1", "dsse-envelope/v1"] } as const;
+const dialects = { junit: ["junit-xml/v1"], json: ["in-toto-statement/v1", "dsse-envelope/v1"], jsonl: ["dsse-envelope-jsonl/v1"], attestation: ["in-toto-statement/v1", "dsse-envelope/v1"] } as const;
 const countKeys = ["executed", "passed", "failed", "errored", "skipped", "disabled", "unknown"] as const;
 const producerKeys = ["tests", "executed", "passed", "failures", "errors", "skipped", "disabled", "unknown"] as const;
 const statuses = ["passed", "failed", "errored", "skipped", "disabled", "unknown"] as const;
 const reasons: readonly EvidenceReason[] = ["source_unparsed", "source_rejected", "counts_mismatch", "unknown_leaves", "no_tests",
   "missing_source", "extra_source", "duplicate_shard", "kind_mismatch", "constraint_mismatch", "inventory_not_declared",
-  "retrospective_inventory", "identity_unverified", "raw_removed", "normalized_removed", "parse_incomplete", "attestation_only"];
+  "retrospective_inventory", "identity_unverified", "raw_removed", "normalized_removed", "parse_incomplete", "attestation_only",
+  "unsupported_schema", "invalid_json", "duplicate_key", "xml_doctype", "xml_entity", "unsafe_encoding", "depth_exceeded", "source_limit",
+  "worker_timeout", "import_timeout", "worker_crashed", "normalization_limit", "subject_unresolved", "ambiguous_subject"];
 function invalid(message: string): never { throw new EvidenceError(message); }
 export function evidenceObject(value: unknown, allowed: readonly string[], label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) invalid(`${label} must be a plain object`);
@@ -117,36 +119,76 @@ export function deriveEvidenceCounts(leaves: EvidenceLeaf[]): EvidenceCounts {
     counts[leaf.status]++;
     if (["passed", "failed", "errored"].includes(leaf.status)) counts.executed++;
   }
-  return Object.fromEntries(countKeys.map(key => [key, String(counts[key])])) as EvidenceCounts;
+  return Object.fromEntries(countKeys.map(key => [key, key === "executed" && counts.unknown ? null : String(counts[key])])) as EvidenceCounts;
+}
+export function observedExecutedLowerBound(leaves: EvidenceLeaf[]): string { return String(leaves.filter(leaf => ["passed", "failed", "errored"].includes(leaf.status)).length); }
+function parseAttestation(value: unknown, parsed: boolean): EvidenceAttestationSummary {
+  const summary = evidenceObject(value, ["statementType", "predicateType", "payloadType", "signatureCount", "signaturesChecked", "producerResult", "producerTests", "subjects", "assertedCommits", "reportReferences"], "attestation summary");
+  const statementType = evidenceText(summary.statementType, "statement type", 256), predicateType = evidenceText(summary.predicateType, "predicate type", 256);
+  if (parsed && (statementType !== EVIDENCE_STATEMENT_TYPE || predicateType !== EVIDENCE_PREDICATE_TYPE)) invalid("Parsed attestation must use an exactly supported schema");
+  const payloadType = summary.payloadType === null ? null : evidenceText(summary.payloadType, "payload MIME", 128);
+  if (parsed && payloadType !== null && !(EVIDENCE_PAYLOAD_TYPES as readonly string[]).includes(payloadType)) invalid("Parsed attestation payload MIME is unsupported");
+  if (summary.signaturesChecked !== false) invalid("Parser signature presence cannot claim verification");
+  const tests = evidenceObject(summary.producerTests, ["passed", "warned", "failed"], "producer test assertions");
+  const subjects = evidenceArray(summary.subjects, L.MAX_SUBJECTS, "subjects").map(raw => {
+    const subject = evidenceObject(raw, ["name", "digests"], "subject");
+    return { name: evidenceText(subject.name, "subject name", 512), digests: evidenceArray(subject.digests, 4, "subject digests", 1).map(rawDigest => {
+      const digest = evidenceObject(rawDigest, ["algorithm", "value"], "subject digest");
+      const algorithm = oneOf(digest.algorithm, ["sha256", "gitCommit", "sha1", "gitTree"], "digest algorithm");
+      if (typeof digest.value !== "string" || !(algorithm === "sha256" ? /^[a-fA-F0-9]{64}$/ : algorithm === "sha1" ? /^[a-fA-F0-9]{40}$/ : /^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/).test(digest.value)) invalid("Subject digest length is incompatible with its algorithm");
+      return { algorithm, value: digest.value };
+    }) };
+  });
+  const reportReferences = evidenceArray(summary.reportReferences, L.MAX_SUBJECTS, "claimed report references").map(raw => {
+    const reference = evidenceObject(raw, ["subjectName", "sha256"], "claimed report reference");
+    const subjectName = evidenceText(reference.subjectName, "subject name", 512), sha256 = evidenceSha256(reference.sha256);
+    if (!subjects.some(subject => subject.name === subjectName && subject.digests.some(digest => digest.algorithm === "sha256" && digest.value.toLowerCase() === sha256))) invalid("Claimed report digest requires its exact subject record");
+    return { subjectName, sha256 };
+  });
+  const assertedCommits = evidenceArray(summary.assertedCommits, L.MAX_SUBJECTS, "asserted commits").map(commit => {
+    if (typeof commit !== "string" || !/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/.test(commit)) invalid("Commit assertion requires an exact full commit digest");
+    return commit;
+  });
+  return { statementType, predicateType, payloadType, signatureCount: summary.signatureCount === null ? null : evidenceDecimal(summary.signatureCount), signaturesChecked: false,
+    producerResult: summary.producerResult === null ? null : oneOf(summary.producerResult, ["PASSED", "WARNED", "FAILED"] as const, "producer result"),
+    producerTests: Object.fromEntries(["passed", "warned", "failed"].map(key => [key, tests[key] === null ? null : evidenceArray(tests[key], L.MAX_PRODUCER_TEST_NAMES, "producer test assertions").map(name => evidenceText(name, "producer test name", 512, true))])) as EvidenceAttestationSummary["producerTests"],
+    subjects, assertedCommits, reportReferences };
 }
 export function parseNormalizedEvidence(value: unknown, kind: EvidenceKind): NormalizedEvidenceSource {
-  const source = evidenceObject(value, ["version", "sourceId", "parseState", "reportOutcome", "leafCounts", "producerCounts", "countsConsistent", "assertedIdentity", "reasonCodes", "leaves"], "normalized source");
+  const source = evidenceObject(value, ["version", "sourceId", "parseState", "interpretationComplete", "reportOutcome", "leafCounts", "observedExecutedLowerBound", "producerCounts", "countsConsistent", "assertedIdentity", "attestation", "reasonCodes", "leaves"], "normalized source");
   if (source.version !== EVIDENCE_VERSION) invalid("Unsupported evidence version");
   const parseState = oneOf(source.parseState, ["parsed", "unparsed", "rejected"], "parse state");
   const leaves = evidenceArray(source.leaves, L.MAX_LEAVES, "leaves").map(parseLeaf);
   if (new Set(leaves.map(leaf => leaf.id)).size !== leaves.length) invalid("Leaf IDs must retain distinct observations");
-  if ((parseState !== "parsed" || kind === "attestation") && leaves.length) invalid("Unparsed or attestation sources cannot assert executed leaves");
+  if ((parseState !== "parsed" || kind !== "junit") && leaves.length) invalid("Unparsed or attestation sources cannot assert executed leaves");
   const rawCounts = evidenceObject(source.leafCounts, countKeys, "leaf counts");
   const leafCounts = Object.fromEntries(countKeys.map(key => [key, rawCounts[key] === null ? null : evidenceDecimal(rawCounts[key])])) as EvidenceCounts;
-  const expectedCounts = parseState === "parsed" && kind !== "attestation" ? deriveEvidenceCounts(leaves) : Object.fromEntries(countKeys.map(key => [key, null]));
+  const expectedCounts = parseState === "parsed" && kind === "junit" ? deriveEvidenceCounts(leaves) : Object.fromEntries(countKeys.map(key => [key, null]));
   if (canonicalEvidenceJson(leafCounts) !== canonicalEvidenceJson(expectedCounts)) invalid("Leaf counts must match observed leaves without producer-count substitution");
   const producer = source.producerCounts === null ? null : evidenceObject(source.producerCounts, producerKeys, "producer counts");
   const producerCounts = producer ? Object.fromEntries(Object.entries(producer).map(([key, count]) => [key, evidenceDecimal(count)])) : null;
   if (source.countsConsistent !== null && typeof source.countsConsistent !== "boolean") invalid("Count consistency must be explicit or unavailable");
-  if ((parseState !== "parsed" || kind === "attestation") && source.countsConsistent !== null) invalid("No leaf consistency is established for unparsed or attestation evidence");
+  const lowerBound = parseState === "parsed" && kind === "junit" ? observedExecutedLowerBound(leaves) : null;
+  if (source.observedExecutedLowerBound !== lowerBound) invalid("Observed execution lower bound cannot become an exact denominator");
+  if ((parseState !== "parsed" || kind !== "junit") && source.countsConsistent !== null) invalid("No leaf consistency is established for unparsed or attestation evidence");
+  const reasonCodes = evidenceArray(source.reasonCodes, reasons.length, "reason codes").map(reason => oneOf(reason, reasons, "reason code"));
+  if (typeof source.interpretationComplete !== "boolean" || (source.interpretationComplete && (parseState !== "parsed" || leafCounts.unknown !== null && leafCounts.unknown !== "0" || reasonCodes.includes("parse_incomplete")))) invalid("Interpretation completeness contradicts missing classification or parser diagnostics");
   const observedProducerCounts = { tests: String(leaves.length), executed: leafCounts.executed, passed: leafCounts.passed, failures: leafCounts.failed,
     errors: leafCounts.errored, skipped: leafCounts.skipped, disabled: leafCounts.disabled, unknown: leafCounts.unknown };
   if (source.countsConsistent === true && producerCounts && Object.entries(producerCounts).some(([key, count]) => count !== observedProducerCounts[key as keyof typeof observedProducerCounts])) invalid("Conflicting producer counts cannot be consistent");
   const reportOutcome = oneOf(source.reportOutcome, ["reports_pass", "reports_fail", "no_tests", "unknown"], "report outcome");
   const expectedOutcome = leafCounts.failed !== null && (leafCounts.failed !== "0" || leafCounts.errored !== "0") ? "reports_fail" :
-    parseState !== "parsed" || kind === "attestation" || source.countsConsistent !== true || leafCounts.unknown !== "0" ? "unknown" :
+    parseState !== "parsed" || kind !== "junit" || !source.interpretationComplete || reasonCodes.includes("counts_mismatch") || source.countsConsistent !== true || leafCounts.unknown !== "0" ? "unknown" :
       leafCounts.executed === "0" ? "no_tests" : "reports_pass";
   if (reportOutcome !== expectedOutcome) invalid("Report outcome does not follow its independent observation precedence");
   const identity = evidenceObject(source.assertedIdentity, ["runnerId", "commit", "sourceSha256"], "asserted identity");
-  return { version: EVIDENCE_VERSION, sourceId: evidenceText(source.sourceId, "source ID"), parseState, reportOutcome, leafCounts, producerCounts,
+  const attestation = source.attestation === null ? null : parseAttestation(source.attestation, parseState === "parsed");
+  if (parseState === "parsed" && kind !== "junit" && !attestation) invalid("Parsed JSON evidence requires its selected attestation schema");
+  if (kind === "junit" && attestation) invalid("Attestation metadata is separate from report leaf execution");
+  return { version: EVIDENCE_VERSION, sourceId: evidenceText(source.sourceId, "source ID"), parseState, interpretationComplete: source.interpretationComplete, reportOutcome, leafCounts, observedExecutedLowerBound: lowerBound, producerCounts,
     countsConsistent: source.countsConsistent as boolean | null, assertedIdentity: { runnerId: nullableText(identity.runnerId, "runner ID"),
       commit: nullableText(identity.commit, "commit", 256), sourceSha256: identity.sourceSha256 === null ? null : evidenceSha256(identity.sourceSha256) },
-    reasonCodes: evidenceArray(source.reasonCodes, reasons.length, "reason codes").map(reason => oneOf(reason, reasons, "reason code")), leaves };
+    attestation, reasonCodes, leaves };
 }
 
 /** Only validated ordinary JSON participates in identity. Key order is irrelevant; array order and duplicate membership are material. */
