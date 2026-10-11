@@ -7,7 +7,6 @@ export const LIVE_REF_PATTERN = SEMANTIC_REF_PATTERN;
 export class LiveRefError extends Error {
   constructor(message: string) { super(message); this.name = "LiveRefError"; }
 }
-
 interface Entry { element: WeakRef<Element>; document: WeakRef<Document>; expires: number }
 interface Options { now?: () => number; random?: () => string }
 
@@ -112,4 +111,3 @@ export class LiveElementRefs {
 
   invalidate(): void { this.#active = false; this.#entries.clear(); this.#issued.clear(); }
 }
-

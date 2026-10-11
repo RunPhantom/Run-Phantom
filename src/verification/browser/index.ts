@@ -8,17 +8,18 @@
  * rather than failing the session, which is what lets an assertion return
  * inconclusive instead of a false pass when its evidence was never being collected.
  */
-import { CAUSAL_PROTOCOL_VERSION, CAUSAL_CAPABILITY, VERIFICATION_LIMITS, type Coverage, type AppCommand, type RelativeTarget } from "../protocol.js";
+import { SEMANTIC_PROTOCOL_VERSION, SEMANTIC_CAPABILITY, CAUSAL_CAPABILITY, VERIFICATION_LIMITS, type Coverage, type AppCommand, type RelativeTarget } from "../protocol.js";
 import { parseCommand, validateOrigin } from "../validation.js";
 import { sanitizeWithReport } from "../serialization.js";
 import { installConsole } from "./observers/console.js";
 import { installNetwork } from "./observers/network.js";
 import { installRoute } from "./observers/route.js";
 import { observeSafely, type Emit, type Teardown } from "./observers/types.js";
-import { runDomCommand } from "./actions/index.js";
+import { runDomCommand, runSemanticDomCommand } from "./actions/index.js";
+import { LiveElementRefs } from "./dom/refs.js";
 import { selectPath } from "../state-select.js";
 
-export interface ConnectionOptions { url: string; sessionId: string; token: string; causalReadings?: boolean }
+export interface ConnectionOptions { url: string; sessionId: string; token: string; causalReadings?: boolean; semanticRefs?: boolean }
 export interface RuntimeConnection {
   disconnect(): void;
   signal(name: string, data?: unknown): void;
@@ -38,6 +39,7 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
   if (typeof options.token !== "string" || !options.token || options.token.length > 512) {
     throw new Error("Invalid verification session token");
   }
+  const refs = new LiveElementRefs(options.sessionId, document);
   const globals = window as unknown as Record<symbol, unknown>;
   if (globals[ACTIVE_RUNTIME]) throw new Error("A Run Phantom verification runtime is already connected on this page");
   const lease = {};
@@ -147,6 +149,7 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
     for (const cleanup of teardown.reverse()) observeSafely(cleanup);
     teardown.length = 0;
     stores.clear();
+    refs.invalidate();
     secrets.clear();
     secretSpellings.clear();
     earlyEvents.length = 0;
@@ -166,8 +169,8 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
     install("console", () => installConsole(emit, prepare));
     install("network", () => installNetwork(emit, () => currentActionId));
     install("route", () => installRoute(emit));
-    observeSafely(() => send({ type: "hello", version: CAUSAL_PROTOCOL_VERSION, token: options.token, coverage,
-      capabilities: options.causalReadings === false ? [] : [CAUSAL_CAPABILITY] }), disconnect);
+    observeSafely(() => send({ type: "hello", version: SEMANTIC_PROTOCOL_VERSION, token: options.token, coverage,
+      capabilities: [...(options.causalReadings === false ? [] : [CAUSAL_CAPABILITY]), ...(options.semanticRefs === false ? [] : [SEMANTIC_CAPABILITY])] }), disconnect);
   };
   const actionReading = (id: string, phase: "before" | "after", target: RelativeTarget): void => {
     let available = false;
@@ -195,7 +198,7 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
   };
   const act = (id: string, command: AppCommand): void => {
     try {
-      if (command.type === "fill" && command.value && !secrets.has(command.value)) {
+      if ((command.type === "fill" || command.type === "ref-fill") && command.value && !secrets.has(command.value)) {
         if (secretCharacters + command.value.length > 1024 * 1024 || secrets.size >= 1000) {
           throw new Error("Live fill redaction capacity reached; reconnect before another fill");
         }
@@ -222,6 +225,13 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
       } else if (command.type === "causal-click") {
         output = runDomCommand({ type: "click", selector: command.selector }, prepare);
         for (const target of command.targets) actionReading(id, "after", target);
+      } else if (command.type === "find" || command.type === "semantic-snapshot" || command.type === "ref-click" || command.type === "ref-fill") {
+        if (options.semanticRefs === false) throw new Error("Semantic references are not enabled for this runtime");
+        output = runSemanticDomCommand(command, refs, prepare, () => {
+          currentActionId = id;
+          emit("action.boundary", {}, id);
+          if (!active || !ready) throw new Error("Verification disconnected before action dispatch");
+        });
       } else output = runDomCommand(command, prepare);
       // DOM commands redact their text fields before returning. Apply generic size limits
       // to the result envelope without exact-fill rewriting of its typed schema.
