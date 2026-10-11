@@ -1,0 +1,104 @@
+{
+  "feature": "F19 semantic discovery and live references",
+  "source_commit": "bc6baa6f7415a654ce5a9a5ab425821505c41703",
+  "base_commit": "a151398b6418a4898a07747134d53edd2c5f0f40",
+  "independent_review": "APPROVE for bounded local qualification",
+  "cleanup": "standard no-op; source hashes unchanged",
+  "backend": {
+    "passed": 731,
+    "skipped": 1,
+    "failed": 0,
+    "assertions": 4140
+  },
+  "source_chromium": {
+    "passed": 134,
+    "skipped": 13,
+    "failed": 0,
+    "retries": 0,
+    "workers": 1,
+    "skip_scope": "Six compiled cases qualified separately; seven live-provider cases unexecuted"
+  },
+  "copied_native_macos_arm64": {
+    "passed": 6,
+    "skipped": 0,
+    "failed": 0,
+    "retries": 0,
+    "artifact_sha256": "604282904793a057c57d7d5efd973b3930ecc2b8daa03bd90bdab55079ffc3b8",
+    "artifact_bytes": 68334160,
+    "observed_executable_and_external_empty_cwd": true,
+    "owned_pid_listener_closed": true,
+    "private_runtime_tree_removed": true
+  },
+  "output_proof": {
+    "native_http_click": "Committed 1",
+    "native_ui_click": "Committed 2",
+    "fill_observed_exact": true,
+    "stale_replacement_effects": {
+      "clicks": 0,
+      "inputs": 0,
+      "focus": 0
+    },
+    "ephemeral_saved_identity_status": 400,
+    "saved_rows_unchanged": true
+  },
+  "screenshots": [
+    {
+      "file": "semantic-inspector-desktop.png",
+      "sha256": "9d5f66a39a5ad988c2f344254de1e4415d6e2e553b8b51b0cc63705dd69c1810",
+      "bytes": 82471,
+      "width": 1280,
+      "height": 720,
+      "observed": "Actual unique button selected with normalized Café 東京 ✓ name, SDK-reported/partial ARIA and observable-scope disclosure; live fill field empty.",
+      "fixture": "synthetic local application",
+      "provider_calls": 0
+    },
+    {
+      "file": "semantic-inspector-mobile.png",
+      "sha256": "963e0f0df550152be09670ed1de12c21334f4b74705916a667b3e19035238df4",
+      "bytes": 75059,
+      "width": 390,
+      "height": 844,
+      "observed": "Actual label-based unique textbox selection at the mobile viewport; controls wrap within viewport and private fill is empty. The inherited V1 chat overlay remains outside F19 composition acceptance.",
+      "fixture": "synthetic local application",
+      "provider_calls": 0
+    },
+    {
+      "file": "semantic-ambiguous-refusal.png",
+      "sha256": "3483d998f95edb13ffebd23f935cf207dd0276213a33805bb1af27616754beea",
+      "bytes": 88725,
+      "width": 1280,
+      "height": 720,
+      "observed": "Actual Save/Save as ambiguity shown with no selected handle or semantic mutation controls.",
+      "fixture": "synthetic local application",
+      "provider_calls": 0
+    },
+    {
+      "file": "semantic-capability-refusal.png",
+      "sha256": "91c7b717f6bb27e860663efd78a113fa0641baefe938941bc5aef47f7fcd296b",
+      "bytes": 100661,
+      "width": 1280,
+      "height": 720,
+      "observed": "Actual missing-capability message and disabled discovery inputs/actions visible.",
+      "fixture": "synthetic local application",
+      "provider_calls": 0
+    },
+    {
+      "file": "semantic-installed-inspector.png",
+      "sha256": "2ebffba8d4eaa9407691204d1793b25c95a2b944e37e3308abae80d35ae919fc",
+      "bytes": 86122,
+      "width": 1280,
+      "height": 720,
+      "observed": "Actual native-served unique button selection, partial source/scope disclosure and empty fill field; real prior action boundary displayed.",
+      "fixture": "synthetic local application",
+      "provider_calls": 0
+    }
+  ],
+  "limitations": [
+    "Observations remain SDK-reported and accessible names are partial ARIA",
+    "Closed roots are unobservable; limited coverage prevents exact selection",
+    "Native Windows and composed V1 UI qualification pending",
+    "Seven live-provider cells unexecuted; zero paid calls",
+    "References expire, disconnect invalidates them, and ephemeral handles cannot be saved or replayed"
+  ],
+  "maintained_by": "Divyam Talwar"
+}
