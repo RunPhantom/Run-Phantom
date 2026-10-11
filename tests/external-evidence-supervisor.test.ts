@@ -103,6 +103,80 @@ test("byte admission copies mutable input and rejects source/import count excess
 test("daemon supervisor identity is shared, independent of caller or database scope", () => {
   expect(getEvidenceSupervisor()).toBe(getEvidenceSupervisor());
 });
+test("hidden oversized byte length is rejected before caller copy hooks or worker admission", async () => {
+  let reads = 0, copies = 0, launches = 0;
+  const bytes = new Uint8Array(2 * 1024 * 1024 + 1);
+  Object.defineProperty(bytes, "byteLength", { get() { reads++; return 1; } });
+  Object.defineProperty(bytes, "slice", { value() { copies++; return new TextEncoder().encode(xml); } });
+  const supervisor = new EvidenceSupervisor({ workerFactory: () => { launches++; throw new Error("must not start"); } });
+  try {
+    expect(() => { const handle = supervisor.submit(request("hidden-length", { sources: [{ sourceId: "one", dialect: "junit-xml/v1", bytes }] }));
+      void handle.result.catch(() => {}); handle.cancel(); }).toThrow("input_limit");
+    expect(reads).toBe(0); expect(copies).toBe(0); expect(launches).toBe(0);
+    expect(supervisor.state).toEqual({ active: 0, queued: 0, closed: false });
+  } finally { await supervisor.shutdown(); }
+});
+test("actual cumulative bytes are bounded before copying despite forged source lengths", async () => {
+  let reads = 0, copies = 0, launches = 0;
+  const sources = Array.from({ length: 5 }, (_, index) => {
+    const bytes = new Uint8Array(2 * 1024 * 1024);
+    Object.defineProperty(bytes, "byteLength", { get() { reads++; return 0; } });
+    Object.defineProperty(bytes, "slice", { value() { copies++; return new Uint8Array(); } });
+    return { sourceId: `source-${index}`, dialect: "junit-xml/v1", bytes };
+  });
+  const supervisor = new EvidenceSupervisor({ workerFactory: () => { launches++; throw new Error("must not start"); } });
+  try {
+    expect(() => { const handle = supervisor.submit(request("aggregate-bytes", { sources })); void handle.result.catch(() => {}); handle.cancel(); }).toThrow("input_limit");
+    expect(reads).toBe(0); expect(copies).toBe(0); expect(launches).toBe(0);
+  } finally { await supervisor.shutdown(); }
+});
+test("counterfeit and proxy byte arrays cannot invoke traps or enter the queue", async () => {
+  let traps = 0;
+  const fake = Object.create(Uint8Array.prototype);
+  Object.defineProperty(fake, "byteLength", { get() { traps++; return 1; } });
+  Object.defineProperty(fake, "slice", { value() { traps++; return new Uint8Array(); } });
+  const proxy = new Proxy(new Uint8Array(1), { get() { traps++; throw new Error("caller trap"); }, getPrototypeOf() { traps++; throw new Error("caller trap"); } });
+  const supervisor = new EvidenceSupervisor();
+  try {
+    for (const bytes of [fake, proxy, new Uint16Array(1)]) {
+      expect(() => { const handle = supervisor.submit(request("invalid-bytes", { sources: [{ sourceId: "one", dialect: "junit-xml/v1", bytes }] }));
+        void handle.result.catch(() => {}); handle.cancel(); }).toThrow("input_limit");
+    }
+    expect(traps).toBe(0); expect(supervisor.state.active).toBe(0);
+  } finally { await supervisor.shutdown(); }
+});
+test("genuine bytes with poisoned methods and species still reach real workers without caller hooks", async () => {
+  let reads = 0, copies = 0, species = 0;
+  class HostileBytes extends Uint8Array { static get [Symbol.species](): Uint8ArrayConstructor { species++; throw new Error("caller species"); } }
+  const raw = new TextEncoder().encode(xml), first = raw.slice();
+  Object.defineProperty(first, "slice", { value() { copies++; throw new Error("caller slice"); } });
+  const inputs = [first, new HostileBytes(raw)];
+  for (const bytes of inputs) Object.defineProperty(bytes, "byteLength", { get() { reads++; return 0; } });
+  const supervisor = new EvidenceSupervisor();
+  try {
+    for (const bytes of inputs) {
+      const result = await supervisor.submit(request("genuine-bytes", { sources: [{ sourceId: "one", dialect: "junit-xml/v1", bytes }] })).result;
+      expect(result.sources[0].reportOutcome).toBe("reports_pass");
+      expect(() => process.kill(result.workers[0].pid, 0)).toThrow();
+    }
+    expect(reads).toBe(0); expect(copies).toBe(0); expect(species).toBe(0);
+  } finally { await supervisor.shutdown(); }
+});
+test("queued Buffer reports retain an owned snapshot after caller mutation", async () => {
+  let blocked = true;
+  const supervisor = new EvidenceSupervisor({ workerFactory: () => blocked ? fixtureProcess("setInterval(() => {}, 1000)") : spawnEvidenceWorker() });
+  const blockers = [supervisor.submit(request("block-one")), supervisor.submit(request("block-two"))];
+  const stopped = blockers.map(handle => handle.result.catch(error => error));
+  const bytes = Buffer.from(xml), queued = supervisor.submit(request("buffer", { sources: [{ sourceId: "one", dialect: "junit-xml/v1", bytes }] }));
+  try {
+    bytes.fill(0); blocked = false;
+    for (const handle of blockers) handle.cancel();
+    await Promise.all(stopped);
+    const result = await queued.result;
+    expect(result.sources[0].reportOutcome).toBe("reports_pass");
+    expect(() => process.kill(result.workers[0].pid, 0)).toThrow();
+  } finally { queued.cancel(); await supervisor.shutdown(); }
+});
 test("valid source workers cannot multiply the whole import's normalized-byte or leaf budget", async () => {
   const sourceBytes = Buffer.byteLength(JSON.stringify(parseExternalEvidence(new TextEncoder().encode(xml), "junit-xml/v1", "one")));
   for (const limits of [{ maxNormalizedBytes: sourceBytes + 128 }, { maxLeaves: 1 }]) {

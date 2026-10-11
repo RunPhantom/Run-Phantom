@@ -78,6 +78,22 @@ describe("real bounded report byte interpretation", () => {
     expect(read('<?xml version="1.0" encoding="UTF-16"?><testsuite/>').reasonCodes).toContain("unsafe_encoding");
     expect(read('<testsuites>'.repeat(70) + '</testsuites>'.repeat(70)).reasonCodes).toContain("depth_exceeded");
   });
+  test("direct reading refuses hidden oversized internal bytes without caller length hooks", () => {
+    let reads = 0;
+    const report = Buffer.concat([Buffer.from('<testsuite><testcase name="one"/></testsuite>'), Buffer.alloc(2 * 1024 * 1024, 32)]);
+    Object.defineProperty(report, "byteLength", { get() { reads++; return 1; } });
+    const result = parseExternalEvidence(report, "junit-xml/v1", "direct");
+    expect(result.parseState).toBe("rejected"); expect(result.reasonCodes).toContain("source_limit");
+    expect(result.leaves).toEqual([]); expect(reads).toBe(0);
+  });
+  test("direct reading rejects counterfeit and proxy bytes without invoking their traps", () => {
+    let traps = 0;
+    const fake = Object.create(Uint8Array.prototype);
+    Object.defineProperty(fake, "byteLength", { get() { traps++; return 1; } });
+    const proxy = new Proxy(bytes('<testsuite/>'), { get() { traps++; throw new Error("caller trap"); }, getPrototypeOf() { traps++; throw new Error("caller trap"); } });
+    for (const report of [fake, proxy]) expect(parseExternalEvidence(report, "junit-xml/v1", "direct").parseState).toBe("rejected");
+    expect(traps).toBe(0);
+  });
   test("normalization redacts captured secrets before publication", () => {
     const result = read('<testsuite><testcase name="one"><failure>Authorization: Bearer synthetic-token-value</failure></testcase></testsuite>');
     expect(JSON.stringify(result)).not.toContain("synthetic-token-value");
