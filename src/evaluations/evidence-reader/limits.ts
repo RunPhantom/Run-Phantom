@@ -33,10 +33,17 @@ export function snapshotEvidenceBytes(value: unknown, sourceLimit: number, remai
   } catch { throw new ReaderRefusal("source_rejected"); }
 }
 export function readerLimits(overrides: Partial<ReaderLimits> = {}): ReaderLimits {
+  const invalid = () => new TypeError("Reader limits can only narrow the fixed parser budget");
+  if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) throw invalid();
+  const prototype = Object.getPrototypeOf(overrides);
+  if (prototype !== Object.prototype && prototype !== null) throw invalid();
   const result = { ...DEFAULT_READER_LIMITS };
-  for (const [key, value] of Object.entries(overrides)) {
-    if (!(key in result) || !Number.isSafeInteger(value) || value! < 1 || value! > result[key as keyof ReaderLimits]) throw new TypeError("Reader limits can only narrow the fixed parser budget");
-    result[key as keyof ReaderLimits] = value!;
+  for (const key of Reflect.ownKeys(overrides)) {
+    const descriptor = Object.getOwnPropertyDescriptor(overrides, key)!;
+    if (typeof key !== "string" || !Object.hasOwn(DEFAULT_READER_LIMITS, key) || !Object.hasOwn(descriptor, "value")) throw invalid();
+    const value = descriptor.value;
+    if (!Number.isSafeInteger(value) || value < 1 || value > DEFAULT_READER_LIMITS[key as keyof ReaderLimits]) throw invalid();
+    result[key as keyof ReaderLimits] = value;
   }
   return result;
 }
