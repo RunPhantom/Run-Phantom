@@ -1,0 +1,92 @@
+{
+  "feature": "F03",
+  "sourceHead": "e0c0f1b9db71a6966f14f0f72ebdb97ca6d97015",
+  "baseHead": "e83ec2e0453341bcefa1a78a1b4e8d208621f384",
+  "meaningfulOwnCommits": 13,
+  "ownedSourceFiles": 13,
+  "scope": "Isolated bounded reader and exact packaged worker protocol; application import service and report workspace remain downstream",
+  "backend": {
+    "pass": 790,
+    "skip": 2,
+    "fail": 0,
+    "assertions": 4456,
+    "files": 73,
+    "seconds": 69.74,
+    "native_windows_skip": "native Windows rejects ancestor junctions before creating team state; requires Windows host",
+    "native_cli_opt_in_skip": "RUNPHANTOM_F03_TEST_BINARY absent in source backend; separately closed against actual copied artifact after current build"
+  },
+  "sourceChromium": {
+    "expected": 114,
+    "skipped": 10,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "lintBuildThreeTypes": "passed",
+  "copiedApplicationCommonChecks": {
+    "passed": 3,
+    "failed": 0,
+    "skipped": 0
+  },
+  "sourceAndCopiedCliChecks": {
+    "passed": 2,
+    "failed": 0,
+    "assertions": 144
+  },
+  "independentCopiedWorkerControls": {
+    "passed": 9,
+    "failed": 0,
+    "scopes": [
+      "valid JUnit",
+      "malformed input",
+      "scope/path capability refusal",
+      "decoded size cap",
+      "invalid limit",
+      "extra CLI arguments",
+      "ambient profile refusal",
+      "real supervisor transport and exit/reaping"
+    ]
+  },
+  "copiedArtifactSha256": "7978da7bf6464b6a60aba474052f2502d751c978d51717bf41d7fa61247effd4",
+  "actualOsExecutableCwdAndPidObservations": true,
+  "allTenOwnedProcessesGoneListenerClosedTemporaryCopyProfileRemoved": true,
+  "review": {
+    "correctedCore": "APPROVE",
+    "lintDelta": "APPROVE"
+  },
+  "cleanup": "approved scoped no-op with shared intrinsic byte snapshot reuse",
+  "screenshots": [
+    {
+      "name": "runphantom-desktop-detail.png",
+      "sha256": "249c8dfdc9c3c1e5884f96b5c86b9627e70db5c2b94be91c4106142a37208ff4",
+      "width": 1280,
+      "height": 720,
+      "runtime": "actual copied macOS arm64 application",
+      "scope": "Existing end-user UI on packaged parser foundation; downstream report import UI pending"
+    },
+    {
+      "name": "runphantom-desktop.png",
+      "sha256": "5cb1533cd35252bf76da0aaa8e21bc2ebe08acbca260c5b110fd2fcdc4ceff00",
+      "width": 1280,
+      "height": 720,
+      "runtime": "actual copied macOS arm64 application",
+      "scope": "Existing end-user UI on packaged parser foundation; downstream report import UI pending"
+    },
+    {
+      "name": "runphantom-mobile.png",
+      "sha256": "8c142d10ed6a9ef7e6c32245115c90e746b9178f06c86e989a4c1024bd9759f4",
+      "width": 390,
+      "height": 844,
+      "runtime": "actual copied macOS arm64 application",
+      "scope": "Existing end-user UI on packaged parser foundation; downstream report import UI pending"
+    }
+  ],
+  "providerSpendUsd": 0,
+  "pending": [
+    "Native Windows at current head",
+    "Seven configured paid-provider journeys",
+    "F04 authorized import service and F05 report UI",
+    "Complete assembled/installed qualification"
+  ],
+  "osSandboxCpuRssCeilings": "unavailable; no hard OS isolation claim",
+  "privateManifestSha256": "d26dd821fe5d0668e4e205247b0dbc68df91452a90930901f8638883d165a178"
+}
