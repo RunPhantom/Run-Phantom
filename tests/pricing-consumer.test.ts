@@ -59,6 +59,18 @@ describe("actual app pricing consumer", () => {
     expect(getCostBreakdown("fixture/known", 100, 100)).toBeNull();
   });
 
+  test("a storage write failure cannot turn requested revocation into consent", async () => {
+    setModelPricingConsent(true);
+    await fetchPrices();
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: () => "1", setItem: () => { throw new Error("Storage unavailable"); } } });
+    setModelPricingConsent(false);
+    fetchMock.mockClear();
+    await fetchPrices();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(getPricingSnapshot().status).toBe("disabled");
+    expect(getCostBreakdown("fixture/known", 100, 100)).toBeNull();
+  });
+
   test.each([-1, 0.5, Infinity, Number.MAX_SAFE_INTEGER + 1])("invalid count %p stays unavailable", async value => {
     setModelPricingConsent(true);
     await fetchPrices();

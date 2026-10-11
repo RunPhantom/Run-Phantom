@@ -21,9 +21,11 @@ let rateCache = new Map<string, FrozenRateRevision>();
 let generation = 0;
 let controller: AbortController | null = null;
 let pending: Promise<void> | null = null;
+let deniedUntilExplicitConsent = false;
 const listeners = new Set<() => void>();
 
 export function modelPricingConsentEnabled(): boolean {
+  if (deniedUntilExplicitConsent) return false;
   try { return localStorage.getItem(MODEL_PRICING_CONSENT_KEY) === "1"; } catch { return false; }
 }
 
@@ -42,12 +44,14 @@ function resetPricing(): void {
 }
 
 export function setModelPricingConsent(enabled: boolean): void {
-  try { localStorage.setItem(MODEL_PRICING_CONSENT_KEY, enabled ? "1" : "0"); } catch {}
+  deniedUntilExplicitConsent = !enabled;
+  try { localStorage.setItem(MODEL_PRICING_CONSENT_KEY, enabled ? "1" : "0"); } catch { deniedUntilExplicitConsent = true; }
   resetPricing();
 }
 
 const handleStorage = (event: StorageEvent): void => {
   if (event.key !== MODEL_PRICING_CONSENT_KEY && event.key !== null) return;
+  deniedUntilExplicitConsent = event.key === null || event.newValue !== "1";
   resetPricing();
   if (modelPricingConsentEnabled()) void fetchPrices();
 };
@@ -103,8 +107,10 @@ export async function fetchPrices(): Promise<void> {
   pending = (async () => {
     try {
       const response = await fetch(NOMINAL_CATALOGUE_URL, { signal: requestController.signal });
+      if (requestGeneration !== generation || !modelPricingConsentEnabled()) { await response.body?.cancel().catch(() => {}); return; }
       if (!response.ok) throw new Error("Catalogue request failed");
       const bytes = await readCatalogue(response);
+      if (requestGeneration !== generation || !modelPricingConsentEnabled()) return;
       const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
       const value = parseJsonEvidence(text);
       if (hasDuplicateJsonKeys(text)) throw new Error("Duplicate catalogue keys");
