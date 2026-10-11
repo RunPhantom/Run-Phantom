@@ -57,6 +57,20 @@ export function calculateCost(usage: NormalizedUsage, rateRevision: FrozenRateRe
   }
 
   for (const [parent, details, disjoint] of [["input", INPUT_DETAILS, usage.inputDetailsDisjoint], ["output", OUTPUT_DETAILS, usage.outputDetailsDisjoint]] as const) {
+    const parentMeasure = usage.categories[parent];
+    const parentCount = parentMeasure.state === "known" && validTokenCount(parentMeasure.count) ? parentMeasure.count : null;
+    let includedTotal = 0;
+    for (const category of details) {
+      const measure = usage.categories[category];
+      if (usage.inclusion[category] !== "included" || measure.state !== "known" || !validTokenCount(measure.count)) continue;
+      if (parentCount !== null && measure.count > parentCount) fail(parent, "included_categories_exceed_total");
+      if (disjoint === true) {
+        if (!Number.isSafeInteger(includedTotal + measure.count)) fail(parent, "token_sum_overflow");
+        else includedTotal += measure.count;
+      }
+    }
+    if (disjoint === true && parentCount !== null && includedTotal > parentCount) fail(parent, "included_categories_exceed_total");
+
     const separatelyPriced = details.filter(category => band.categories[category].kind === "priced" && (usage.categories[category].count ?? 0) > 0);
     if (separatelyPriced.length > 1 && disjoint !== true) {
       fail(parent, "category_overlap_unavailable");
