@@ -1,0 +1,42 @@
+{
+  "feature": "F00",
+  "source_head": "19b81d93f17136ddd712dd57f4c2481e0d824ea8",
+  "screenshots": [
+    {
+      "file": "protected-evidence-frozen-mobile.png",
+      "sha256": "48c5982836baf6bc7c5f055760a818c3ef21a3984d93eff9198f5253ac5228d7"
+    },
+    {
+      "file": "protected-evidence-unknown-desktop.png",
+      "sha256": "a02c5701f777560468db2fd7b95326056f61f5eb0ad87a150d713803ee47c349"
+    },
+    {
+      "file": "protected-revision-conflict.png",
+      "sha256": "b7b0dc66fbeba742e6500e4d6f1dfdd3a4d55cf66d87c7e5eac9e086e326c879"
+    }
+  ],
+  "fixtures": "Synthetic local records only; screenshot contents inspected before publication.",
+  "scope": "Protected existing evaluation/replay contracts, not completed UI revamp or global qualification.",
+  "backend": {
+    "passed": 677,
+    "skipped": 1,
+    "failed": 0,
+    "skip_reason": "NativeWindows-onlyfixture onmacOS"
+  },
+  "chromium": {
+    "passed": 114,
+    "skipped": 10,
+    "failed": 0,
+    "skip_reason": "Explicit compiled and paid-provider opt-in journeys; compiledsubsetverifiedseparately"
+  },
+  "installed_macos_arm64_subset": {
+    "passed": 3,
+    "skipped": 0,
+    "failed": 0,
+    "source_free": true,
+    "binary_sha256": "e9e857ad9fff699ff3ec2a758a0d1ceffb7a9d38865e382fda2e59a9a5731d31"
+  },
+  "provider_spend_usd": 0,
+  "windows": "Actualrunpending",
+  "full_platform_qualification": "Pending"
+}
