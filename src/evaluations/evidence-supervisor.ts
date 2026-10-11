@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { EVIDENCE_LIMITS as L, type NormalizedEvidenceSource } from "./evidence-protocol";
 import { evidenceText, parseNormalizedEvidence } from "./evidence-validation";
 import { EVIDENCE_WORKER_ENTRY, EVIDENCE_WORKER_OUTPUT_BYTES, readBoundedStream, type EvidenceWorkerRequest } from "./evidence-worker";
-import { readerLimits, type ReaderLimits } from "./evidence-reader/limits";
+import { readerLimits, snapshotEvidenceBytes, type ReaderLimits } from "./evidence-reader/limits";
 import { strictEvidenceJson } from "./evidence-reader/json";
 
 declare const __RUNPHANTOM_PACKAGED__: boolean;
@@ -89,10 +89,12 @@ export class EvidenceSupervisor {
     let bytes = 0; const ids = new Set<string>();
     const sources = request.sources.map(source => {
       evidenceText(source.sourceId, "source ID"); evidenceText(source.dialect, "dialect");
-      if (!(source.bytes instanceof Uint8Array) || source.bytes.byteLength > this.#limits.maxSourceBytes || ids.has(source.sourceId)) throw new EvidenceSupervisorError("input_limit");
-      bytes += source.bytes.byteLength; ids.add(source.sourceId);
-      if (bytes > L.MAX_IMPORT_BYTES) throw new EvidenceSupervisorError("input_limit");
-      return { sourceId: source.sourceId, dialect: source.dialect, bytes: source.bytes.slice() };
+      if (ids.has(source.sourceId)) throw new EvidenceSupervisorError("input_limit");
+      let snapshot: Uint8Array;
+      try { snapshot = snapshotEvidenceBytes(source.bytes, this.#limits.maxSourceBytes, L.MAX_IMPORT_BYTES - bytes); }
+      catch { throw new EvidenceSupervisorError("input_limit"); }
+      bytes += snapshot.byteLength; ids.add(source.sourceId);
+      return { sourceId: source.sourceId, dialect: source.dialect, bytes: snapshot };
     });
     let resolve!: Job["resolve"], reject!: Job["reject"];
     const promise = new Promise<ReaderOperationResult>((yes, no) => { resolve = yes; reject = no; });
