@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { parseExternalEvidence } from "../src/evaluations/external-evidence";
 import { EVIDENCE_PREDICATE_TYPE, EVIDENCE_STATEMENT_TYPE } from "../src/evaluations/evidence-protocol";
+import { readerLimits, DEFAULT_READER_LIMITS, type ReaderLimits } from "../src/evaluations/evidence-reader/limits";
 
 const bytes = (text: string) => new TextEncoder().encode(text);
 const read = (text: string, dialect = "junit-xml/v1") => parseExternalEvidence(bytes(text), dialect, "fixture");
@@ -93,6 +94,17 @@ describe("real bounded report byte interpretation", () => {
     const proxy = new Proxy(bytes('<testsuite/>'), { get() { traps++; throw new Error("caller trap"); }, getPrototypeOf() { traps++; throw new Error("caller trap"); } });
     for (const report of [fake, proxy]) expect(parseExternalEvidence(report, "junit-xml/v1", "direct").parseState).toBe("rejected");
     expect(traps).toBe(0);
+  });
+  test("limit records refuse inherited, accessor, hidden and symbolic fields without reading getters", () => {
+    let getters = 0;
+    const accessor = Object.defineProperty({}, "maxDepth", { enumerable: true, get() { getters++; return 1; } });
+    const hidden = Object.defineProperty({}, "toString", { value: 1 });
+    for (const invalid of [Object.create({ maxDepth: 1 }), accessor, hidden, { [Symbol("limit")]: 1 },
+      { maxDepth: NaN }, { maxDepth: Infinity }, { maxDepth: -1 }]) expect(() => readerLimits(invalid as Partial<ReaderLimits>)).toThrow();
+    expect(getters).toBe(0);
+    expect(readerLimits({})).toEqual(DEFAULT_READER_LIMITS);
+    expect(readerLimits(Object.assign(Object.create(null), { maxDepth: 1 })).maxDepth).toBe(1);
+    expect(read('<testsuite><testcase name="one"/></testsuite>').reportOutcome).toBe("reports_pass");
   });
   test("normalization redacts captured secrets before publication", () => {
     const result = read('<testsuite><testcase name="one"><failure>Authorization: Bearer synthetic-token-value</failure></testcase></testsuite>');

@@ -27,6 +27,15 @@ test("closed worker protocol refuses authority, paths and invalid byte encodings
     expect(result.output).toEqual({ version: 1, id: null, error: "protocol_invalid" });
   }
 });
+test("actual worker rejects nonrecord and inherited-name limit fields while allowing empty defaults", async () => {
+  for (const limits of [[], 0, "", null, { toString: 1 }, { constructor: 1 }, { maxDepth: 0 }, { maxLeaves: 1.5 }]) {
+    const result = await worker({ ...request, limits });
+    expect(result.exit).toBe(1); expect(result.output).toEqual({ version: 1, id: null, error: "protocol_invalid" });
+    expect(() => process.kill(result.pid, 0)).toThrow();
+  }
+  const empty = await worker({ ...request, limits: {} });
+  expect(empty.exit).toBe(0); expect(empty.output.normalized.reportOutcome).toBe("reports_pass");
+});
 test("stream output is bounded before concatenating an excessive message", async () => {
   const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array(1025)); controller.close(); } });
   expect(await readBoundedStream(stream, 1024).catch(error => error.message)).toBe("worker_stream_limit");
