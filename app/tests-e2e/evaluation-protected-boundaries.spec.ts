@@ -32,7 +32,10 @@ test("protected evaluations: user sees missing graph/modality evidence and downl
   const image = await startEvaluation(request, runPhantom.url, reference, imageId, "Image identity unavailable");
   expect(incomplete.results[0]).toMatchObject({ inputMatch: "match", status: "inconclusive", snapshot: { complete: false } });
   expect(image.results[0]).toMatchObject({ inputMatch: "unavailable", status: "inconclusive", snapshot: { input: null } });
-  await page.goto(`${runPhantom.url}/evaluations`);
+  const loaded = await page.goto(`${runPhantom.url}/evaluations`);
+  expect(loaded?.status(), "The completed production build must serve the evaluation document").toBe(200);
+  expect(loaded?.headers()["content-type"]).toContain("text/html");
+  await expect(page.getByRole("heading", { name: "Evaluations", exact: true })).toBeVisible();
   const results = page.getByRole("region", { name: "Experiment results", exact: true });
   const before = new Map<string, string>();
   for (const experiment of [complete, incomplete, image]) {
@@ -67,9 +70,27 @@ test("protected evaluations: user sees missing graph/modality evidence and downl
   } });
   expect(edit.status()).toBe(201);
   expect((await edit.json() as DatasetRevision).version).toBe(reference.version + 1);
-  await page.reload();
+  const reopened = await page.reload();
+  expect(reopened?.status(), "Reload requires the production assets to remain available throughout acceptance").toBe(200);
+  expect(reopened?.headers()["content-type"]).toContain("text/html");
+  await expect(page.getByRole("heading", { name: "Evaluations", exact: true })).toBeVisible();
+  const datasets = page.getByRole("combobox", { name: "Dataset", exact: true });
+  await datasets.selectOption(reference.datasetId);
+  await expect(datasets).toHaveValue(reference.datasetId);
+  const revisions = page.getByRole("combobox", { name: "Revision", exact: true });
+  await expect(revisions).toHaveValue(String(reference.version + 1));
+  await revisions.selectOption(String(reference.version));
+  await expect(revisions).toHaveValue(String(reference.version));
+  const cases = page.getByRole("region", { name: "Dataset cases", exact: true });
+  await expect(cases.getByText("This is an immutable historical revision. Select the latest revision to make changes.", { exact: true })).toBeVisible();
+  await expect(cases.getByRole("heading", { name: "Checkout result", exact: true })).toBeVisible();
+  const savedExperiments = page.getByRole("combobox", { name: "View experiment", exact: true });
+  await expect(savedExperiments.locator("option")).toHaveCount(4);
   for (const frozen of [complete, incomplete, image]) {
-    await page.getByRole("combobox", { name: "View experiment", exact: true }).selectOption(frozen.id);
+    await expect(savedExperiments.locator("option").filter({ hasText: frozen.name })).toHaveAttribute("value", frozen.id);
+    await savedExperiments.selectOption(frozen.id);
+    await expect(savedExperiments).toHaveValue(frozen.id);
+    await expect(results.getByRole("heading", { name: frozen.name, exact: true })).toBeVisible();
     await expect(results.getByRole("article", { name: `Checkout result: ${frozen.verdict}`, exact: true })).toBeVisible();
     const pending = page.waitForEvent("download");
     await results.getByRole("button", { name: "Download JSON report", exact: true }).click();
