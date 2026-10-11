@@ -660,7 +660,7 @@ export function reassignAnnotations(fromRunId: string, toRunId: string): number 
   return rows.length;
 }
 
-export function insertSpan(span: { id: string; run_id: string; parent_span_id?: string; name: string; span_type?: string; status?: string; input_payload?: string; output_payload?: string; start_time_ms: number; end_time_ms: number; duration_ms: number; model?: string; provider?: string; input_tokens?: number; output_tokens?: number; attributes?: string }) {
+export function insertSpan(span: { id: string; run_id: string; parent_span_id?: string; name: string; span_type?: string; status?: string; input_payload?: string; output_payload?: string; start_time_ms: number; end_time_ms: number; duration_ms: number; model?: string; provider?: string; input_tokens?: number; output_tokens?: number; attributes?: string; otlp_evidence?: string }) {
   const row = {
     id: span.id,
     run_id: span.run_id,
@@ -678,6 +678,7 @@ export function insertSpan(span: { id: string; run_id: string; parent_span_id?: 
     input_tokens: span.input_tokens ?? null,
     output_tokens: span.output_tokens ?? null,
     attributes: span.attributes ?? null,
+    otlp_evidence: span.otlp_evidence ?? null,
   };
   getDrizzleDb()
     .insert(schema.spans)
