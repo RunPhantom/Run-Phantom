@@ -20,8 +20,10 @@ async function expectNoAuthorityState(cwd: string, profile: string) {
   expect(await readdir(cwd)).toEqual([]);
   const files = await readdir(profile, { recursive: true });
   // Bun may create its own macOS transpiler cache before JavaScript checks the environment.
-  expect(files.every(file => process.platform === "darwin" && (file === "Library" || file === "Library/Caches" ||
-    file === "Library/Caches/bun" || file.startsWith("Library/Caches/bun/")))).toBe(true);
+  const valid = files.every(file => process.platform === "darwin" && (file === "Library" || file === "Library/Caches" ||
+    file === "Library/Caches/bun" || file.startsWith("Library/Caches/bun/")));
+  if (!valid) console.info("F03 unexpected private state paths", JSON.stringify(files.slice(0, 16)));
+  expect(valid).toBe(true);
 }
 
 async function qualify(command: string[]) {
@@ -29,6 +31,18 @@ async function qualify(command: string[]) {
   const cwd = join(directory, "empty-state"), profile = join(directory, "private-profile");
   await mkdir(cwd); await mkdir(profile);
   try {
+    if (process.platform === "win32") {
+      const probe = Bun.spawn([process.execPath, "--no-env-file", "--no-install", "-e",
+        "process.stdout.write(JSON.stringify(Object.keys(process.env).sort()))"],
+      { cwd, env: minimalEnv(), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      const timer = setTimeout(() => probe.kill("SIGKILL"), 3_000);
+      try {
+        const [out, err, exit] = await Promise.all([readBoundedStream(probe.stdout, 4096), readBoundedStream(probe.stderr, 4096), probe.exited]);
+        expect(exit).toBe(0); expect(err.byteLength).toBe(0);
+        console.info("F03 minimal native boot environment keys", new TextDecoder().decode(out));
+        expect(() => process.kill(probe.pid, 0)).toThrow();
+      } finally { clearTimeout(timer); if (probe.exitCode === null) probe.kill("SIGKILL"); await probe.exited; }
+    }
     const cases = [
       { args: [], env: minimalEnv(), input: input(xml), exit: 0, outcome: "reports_pass" },
       { args: [], env: minimalEnv(), input: input("<testsuite><testcase></testsuite>"), exit: 0, outcome: "unknown" },
