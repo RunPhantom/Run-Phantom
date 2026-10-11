@@ -307,6 +307,15 @@ describe("immutable attestation assertions", () => {
       expect(set.sources[1].authentication).toBe("not_checked");
     }
   });
+  test("a report's self-declared commit stays advisory even when it equals the trusted expected commit", () => {
+    const inventory = store.saveInventory("self-declared", 0, [{ ...expected, constraints: { ...expected.constraints, commit: "a".repeat(40) } }], "prospective");
+    const draft = request(); draft.inventory = { id: inventory.id, revision: inventory.revision };
+    const report = normalized(); report.assertedIdentity.commit = "a".repeat(40);
+    const admitted = store.admit(draft); store.start(admitted.job.id, admitted.publicationToken);
+    const set = store.publish(admitted.job.id, admitted.publicationToken, [{ sourceId: "source-1", raw, normalized: report }])!;
+    expect(set.sources[0]).toMatchObject({ reportIdentityAsserted: false, commitAssertionMatches: null, authentication: "not_checked" });
+    expect(store.getSet(set.id).sources[0].normalized!.assertedIdentity.commit).toBe("a".repeat(40));
+  });
 });
 
 describe("transactional evidence resource reservations", () => {
