@@ -78,6 +78,7 @@ test.each(["JSON", "gzipped protobuf"])("actual %s ingest, file-backed storage, 
   expect(evidence.links[0]).toMatchObject({ traceId: "ffeeddccbbaa99887766554433221100", spanId: "ffeeddccbbaa9988", flags: 0 });
   expect(evidence.events[0].attributes[0].value).toEqual({ intValue: "9007199254740993" });
   expect(evidence.events[1].droppedAttributesCount).toBeNull(); expect(evidence.droppedAttributesCount).toBe(0);
+  expect(evidence.status).toEqual({ code: 1, message: "Local capture completed" });
   expect((await fetch(`${source}/v1/traces`, options)).status).toBe(200);
   expect(await exported()).toEqual(trace);
   const previousPid = stores.get("source")!.pid;
@@ -165,8 +166,38 @@ test("actual ingress persists receiver loss and redaction separately from unavai
   record("bounded-capture-roundtrip.json", { trace, originalOutput: fidelityOutput, sourceDigestUnchanged: sha(sent) === sourceDigest });
 });
 
+test.each(["JSON", "gzipped protobuf"])("actual %s diagnostic capture preserves absence and bounds secrets/oversized messages through reopen and import", async encoding => {
+  const sent = fidelityRequest() as any, sourceSpan = sent.resourceSpans[0].scopeSpans[0].spans[0];
+  const credential = `sk-proj-${"x".repeat(48)}`;
+  const diagnostics = [undefined, { message: "Source diagnostic without code" }, { code: 0, message: "" },
+    { code: 2, message: credential }, { code: 2, message: "diagnostic ".repeat(500) }];
+  sent.resourceSpans[0].scopeSpans[0].spans = diagnostics.map((status, index) => ({ ...structuredClone(sourceSpan),
+    spanId: `10203040506070${String(index + 80)}`, status }));
+  const options = encoding === "JSON" ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sent) }
+    : { method: "POST", headers: { "Content-Type": "application/x-protobuf", "Content-Encoding": "gzip" }, body: gzipSync(encodeFidelityRequest(sent)) };
+  expect((await fetch(`${source}/v1/traces`, options)).status).toBe(200);
+  const trace = await exported(); expect(trace.spans).toHaveLength(5);
+  for (const [index, span] of trace.spans.entries()) {
+    const evidence = JSON.parse(span.otlp_evidence), status = diagnostics[index];
+    expect(span.output_payload).toBe(fidelityOutput); expect(span.status).toBe(index < 3 ? "OK" : "ERROR");
+    expect(evidence.status).toEqual(index === 0 ? null : { code: status!.code ?? null,
+      message: index === 3 ? "[REDACTED]" : index === 4 ? "[TRUNCATED]" : status!.message ?? null });
+    expect(evidence.capture).toMatchObject({ redactedValues: index === 3 ? 1 : 0, truncatedValues: index === 4 ? 1 : 0 });
+    expect(span.otlp_evidence).not.toContain(credential);
+    if (index === 1 && encoding !== "JSON") expect(JSON.parse(span.attributes)["otel.status.code"]).toBe(0);
+  }
+  await stopStore(stores.get("source")!); source = await startStore("source"); expect(await exported()).toEqual(trace);
+  expect((await post(destination, "/api/import-run", trace)).status).toBe(200); expect(await exported(destination)).toEqual(trace);
+  record(`diagnostic-${encoding === "JSON" ? "json" : "protobuf"}.json`, { trace, exactAfterReopenAndIndependentImport: true, legacyCanonicalOutcomeAndOriginalOutputRetained: true,
+    notice: "Only the bounded source envelope is sanitized. Existing legacy flat diagnostic attributes are intentionally preserved." });
+});
+
 const invalidEnvelopes: [string, (evidence: any) => void][] = [
   ["unknown envelope version", evidence => { evidence.schemaVersion = 2; }],
+  ["missing status observation", evidence => { delete evidence.status; }],
+  ["status code overflow", evidence => { evidence.status.code = 2147483648; }],
+  ["credential-bearing diagnostic", evidence => { evidence.status.message = `sk-proj-${"x".repeat(48)}`; }],
+  ["oversized diagnostic", evidence => { evidence.status.message = "x".repeat(4097); }],
   ["unknown field", evidence => { evidence.unreported = true; }],
   ["missing source count", evidence => { delete evidence.droppedEventsCount; }],
   ["lossy numeric nanoseconds", evidence => { evidence.events[0].timeUnixNano = 1770000000000000000; }],

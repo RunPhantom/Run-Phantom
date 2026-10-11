@@ -4,6 +4,9 @@ import { redactText } from "../verification/serialization";
 
 export const OTLP_EVIDENCE_LIMITS = { events: 128, links: 128, attributes: 128,
   valueItems: 128, depth: 8, valueNodes: 4096, text: 4096, key: 256, bytes: 256 * 1024 } as const;
+// Protobuf canonical mapping defaults missing status codes to zero. Retain the
+// source observation separately without allowing JSON to forge this marker.
+export const OTLP_SOURCE_STATUS = Symbol("otlp-source-status");
 
 export type EvidenceValue = { stringValue: string } | { boolValue: boolean } | { intValue: string }
   | { doubleValue: number } | { bytesValue: string } | { arrayValue: { values: EvidenceValue[] } }
@@ -16,6 +19,7 @@ export interface OtlpEvidence extends AttributeSource {
   schemaVersion: 1;
   startTimeUnixNano: string | null; endTimeUnixNano: string | null;
   kind: number | null; flags: number | null; traceState: string | null;
+  status: { code: number | null; message: string | null } | null;
   resource: (AttributeSource & { schemaUrl: string | null }) | null;
   scope: (AttributeSource & { name: string | null; version: string | null; schemaUrl: string | null }) | null;
   droppedEventsCount: number | null; droppedLinksCount: number | null;
@@ -24,12 +28,13 @@ export interface OtlpEvidence extends AttributeSource {
     droppedAttributes: number; truncatedValues: number; invalidValues: number; redactedValues: number };
 }
 
-const own = (value: unknown, key: string): unknown => {
+const own = (value: unknown, key: PropertyKey): unknown => {
   if (!value || typeof value !== "object") return undefined;
   const descriptor = Object.getOwnPropertyDescriptor(value, key);
   return descriptor && "value" in descriptor ? descriptor.value : undefined;
 };
 const uint32 = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0xffffffff;
+const int32 = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= -0x80000000 && value <= 0x7fffffff;
 const decimal = (value: unknown, signed: boolean): value is string => {
   if (typeof value !== "string" || !(signed ? /^-?\d{1,19}$/ : /^\d{1,20}$/).test(value)) return false;
   const n = BigInt(value);
@@ -55,6 +60,11 @@ export function captureOtlpEvidence(span: unknown, resourceSpans: unknown, scope
   const count = (value: unknown): number | null => {
     if (value === undefined || value === null) return null;
     if (uint32(value)) return value;
+    capture.invalidValues++; return null;
+  };
+  const statusCode = (value: unknown): number | null => {
+    if (value === undefined || value === null) return null;
+    if (int32(value)) return value;
     capture.invalidValues++; return null;
   };
   const nanos = (value: unknown): string | null => {
@@ -119,10 +129,17 @@ export function captureOtlpEvidence(span: unknown, resourceSpans: unknown, scope
   };
   const source = (input: unknown): AttributeSource => ({ attributes: attributes(own(input, "attributes")), droppedAttributesCount: count(own(input, "droppedAttributesCount")) });
   const resource = own(resourceSpans, "resource"), scope = own(scopeSpans, "scope");
+  const canonicalStatus = own(span, "status"), sourceStatus = own(canonicalStatus, OTLP_SOURCE_STATUS) ?? canonicalStatus;
+  const status = (): OtlpEvidence["status"] => {
+    if (sourceStatus === undefined || sourceStatus === null) return null;
+    if (typeof sourceStatus !== "object" || Array.isArray(sourceStatus)) { capture.invalidValues++; return null; }
+    return { code: statusCode(own(sourceStatus, "code")), message: text(own(sourceStatus, "message")) };
+  };
   const resourceSchemaUrl = text(own(resourceSpans, "schemaUrl")), scopeSchemaUrl = text(own(scopeSpans, "schemaUrl"));
   const evidence: OtlpEvidence = {
     schemaVersion: 1, startTimeUnixNano: nanos(own(span, "startTimeUnixNano")), endTimeUnixNano: nanos(own(span, "endTimeUnixNano")),
     kind: count(own(span, "kind")), flags: count(own(span, "flags")), traceState: text(own(span, "traceState")),
+    status: status(),
     ...source(span), resource: resource || resourceSchemaUrl !== null ? { schemaUrl: resourceSchemaUrl, ...source(resource) } : null,
     scope: scope || scopeSchemaUrl !== null ? { name: text(own(scope, "name")), version: text(own(scope, "version")), schemaUrl: scopeSchemaUrl, ...source(scope) } : null,
     droppedEventsCount: count(own(span, "droppedEventsCount")), droppedLinksCount: count(own(span, "droppedLinksCount")), events: [], links: [], capture,
@@ -214,9 +231,14 @@ export function validateOtlpEvidence(input: unknown): asserts input is OtlpEvide
     }
   };
   const source = (entry: Record<string, unknown>) => { attributes(entry.attributes); count(entry.droppedAttributesCount); };
-  const evidence = record(input, ["schemaVersion", "startTimeUnixNano", "endTimeUnixNano", "kind", "flags", "traceState", "attributes", "droppedAttributesCount", "resource", "scope", "droppedEventsCount", "droppedLinksCount", "events", "links", "capture"]);
+  const evidence = record(input, ["schemaVersion", "startTimeUnixNano", "endTimeUnixNano", "kind", "flags", "traceState", "status", "attributes", "droppedAttributesCount", "resource", "scope", "droppedEventsCount", "droppedLinksCount", "events", "links", "capture"]);
   if (evidence.schemaVersion !== 1) fail();
   nanos(evidence.startTimeUnixNano); nanos(evidence.endTimeUnixNano); count(evidence.kind); count(evidence.flags); text(evidence.traceState, true); source(evidence);
+  if (evidence.status !== null) {
+    const status = record(evidence.status, ["code", "message"]);
+    if (status.code !== null && !int32(status.code)) fail();
+    text(status.message, true);
+  }
   count(evidence.droppedEventsCount); count(evidence.droppedLinksCount);
   if (evidence.resource !== null) { const resource = record(evidence.resource, ["schemaUrl", "attributes", "droppedAttributesCount"]); text(resource.schemaUrl, true); source(resource); }
   if (evidence.scope !== null) { const scope = record(evidence.scope, ["name", "version", "schemaUrl", "attributes", "droppedAttributesCount"]); text(scope.name, true); text(scope.version, true); text(scope.schemaUrl, true); source(scope); }

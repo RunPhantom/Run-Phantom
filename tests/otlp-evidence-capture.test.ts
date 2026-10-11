@@ -11,7 +11,7 @@ test("JSON and independent protobuf source retain exact nanoseconds, int64 value
   expect(b).toEqual(a);
   validateOtlpEvidence(a.otlpEvidence);
   expect(a.otlpEvidence).toMatchObject({ startTimeUnixNano: "1770000000000000001", endTimeUnixNano: "1770000000000123456",
-    kind: 3, flags: 2147484417, traceState: "fixture=source", droppedAttributesCount: 0, droppedEventsCount: 3, droppedLinksCount: 4,
+    kind: 3, flags: 2147484417, traceState: "fixture=source", status: { code: 1, message: "Local capture completed" }, droppedAttributesCount: 0, droppedEventsCount: 3, droppedLinksCount: 4,
     resource: { droppedAttributesCount: 0 }, scope: { droppedAttributesCount: 2 },
     capture: { sourceCountPolicy: "absent-is-unknown", droppedEvents: 0, droppedLinks: 0, droppedAttributes: 0, truncatedValues: 0, invalidValues: 0, redactedValues: 0 } });
   expect(a.otlpEvidence.events[0]).toMatchObject({ timeUnixNano: "1770000000000000002", droppedAttributesCount: 0,
@@ -21,6 +21,32 @@ test("JSON and independent protobuf source retain exact nanoseconds, int64 value
     droppedAttributesCount: 5, attributes: [{ key: "bytes", value: { bytesValue: "AP8B" } }] });
   expect(a.outputPayload).toBe(fidelityOutput);
   expect(a.normalized).toEqual({ kind: "other" });
+});
+
+test("source diagnostics retain absent status and code separately from legacy canonical outcomes", () => {
+  for (const status of [undefined, {}, { message: "Source diagnostic without code" }, { code: 0, message: "" }]) {
+    const body = fidelityRequest() as any, source = body.resourceSpans[0].scopeSpans[0].spans[0];
+    source.status = status;
+    const json = parseOtlpRequest(body)[0], binary = parseOtlpRequest(decodeOtlpProtobuf(encodeFidelityRequest(body)))[0];
+    expect(binary.otlpEvidence).toEqual(json.otlpEvidence);
+    expect(json.otlpEvidence.status).toEqual(status === undefined ? null : { code: status.code ?? null, message: status.message ?? null });
+    expect(binary.status).toBe("OK"); expect(json.status).toBe("OK");
+    if (status) expect(binary.attributes["otel.status.code"]).toBe(status.code ?? 0);
+    expect(binary.outputPayload).toBe(fidelityOutput); expect(binary.normalized).toEqual(json.normalized);
+    validateOtlpEvidence(binary.otlpEvidence);
+  }
+});
+
+test("status diagnostic redaction and truncation disclose receiver loss without changing the canonical result", () => {
+  for (const message of [`sk-proj-${"x".repeat(48)}`, "diagnostic ".repeat(500)]) {
+    const body = fidelityRequest() as any, source = body.resourceSpans[0].scopeSpans[0].spans[0]; source.status = { code: 2, message };
+    const json = parseOtlpRequest(body)[0], binary = parseOtlpRequest(decodeOtlpProtobuf(encodeFidelityRequest(body)))[0];
+    expect(binary).toEqual(json); expect(binary.status).toBe("ERROR"); expect(binary.outputPayload).toBe(fidelityOutput);
+    expect(binary.attributes["otel.status.message"]).toBe(message);
+    expect(binary.otlpEvidence.status).toEqual({ code: 2, message: message.length > 4096 ? "[TRUNCATED]" : "[REDACTED]" });
+    expect(binary.otlpEvidence.capture).toMatchObject({ redactedValues: message.length > 4096 ? 0 : 1, truncatedValues: message.length > 4096 ? 1 : 0 });
+    validateOtlpEvidence(binary.otlpEvidence);
+  }
 });
 
 test("absent protobuf fields remain unavailable instead of becoming captured zero", () => {

@@ -1,4 +1,5 @@
 import * as protobuf from "protobufjs";
+import { OTLP_SOURCE_STATUS } from "./spans/otlp-evidence";
 
 const OTLP_PROTO = `
 syntax = "proto3";
@@ -129,6 +130,8 @@ function convertKeyValue(kv: any): any {
 }
 
 function convertSpan(s: any): any {
+  const status = s.status ? { code: typeof s.status.code === "number" ? s.status.code : 0, message: s.status.message } : undefined;
+  if (status) Object.defineProperty(status, OTLP_SOURCE_STATUS, { value: { code: s.status.code, message: s.status.message } });
   return {
     traceId: bytesToHex(s.traceId) ?? "",
     spanId: bytesToHex(s.spanId) ?? "",
@@ -157,9 +160,7 @@ function convertSpan(s: any): any {
       attributes: (l.attributes ?? []).map(convertKeyValue),
       droppedAttributesCount: l.droppedAttributesCount,
     })),
-    status: s.status
-      ? { code: typeof s.status.code === "number" ? s.status.code : 0, message: s.status.message }
-      : undefined,
+    status,
   };
 }
 

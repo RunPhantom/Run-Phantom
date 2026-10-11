@@ -13,7 +13,7 @@ export function fidelityRequest() {
   }, spans: [{ traceId: fidelityTraceId, spanId: fidelitySpanId, name: "captured-checkout",
     startTimeUnixNano: "1770000000000000001", endTimeUnixNano: "1770000000000123456",
     kind: 3, flags: 2147484417, traceState: "fixture=source", droppedAttributesCount: 0,
-    droppedEventsCount: 3, droppedLinksCount: 4, status: { code: 1 },
+    droppedEventsCount: 3, droppedLinksCount: 4, status: { code: 1, message: "Local capture completed" },
     attributes: [{ key: "runphantom.span.kind", value: { stringValue: "agent_root" } },
       { key: "runphantom.input", value: { stringValue: '{"prompt":"Inspect checkout A-42"}' } },
       { key: "runphantom.output", value: { stringValue: fidelityOutput } }],

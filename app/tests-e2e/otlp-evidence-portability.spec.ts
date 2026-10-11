@@ -66,6 +66,7 @@ test("bounded OTLP evidence survives actual save, cache clear, file import, relo
     const sourceSpan = original.spans.find((span: any) => span.id === fidelitySpanId), envelope = JSON.parse(sourceSpan.otlp_evidence);
     expect(sourceSpan.output_payload).toBe(fidelityOutput);
     expect(envelope).toMatchObject({ startTimeUnixNano: "1770000000000000001", endTimeUnixNano: "1770000000000123456",
+      status: { code: 1, message: "Local capture completed" },
       resource: { schemaUrl: "https://schemas.example/resource/1", droppedAttributesCount: 0 },
       scope: { schemaUrl: "https://schemas.example/scope/1", droppedAttributesCount: 2 },
       capture: { droppedEvents: 0, droppedLinks: 0, redactedValues: 0 } });
