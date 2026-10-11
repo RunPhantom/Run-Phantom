@@ -136,15 +136,15 @@ function convertSpan(s: any): any {
     traceState: s.traceState,
     flags: s.flags,
     name: s.name ?? "",
-    kind: typeof s.kind === "number" ? s.kind : 0,
-    startTimeUnixNano: String(s.startTimeUnixNano ?? "0"),
-    endTimeUnixNano: String(s.endTimeUnixNano ?? "0"),
+    kind: s.kind,
+    startTimeUnixNano: s.startTimeUnixNano === undefined ? undefined : String(s.startTimeUnixNano),
+    endTimeUnixNano: s.endTimeUnixNano === undefined ? undefined : String(s.endTimeUnixNano),
     attributes: (s.attributes ?? []).map(convertKeyValue),
     droppedAttributesCount: s.droppedAttributesCount,
     droppedEventsCount: s.droppedEventsCount,
     droppedLinksCount: s.droppedLinksCount,
     events: (s.events ?? []).map((e: any) => ({
-      timeUnixNano: String(e.timeUnixNano ?? "0"),
+      timeUnixNano: e.timeUnixNano === undefined ? undefined : String(e.timeUnixNano),
       name: e.name ?? "",
       attributes: (e.attributes ?? []).map(convertKeyValue),
       droppedAttributesCount: e.droppedAttributesCount,
@@ -175,7 +175,7 @@ export function decodeOtlpProtobuf(buf: Buffer | Uint8Array): { resourceSpans: a
     schemaUrl: rs.schemaUrl,
     resource: rs.resource
       ? { attributes: (rs.resource.attributes ?? []).map(convertKeyValue), droppedAttributesCount: rs.resource.droppedAttributesCount }
-      : { attributes: [] },
+      : undefined,
     scopeSpans: (rs.scopeSpans ?? []).map((ss: any) => ({
       schemaUrl: ss.schemaUrl,
       scope: ss.scope
