@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { expect, test as sourceTest } from "./fixtures";
 import { clearRunPhantom } from "./helpers";
+import type { Snapshot } from "../../src/evaluations/protocol";
 
 const compiledUrl = process.env.RUNPHANTOM_COMPILED_URL;
 if (compiledUrl) {
@@ -59,6 +60,13 @@ test.beforeEach(async ({ runPhantom }, testInfo) => {
 
 test("pricing: real Settings consent refreshes an open run with exact source and unavailable rows", async ({ page, runPhantom }, testInfo) => {
   const before = await seed(runPhantom.url, "mixed");
+  const readReportedSnapshot = async (): Promise<Snapshot> => {
+    const response = await fetch(`${runPhantom.url}/api/evaluations/runs/${RUN_ID}/snapshot`);
+    expect(response.ok).toBe(true);
+    return await response.json() as Snapshot;
+  };
+  const reportedSnapshot = await readReportedSnapshot();
+  expect(reportedSnapshot.metrics.costUsd).toBe(0.246);
   let requests = 0;
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
@@ -102,6 +110,9 @@ test("pricing: real Settings consent refreshes an open run with exact source and
   expect(afterResponse.ok).toBe(true);
   const after = await afterResponse.json() as typeof before;
   expect(after.spans.map(span => ({ model: span.model, input: span.input_tokens, output: span.output_tokens, attributes: span.attributes }))).toEqual(before.spans.map(span => ({ model: span.model, input: span.input_tokens, output: span.output_tokens, attributes: span.attributes })));
+  const afterReportedSnapshot = await readReportedSnapshot();
+  expect(afterReportedSnapshot.metrics).toEqual(reportedSnapshot.metrics);
+  expect(afterReportedSnapshot.models).toEqual(reportedSnapshot.models);
 
   const settingsPage = await page.context().newPage();
   await settingsPage.goto(`${runPhantom.url}/settings`);
