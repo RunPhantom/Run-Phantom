@@ -111,10 +111,23 @@ teamTest("cost analytics: actual private project/UI and revoked viewer never fal
   await page.screenshot({ path: info.outputPath("cost-analytics-team-project.png"), fullPage: true });
   const invitation = await mutate(`/projects/${projectId}/invites`, { email: "cost-viewer@example.test", role: "viewer" }); expect(invitation.ok()).toBe(true); const invitationToken = (await invitation.json()).token;
   const viewerContext = await browser.newContext(); const viewer = await viewerContext.newPage();
-  const accepted = await viewerContext.request.post(`${team.url}/api/team/invites/accept`, { headers: { Origin: team.url }, data: { token: invitationToken, email: "cost-viewer@example.test", password: "Synthetic viewer password 2026" } }); expect(accepted.ok()).toBe(true); const viewerSession = await accepted.json();
-  await viewer.goto(`${team.url}/team/projects/${projectId}/costs`); await expect(viewer.getByTestId("reported-cost")).toContainText("$0.123");
-  const revoked = await mutate(`/projects/${projectId}/members/${viewerSession.session.user.id}`, undefined, "DELETE"); expect(revoked.status()).toBe(204);
-  await viewer.getByRole("button", { name: "Refresh", exact: true }).click(); await expect(viewer.getByRole("heading", { name: "Cost & usage", exact: true })).toHaveCount(0);
-  await expect(viewer.getByTestId("reported-cost")).toHaveCount(0); expect(localRequests).toEqual([]); await viewerContext.close();
+  try {
+    const viewerLocalRequests: string[] = [];
+    viewer.on("request", request => { const path = new URL(request.url()).pathname; if (path.startsWith("/api/") && !path.startsWith("/api/team/")) viewerLocalRequests.push(path); });
+    const detectorProbe = "/api/local-fallback-observer-probe";
+    await viewer.route(`${team.url}${detectorProbe}`, route => route.fulfill({ contentType: "application/json", body: "{}" }));
+    const accepted = await viewerContext.request.post(`${team.url}/api/team/invites/accept`, { headers: { Origin: team.url }, data: { token: invitationToken, email: "cost-viewer@example.test", password: "Synthetic viewer password 2026" } }); expect(accepted.ok()).toBe(true); const viewerSession = await accepted.json();
+    await viewer.goto(`${team.url}/team/projects/${projectId}/costs`); await expect(viewer.getByTestId("reported-cost")).toContainText("$0.123");
+    await viewer.evaluate(async path => { await fetch(path); }, detectorProbe);
+    expect(viewerLocalRequests).toEqual([detectorProbe]);
+    viewerLocalRequests.length = 0; await viewer.unroute(`${team.url}${detectorProbe}`);
+    const revoked = await mutate(`/projects/${projectId}/members/${viewerSession.session.user.id}`, undefined, "DELETE"); expect(revoked.status()).toBe(204);
+    const refusal = viewer.waitForResponse(response => new URL(response.url()).pathname === `/api/team/projects/${projectId}/pricing/analytics` && response.request().method() === "POST");
+    await viewer.getByRole("button", { name: "Refresh", exact: true }).click(); expect((await refusal).status()).toBe(404);
+    await expect(viewer.getByRole("heading", { name: "Cost & usage", exact: true })).toHaveCount(0);
+    await expect(viewer.getByTestId("reported-cost")).toHaveCount(0); expect(localRequests).toEqual([]); expect(viewerLocalRequests).toEqual([]);
+    await viewer.screenshot({ path: info.outputPath("cost-analytics-revoked-viewer.png"), fullPage: true });
+    await info.attach("Scoped request observers", { body: JSON.stringify({ probeCaughtOnActualViewer: true, ownerLocalRequests: localRequests, viewerLocalRequests, revokedAnalyticsStatus: 404, revokedCapturedContentRemoved: true }), contentType: "application/json" });
+  } finally { await viewerContext.close(); }
   await info.attach("Team analytics runtime", { body: JSON.stringify({ runtime: process.env.RUNPHANTOM_TEAM_TEST_BINARY ? "copied-compiled-private-team" : "source-private-team", capture: "synthetic-stored-OTLP", providerSpendUsd: 0 }), contentType: "application/json" });
 });
