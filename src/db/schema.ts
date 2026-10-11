@@ -42,6 +42,7 @@ export const spans = sqliteTable(
     input_tokens: integer("input_tokens"),
     output_tokens: integer("output_tokens"),
     attributes: text("attributes"),
+    otlp_evidence: text("otlp_evidence"),
   },
   (table) => [
     primaryKey({ columns: [table.run_id, table.id] }),

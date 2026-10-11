@@ -77,7 +77,9 @@ for (const prior of [false, true]) test(`evidence migration: ${prior ? "upgrade 
     expect(history).toHaveLength(journal.entries.length);
     if (originals) {
       expect(installed.query("SELECT * FROM runs").all()).toEqual(originals.runs);
-      expect(installed.query("SELECT * FROM spans").all()).toEqual(originals.spans);
+      const upgradedSpans = installed.query("SELECT * FROM spans").all() as Record<string, unknown>[];
+      for (const span of upgradedSpans) expect(span.otlp_evidence).toBeNull();
+      expect(upgradedSpans.map(({ otlp_evidence: _newEvidence, ...priorColumns }) => priorColumns)).toEqual(originals.spans);
       expect(installed.query("SELECT * FROM evaluation_revisions").all()).toEqual(originals.revisions);
       expect(history.slice(0, 7)).toEqual(originals.history);
     }
