@@ -152,20 +152,6 @@ export interface CostBreakdown {
   source: FrozenRateRevision["source"];
 }
 
-export function getTokensByModel(spans: Span[]): Map<string, { inTok: number; outTok: number }> {
-  const byModel = new Map<string, { inTok: number; outTok: number }>();
-  const llmIds = new Set(spans.filter(span => span.span_type?.includes("LLM")).map(span => span.id));
-  for (const span of spans) {
-    if (!span.model || !span.span_type?.includes("LLM") || !(span.input_tokens || span.output_tokens)) continue;
-    if (span.parent_span_id && llmIds.has(span.parent_span_id)) continue;
-    const existing = byModel.get(span.model) ?? { inTok: 0, outTok: 0 };
-    existing.inTok += span.input_tokens ?? 0;
-    existing.outTok += span.output_tokens ?? 0;
-    byModel.set(span.model, existing);
-  }
-  return byModel;
-}
-
 export interface PricingUsageTotals { inTok: number | null; outTok: number | null }
 
 export function getPricingUsageByModel(spans: Span[]): Map<string | null, PricingUsageTotals> {
