@@ -118,6 +118,36 @@ test("review portability: exact raw text/key limits retain their identity and ou
   expect(evidence.capture).toMatchObject({ redactedValues: 0, truncatedValues: 0, droppedAttributes: 0 });
 });
 
+function attributeValueCount(groups: any[]): number {
+  const count = (value: any): number => 1 + (value.arrayValue?.values ?? []).reduce((sum: number, child: any) => sum + count(child), 0)
+    + (value.kvlistValue?.values ?? []).reduce((sum: number, child: any) => sum + count(child.value), 0);
+  return groups.reduce((sum, group) => sum + (group?.attributes ?? []).reduce((total: number, attribute: any) => total + count(attribute.value), 0), 0);
+}
+
+test.each(["redacted", "mixed"])("review portability: 4614 %s values respect the cumulative 4096-node budget across a real roundtrip", async variant => {
+  const sent = fidelityRequest() as any, resource = sent.resourceSpans[0], scope = resource.scopeSpans[0], span = scope.spans[0];
+  span.events = Array.from({ length: 36 }, () => ({ name: "e", attributes: Array.from({ length: 128 }, (_, index) => ({
+    key: variant === "mixed" && index % 2 ? `ordinary-${index}` : "token", value: { boolValue: false },
+  })) }));
+  expect(attributeValueCount([span, resource.resource, scope.scope, ...span.events, ...span.links])).toBe(4614);
+  const evidence = await verifyCapturedBoundary(`${variant}-node-budget`, sent);
+  expect(attributeValueCount([evidence, evidence.resource, evidence.scope, ...evidence.events, ...evidence.links])).toBe(4096);
+  expect(evidence.capture).toMatchObject({ droppedAttributes: 518, redactedValues: variant === "redacted" ? 4091 : 2046 });
+  expect(evidence.events[31].attributes).toHaveLength(123); expect(evidence.events[32].attributes).toEqual([]);
+  expect(evidence.links[0].attributes).toEqual([]);
+  expect(evidence.droppedEventsCount).toBe(3); expect(evidence.droppedLinksCount).toBe(4);
+});
+
+test("review portability: exactly 4096 ordinary values retain the last linked value without invented loss", async () => {
+  const sent = fidelityRequest() as any, resource = sent.resourceSpans[0], scope = resource.scopeSpans[0], span = scope.spans[0];
+  span.events = Array.from({ length: 32 }, (_, index) => ({ name: "exact-budget", attributes: Array.from({ length: index === 31 ? 122 : 128 }, () => ({ key: "ordinary", value: { boolValue: false } })) }));
+  expect(attributeValueCount([span, resource.resource, scope.scope, ...span.events, ...span.links])).toBe(4096);
+  const evidence = await verifyCapturedBoundary("exact-ordinary-node-budget", sent);
+  expect(attributeValueCount([evidence, evidence.resource, evidence.scope, ...evidence.events, ...evidence.links])).toBe(4096);
+  expect(evidence.links[0].attributes).toEqual(span.links[0].attributes);
+  expect(evidence.capture).toMatchObject({ droppedAttributes: 0, truncatedValues: 0, redactedValues: 0 });
+});
+
 test.each(["JSON", "gzipped protobuf"])("actual %s ingest, file-backed storage, fresh-process reopen and independent import preserve evidence", async (encoding) => {
   const sent = fidelityRequest();
   const options = encoding === "JSON" ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sent) }

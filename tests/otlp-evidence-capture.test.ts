@@ -121,6 +121,22 @@ test("depth, value-node and byte bounds produce portable explicit loss rather th
   }
 });
 
+test("redacted placeholders in every source and nested kvlist share the value budget without reading sensitive getters", () => {
+  const body = fidelityRequest() as any, resource = body.resourceSpans[0], scope = resource.scopeSpans[0], span = scope.spans[0];
+  let invoked = 0;
+  const secret = () => Object.defineProperty({ key: "api_key" }, "value", { enumerable: true, get() { invoked++; throw new Error("Sensitive source getter must not run"); } });
+  const nested = { key: "nested", value: { kvlistValue: { values: [secret()] } } };
+  span.attributes.push(nested); resource.resource.attributes.push(secret()); scope.scope.attributes.push(secret()); span.links[0].attributes.push(secret());
+  span.events = Array.from({ length: 36 }, () => ({ name: "budget", attributes: Array.from({ length: 128 }, secret) }));
+  const evidence = captureOtlpEvidence(span, resource, scope);
+  expect(invoked).toBe(0); expect(evidence.capture.droppedAttributes).toBeGreaterThan(0);
+  expect(evidence.attributes).toContainEqual({ key: "nested", value: { kvlistValue: { values: [{ key: "api_key", value: { stringValue: "[REDACTED]" } }] } } });
+  validateOtlpEvidence(evidence);
+  const small = captureOtlpEvidence({ ...span, events: [] }, resource, scope);
+  expect(small.links[0].attributes).toContainEqual({ key: "api_key", value: { stringValue: "[REDACTED]" } });
+  expect(small.capture.redactedValues).toBe(4); expect(invoked).toBe(0); validateOtlpEvidence(small);
+});
+
 test("portable validator refuses malformed, unsafe and executable-shaped envelopes without invoking accessors", () => {
   const original = parseOtlpRequest(fidelityRequest())[0].otlpEvidence;
   for (const mutate of [

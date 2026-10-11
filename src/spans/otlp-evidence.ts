@@ -76,7 +76,7 @@ export function captureOtlpEvidence(span: unknown, resourceSpans: unknown, scope
   };
   const unavailable = (): EvidenceValue => { capture.invalidValues++; return { stringValue: "[UNAVAILABLE]" }; };
   const value = (input: unknown, depth: number): EvidenceValue => {
-    if (++nodes >= OTLP_EVIDENCE_LIMITS.valueNodes || depth >= OTLP_EVIDENCE_LIMITS.depth) {
+    if (++nodes > OTLP_EVIDENCE_LIMITS.valueNodes || depth >= OTLP_EVIDENCE_LIMITS.depth) {
       capture.truncatedValues++; return { stringValue: "[TRUNCATED]" };
     }
     const variants = ["stringValue", "boolValue", "intValue", "doubleValue", "bytesValue", "arrayValue", "kvlistValue"]
@@ -120,7 +120,7 @@ export function captureOtlpEvidence(span: unknown, resourceSpans: unknown, scope
       const safeKey = text(key)!;
       if (safeKey.length > OTLP_EVIDENCE_LIMITS.key) { capture.droppedAttributes++; capture.truncatedValues++; continue; }
       let decoded: EvidenceValue;
-      if (defaultIsSensitiveKey(key)) { capture.redactedValues++; decoded = { stringValue: "[REDACTED]" }; }
+      if (defaultIsSensitiveKey(key)) { nodes++; capture.redactedValues++; decoded = { stringValue: "[REDACTED]" }; }
       else decoded = value(own(entry, "value"), depth);
       const attribute = { key: safeKey, value: decoded };
       const size = Buffer.byteLength(JSON.stringify(attribute));
