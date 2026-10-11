@@ -1,6 +1,10 @@
 #!/usr/bin/env node
-/** Select shared or local authority before loading either runtime. */
-if (process.argv[2] === "team") {
+/** Internal readers must finish before loading either authority runtime. */
+if (process.argv[2] === "__runphantom_evidence_worker_v1") {
+  if (process.argv.length !== 3) process.exit(1);
+  const { runEvidenceWorker } = await import("./evaluations/evidence-worker");
+  process.exit(await runEvidenceWorker());
+} else if (process.argv[2] === "team") {
   try {
     const { runTeamCli } = await import("./team/cli");
     process.exit(await runTeamCli(process.argv.slice(3)));
