@@ -1,11 +1,12 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { access, chmod, copyFile, mkdir, mkdtemp, open, readFile, readdir, readlink, realpath, rm, stat } from "node:fs/promises";
+import { access, chmod, copyFile, mkdir, mkdtemp, open, readFile, readdir, readlink, realpath, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { removeOwnedDirectory } from "./owned-directory";
 
 export type RuntimeSelection = { mode: "source" } | { mode: "installed"; artifact: string; sha256: string };
 export type ProcessObservation = { executable: string; cwd: string | null; command: string; listenerOwned: boolean; cwdEvidence: "observed" | "launch-only" };
@@ -163,17 +164,6 @@ export async function stopOwnedProcess(owned: OwnedProcess): Promise<{ pid: numb
     }
   }
   return { pid: pid ?? null, closeObserved: true, forced, identity: await owned.identity };
-}
-export async function removeOwnedDirectory(directory: string): Promise<void> {
-  for (let attempt = 0; ; attempt++) {
-    try { await rm(directory, { recursive: true, force: true }); break; }
-    catch (error) {
-      if (attempt >= 9 || !["EBUSY", "EPERM", "ENOTEMPTY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
-      await sleep(100);
-    }
-  }
-  try { await stat(directory); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
-  throw refusal("fixture_directory_not_removed");
 }
 async function reservePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
