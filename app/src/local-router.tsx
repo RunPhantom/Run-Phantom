@@ -9,6 +9,7 @@ import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/s
 import { NavSidebar } from "./components/NavSidebar";
 import { MessagePane } from "./components/MessagePane";
 import { RunsPage } from "./pages/RunsPage";
+import { CostAnalyticsPage } from "./pages/CostAnalyticsPage";
 import { SearchPage } from "./pages/SearchPage";
 import { SavedPage } from "./pages/SavedPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
@@ -117,6 +118,7 @@ export const localRoutes: RouteObject[] = [
       { path: "settings", element: <SettingsPage />, errorElement: <RouteError /> },
       { path: "verification", element: <VerificationPage />, errorElement: <RouteError /> },
       { path: "evaluations", element: <EvaluationsPage />, errorElement: <RouteError /> },
+      { path: "costs", element: <CostAnalyticsPage />, errorElement: <RouteError /> },
       { path: "*", element: <NotFoundPage />, errorElement: <RouteError /> },
     ],
   },
