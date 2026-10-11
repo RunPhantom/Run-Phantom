@@ -61,6 +61,63 @@ function record(name: string, value: unknown) {
   if (process.env.F10_EVIDENCE_PATH) writeFileSync(path.join(process.env.F10_EVIDENCE_PATH, name), JSON.stringify(value, null, 2) + "\n");
 }
 
+async function verifyCapturedBoundary(label: string, sent: ReturnType<typeof fidelityRequest>) {
+  expect((await post(source, "/v1/traces", fidelityRequest())).status).toBe(200);
+  const control = await exported();
+  expect((await post(destination, "/api/import-run", control)).status).toBe(200);
+  expect((await fetch(`${source}/api/clear`, { method: "POST" })).status).toBe(200);
+  const requestDigest = sha(sent);
+  expect((await post(source, "/v1/traces", sent)).status).toBe(200);
+  const detail = await fetch(`${source}/api/runs/detail/${fidelityTraceId}`); expect(detail.status).toBe(200);
+  const actual = await detail.json(), captured = actual.spans[0];
+  expect(captured.output_payload).toBe(fidelityOutput);
+  const before = await fetch(`${source}/api/runs/${fidelityTraceId}/export`), beforeBody = await before.json();
+  // When a regression blocks export, probe the receiver's actual persisted
+  // envelope using the known-good portable control; this is a refusal receipt,
+  // never a successful file-export claim.
+  const transfer = before.status === 200 ? beforeBody : { ...control,
+    spans: control.spans.map((span: any) => ({ ...span, otlp_evidence: captured.otlp_evidence })) };
+  const importResponse = await post(destination, "/api/import-run", transfer), destinationAfter = await exported(destination);
+  const previousPid = stores.get("source")!.pid; await stopStore(stores.get("source")!);
+  const db = new Database(path.join(directory, "source.db"), { readonly: true });
+  try { expect(db.query("SELECT otlp_evidence,output_payload FROM spans WHERE run_id=?").get(fidelityTraceId)).toEqual({ otlp_evidence: captured.otlp_evidence, output_payload: fidelityOutput }); }
+  finally { db.close(); }
+  source = await startStore("source"); const nextPid = stores.get("source")!.pid; expect(nextPid).not.toBe(previousPid);
+  const reopenedDetail = await fetch(`${source}/api/runs/detail/${fidelityTraceId}`); expect(reopenedDetail.status).toBe(200);
+  const reopenedSpan = (await reopenedDetail.json()).spans[0];
+  expect(reopenedSpan.otlp_evidence).toBe(captured.otlp_evidence); expect(reopenedSpan.output_payload).toBe(fidelityOutput);
+  const after = await fetch(`${source}/api/runs/${fidelityTraceId}/export`), afterBody = await after.json();
+  record(`boundary-${label}.json`, { fixture: "actual local captured telemetry; no provider execution", requestDigest,
+    requestDigestAfter: sha(sent), exportBeforeStatus: before.status, exportAfterRestartStatus: after.status,
+    independentImportStatus: importResponse.status, sourcePids: [previousPid, nextPid], output: captured.output_payload,
+    actualEnvelope: JSON.parse(captured.otlp_evidence), controlDigest: sha(control), destinationDigest: sha(destinationAfter),
+    exportedTrace: before.status === 200 ? beforeBody : null, exportError: before.status === 200 ? null : beforeBody,
+    actualEnvelopeDigestBefore: sha(captured.otlp_evidence), actualEnvelopeDigestAfterRestart: sha(reopenedSpan.otlp_evidence),
+    sourceExportDigest: before.status === 200 ? sha(beforeBody) : null });
+  expect(sha(sent)).toBe(requestDigest); expect(before.status).toBe(200); expect(after.status).toBe(200);
+  expect(importResponse.status).toBe(200); expect(afterBody).toEqual(beforeBody); expect(destinationAfter).toEqual(beforeBody);
+  return JSON.parse(captured.otlp_evidence);
+}
+
+const redactionUrl = "https://example.test/?token=x";
+test.each(["text", "key"])("review portability: post-redaction %s expansion remains bounded after storage/restart/export/import", async variant => {
+  const sent = fidelityRequest() as any, span = sent.resourceSpans[0].scopeSpans[0].spans[0], maximum = variant === "text" ? 4096 : 256;
+  const raw = "x".repeat(maximum - redactionUrl.length - 1) + " " + redactionUrl;
+  expect(raw.length).toBe(maximum);
+  span.events[0].attributes = [{ key: variant === "key" ? raw : "ordinary", value: { stringValue: variant === "text" ? raw : "captured" } }];
+  const evidence = await verifyCapturedBoundary(`post-redaction-${variant}`, sent);
+  expect(evidence.capture).toMatchObject({ redactedValues: 1, truncatedValues: 1, droppedAttributes: variant === "key" ? 1 : 0 });
+  expect(evidence.events[0].attributes).toEqual(variant === "key" ? [] : [{ key: "ordinary", value: { stringValue: "[TRUNCATED]" } }]);
+});
+
+test("review portability: exact raw text/key limits retain their identity and output through a real transfer", async () => {
+  const sent = fidelityRequest() as any, span = sent.resourceSpans[0].scopeSpans[0].spans[0];
+  span.events[0].attributes = [{ key: "k".repeat(256), value: { stringValue: "v".repeat(4096) } }];
+  const evidence = await verifyCapturedBoundary("exact-text-key-boundaries", sent);
+  expect(evidence.events[0].attributes).toEqual(span.events[0].attributes);
+  expect(evidence.capture).toMatchObject({ redactedValues: 0, truncatedValues: 0, droppedAttributes: 0 });
+});
+
 test.each(["JSON", "gzipped protobuf"])("actual %s ingest, file-backed storage, fresh-process reopen and independent import preserve evidence", async (encoding) => {
   const sent = fidelityRequest();
   const options = encoding === "JSON" ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sent) }

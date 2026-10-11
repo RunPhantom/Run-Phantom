@@ -55,6 +55,7 @@ export function captureOtlpEvidence(span: unknown, resourceSpans: unknown, scope
     if (noNul !== value) capture.invalidValues++;
     const safe = redactText(noNul);
     if (safe !== noNul) capture.redactedValues++;
+    if (safe.length > OTLP_EVIDENCE_LIMITS.text) { capture.truncatedValues++; return "[TRUNCATED]"; }
     return safe;
   };
   const count = (value: unknown): number | null => {
@@ -117,6 +118,7 @@ export function captureOtlpEvidence(span: unknown, resourceSpans: unknown, scope
         capture.droppedAttributes++; capture.invalidValues++; continue;
       }
       const safeKey = text(key)!;
+      if (safeKey.length > OTLP_EVIDENCE_LIMITS.key) { capture.droppedAttributes++; capture.truncatedValues++; continue; }
       let decoded: EvidenceValue;
       if (defaultIsSensitiveKey(key)) { capture.redactedValues++; decoded = { stringValue: "[REDACTED]" }; }
       else decoded = value(own(entry, "value"), depth);
