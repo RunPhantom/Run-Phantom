@@ -1,0 +1,255 @@
+{
+  "feature": "F01",
+  "sourceHead": "cbca0baaa893bf7619b4e8aeca308aae0959e0c1",
+  "baseHead": "19b81d93f17136ddd712dd57f4c2481e0d824ea8",
+  "scope": "Atex V1 application design tokens, navigation shell and accessible primitives; full route composition remains downstream",
+  "verification": {
+    "backend": {
+      "passed": 677,
+      "skipped": 1,
+      "failed": 0,
+      "assertions": 3749,
+      "files": 65,
+      "duration_seconds": 67.37,
+      "skip_reason": "Native Windows junction boundary requires a Windows runtime"
+    },
+    "sourceChromium": {
+      "passed": 124,
+      "skipped": 10,
+      "failed": 0,
+      "flaky": 0,
+      "retries": 0,
+      "f01_new_journeys": 10
+    },
+    "copiedMacosChromium": {
+      "passed": 3,
+      "skipped": 0,
+      "failed": 0,
+      "flaky": 0,
+      "retries": 0
+    },
+    "lintBuildThreeTypes": "passed",
+    "trackedSourceFilesUnchanged": 411,
+    "embeddedAssetsMatchSource": 319,
+    "copiedBinarySha256": "8d9b490722e8133d31823ce7608ecbd29b329119f1918656ce9597bdf326ef4a",
+    "ownedProcessWaitedReapedAndProfileRemoved": true
+  },
+  "newJourneys": [
+    {
+      "title": "reference shell: real routes, readable navigation and unobscured header at 1440px",
+      "runtime": "source UI",
+      "result": "passed"
+    },
+    {
+      "title": "reference shell: real routes, readable navigation and unobscured header at 1024px",
+      "runtime": "source UI",
+      "result": "passed"
+    },
+    {
+      "title": "reference shell: real routes, readable navigation and unobscured header at 390px",
+      "runtime": "source UI",
+      "result": "passed"
+    },
+    {
+      "title": "reference shell: real routes, readable navigation and unobscured header at 320px",
+      "runtime": "source UI",
+      "result": "passed"
+    },
+    {
+      "title": "reference shell: keyboard navigation, active-section clicks and browser Back retain working history",
+      "runtime": "source UI",
+      "result": "passed"
+    },
+    {
+      "title": "reference shell: an actual captured span and its output remain unchanged through navigation and reload",
+      "runtime": "source UI",
+      "result": "passed"
+    },
+    {
+      "title": "reference shell: reduced motion removes drawer movement while retaining focus and navigation",
+      "runtime": "source UI",
+      "result": "passed"
+    },
+    {
+      "title": "reference shell: real WebSocket closure reports offline and reconnects without a fabricated status",
+      "runtime": "source UI",
+      "result": "passed"
+    },
+    {
+      "title": "reference shell: keyboard focus contrasts on primary and outline controls while create and export work",
+      "runtime": "source UI",
+      "result": "passed"
+    },
+    {
+      "title": "a coarse-pointer user reads 16px controls and creates a retained dataset",
+      "runtime": "source UI",
+      "result": "passed"
+    }
+  ],
+  "observedPrimitives": {
+    "touch": {
+      "coarsePointer": true,
+      "controls": [
+        {
+          "label": "Dataset name",
+          "tag": "INPUT",
+          "fontSize": "16px",
+          "height": 44
+        },
+        {
+          "label": "Dataset",
+          "tag": "SELECT",
+          "fontSize": "16px",
+          "height": 44
+        },
+        {
+          "label": "Dataset JSON",
+          "tag": "TEXTAREA",
+          "fontSize": "16px",
+          "height": 144
+        }
+      ]
+    },
+    "focus": {
+      "primary": {
+        "outlineColor": "rgb(255, 255, 255)",
+        "outlineWidth": "2px",
+        "outlineOffset": "-4px",
+        "outlineStyle": "solid",
+        "background": "rgb(0, 33, 204)",
+        "shadow": "rgb(255, 255, 255) 0px 0px 0px 0px, rgb(0, 33, 204) 0px 0px 0px 1px, rgba(0, 0, 0, 0) 0px 0px 0px 0px"
+      },
+      "outline": {
+        "outlineColor": "rgb(0, 33, 204)",
+        "outlineWidth": "2px",
+        "outlineOffset": "-2px",
+        "outlineStyle": "solid",
+        "background": "rgb(255, 255, 255)"
+      }
+    }
+  },
+  "downloadedDatasetSha256": "9e418ea4b1dcd1f73690376ce359ecb31f78cc7e97acaca08d9e125b3d2a9439",
+  "review": {
+    "decision": "APPROVE bounded foundation",
+    "receiptSha256": "a5859adf605cdd3e01bb4eee8974e87a29edf0e35d0e627d8bdedabba85d2ff1"
+  },
+  "screenshots": [
+    {
+      "name": "reference-shell-1440.png",
+      "sha256": "cd658c13f4e36e7281c51938e58c388673d91a46de1381037d5b2de7627598f8",
+      "width": 1440,
+      "height": 1000,
+      "runtime": "source UI",
+      "visually_inspected": true
+    },
+    {
+      "name": "reference-shell-1024.png",
+      "sha256": "89e5738185983eeab3ee21f74c92b4593f755735bd01ab45630dd5014e5a54c3",
+      "width": 1024,
+      "height": 1000,
+      "runtime": "source UI",
+      "visually_inspected": true
+    },
+    {
+      "name": "reference-shell-390.png",
+      "sha256": "a0c8c8c5dbae42e602a1618bddae171a30de7ca70a625dbec2a47de52f9d78e4",
+      "width": 390,
+      "height": 844,
+      "runtime": "source UI",
+      "visually_inspected": true
+    },
+    {
+      "name": "reference-shell-320.png",
+      "sha256": "ee2c90fb495687e184c88c6e766b7f2a57d973acdf2062c5877f3f99a28bbb47",
+      "width": 320,
+      "height": 844,
+      "runtime": "source UI",
+      "visually_inspected": true
+    },
+    {
+      "name": "reference-shell-captured-output.png",
+      "sha256": "794e6c5e404650d15b1fd016c5abb93f4503d3b66d3dae983cbaefb8e5399e83",
+      "width": 1280,
+      "height": 720,
+      "runtime": "source UI",
+      "visually_inspected": true
+    },
+    {
+      "name": "reference-shell-connection-interrupted.png",
+      "sha256": "5fcf736c67d966602afb6057021486fd75b4057cf2f34ad8c8c921af6556ae1f",
+      "width": 1280,
+      "height": 720,
+      "runtime": "source UI",
+      "visually_inspected": true
+    },
+    {
+      "name": "reference-primary-keyboard-focus.png",
+      "sha256": "f7f00fb23c43ffc004f77be7b704c29dd9879ae588261903186c3ded5a759af1",
+      "width": 1440,
+      "height": 1000,
+      "runtime": "source UI",
+      "visually_inspected": true
+    },
+    {
+      "name": "reference-outline-keyboard-focus.png",
+      "sha256": "a3f3fcabcd8c565d54b1589558c4f9ebcf0d5bc96be4438029769cc684d02270",
+      "width": 1440,
+      "height": 1000,
+      "runtime": "source UI",
+      "visually_inspected": true
+    },
+    {
+      "name": "reference-touch-readable-json.png",
+      "sha256": "24ae4269b03e62bf4b5013433fdff2be96de1f0be438f792c2c256256c717fcf",
+      "width": 390,
+      "height": 844,
+      "runtime": "source UI",
+      "visually_inspected": true
+    },
+    {
+      "name": "reference-touch-created-dataset.png",
+      "sha256": "75400ae88612089277f1665197320ea0df0ef8ce80add942e26d26702ac6ac2d",
+      "width": 390,
+      "height": 844,
+      "runtime": "source UI",
+      "visually_inspected": true
+    },
+    {
+      "name": "runphantom-desktop-detail.png",
+      "sha256": "ed39bbe4a949665ed609ac9466c470bfa936a4b1bdead437bec799b0060dc0de",
+      "width": 1280,
+      "height": 720,
+      "runtime": "copied macOS arm64 application",
+      "visually_inspected": true
+    },
+    {
+      "name": "runphantom-desktop.png",
+      "sha256": "7832c58d4bd2f04e44665a6c726294ed53dff2728605b9656134d981945e9d17",
+      "width": 1280,
+      "height": 720,
+      "runtime": "copied macOS arm64 application",
+      "visually_inspected": true
+    },
+    {
+      "name": "runphantom-mobile.png",
+      "sha256": "6148d13acb181ec7c88e36854a5ba4cf9acc87a3d54d033fa87f493cfe673a26",
+      "width": 390,
+      "height": 844,
+      "runtime": "copied macOS arm64 application",
+      "visually_inspected": true
+    }
+  ],
+  "providerSpendUsd": 0,
+  "fullFeaturePlatformAcceptance": false,
+  "pendingScopes": [
+    "Native Windows at this candidate",
+    "The ten new foundation journeys against installed executables",
+    "Seven explicitly configured live-provider journeys",
+    "F41\u2013F44 full route compositions and complete assembled/native qualification"
+  ],
+  "historicalFailuresRetained": [
+    "Existing hue-provenance test refused an inaccurate comment; corrected without changing rendering or the hue assertion",
+    "Existing mobile audit assumed a single-row header; strict rectangle clearance, viewport containment and hit tests now cover the actual in-flow layout"
+  ],
+  "privateExactEvidenceSha256": "f576c1da435daf7561265242712d5e3792d09693d21b7c1d4dfa55a76f4166af"
+}
