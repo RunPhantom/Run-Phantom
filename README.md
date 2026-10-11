@@ -296,6 +296,32 @@ For provider integrations, follow the [example setup guides](./examples/README.m
 `bun run dev:examples` starts its own daemon and example suite; stop the regular
 development server first. Individual examples may need additional runtimes.
 
+Browser journeys use a fresh source daemon by default. To qualify an installed
+executable, first run `bun scripts/build-bun.ts` on the target host, then run:
+
+```bash
+bun scripts/qualify-native.ts --binary=/absolute/path/to/runphantom --sha256=<artifact-sha256> --output=/absolute/path/to/new-receipts-directory
+```
+
+The output directory must have an existing parent and must not already exist.
+Compute the SHA256 from the artifact you intend to test. The command runs the
+fresh-store and live reconnection journeys in Chromium with one worker and
+zero retries. Append managed journey filenames such as `connection-readiness.spec.ts`
+to select other tests. Each test runs a copied executable outside the checkout
+with its own empty working directory, profile and database; start and cleanup
+receipts record the artifact hashes, process identity, listener and actual exit.
+Missing artifacts, wrong digests, skipped journeys and incomplete cleanup fail
+qualification. Optional provider credentials are blank during these tests.
+
+For a direct Playwright invocation, set `RUNPHANTOM_E2E_RUNTIME=installed`,
+`RUNPHANTOM_E2E_BINARY` to an absolute executable path and
+`RUNPHANTOM_E2E_SHA256` to its SHA256. Source remains the default and is labelled
+as source in receipts. The three standalone compiled smoke gates retain their
+existing opt-in commands. Selected native journeys qualify only the host and
+features actually executed; other architectures, Windows, Linux and provider
+acceptance require their own runs. Windows records the requested working
+directory separately because CIM does not expose an observed process cwd.
+
 See the [agent and contributor guide](./AGENTS.md) for repository conventions
 and verification requirements.
 
