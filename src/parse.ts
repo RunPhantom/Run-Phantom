@@ -1,6 +1,7 @@
 import { normalizeOtelId } from "./ids";
 import { normalizeSpan } from "./spans/normalize";
 import type { NormalizedSpan } from "./spans/normalized";
+import { captureOtlpEvidence, type OtlpEvidence } from "./spans/otlp-evidence";
 
 export interface ParsedSpan {
   traceId: string; spanId: string; parentSpanId?: string; name: string; spanType: string;
@@ -9,6 +10,7 @@ export interface ParsedSpan {
   inputTokens?: number; outputTokens?: number; attributes: Record<string, string | number | boolean>;
   eventId?: string; eventName?: string; userId?: string; convoId?: string;
   replayRunId?: string;
+  otlpEvidence: OtlpEvidence;
   /**
    * SDK-agnostic typed view of this span. Computed via the adapter dispatcher
    * at ingest time so consumers (replay engine, UI, MCP tools) read typed
@@ -352,6 +354,7 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
           outputTokens: typeof outputTokens === "number" ? outputTokens : undefined,
           attributes: allAttrs,
           eventId, eventName, userId, convoId, replayRunId,
+          otlpEvidence: captureOtlpEvidence(s, rs, ss),
           normalized: match.normalized,
         });
       }
