@@ -92,7 +92,7 @@ describe("owned causal verification dispatch", () => {
     expect(parseBrowserMessage({ type: "hello", version: 2, token: "test", coverage, capabilities: ["causal-readings"] })).toMatchObject({ version: 2 });
     for (const invalid of [
       { version: 1, capabilities: ["causal-readings"] }, { version: 2 }, { version: 2, capabilities: ["trusted-browser"] },
-      { version: 2, capabilities: ["causal-readings", "causal-readings"] }, { version: 3, capabilities: [] },
+      { version: 2, capabilities: ["causal-readings", "causal-readings"] }, { version: 4, capabilities: [] },
     ]) expect(() => parseBrowserMessage({ type: "hello", token: "test", coverage, ...invalid })).toThrow();
     expect(() => parseBrowserMessage({ type: "event", event: { type: "action.result", actionId: "a", data: {} } })).toThrow();
   });

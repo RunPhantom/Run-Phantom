@@ -1,6 +1,8 @@
+import { SEMANTIC_REF_PATTERN } from "../../protocol.js";
+
 export const MAX_LIVE_REFS = 1000;
 export const LIVE_REF_TTL_MS = 60_000;
-export const LIVE_REF_PATTERN = /^rpref_[0-9a-f]{32}$/;
+export const LIVE_REF_PATTERN = SEMANTIC_REF_PATTERN;
 
 export class LiveRefError extends Error {
   constructor(message: string) { super(message); this.name = "LiveRefError"; }
@@ -110,3 +112,4 @@ export class LiveElementRefs {
 
   invalidate(): void { this.#active = false; this.#entries.clear(); this.#issued.clear(); }
 }
+
