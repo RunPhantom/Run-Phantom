@@ -1,0 +1,248 @@
+import type { Locator, Page, TestInfo, WebSocketRoute } from "@playwright/test";
+import { expect, test } from "./fixtures";
+import {
+  FIXTURE_PRIMARY_RUN_ID,
+  FIXTURE_SPAN_COUNT,
+  readRunPhantomRun,
+  readRunPhantomSpans,
+  seedRunPhantomFixtures,
+} from "./helpers";
+
+const SECTIONS = [
+  { name: "Runs", path: "/runs" },
+  { name: "Search", path: "/search" },
+  { name: "Saved", path: "/saved" },
+  { name: "Verification", path: "/verification" },
+  { name: "Evaluations", path: "/evaluations" },
+  { name: "Settings", path: "/settings" },
+] as const;
+const MOBILE_WIDTHS = new Set([390, 320]);
+
+async function expectHeader(page: Page, section: string) {
+  const header = page.locator("[data-workspace-header]");
+  await expect(header).toBeVisible();
+  await expect(header.getByText(section, { exact: true })).toBeVisible();
+  const connection = header.locator("[data-connection-status]");
+  await expect(connection).toHaveAttribute("data-connection-status", "connected");
+  await expect(connection).toContainText(/connected/i);
+  const box = await header.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.height).toBeGreaterThanOrEqual(64);
+  expect(box!.height).toBeLessThanOrEqual(72);
+  expect(await header.evaluate(element => getComputedStyle(element).position)).not.toBe("absolute");
+  expect(await header.evaluate(element => getComputedStyle(element).position)).not.toBe("fixed");
+  const sectionBox = (await header.getByText(section, { exact: true }).boundingBox())!;
+  for (const control of [connection, header.getByRole("button", { name: "Toggle Sidebar", exact: true })]) {
+    const controlBox = (await control.boundingBox())!;
+    expect(sectionBox.x < controlBox.x + controlBox.width && controlBox.x < sectionBox.x + sectionBox.width
+      && sectionBox.y < controlBox.y + controlBox.height && controlBox.y < sectionBox.y + sectionBox.height,
+    `${section} breadcrumb must not overlap header controls`).toBe(false);
+  }
+}
+
+async function expectUnobscured(control: Locator) {
+  await expect(control).toBeInViewport({ ratio: 1 });
+  expect(await control.evaluate(element => {
+    const box = element.getBoundingClientRect();
+    const top = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+    return top === element || (top !== null && element.contains(top));
+  }), "a visible control must receive a real user click").toBe(true);
+}
+
+async function expectNoOverflow(page: Page, width: number) {
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+  expect(await page.evaluate(() => document.body.scrollWidth)).toBeLessThanOrEqual(width);
+}
+
+async function openNavigation(page: Page, mobile: boolean) {
+  if (!mobile) return page.locator('[data-sidebar="sidebar"]').first();
+  const trigger = page.getByRole("button", { name: "Toggle Sidebar", exact: true });
+  await expectUnobscured(trigger);
+  const box = await trigger.boundingBox();
+  expect(box!.width).toBeGreaterThanOrEqual(44);
+  expect(box!.height).toBeGreaterThanOrEqual(44);
+  await trigger.click();
+  const drawer = page.getByRole("dialog", { name: "Navigation", exact: true });
+  await expect(drawer).toBeVisible();
+  return drawer;
+}
+
+async function expectNavigationType(navigation: Locator, mobile: boolean) {
+  const brand = navigation.getByRole("link", { name: /^Run Phantom/ }).getByText("Run Phantom", { exact: true });
+  await expect(brand).toBeVisible();
+  const typography = await brand.evaluate(element => ({
+    size: parseFloat(getComputedStyle(element).fontSize),
+    family: getComputedStyle(element).fontFamily,
+  }));
+  expect(typography.size).toBeGreaterThanOrEqual(18);
+  expect(typography.family).toContain("Syne");
+  for (const section of SECTIONS) {
+    const link = navigation.getByRole("link", { name: section.name, exact: true });
+    await expect(link).toBeVisible();
+    expect(await link.locator("span").last().evaluate(element => parseFloat(getComputedStyle(element).fontSize)), `${section.name} rail text`).toBeGreaterThanOrEqual(14);
+    if (mobile) expect((await link.boundingBox())!.height, `${section.name} touch target`).toBeGreaterThanOrEqual(44);
+  }
+}
+
+async function capture(page: Page, testInfo: TestInfo, name: string) {
+  const destination = testInfo.outputPath(`${name}.png`);
+  await page.screenshot({ path: destination });
+  await testInfo.attach(name, { path: destination, contentType: "image/png" });
+}
+
+for (const width of [1440, 1024, 390, 320]) {
+  test(`reference shell: real routes, readable navigation and unobscured header at ${width}px`, async ({ page, runPhantom }, testInfo) => {
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    const frames: string[] = [];
+    page.on("websocket", socket => {
+      if (new URL(socket.url()).pathname !== "/ws") return;
+      socket.on("framereceived", frame => frames.push(String(frame.payload)));
+    });
+    await page.setViewportSize({ width, height: width < 768 ? 844 : 1000 });
+    await seedRunPhantomFixtures(runPhantom.url);
+    await page.goto(`${runPhantom.url}/runs`);
+    await expectHeader(page, "Runs");
+    await expect.poll(() => frames.some(frame => {
+      try { return JSON.parse(frame).event === "agent_provider"; } catch { return false; }
+    }), { message: "connected status requires real daemon WebSocket traffic" }).toBe(true);
+    const mobile = MOBILE_WIDTHS.has(width);
+    let navigation = await openNavigation(page, mobile);
+    await expectNavigationType(navigation, mobile);
+    const theme = await page.evaluate(async () => {
+      await document.fonts.ready;
+      const style = getComputedStyle(document.documentElement);
+      return {
+        accent: style.getPropertyValue("--rp-accent").trim().toUpperCase(),
+        canvas: style.getPropertyValue("--rp-canvas").trim().toUpperCase(),
+        ink: style.getPropertyValue("--rp-ink").trim().toUpperCase(),
+        syneLoaded: [...document.fonts].some(font => font.family.replace(/["']/g, "") === "Syne" && font.status === "loaded"),
+      };
+    });
+    expect(theme).toEqual({ accent: "#0021CC", canvas: "#F9FAFC", ink: "#0E121B", syneLoaded: true });
+    if (mobile) {
+      await page.keyboard.press("Escape");
+      await expect(navigation).toBeHidden();
+      await expect(page.getByRole("button", { name: "Toggle Sidebar", exact: true })).toBeFocused();
+    }
+    for (const section of SECTIONS) {
+      navigation = await openNavigation(page, mobile);
+      await navigation.getByRole("link", { name: section.name, exact: true }).click();
+      await expect(page).toHaveURL(`${runPhantom.url}${section.path}`);
+      await expectHeader(page, section.name);
+      if (mobile) await expect(page.getByRole("dialog", { name: "Navigation", exact: true })).toBeHidden();
+      else await expect(navigation.getByRole("link", { name: section.name, exact: true })).toHaveAttribute("aria-current", "page");
+      await expectNoOverflow(page, width);
+    }
+    await page.reload();
+    await expectHeader(page, "Settings");
+    await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
+    await expectHeader(page, "Runs");
+    await expect(page.getByRole("tab", { name: "Span Tree", exact: true })).toBeVisible();
+    await expectNoOverflow(page, width);
+    await capture(page, testInfo, `reference-shell-${width}`);
+    expect(errors).toEqual([]);
+  });
+}
+
+test("reference shell: keyboard navigation, active-section clicks and browser Back retain working history", async ({ page, runPhantom }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await seedRunPhantomFixtures(runPhantom.url);
+  await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
+  await expectHeader(page, "Runs");
+  await page.keyboard.press("Tab");
+  const skip = page.getByRole("link", { name: "Skip to trace workspace", exact: true });
+  await expect(skip).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#runphantom-main")).toBeFocused();
+  const previousLocation = page.url();
+  expect(previousLocation).toBe(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}#runphantom-main`);
+  const navigation = page.locator('[data-sidebar="sidebar"]').first();
+  const search = navigation.getByRole("link", { name: "Search", exact: true });
+  await search.focus();
+  await page.keyboard.press("Enter");
+  await expectHeader(page, "Search");
+  await expect(search).toHaveAttribute("aria-current", "page");
+  await search.click();
+  await search.click();
+  await page.goBack();
+  await expect(page).toHaveURL(previousLocation);
+  await expectHeader(page, "Runs");
+  await expect(navigation.getByRole("link", { name: "Runs", exact: true })).toHaveAttribute("aria-current", "page");
+});
+
+test("reference shell: an actual captured span and its output remain unchanged through navigation and reload", async ({ page, runPhantom }, testInfo) => {
+  await seedRunPhantomFixtures(runPhantom.url);
+  const beforeRun = await readRunPhantomRun(runPhantom.url, FIXTURE_PRIMARY_RUN_ID);
+  const beforeSpans = await readRunPhantomSpans(runPhantom.url, FIXTURE_PRIMARY_RUN_ID);
+  expect(beforeRun?.id).toBe(FIXTURE_PRIMARY_RUN_ID);
+  expect(beforeSpans).toHaveLength(FIXTURE_SPAN_COUNT);
+  const root = beforeSpans.find(span => span.name === "agent.turn");
+  expect(root?.output_payload).toContain("Changed 'traec viewer' to 'trace viewer' on line 3.");
+  await page.goto(`${runPhantom.url}/runs`);
+  await page.locator(`[data-run-id="${FIXTURE_PRIMARY_RUN_ID}"]`).click();
+  await expectHeader(page, "Runs");
+  await page.getByRole("tab", { name: "Span Tree", exact: true }).click();
+  await expect(page.locator(`[data-span-row="${root!.id}"]`)).toBeVisible();
+  await page.locator(`[data-span-row="${root!.id}"]`).click();
+  await expect(page).toHaveURL(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}/span/${root!.id}`);
+  await expect(page.getByText("Changed 'traec viewer' to 'trace viewer' on line 3.", { exact: false }).first()).toBeVisible();
+  await page.reload();
+  await expectHeader(page, "Runs");
+  await expect(page.getByText("Changed 'traec viewer' to 'trace viewer' on line 3.", { exact: false }).first()).toBeVisible();
+  expect(await readRunPhantomRun(runPhantom.url, FIXTURE_PRIMARY_RUN_ID)).toEqual(beforeRun);
+  expect(await readRunPhantomSpans(runPhantom.url, FIXTURE_PRIMARY_RUN_ID)).toEqual(beforeSpans);
+  await capture(page, testInfo, "reference-shell-captured-output");
+});
+
+test("reference shell: reduced motion removes drawer movement while retaining focus and navigation", async ({ page, runPhantom }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await seedRunPhantomFixtures(runPhantom.url);
+  await page.goto(`${runPhantom.url}/runs`);
+  await expectHeader(page, "Runs");
+  const drawer = await openNavigation(page, true);
+  const motion = await drawer.evaluate(element => {
+    const style = getComputedStyle(element);
+    return { transition: style.transitionDuration.split(",").map(parseFloat), animation: style.animationDuration.split(",").map(parseFloat), transform: style.transform };
+  });
+  expect(motion.transition.every(duration => duration <= 0.001)).toBe(true);
+  expect(motion.animation.every(duration => duration <= 0.001)).toBe(true);
+  expect(motion.transform).toBe("none");
+  await drawer.getByRole("link", { name: "Search", exact: true }).click();
+  await expectHeader(page, "Search");
+  await expect(drawer).toBeHidden();
+  await expect(page.getByRole("button", { name: "Toggle Sidebar", exact: true })).toBeFocused();
+});
+
+test("reference shell: real WebSocket closure reports offline and reconnects without a fabricated status", async ({ page, runPhantom }, testInfo) => {
+  let socket: WebSocketRoute | undefined;
+  let outage = false;
+  const serverFrames: string[] = [];
+  await page.routeWebSocket("**/ws", route => {
+    if (outage) { void route.close({ code: 1013, reason: "Test transport unavailable" }); return; }
+    socket = route;
+    const server = route.connectToServer();
+    server.onMessage(message => {
+      serverFrames.push(String(message));
+      route.send(message);
+    });
+  });
+  await seedRunPhantomFixtures(runPhantom.url);
+  await page.goto(`${runPhantom.url}/runs`);
+  await expectHeader(page, "Runs");
+  await expect.poll(() => serverFrames.length).toBeGreaterThan(0);
+  const before = serverFrames.length;
+  outage = true;
+  await socket!.close({ code: 1001, reason: "Test connection interrupted" });
+  await expect(page.locator("[data-connection-status]")).toHaveAttribute("data-connection-status", "disconnected");
+  const offline = page.getByRole("alertdialog", { name: "Run Phantom isn't running.", exact: true });
+  await expect(offline).toBeVisible();
+  await expect(offline).toBeFocused();
+  await capture(page, testInfo, "reference-shell-connection-interrupted");
+  outage = false;
+  await expectHeader(page, "Runs");
+  await expect.poll(() => serverFrames.length).toBeGreaterThan(before);
+  await expect(offline).toBeHidden();
+  await expect(page.locator(`[data-run-id="${FIXTURE_PRIMARY_RUN_ID}"]`)).toBeVisible();
+});
