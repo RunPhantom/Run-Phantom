@@ -64,7 +64,7 @@ async function controls(page: Page) {
 }
 async function effects(page: Page) { return page.evaluate(() => (window as unknown as { semanticEffects: { clicks: number; inputs: number; focus: number } }).semanticEffects); }
 
- test.describe("semantic discovery through actual SDK user actions", () => {
+test.describe("semantic discovery through actual SDK user actions", () => {
   test("role, name, label and test-id Unicode names resolve the same exact element", async ({ page, request, runPhantom, targetApp }) => {
     const session = await pair(page, request, runPhantom, targetApp.origin); await controls(page);
     const queries: SemanticQuery[] = [{ kind: "role", role: "button", name: "Café\u00a0東京 ✓" }, { kind: "name", name: "Café 東京 ✓" }, { kind: "test-id", testId: "確定" }];
@@ -134,9 +134,13 @@ async function effects(page: Page) { return page.evaluate(() => (window as unkno
   test("detached, hidden, disabled, readonly and foreign references cause zero focus or mutations", async ({ page, context, request, runPhantom, targetApp }) => {
     const session = await pair(page, request, runPhantom, targetApp.origin); await controls(page);
     const found = await find(request, runPhantom, session.id, { kind: "test-id", testId: "受信者" });
-    await page.evaluate(() => { const original = document.querySelector("#recipient")!; const replacement = original.cloneNode(true); original.replaceWith(replacement); });
+    await page.evaluate(() => { const original = document.querySelector("#recipient")!; const replacement = original.cloneNode(true); Object.assign(window, { detachedRecipient: original }); original.replaceWith(replacement); });
     const stale = await command(request, runPhantom, session.id, { type: "ref-fill", ref: found.ref!, value: "must-not-land" });
     expect(stale.ok).toBe(false); expect(stale.error).toContain("stale"); await expect(page.locator("#recipient")).toHaveValue("");
+    await page.evaluate(() => { document.querySelector("#recipient")!.replaceWith((window as unknown as { detachedRecipient: Element }).detachedRecipient); });
+    const rediscovered = await find(request, runPhantom, session.id, { kind: "test-id", testId: "受信者" });
+    expect(rediscovered.ref).not.toBe(found.ref);
+    expect((await command(request, runPhantom, session.id, { type: "ref-fill", ref: found.ref!, value: "must-not-land" })).ok).toBe(false);
     for (const [name, mutation] of [["Disabled action", "click"], ["Readonly field", "fill"]]) {
       const result = await find(request, runPhantom, session.id, { kind: "name", name });
       const refused = await command(request, runPhantom, session.id, mutation === "click" ? { type: "ref-click", ref: result.ref! } : { type: "ref-fill", ref: result.ref!, value: "must-not-land" });
@@ -174,7 +178,7 @@ async function effects(page: Page) { return page.evaluate(() => (window as unkno
     expect((await command(request, runPhantom, session.id, { type: "ref-click", ref: newer.ref! })).ok).toBe(false);
   });
 
-  test("no capability refuses before dispatch and ephemeral references refuse before saved rows", async ({ page, request, runPhantom, targetApp }) => {
+  test("no capability refuses before dispatch and ephemeral references refuse before saved rows", async ({ page, context, request, runPhantom, targetApp }, testInfo) => {
     const session = await pair(page, request, runPhantom, targetApp.origin, false); await controls(page);
     for (const data of [{ type: "find", query: { kind: "name", name: "Café 東京 ✓" } }, { type: "semantic-snapshot" }, { type: "ref-click", ref: `rpref_${"a".repeat(32)}` }, { type: "ref-fill", ref: `rpref_${"a".repeat(32)}`, value: "must-not-land" }] as AppCommand[]) {
       const refused = await command(request, runPhantom, session.id, data); expect(refused.ok).toBe(false); expect(refused.error).toContain("no action was executed");
@@ -185,6 +189,15 @@ async function effects(page: Page) { return page.evaluate(() => (window as unkno
     const rejected = await request.post(`${runPhantom.url}/api/verification/flows`, { data: { name: "Cannot save ephemeral identity", origin: targetApp.origin, steps: [{ command: { type: "ref-click", ref: `rpref_${"a".repeat(32)}` }, predicate: { kind: "signal", name: "done" } }] } });
     expect(rejected.status()).toBe(400); expect(await rejected.text()).toContain("cannot be saved");
     expect(await (await request.get(`${runPhantom.url}/api/verification/flows`)).json()).toEqual(before);
+    const ui = await context.newPage();
+    try {
+      await ui.goto(`${runPhantom.url}/verification`);
+      const inspector = ui.getByRole("region", { name: "Find a live element", exact: true });
+      await expect(inspector).toContainText("This runtime has no semantic reference capability");
+      await expect(inspector.getByRole("button", { name: "Find element", exact: true })).toBeDisabled();
+      const screenshotRoot = process.env.RUNPHANTOM_PUBLIC_EVIDENCE_DIR;
+      if (screenshotRoot) { await inspector.scrollIntoViewIfNeeded(); const filename = path.join(screenshotRoot, "semantic-capability-refusal.png"); await ui.screenshot({ path: filename, fullPage: true }); await testInfo.attach("Semantic capability refusal", { path: filename, contentType: "image/png" }); }
+    } finally { await ui.close(); }
   });
 
   test("work, output and inaccessible-root limits retain explicit coverage and no unique choice", async ({ page, request, runPhantom, targetApp }) => {
@@ -233,8 +246,13 @@ async function effects(page: Page) { return page.evaluate(() => (window as unkno
       await expect(inspector.getByText("Selected: Café 東京 ✓", { exact: true })).toBeVisible();
       await expect(inspector.getByLabel("Normalized semantic query")).toContainText("Café 東京 ✓");
       const screenshotRoot = process.env.RUNPHANTOM_PUBLIC_EVIDENCE_DIR;
-      if (screenshotRoot) { mkdirSync(screenshotRoot, { recursive: true }); const filename = path.join(screenshotRoot, "semantic-inspector-desktop.png"); await page.screenshot({ path: filename, fullPage: true }); await testInfo.attach("Semantic inspector desktop", { path: filename, contentType: "image/png" }); }
+      if (screenshotRoot) { mkdirSync(screenshotRoot, { recursive: true }); const filename = path.join(screenshotRoot, "semantic-inspector-desktop.png"); await inspector.getByText("Selected: Café 東京 ✓", { exact: true }).scrollIntoViewIfNeeded(); await page.screenshot({ path: filename, fullPage: true }); await testInfo.attach("Semantic inspector desktop", { path: filename, contentType: "image/png" }); }
       await inspector.getByRole("button", { name: "Click selected element", exact: true }).click(); await expect(app.getByText("Committed 1", { exact: true })).toBeVisible();
+      await inspector.getByRole("combobox", { name: "Find by", exact: true }).selectOption("name"); await inspector.getByLabel(/^Element name/).fill("Save"); await inspector.getByLabel("Exact text match", { exact: true }).uncheck();
+      await inspector.getByRole("button", { name: "Find element", exact: true }).click(); await expect(inspector).toContainText("Multiple matches. Use a more precise query before acting."); await expect(inspector.getByText(/^Selected:/)).toHaveCount(0);
+      expect((await effects(app)).clicks).toBe(1);
+      if (screenshotRoot) { const filename = path.join(screenshotRoot, "semantic-ambiguous-refusal.png"); await inspector.getByText("Multiple matches. Use a more precise query before acting.", { exact: true }).scrollIntoViewIfNeeded(); await page.screenshot({ path: filename, fullPage: true }); await testInfo.attach("Semantic ambiguity refusal", { path: filename, contentType: "image/png" }); }
+      await inspector.getByLabel("Exact text match", { exact: true }).check();
       await inspector.getByRole("combobox", { name: "Find by", exact: true }).selectOption("label"); await inspector.getByLabel(/^Element label/).fill("Café 東京");
       await inspector.getByRole("button", { name: "Find element", exact: true }).click(); await expect(inspector.getByText("Selected: Café 東京", { exact: true })).toBeVisible();
       await inspector.getByLabel(/^Live element fill value/).fill("ui-private-live-value"); await inspector.getByRole("button", { name: "Fill selected element", exact: true }).click();
@@ -250,6 +268,8 @@ async function effects(page: Page) { return page.evaluate(() => (window as unkno
       await inspector.getByRole("button", { name: "Find element", exact: true }).click(); await expect(inspector.getByText("Selected: Café 東京", { exact: true })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       if (screenshotRoot) { const filename = path.join(screenshotRoot, "semantic-inspector-mobile.png"); await page.screenshot({ path: filename, fullPage: true }); await testInfo.attach("Semantic inspector mobile", { path: filename, contentType: "image/png" }); }
+      await inspector.getByLabel(/^Live element fill value/).fill("mobile-private-live-value");
+      await inspector.getByRole("button", { name: "Fill selected element", exact: true }).click(); await expect(app.locator("#recipient")).toHaveValue("mobile-private-live-value");
       expect(errors).toEqual([]);
     } finally { await app.close(); }
   });
@@ -269,6 +289,130 @@ async function effects(page: Page) { return page.evaluate(() => (window as unkno
       const field = await call({ type: "find", query: { kind: "label", label: "Café 東京" } }); const filled = await call({ type: "ref-fill", ref: field.result!.ref!, value: "mcp-live-private-value" }); expect(filled.ok).toBe(true); await expect(page.locator("#recipient")).toHaveValue("mcp-live-private-value");
       await page.locator("#commit").evaluate(element => element.remove()); const stale = await call({ type: "ref-click", ref: unique.result!.ref! }); expect(stale.ok).toBe(false); expect(stale.error).toContain("stale");
       const observed = await client.callTool({ name: "app_observe", arguments: { sessionId: session.id } }); expect(JSON.stringify(observed)).not.toContain("mcp-live-private-value");
+      await page.evaluate(() => window.runtime.disconnect());
+      const incapable = await pair(page, request, runPhantom, targetApp.origin, false); await controls(page);
+      for (const data of [{ type: "find", query: { kind: "name", name: "Café 東京 ✓" } }, { type: "ref-click", ref: unique.result!.ref! }, { type: "ref-fill", ref: field.result!.ref!, value: "must-not-land" }] as AppCommand[]) {
+        const refused = parse(await client.callTool({ name: "app_act", arguments: { sessionId: incapable.id, command: data } })); expect(refused.ok).toBe(false); expect(refused.error).toContain("no action was executed");
+      }
+      expect(await effects(page)).toEqual({ clicks: 0, inputs: 0, focus: 0 });
     } finally { await client.close(); await transport.close(); }
   });
+
+  test("a forced browser nonce collision after expiry cannot reuse a handed-out handle", async ({ page, request, runPhantom, targetApp }) => {
+    await page.addInitScript(() => {
+      const native = crypto.getRandomValues.bind(crypto);
+      const overrides: string[] = []; Object.assign(window, { semanticNonceOverrides: overrides });
+      Object.defineProperty(crypto, "getRandomValues", { configurable: true, value(array: ArrayBufferView) {
+        if (array instanceof Uint8Array && array.byteLength === 16 && overrides.length) {
+          const next = overrides.shift()!;
+          for (let index = 0; index < 16; index++) array[index] = parseInt(next.slice(index * 2, index * 2 + 2), 16);
+          return array;
+        }
+        return native(array);
+      } });
+    });
+    await page.clock.install();
+    const session = await pair(page, request, runPhantom, targetApp.origin); await controls(page);
+    const original = await find(request, runPhantom, session.id, { kind: "test-id", testId: "確定" });
+    await page.clock.fastForward(60_001);
+    const replacementNonce = "b".repeat(32);
+    await page.evaluate(({ previous, replacement }) => { (window as unknown as { semanticNonceOverrides: string[] }).semanticNonceOverrides.push(previous, replacement); }, { previous: original.ref!.slice(6), replacement: replacementNonce });
+    const fresh = await find(request, runPhantom, session.id, { kind: "test-id", testId: "確定" });
+    expect(fresh.status).toBe("unique"); expect(fresh.ref).toBe(`rpref_${replacementNonce}`); expect(fresh.ref).not.toBe(original.ref);
+    expect(await page.evaluate(() => (window as unknown as { semanticNonceOverrides: string[] }).semanticNonceOverrides.length)).toBe(0);
+    const refused = await command(request, runPhantom, session.id, { type: "ref-click", ref: original.ref! }); expect(refused.ok).toBe(false);
+    expect(await effects(page)).toEqual({ clicks: 0, inputs: 0, focus: 0 });
+    expect((await command(request, runPhantom, session.id, { type: "ref-click", ref: fresh.ref! })).ok).toBe(true); await expect(page.getByText("Committed 1", { exact: true })).toBeVisible();
+  });
+
+  test("the actual connection refuses lifetime issuance exhaustion without rebinding old tokens", async ({ page, request, runPhantom, targetApp }) => {
+    const session = await pair(page, request, runPhantom, targetApp.origin); await controls(page);
+    let oldRef = "";
+    for (let batch = 0; batch < 34; batch++) {
+      await page.evaluate(batch => {
+        document.querySelector("#capacity")?.remove(); const group = document.createElement("div"); group.id = "capacity";
+        for (let index = 0; index < 30; index++) { const button = document.createElement("button"); button.textContent = `Capacity ${batch} ${index}`; group.append(button); }
+        document.body.append(group);
+      }, batch);
+      const result = await find(request, runPhantom, session.id, { kind: "role", role: "button", name: "Capacity", exact: false });
+      expect(result.count).toBe(30);
+      if (!oldRef) oldRef = result.elements[0].ref!;
+      if (batch < 33) { expect(result.status).toBe("ambiguous"); expect(result.elements.filter(item => item.ref)).toHaveLength(30); }
+      else { expect(result.status).toBe("inconclusive"); expect(result.coverage.reasons).toContain("reference-capacity-exhausted"); expect(result.elements.filter(item => item.ref)).toHaveLength(10); expect(result.ref).toBeUndefined(); }
+    }
+    expect((await command(request, runPhantom, session.id, { type: "ref-click", ref: oldRef })).ok).toBe(false);
+    const exhausted = await find(request, runPhantom, session.id, { kind: "test-id", testId: "確定" }); expect(exhausted.ref).toBeUndefined(); expect(exhausted.coverage.reasons).toContain("reference-capacity-exhausted");
+    expect(await effects(page)).toEqual({ clicks: 0, inputs: 0, focus: 0 });
+  });
+
+  test("a late old-session response and malformed SDK summary cannot repopulate the inspector", async ({ page, context, request, runPhantom, targetApp }) => {
+    const app = await context.newPage();
+    let release: (() => void) | undefined;
+    let capture: (() => void) | undefined;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const captured = new Promise<void>(resolve => { capture = resolve; });
+    const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+    try {
+      const session = await pair(app, request, runPhantom, targetApp.origin); await controls(app);
+      const other = await (await request.post(`${runPhantom.url}/api/verification/sessions`, { data: { origin: targetApp.origin } })).json() as SessionSummary;
+      await page.goto(`${runPhantom.url}/verification`);
+      const inspector = page.getByRole("region", { name: "Find a live element", exact: true });
+      await page.getByRole("combobox", { name: "Active session", exact: true }).selectOption(session.id);
+      await inspector.getByLabel(/^Element name/).fill("Café 東京 ✓");
+      const endpoint = `**/api/verification/sessions/${session.id}/command`;
+      await page.route(endpoint, async route => { const response = await route.fetch(); capture!(); await held; await route.fulfill({ response }); });
+      await inspector.getByRole("button", { name: "Find element", exact: true }).click(); await captured;
+      await page.getByRole("combobox", { name: "Active session", exact: true }).selectOption(other.id); release!();
+      await expect(inspector.getByText(/^Selected:/)).toHaveCount(0); await expect(inspector.getByLabel("Semantic discovery")).toHaveCount(0);
+      await page.unroute(endpoint);
+      await page.getByRole("combobox", { name: "Active session", exact: true }).selectOption(session.id);
+      await page.route(endpoint, async route => { await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, cursor: 1, result: { source: "sdk-reported", nameModel: "partial-aria", documentGeneration: "a".repeat(32), count: 1, countExact: true, elements: [null], coverage: { complete: true, reasons: [] } } }) }); });
+      await inspector.getByRole("button", { name: "Find element", exact: true }).click();
+      await expect(inspector.getByRole("alert")).toContainText("unsupported semantic discovery"); await expect(inspector.getByText(/^Selected:/)).toHaveCount(0);
+      await page.unroute(endpoint); await inspector.getByRole("button", { name: "Find element", exact: true }).click(); await expect(inspector.getByText("Selected: Café 東京 ✓", { exact: true })).toBeVisible();
+      expect(errors).toEqual([]); expect(await effects(app)).toEqual({ clicks: 0, inputs: 0, focus: 0 });
+    } finally { release?.(); await app.close(); }
+  });
+});
+
+test("compiled SDK: semantic discovery and inspector act on an exact native-served live handle", async ({ page, context, request, targetApp }, testInfo) => {
+  const url = process.env.RUNPHANTOM_COMPILED_URL;
+  test.skip(!url, "RUNPHANTOM_COMPILED_URL is required for packaged semantic verification");
+  const daemon = { url: url!, port: Number(new URL(url!).port), dbPath: "" };
+  const session = await pair(page, request, daemon, targetApp.origin); await controls(page);
+  const found = await find(request, daemon, session.id, { kind: "role", role: "button", name: "Café 東京 ✓" });
+  expect(found.status).toBe("unique"); expect(found.query).toMatchObject({ name: "Café 東京 ✓", exact: true });
+  expect((await command(request, daemon, session.id, { type: "ref-click", ref: found.ref! })).ok).toBe(true); await expect(page.getByText("Committed 1", { exact: true })).toBeVisible();
+  const field = await find(request, daemon, session.id, { kind: "label", label: "Café 東京" });
+  expect((await command(request, daemon, session.id, { type: "ref-fill", ref: field.ref!, value: "installed-private-live-value" })).ok).toBe(true); await expect(page.locator("#recipient")).toHaveValue("installed-private-live-value");
+  const ui = await context.newPage();
+  try {
+    await ui.goto(`${url}/verification`);
+    const inspector = ui.getByRole("region", { name: "Find a live element", exact: true });
+    await inspector.getByLabel(/^Element name/).fill("Café 東京 ✓"); await inspector.getByRole("button", { name: "Find element", exact: true }).click(); await expect(inspector.getByText("Selected: Café 東京 ✓", { exact: true })).toBeVisible();
+    const screenshotRoot = process.env.RUNPHANTOM_PUBLIC_EVIDENCE_DIR;
+    if (screenshotRoot) { await inspector.getByText("Selected: Café 東京 ✓", { exact: true }).scrollIntoViewIfNeeded(); const filename = path.join(screenshotRoot, "semantic-installed-inspector.png"); await ui.screenshot({ path: filename, fullPage: true }); await testInfo.attach("Installed semantic inspector", { path: filename, contentType: "image/png" }); }
+    await inspector.getByRole("button", { name: "Click selected element", exact: true }).click(); await expect(page.getByText("Committed 2", { exact: true })).toBeVisible();
+    expect(JSON.stringify(await observe(request, daemon, session.id))).not.toContain("installed-private-live-value");
+  } finally { await ui.close(); await page.evaluate(() => window.runtime.disconnect()); await request.delete(`${url}/api/verification/sessions/${session.id}`); }
+});
+
+test("compiled SDK: stale and incapable handles refuse without focus, writes or saved identity", async ({ page, request, targetApp }) => {
+  const url = process.env.RUNPHANTOM_COMPILED_URL;
+  test.skip(!url, "RUNPHANTOM_COMPILED_URL is required for packaged semantic refusals");
+  const daemon = { url: url!, port: Number(new URL(url!).port), dbPath: "" };
+  const session = await pair(page, request, daemon, targetApp.origin); await controls(page);
+  let incapable: SessionSummary | undefined;
+  try {
+    const field = await find(request, daemon, session.id, { kind: "test-id", testId: "受信者" });
+    await page.locator("#recipient").evaluate(element => element.replaceWith(element.cloneNode(true)));
+    const stale = await command(request, daemon, session.id, { type: "ref-fill", ref: field.ref!, value: "must-not-land" }); expect(stale.ok).toBe(false); expect(stale.error).toContain("stale");
+    await expect(page.locator("#recipient")).toHaveValue(""); expect(await effects(page)).toEqual({ clicks: 0, inputs: 0, focus: 0 });
+    await page.evaluate(() => window.runtime.disconnect());
+    incapable = await pair(page, request, daemon, targetApp.origin, false); await controls(page);
+    const refused = await command(request, daemon, incapable.id, { type: "ref-fill", ref: field.ref!, value: "must-not-land" }); expect(refused.ok).toBe(false); expect(refused.error).toContain("no action was executed");
+    const before = await (await request.get(`${url}/api/verification/flows`)).json();
+    const saved = await request.post(`${url}/api/verification/flows`, { data: { name: "Cannot persist native live handle", origin: targetApp.origin, steps: [{ command: { type: "ref-click", ref: field.ref! }, predicate: { kind: "signal", name: "done" } }] } }); expect(saved.status()).toBe(400);
+    expect(await (await request.get(`${url}/api/verification/flows`)).json()).toEqual(before); expect(await effects(page)).toEqual({ clicks: 0, inputs: 0, focus: 0 });
+  } finally { await page.evaluate(() => window.runtime.disconnect()); await request.delete(`${url}/api/verification/sessions/${session.id}`); if (incapable) await request.delete(`${url}/api/verification/sessions/${incapable.id}`); }
 });

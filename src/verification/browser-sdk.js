@@ -1204,6 +1204,141 @@ function matchesSemanticQuery(element, query) {
   }
 }
 
+// src/verification/browser/dom/refs.ts
+var MAX_LIVE_REFS = 1000;
+var LIVE_REF_TTL_MS = 60000;
+var LIVE_REF_PATTERN = SEMANTIC_REF_PATTERN;
+
+class LiveRefError extends Error {
+  code;
+  constructor(message, code = "unavailable") {
+    super(message);
+    this.code = code;
+    this.name = "LiveRefError";
+  }
+}
+function nonce() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+function inOpenRoot(element) {
+  let current = element;
+  for (let depth = 0;depth < 64; depth++) {
+    const root = current.getRootNode();
+    if (root === element.ownerDocument)
+      return true;
+    if (root.nodeType !== 11 || !("host" in root))
+      return false;
+    const shadow = root;
+    if (shadow.mode !== "open" || shadow.host.shadowRoot !== shadow)
+      return false;
+    current = shadow.host;
+  }
+  return false;
+}
+
+class LiveElementRefs {
+  sessionId;
+  document;
+  documentGeneration;
+  #entries = new Map;
+  #issued = new Set;
+  #reverse = new WeakMap;
+  #now;
+  #random;
+  #active = true;
+  constructor(sessionId, document2, options = {}) {
+    this.sessionId = sessionId;
+    this.document = document2;
+    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(sessionId))
+      throw new LiveRefError("Invalid reference session");
+    this.#now = options.now ?? (() => performance.now());
+    this.#random = options.random ?? nonce;
+    this.documentGeneration = this.#nonce();
+  }
+  get size() {
+    this.#prune();
+    return this.#entries.size;
+  }
+  #nonce() {
+    const value = this.#random();
+    if (!/^[0-9a-f]{32}$/.test(value))
+      throw new LiveRefError("Secure reference generation is unavailable");
+    return value;
+  }
+  #owns(element, owner) {
+    try {
+      if (!this.#active || element.ownerDocument !== owner || !element.isConnected || !inOpenRoot(element))
+        return false;
+      if (this.document.defaultView?.document !== this.document)
+        return false;
+      let current = owner;
+      for (let depth = 0;depth < 64; depth++) {
+        if (current === this.document)
+          return true;
+        const view = current.defaultView;
+        const frame = view?.frameElement;
+        if (!view || view.document !== current || !frame || !frame.isConnected || !inOpenRoot(frame) || !("contentDocument" in frame) || frame.contentDocument !== current)
+          return false;
+        current = frame.ownerDocument;
+      }
+    } catch {
+      return false;
+    }
+    return false;
+  }
+  #prune() {
+    const now = this.#now();
+    for (const [ref, entry] of this.#entries) {
+      const element = entry.element.deref();
+      const owner = entry.document.deref();
+      if (now >= entry.expires || !element || !owner || !this.#owns(element, owner))
+        this.#entries.delete(ref);
+    }
+  }
+  refFor(element) {
+    if (!this.#owns(element, element.ownerDocument))
+      throw new LiveRefError("Element is outside the active document scope");
+    this.#prune();
+    const existing = this.#reverse.get(element);
+    if (existing && this.#entries.has(existing))
+      return existing;
+    if (this.#issued.size >= MAX_LIVE_REFS)
+      throw new LiveRefError("Live reference capacity exhausted; reconnect before discovering new references", "capacity");
+    let ref = "";
+    for (let attempt = 0;attempt < 8; attempt++) {
+      const candidate = `rpref_${this.#nonce()}`;
+      if (!this.#issued.has(candidate)) {
+        ref = candidate;
+        break;
+      }
+    }
+    if (!ref)
+      throw new LiveRefError("Secure reference collision could not be resolved");
+    this.#issued.add(ref);
+    this.#entries.set(ref, { element: new WeakRef(element), document: new WeakRef(element.ownerDocument), expires: this.#now() + LIVE_REF_TTL_MS });
+    this.#reverse.set(element, ref);
+    return ref;
+  }
+  resolve(ref) {
+    if (!LIVE_REF_PATTERN.test(ref))
+      throw new LiveRefError("Invalid live reference");
+    const entry = this.#entries.get(ref);
+    const element = entry?.element.deref();
+    const owner = entry?.document.deref();
+    if (!entry || !element || !owner || this.#now() >= entry.expires || !this.#owns(element, owner)) {
+      this.#entries.delete(ref);
+      throw new LiveRefError("Live reference is stale, expired, disconnected, or belongs to another session/document");
+    }
+    return element;
+  }
+  invalidate() {
+    this.#active = false;
+    this.#entries.clear();
+    this.#issued.clear();
+  }
+}
+
 // src/verification/browser/dom/snapshot.ts
 function incomplete(coverage, reason) {
   coverage.complete = false;
@@ -1225,6 +1360,7 @@ function summary(entry, refs, sanitize2, coverage) {
   const label = text2(entry.label);
   const testId = text2(entry.testId);
   const role = text2(entry.role);
+  const tag = text2(entry.element.localName);
   let ref;
   try {
     const raw = refs.refFor(entry.element);
@@ -1233,12 +1369,12 @@ function summary(entry, refs, sanitize2, coverage) {
       ref = raw;
     else
       truncated = true;
-  } catch {
-    incomplete(coverage, "reference-unavailable");
+  } catch (error) {
+    incomplete(coverage, error instanceof LiveRefError && error.code === "capacity" ? "reference-capacity-exhausted" : "reference-unavailable");
   }
   if (truncated)
     incomplete(coverage, "summary-truncated-or-redacted");
-  return { ...ref ? { ref } : {}, tag: entry.element.localName, role, name, label, testId, depth: entry.depth, disabled: entry.disabled, readonly: entry.readonly, ...truncated ? { truncated: true } : {} };
+  return { ...ref ? { ref } : {}, tag, role, name, label, testId, depth: entry.depth, disabled: entry.disabled, readonly: entry.readonly, ...truncated ? { truncated: true } : {} };
 }
 function result(refs, sanitize2, query) {
   const collected = collectSemanticElements(refs.document);
@@ -1405,139 +1541,6 @@ function runSemanticDomCommand(command, refs, sanitize2, beforeMutation) {
     throw new Error("Reference changed during focus");
   const prevented = setNativeValue(element, command.value);
   return { result: { dispatched: true, defaultPrevented: prevented, source: "sdk-reported" } };
-}
-
-// src/verification/browser/dom/refs.ts
-var MAX_LIVE_REFS = 1000;
-var LIVE_REF_TTL_MS = 60000;
-var LIVE_REF_PATTERN = SEMANTIC_REF_PATTERN;
-
-class LiveRefError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "LiveRefError";
-  }
-}
-function nonce() {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-function inOpenRoot(element) {
-  let current = element;
-  for (let depth = 0;depth < 64; depth++) {
-    const root = current.getRootNode();
-    if (root === element.ownerDocument)
-      return true;
-    if (root.nodeType !== 11 || !("host" in root))
-      return false;
-    const shadow = root;
-    if (shadow.mode !== "open" || shadow.host.shadowRoot !== shadow)
-      return false;
-    current = shadow.host;
-  }
-  return false;
-}
-
-class LiveElementRefs {
-  sessionId;
-  document;
-  documentGeneration;
-  #entries = new Map;
-  #issued = new Set;
-  #reverse = new WeakMap;
-  #now;
-  #random;
-  #active = true;
-  constructor(sessionId, document2, options = {}) {
-    this.sessionId = sessionId;
-    this.document = document2;
-    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(sessionId))
-      throw new LiveRefError("Invalid reference session");
-    this.#now = options.now ?? (() => performance.now());
-    this.#random = options.random ?? nonce;
-    this.documentGeneration = this.#nonce();
-  }
-  get size() {
-    this.#prune();
-    return this.#entries.size;
-  }
-  #nonce() {
-    const value = this.#random();
-    if (!/^[0-9a-f]{32}$/.test(value))
-      throw new LiveRefError("Secure reference generation is unavailable");
-    return value;
-  }
-  #owns(element, owner) {
-    try {
-      if (!this.#active || element.ownerDocument !== owner || !element.isConnected || !inOpenRoot(element))
-        return false;
-      if (this.document.defaultView?.document !== this.document)
-        return false;
-      let current = owner;
-      for (let depth = 0;depth < 64; depth++) {
-        if (current === this.document)
-          return true;
-        const view = current.defaultView;
-        const frame = view?.frameElement;
-        if (!view || view.document !== current || !frame || !frame.isConnected || !inOpenRoot(frame) || !("contentDocument" in frame) || frame.contentDocument !== current)
-          return false;
-        current = frame.ownerDocument;
-      }
-    } catch {
-      return false;
-    }
-    return false;
-  }
-  #prune() {
-    const now = this.#now();
-    for (const [ref, entry] of this.#entries) {
-      const element = entry.element.deref();
-      const owner = entry.document.deref();
-      if (now >= entry.expires || !element || !owner || !this.#owns(element, owner))
-        this.#entries.delete(ref);
-    }
-  }
-  refFor(element) {
-    if (!this.#owns(element, element.ownerDocument))
-      throw new LiveRefError("Element is outside the active document scope");
-    this.#prune();
-    const existing = this.#reverse.get(element);
-    if (existing && this.#entries.has(existing))
-      return existing;
-    if (this.#issued.size >= MAX_LIVE_REFS)
-      throw new LiveRefError("Live reference capacity exhausted; reconnect before discovering new references");
-    let ref = "";
-    for (let attempt = 0;attempt < 8; attempt++) {
-      const candidate = `rpref_${this.#nonce()}`;
-      if (!this.#issued.has(candidate)) {
-        ref = candidate;
-        break;
-      }
-    }
-    if (!ref)
-      throw new LiveRefError("Secure reference collision could not be resolved");
-    this.#issued.add(ref);
-    this.#entries.set(ref, { element: new WeakRef(element), document: new WeakRef(element.ownerDocument), expires: this.#now() + LIVE_REF_TTL_MS });
-    this.#reverse.set(element, ref);
-    return ref;
-  }
-  resolve(ref) {
-    if (!LIVE_REF_PATTERN.test(ref))
-      throw new LiveRefError("Invalid live reference");
-    const entry = this.#entries.get(ref);
-    const element = entry?.element.deref();
-    const owner = entry?.document.deref();
-    if (!entry || !element || !owner || this.#now() >= entry.expires || !this.#owns(element, owner)) {
-      this.#entries.delete(ref);
-      throw new LiveRefError("Live reference is stale, expired, disconnected, or belongs to another session/document");
-    }
-    return element;
-  }
-  invalidate() {
-    this.#active = false;
-    this.#entries.clear();
-    this.#issued.clear();
-  }
 }
 
 // src/verification/state-select.ts

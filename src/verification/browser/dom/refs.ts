@@ -5,7 +5,7 @@ export const LIVE_REF_TTL_MS = 60_000;
 export const LIVE_REF_PATTERN = SEMANTIC_REF_PATTERN;
 
 export class LiveRefError extends Error {
-  constructor(message: string) { super(message); this.name = "LiveRefError"; }
+  constructor(message: string, readonly code: "unavailable" | "capacity" = "unavailable") { super(message); this.name = "LiveRefError"; }
 }
 interface Entry { element: WeakRef<Element>; document: WeakRef<Document>; expires: number }
 interface Options { now?: () => number; random?: () => string }
@@ -84,7 +84,7 @@ export class LiveElementRefs {
     this.#prune();
     const existing = this.#reverse.get(element);
     if (existing && this.#entries.has(existing)) return existing;
-    if (this.#issued.size >= MAX_LIVE_REFS) throw new LiveRefError("Live reference capacity exhausted; reconnect before discovering new references");
+    if (this.#issued.size >= MAX_LIVE_REFS) throw new LiveRefError("Live reference capacity exhausted; reconnect before discovering new references", "capacity");
     let ref = "";
     for (let attempt = 0; attempt < 8; attempt++) {
       const candidate = `rpref_${this.#nonce()}`;

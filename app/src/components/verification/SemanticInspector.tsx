@@ -9,8 +9,18 @@ import { C } from "../../utils/colors";
 function discovery(value: unknown): SemanticResult {
   if (!value || typeof value !== "object") throw new Error("The app returned no semantic discovery result.");
   const result = value as Partial<SemanticResult>;
-  if (result.source !== "sdk-reported" || result.nameModel !== "partial-aria" || !Array.isArray(result.elements)
-    || !result.coverage || typeof result.coverage.complete !== "boolean" || !Array.isArray(result.coverage.reasons)) {
+  const whole = (item: unknown, maximum: number) => typeof item === "number" && Number.isSafeInteger(item) && item >= 0 && item <= maximum;
+  const coverage = result.coverage;
+  if (result.source !== "sdk-reported" || result.nameModel !== "partial-aria" || !/^[0-9a-f]{32}$/.test(result.documentGeneration ?? "")
+    || !whole(result.count, 10_000) || typeof result.countExact !== "boolean" || !Array.isArray(result.elements) || result.elements.length > 100
+    || !result.elements.every(item => item && typeof item === "object" && [item.tag, item.role, item.name, item.label, item.testId].every(text => typeof text === "string" && text.length <= 240)
+      && typeof item.disabled === "boolean" && typeof item.readonly === "boolean" && whole(item.depth, 64) && (item.ref === undefined || typeof item.ref === "string" && SEMANTIC_REF_PATTERN.test(item.ref)))
+    || !coverage || typeof coverage !== "object" || coverage.scope !== "visible-observable-dom" || coverage.closedShadowRoots !== "unobservable"
+    || typeof coverage.complete !== "boolean" || typeof coverage.truncated !== "boolean" || !whole(coverage.visitedNodes, 10_000)
+    || ![coverage.openShadowRoots, coverage.sameOriginFrames, coverage.inaccessibleFrames, coverage.hiddenSubtrees, coverage.privateSubtrees].every(item => whole(item, 10_000))
+    || !Array.isArray(coverage.reasons) || coverage.reasons.length > 16 || !coverage.reasons.every(reason => typeof reason === "string" && reason.length <= 128)
+    || result.status !== undefined && !["unique", "ambiguous", "not-found", "inconclusive"].includes(result.status)
+    || result.ref !== undefined && (!SEMANTIC_REF_PATTERN.test(result.ref) || result.status !== "unique" || result.count !== 1 || !coverage.complete || result.elements[0]?.ref !== result.ref)) {
     throw new Error("The app returned an unsupported semantic discovery result.");
   }
   return result as SemanticResult;
@@ -30,15 +40,17 @@ export function SemanticInspector({ sessionId, connected, capable, disabled = fa
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const sequence = useRef(0);
+  const running = useRef(false);
   const scope = `${sessionId}:${connected}:${capable}`;
   const currentScope = useRef(scope);
   currentScope.current = scope;
   useEffect(() => {
-    sequence.current++; setResult(null); setSelected(""); setFill(""); setNotice(""); setError(""); setBusy(false);
+    sequence.current++; running.current = false; setResult(null); setSelected(""); setFill(""); setNotice(""); setError(""); setBusy(false);
   }, [scope]);
   const unavailable = !connected || !capable;
   async function execute(command: AppCommand) {
-    if (busy || disabled || unavailable) return;
+    if (running.current || disabled || unavailable) return;
+    running.current = true;
     const ownedScope = currentScope.current;
     const ticket = ++sequence.current;
     const current = () => currentScope.current === ownedScope && sequence.current === ticket;
@@ -59,7 +71,7 @@ export function SemanticInspector({ sessionId, connected, capable, disabled = fa
         setNotice("App acknowledged the action. Check its outcome next.");
       }
     } catch (cause) { if (current()) { setSelected(""); setError(cause instanceof Error ? cause.message : "Semantic command failed."); } }
-    finally { if (current()) setBusy(false); }
+    finally { if (current()) { running.current = false; setBusy(false); } }
   }
   function query(): SemanticQuery {
     if (kind === "role") return { kind, role, ...(term.trim() ? { name: term } : {}), exact };
