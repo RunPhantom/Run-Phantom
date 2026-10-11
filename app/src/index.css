@@ -171,7 +171,7 @@
   --rp-focus-ring-width: 2px;
   --rp-focus-ring-offset: 2px;
 
-  --rp-danger: #B42318;
+  --rp-danger: #B42318; /* oklch(0.500336 0.182051 29.512720) */
   --rp-danger-hover: #912018;
   --rp-danger-active: #7A1B14;
   --rp-danger-soft: #FEF3F2;
