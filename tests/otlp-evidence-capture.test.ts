@@ -109,4 +109,9 @@ test("portable validator refuses malformed, unsafe and executable-shaped envelop
   expect(() => validateOtlpEvidence(getter)).toThrow(); expect(invoked).toBe(false);
   const coercion = Object.assign(Object.create({ toJSON() { invoked = true; return original; } }), original);
   expect(() => validateOtlpEvidence(coercion)).toThrow(); expect(invoked).toBe(false);
+  const sensitive = structuredClone(original);
+  sensitive.attributes.push({ key: "api_key", value: Object.defineProperty({}, "stringValue", {
+    enumerable: true, get() { invoked = true; return "[REDACTED]"; },
+  }) as any });
+  expect(() => validateOtlpEvidence(sensitive)).toThrow(); expect(invoked).toBe(false);
 });

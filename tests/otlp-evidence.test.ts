@@ -7,6 +7,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
+import { OTLP_EVIDENCE_LIMITS } from "../src/spans/otlp-evidence";
 import { encodeFidelityRequest, fidelityOutput, fidelityRequest, fidelityTraceId } from "./fixtures/otlp-evidence";
 
 const directory = mkdtempSync(path.join(realpathSync(tmpdir()), "rp-otlp-evidence-"));
@@ -132,4 +133,101 @@ test("saved-cache v2 export retains bounded provenance after raw clearing and fr
   expect(restored.spans[0].otlp_evidence).toBe(original.spans[0].otlp_evidence);
   expect(restored.spans[0].output_payload).toBe(fidelityOutput);
   record("saved-cache-roundtrip.json", { originalDigest: sha(original), cache: download, restored, compactedViewNoticePreserved: true });
+});
+
+test("actual ingress persists receiver loss and redaction separately from unavailable exporter counts", async () => {
+  const sent = fidelityRequest() as any, span = sent.resourceSpans[0].scopeSpans[0].spans[0];
+  const credential = `sk-proj-${"x".repeat(48)}`;
+  delete span.droppedEventsCount;
+  span.events = Array.from({ length: 130 }, (_, index) => ({ name: `bounded-event-${index}`, timeUnixNano: "1770000000000000002", attributes: [] }));
+  span.events[0].attributes = [
+    { key: "api_key", value: { stringValue: credential } }, { key: "__proto__", value: { stringValue: "ignored" } },
+    { key: "long-value", value: { stringValue: "x".repeat(4097) } }, { key: "url", value: { stringValue: `https://example.test/?token=${credential}&order=A-42` } },
+    ...Array.from({ length: 126 }, (_, index) => ({ key: `marker-${index}`, value: { boolValue: false } })),
+  ];
+  span.links = Array.from({ length: 131 }, () => ({ traceId: span.traceId, spanId: span.spanId, attributes: [] }));
+  span.links[0].flags = -1;
+  const sourceDigest = sha(sent);
+  expect((await post(source, "/v1/traces", sent)).status).toBe(200);
+  const trace = await exported(), evidence = JSON.parse(trace.spans[0].otlp_evidence);
+  expect(sha(sent)).toBe(sourceDigest); expect(trace.spans[0].output_payload).toBe(fidelityOutput);
+  expect(evidence.events).toHaveLength(128); expect(evidence.links).toHaveLength(128);
+  expect(evidence.events[0].attributes).toHaveLength(127);
+  expect(evidence.events[0].attributes).toContainEqual({ key: "api_key", value: { stringValue: "[REDACTED]" } });
+  expect(evidence.events[0].attributes).toContainEqual({ key: "long-value", value: { stringValue: "[TRUNCATED]" } });
+  expect(evidence.droppedEventsCount).toBeNull(); expect(evidence.droppedLinksCount).toBe(4); expect(evidence.links[0].flags).toBeNull();
+  expect(evidence.capture).toMatchObject({ sourceCountPolicy: "absent-is-unknown", droppedEvents: 2, droppedLinks: 3,
+    droppedAttributes: 3, truncatedValues: 1, invalidValues: 2, redactedValues: 2 });
+  expect(trace.spans[0].otlp_evidence).not.toContain(credential);
+  expect(Buffer.byteLength(trace.spans[0].otlp_evidence)).toBeLessThanOrEqual(OTLP_EVIDENCE_LIMITS.bytes);
+  expect((await post(destination, "/api/import-run", trace)).status).toBe(200);
+  expect(await exported(destination)).toEqual(trace);
+  record("bounded-capture-roundtrip.json", { trace, originalOutput: fidelityOutput, sourceDigestUnchanged: sha(sent) === sourceDigest });
+});
+
+const invalidEnvelopes: [string, (evidence: any) => void][] = [
+  ["unknown envelope version", evidence => { evidence.schemaVersion = 2; }],
+  ["unknown field", evidence => { evidence.unreported = true; }],
+  ["missing source count", evidence => { delete evidence.droppedEventsCount; }],
+  ["lossy numeric nanoseconds", evidence => { evidence.events[0].timeUnixNano = 1770000000000000000; }],
+  ["uint64 overflow", evidence => { evidence.startTimeUnixNano = "18446744073709551616"; }],
+  ["int64 overflow", evidence => { evidence.events[0].attributes[0].value.intValue = "9223372036854775808"; }],
+  ["invalid exporter count", evidence => { evidence.droppedLinksCount = -1; }],
+  ["invented receiver count", evidence => { evidence.capture.droppedEvents = null; }],
+  ["prototype key", evidence => { evidence.events[0].attributes[0].key = "__proto__"; }],
+  ["multiple AnyValue variants", evidence => { evidence.events[0].attributes[0].value.boolValue = false; }],
+  ["sensitive attribute without canonical redaction", evidence => { evidence.events[0].attributes.push({ key: "api_key", value: { stringValue: "do-not-persist" } }); }],
+  ["credential-shaped text", evidence => { evidence.events[0].name = `sk-proj-${"x".repeat(48)}`; }],
+  ["event cap", evidence => { evidence.events = Array.from({ length: 129 }, () => evidence.events[0]); }],
+  ["link cap", evidence => { evidence.links = Array.from({ length: 129 }, () => evidence.links[0]); }],
+  ["attribute cap", evidence => { evidence.attributes = Array.from({ length: 129 }, () => ({ key: "marker", value: { boolValue: false } })); }],
+  ["AnyValue collection cap", evidence => { evidence.events[0].attributes[0].value = { arrayValue: { values: Array.from({ length: 129 }, () => ({ boolValue: false })) } }; }],
+  ["nested depth cap", evidence => { let value: any = { boolValue: false }; for (let i = 0; i < 10; i++) value = { arrayValue: { values: [value] } }; evidence.events[0].attributes[0].value = value; }],
+  ["total envelope byte cap", evidence => { evidence.events = Array.from({ length: 128 }, () => ({ ...evidence.events[0], name: "x".repeat(4096) })); }],
+];
+
+test.each(invalidEnvelopes)("actual v2 HTTP import refuses %s before any existing or new trace mutation", async (label, mutate) => {
+  expect((await post(source, "/v1/traces", fidelityRequest())).status).toBe(200);
+  const original = await exported();
+  expect((await post(destination, "/api/import-run", original)).status).toBe(200);
+  expect((await post(destination, "/api/annotations", { run_id: fidelityTraceId, span_id: null, kind: "note", note: "Preserve local review", source: "user" })).status).toBe(201);
+  const before = await exported(destination), invalid = structuredClone(original);
+  const evidence = JSON.parse(invalid.spans[0].otlp_evidence); mutate(evidence);
+  invalid.run.display_name = "Must not replace local metadata"; invalid.spans[0].output_payload = "Must not replace captured output";
+  invalid.spans[0].otlp_evidence = JSON.stringify(evidence);
+  const response = await post(destination, "/api/import-run", invalid);
+  expect(response.status).toBe(400); expect((await response.json()).error).toContain("import rejected");
+  expect(await exported(destination)).toEqual(before); expect(await exported()).toEqual(original);
+  const newId = "rejected-new-evidence"; invalid.run.id = newId; invalid.spans[0].run_id = newId;
+  expect((await post(destination, "/api/import-run", invalid)).status).toBe(400);
+  expect((await fetch(`${destination}/api/runs/${newId}/export`)).status).toBe(404);
+  expect(await exported(destination)).toEqual(before);
+  record(`invalid-${label.replace(/[^a-z0-9]+/g, "-")}.json`, { label, rejectionStatus: 400, sourceDigest: sha(original), existingDigestBefore: sha(before), existingDigestAfter: sha(await exported(destination)), newRunStatus: 404 });
+});
+
+test.each(["missing column", "object instead of string", "extra encoded bytes", "v1 masquerade"])("actual import rejects %s without creating a destination trace", async label => {
+  expect((await post(source, "/v1/traces", fidelityRequest())).status).toBe(200);
+  const original = await exported(), invalid = structuredClone(original);
+  if (label === "missing column") delete invalid.spans[0].otlp_evidence;
+  else if (label === "object instead of string") invalid.spans[0].otlp_evidence = JSON.parse(invalid.spans[0].otlp_evidence);
+  else if (label === "extra encoded bytes") invalid.spans[0].otlp_evidence += " ".repeat(OTLP_EVIDENCE_LIMITS.bytes);
+  else invalid.format = "runphantom-trace/v1";
+  expect((await post(destination, "/api/import-run", invalid)).status).toBe(400);
+  expect((await fetch(`${destination}/api/runs/${fidelityTraceId}/export`)).status).toBe(404);
+  expect(await exported()).toEqual(original);
+});
+
+test("a corrupted saved-cache envelope cannot become a portable download or imported evidence", async () => {
+  expect((await post(source, "/v1/traces", fidelityRequest())).status).toBe(200);
+  const original = await exported(), cached = structuredClone(original);
+  const credential = `sk-proj-${"x".repeat(48)}`, evidence = JSON.parse(cached.spans[0].otlp_evidence);
+  evidence.events[0].name = credential; cached.spans[0].otlp_evidence = JSON.stringify(evidence);
+  expect((await fetch(`${source}/api/saved-runs/cache/${fidelityTraceId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cached) })).status).toBe(200);
+  expect(await exported()).toEqual(original);
+  expect((await fetch(`${source}/api/clear`, { method: "POST" })).status).toBe(200);
+  const rejected = await fetch(`${source}/api/runs/${fidelityTraceId}/export`);
+  expect(rejected.status).toBe(413); expect(await rejected.text()).not.toContain(credential);
+  expect((await post(destination, "/api/import-run", cached)).status).toBe(400);
+  expect((await fetch(`${destination}/api/runs/${fidelityTraceId}/export`)).status).toBe(404);
+  record("corrupt-cache-refusal.json", { rawDigestBeforeClear: sha(original), cacheExportStatus: 413, importStatus: 400, newTraceStatus: 404 });
 });

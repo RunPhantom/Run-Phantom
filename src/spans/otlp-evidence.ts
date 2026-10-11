@@ -209,7 +209,7 @@ export function validateOtlpEvidence(input: unknown): asserts input is OtlpEvide
       text(entry.key, false, OTLP_EVIDENCE_LIMITS.key);
       if (reservedKey(entry.key as string)) fail();
       if (defaultIsSensitiveKey(entry.key as string)
-        && JSON.stringify(entry.value) !== '{"stringValue":"[REDACTED]"}') fail();
+        && record(entry.value, ["stringValue"]).stringValue !== "[REDACTED]") fail();
       value(entry.value, depth);
     }
   };
