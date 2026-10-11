@@ -69,6 +69,13 @@ export interface CostAnalytics extends AnalyticsPopulation {
   readonly byTime: readonly AnalyticsGroup[];
   readonly rateRevisions: readonly FrozenRateRevision[];
 }
+export interface CostAnalyticsReport extends CostAnalytics {
+  readonly asOf: number;
+  readonly scope: { readonly kind: "local" | "team"; readonly projectId: string };
+  readonly sourceRevision: string;
+  readonly rateAuthority: "request-declared";
+}
+const hasOwn = (value: Record<string, unknown>, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw invalid();
@@ -135,8 +142,8 @@ function attributes(span: AnalyticsSpan): { values: Record<string, unknown>; una
 }
 function reported(values: Record<string, unknown>, unavailable: boolean): { value: number | null; reasons: string[] } {
   if (unavailable) return { value: null, reasons: ["attributes_unavailable"] };
-  if (Object.hasOwn(values, "runphantom.cost.currency") && values["runphantom.cost.currency"] !== "USD") return { value: null, reasons: ["reported_currency_unavailable"] };
-  const observed = REPORTED_COST_KEYS.filter(key => Object.hasOwn(values, key)).map(key => values[key]);
+  if (hasOwn(values, "runphantom.cost.currency") && values["runphantom.cost.currency"] !== "USD") return { value: null, reasons: ["reported_currency_unavailable"] };
+  const observed = REPORTED_COST_KEYS.filter(key => hasOwn(values, key)).map(key => values[key]);
   if (!observed.length) return { value: null, reasons: ["reported_cost_missing"] };
   if (observed.some(value => typeof value !== "number" || !Number.isFinite(value) || value < 0)) return { value: null, reasons: ["reported_cost_invalid"] };
   if (observed.some(value => value !== observed[0])) return { value: null, reasons: ["reported_cost_conflicting"] };
@@ -187,9 +194,9 @@ export function aggregateCostAnalytics(spans: readonly AnalyticsSpan[], input: C
     if (timed) counts.selectedGenerations++; else counts.untimedGenerations++;
     const captured = attributes(span);
     const values = { ...captured.values };
-    if (!MODEL_KEYS.some(key => Object.hasOwn(values, key)) && span.model !== null) values["gen_ai.response.model"] = span.model;
-    if (!INPUT_KEYS.some(key => Object.hasOwn(values, key)) && span.inputTokens !== null) values["gen_ai.usage.input_tokens"] = span.inputTokens;
-    if (!OUTPUT_KEYS.some(key => Object.hasOwn(values, key)) && span.outputTokens !== null) values["gen_ai.usage.output_tokens"] = span.outputTokens;
+    if (!MODEL_KEYS.some(key => hasOwn(values, key)) && span.model !== null) values["gen_ai.response.model"] = span.model;
+    if (!INPUT_KEYS.some(key => hasOwn(values, key)) && span.inputTokens !== null) values["gen_ai.usage.input_tokens"] = span.inputTokens;
+    if (!OUTPUT_KEYS.some(key => hasOwn(values, key)) && span.outputTokens !== null) values["gen_ai.usage.output_tokens"] = span.outputTokens;
     if (captured.unavailable) values["runphantom.usage.unit"] = "unavailable";
     const usage = normalizeUsage(values, span.provider);
     const quoteUsage = request.estimateMode === "nominal-input-output" ? normalizeUsage({
@@ -200,7 +207,9 @@ export function aggregateCostAnalytics(spans: readonly AnalyticsSpan[], input: C
     const estimate = rate ? calculateCost(quoteUsage, rate) : null;
     const capturedCost = reported(values, captured.unavailable);
     const loss = !timed ? ["timestamp_unavailable"] : structure === "unavailable" ? ["ancestry_unavailable"] : [];
-    const targets = [timed ? total : untimed];
+    // An untimed capture might belong inside the window; retain it in the
+    // unavailable denominator so timed subtotals never certify full coverage.
+    const targets = timed ? [total] : [total, untimed];
     const identities = { byModel: usage.model, byProvider: usage.provider, byProject: span.projectId, byTime: timed ? new Date(Math.floor(span.startedAt! / (request.bucket === "hour" ? 3_600_000 : 86_400_000)) * (request.bucket === "hour" ? 3_600_000 : 86_400_000)).toISOString() : null };
     for (const key of Object.keys(groups) as Array<keyof typeof groups>) {
       const identity = identities[key];

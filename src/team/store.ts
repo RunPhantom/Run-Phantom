@@ -8,6 +8,8 @@ import { assertTeamIngestBatch, redactTeamText, type TeamIngestBatch } from "./i
 import { TeamError } from "./errors";
 import { bytes, digest, requiredEmail, requiredHash, requiredId, requiredName, requiredRole, lifetime, pageInput, pageResult, type Paging } from "./store-utils";
 import { searchTeamRuns } from "./search";
+import { ANALYTICS_LIMITS, CostAnalyticsError, parseCostAnalyticsRequest, type AnalyticsSpan } from "../pricing/analytics";
+import { buildCostAnalyticsReport, type CostAnalyticsReport } from "./pricing";
 import { TEAM_LIMITS as L, type Account, type Actor, type SessionInfo, type Project, type Role, type PageQuery, type Page, type Member, type Invite, type InviteCreate, type IngestKey, type KeyCreate, type RunSummary, type RunFilters, type RunDetail, type Span, type SpanSummary, type Note, type NoteCreate, type Metrics, type Check, type CheckSummary, type CheckReport, type AuditEvent, type AuditPage } from "./protocol";
 
 export interface SessionContext {
@@ -495,6 +497,22 @@ export class TeamStore {
     const known = completed.map(row => row.duration).filter((value): value is number => value !== null && Number.isFinite(value) && value >= 0).sort((a, b) => a - b);
     const rank = (p: number) => known.length ? known[Math.ceil(p * known.length) - 1] : null;
     return { asOf: to, window: { selection, from, to, field: "startedAt" }, traces: { total: rows.length, completed: completed.length, running: rows.filter(row => row.status === "running").length, failed: rows.filter(row => row.status === "failed").length, terminal: rows.filter(row => row.status !== "running").length }, duration: { population: "completedTraces", knownCount: known.length, unavailableCount: completed.length - known.length, p50Ms: rank(.5), p95Ms: rank(.95) } };
+  }
+
+  pricingAnalytics(context: ProjectContext, input: unknown): CostAnalyticsReport {
+    let request;
+    try { request = parseCostAnalyticsRequest(input); }
+    catch { throw new TeamError("invalid_request", "Invalid cost analytics request"); }
+    return this.#db.transaction(() => {
+      const scope = this.#project(context);
+      const selection = `s.project_id=? AND s.run_id IN (SELECT run_id FROM spans WHERE project_id=? AND json_extract(data,'$.kind')='LLM_GENERATION' AND ((started_at>=? AND started_at<?) OR started_at IS NULL OR started_at<0 OR started_at>8640000000000000))`;
+      const args = [scope.projectId, scope.projectId, request.from, request.to];
+      const size = this.#get<{ n: number; bytes: number }>(`SELECT COUNT(*) AS n,COALESCE(SUM(length(CAST(COALESCE(json_extract(s.data,'$.attributes'),'') AS BLOB))),0) AS bytes FROM spans s WHERE ${selection}`, ...args)!;
+      if (!Number.isSafeInteger(size.n) || !Number.isSafeInteger(size.bytes) || size.n > ANALYTICS_LIMITS.spans || size.bytes > ANALYTICS_LIMITS.attributeBytes) throw new TeamError("too_large", "Cost analytics exceeds a complete-population limit; select a smaller window");
+      const spans = this.#all<AnalyticsSpan>(`SELECT s.project_id AS projectId,s.run_id AS runId,s.id,json_extract(s.data,'$.parentSpanId') AS parentSpanId,json_extract(s.data,'$.kind') AS kind,s.started_at AS startedAt,s.model,s.provider,json_extract(s.data,'$.inputTokens') AS inputTokens,json_extract(s.data,'$.outputTokens') AS outputTokens,json_extract(s.data,'$.attributes') AS attributes,json_extract(s.data,'$.unavailable.attributes') AS attributesUnavailable FROM spans s WHERE ${selection} ORDER BY s.run_id,s.id`, ...args);
+      try { return buildCostAnalyticsReport({ kind: "team", projectId: scope.projectId }, spans, request, this.#now()); }
+      catch (error) { throw new TeamError(error instanceof CostAnalyticsError ? error.code : "invalid_request", error instanceof CostAnalyticsError ? error.message : "Invalid cost analytics request"); }
+    }).immediate();
   }
 
   acquireCheckEvidence(context: ProjectContext, runIds: string[], definitionBytes: number): CheckEvidence {

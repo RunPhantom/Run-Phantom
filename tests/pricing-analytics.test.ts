@@ -66,7 +66,9 @@ describe("complete captured cost and usage populations", () => {
   test("UTC window bounds are inclusive/exclusive and untimed rows are disclosed", () => {
     const result = aggregateCostAnalytics([span({ id: "first", startedAt: 3_600_000 }), span({ id: "last", startedAt: 7_200_000 }), span({ id: "untimed", startedAt: null })], request({ from: 3_600_000, to: 7_200_000 }));
     expect(result.window).toMatchObject({ timezone: "UTC", field: "generationStartedAt" });
-    expect(result.reportedUsd.eligibleCount).toBe(1);
+    expect(result.reportedUsd.eligibleCount).toBe(2);
+    expect(result.reportedUsd.completeTotal).toBeNull();
+    expect(result.reportedUsd.knownSum).toBe(.123);
     expect(result.population).toMatchObject({ outsideWindow: 1, untimedGenerations: 1, selectedGenerations: 1 });
     expect(result.untimed.reportedUsd.unavailableReasons.timestamp_unavailable).toBe(1);
     expect(result.byTime.map(row => row.identity)).toEqual(["1970-01-01T01:00:00.000Z", null]);
