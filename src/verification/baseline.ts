@@ -32,8 +32,21 @@ export interface BaselineReading extends ReadingMetadata {
   readonly version: 1;
   readonly availability: "complete" | "partial" | "unavailable";
   readonly value: SnapshotValue;
-  readonly unavailableReason?: "capture-incomplete" | "non-json" | "limit";
+  readonly unavailableReason?: "capture-incomplete" | "non-json" | "limit" | "invalid-reading";
 }
+
+export interface CausalAttribution {
+  readonly source: "action-result" | "declared-operation";
+  readonly scope: BaselineScope;
+  readonly actionId: string;
+  readonly cursor: number;
+  readonly baseline: BaselineReading;
+  readonly reading: BaselineReading;
+}
+
+// Process-local classification, not authorization: only the owning dispatcher may supply provenance.
+// Persisted/copied records remain inspectable but must be matched to owned capture records before reuse.
+const capturedAttributions = new WeakSet<object>();
 
 export class BaselineInputError extends Error {
   constructor(message: string) { super(message); this.name = "BaselineInputError"; }
@@ -98,7 +111,7 @@ export function sameBaselineScope(left: BaselineScope, right: BaselineScope): bo
 }
 
 class SnapshotError extends Error {
-  constructor(readonly reason: "non-json" | "limit") { super(reason); }
+  constructor(readonly reason: "non-json" | "limit" | "invalid-reading") { super(reason); }
 }
 
 // Inspect data descriptors before redaction: application getters and toJSON are executable code.
@@ -177,6 +190,7 @@ export function captureBaselineReading(metadata: ReadingMetadata, value: unknown
     ...(raw.truncated === true ? { truncated: true } : {}), ...(raw.redacted === true ? { redacted: true } : {}) };
   if (!base.complete) return Object.freeze({ ...base, availability: "unavailable", value: null, unavailableReason: "capture-incomplete" });
   try {
+    if (scope.kind === "element" && (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)) throw new SnapshotError("invalid-reading");
     const cloned = cloneJson(value, 0, { nodes: 0, characters: 0 }, new Set());
     if (new TextEncoder().encode(JSON.stringify(cloned)).byteLength > L.MAX_EVENT_BYTES) throw new SnapshotError("limit");
     const clean = sanitizeWithReport(cloned);
@@ -189,4 +203,39 @@ export function captureBaselineReading(metadata: ReadingMetadata, value: unknown
     return Object.freeze({ ...base, availability: "unavailable", value: null,
       unavailableReason: error instanceof SnapshotError ? error.reason : "non-json" });
   }
+}
+
+/** Call only with a dispatcher-owned result or an operation matched by its declared contract.
+ * A later ordinary DOM/state event is not an action result. Request payloads cannot supply this proof.
+ * This validates the result shape; it cannot authenticate the source of a supplied record.
+ */
+export function captureCausalAttribution(raw: unknown): CausalAttribution {
+  const event = record(raw, ["t", "type", "actionId", "data", "truncated"]);
+  const source = event.type === "action.result" ? "action-result" : event.type === "operation.result" ? "declared-operation" : undefined;
+  if (!source || event.truncated !== undefined && event.truncated !== false) throw new BaselineInputError("A complete captured result is required for attribution");
+  const cursor = baselineCursor(event.t);
+  const actionId = identifier(event.actionId);
+  const data = record(event.data, ["scope", "baselineCursor", "baselineValue", "readingCursor", "value", "operationId", "phase"]);
+  const scope = captureBaselineScope(data.scope);
+  const baselineCursor_ = baselineCursor(data.baselineCursor);
+  const readingCursor = baselineCursor(data.readingCursor);
+  if (baselineCursor_ >= readingCursor || readingCursor > cursor || !Object.hasOwn(data, "value") || !Object.hasOwn(data, "baselineValue")) throw new BaselineInputError("The captured result must include its own ordered pre/post scoped readings");
+  let outcome: OperationReading | undefined;
+  if (source === "declared-operation") {
+    if (data.phase !== "accepted" && data.phase !== "final") throw new BaselineInputError("An operation result requires its declared phase");
+    outcome = { operationId: identifier(data.operationId), phase: data.phase };
+  } else if (Object.hasOwn(data, "phase") || Object.hasOwn(data, "operationId")) {
+    throw new BaselineInputError("Operation attribution requires an operation result");
+  }
+  const baseline = captureBaselineReading({ scope, cursor: baselineCursor_, fresh: true, complete: true }, data.baselineValue);
+  const reading = captureBaselineReading({ scope, cursor: readingCursor, fresh: true, complete: true, actionId,
+    ...(outcome === undefined ? {} : { outcome }) }, data.value);
+  if (baseline.availability !== "complete" || reading.availability !== "complete") throw new BaselineInputError("Partial baseline or result readings cannot establish attribution");
+  const attribution = Object.freeze({ source, scope, actionId, cursor, baseline, reading });
+  capturedAttributions.add(attribution);
+  return attribution;
+}
+
+export function isCapturedAttribution(value: unknown): value is CausalAttribution {
+  return typeof value === "object" && value !== null && capturedAttributions.has(value);
 }

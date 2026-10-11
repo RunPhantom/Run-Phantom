@@ -91,6 +91,14 @@ describe("immutable verification baseline readings", () => {
     expect(stale.fresh).toBe(false);
   });
 
+  test("element readings preserve the actual safe count contract rather than coercing arbitrary JSON", () => {
+    const element = metadata({ scope: { sessionId: "app-1", generation: 2, kind: "element", target: "#success" } });
+    for (const value of [0, 1, Number.MAX_SAFE_INTEGER]) expect(captureBaselineReading(element, value)).toMatchObject({ availability: "complete", value });
+    for (const value of ["1", -1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, null, { count: 1 }]) {
+      expect(captureBaselineReading(element, value)).toMatchObject({ availability: "unavailable", unavailableReason: "invalid-reading" });
+    }
+  });
+
   test("scope targets reuse saved-flow credential and own-path validation", () => {
     const scope = { sessionId: "app-1", generation: 0, kind: "state", target: "cart" };
     expect(captureBaselineScope(scope).path).toBe("");
