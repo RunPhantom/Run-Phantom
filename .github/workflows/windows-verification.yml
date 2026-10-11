@@ -1,0 +1,107 @@
+name: Native Windows verification
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: windows-verification-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      ANTHROPIC_API_KEY: ''
+      OPENAI_API_KEY: ''
+      RUNPHANTOM_OPENAI_API_KEY: ''
+      RUNPHANTOM_CLAUDE_CLI_CHAT: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Check backend and application types
+        run: |
+          bun x tsc --noEmit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Set-Location app
+          bun x tsc --noEmit
+      - name: Lint
+        run: bun run lint
+      - name: Native backend and integration tests
+        run: bun run test
+      - name: Build application and verify generated assets
+        run: bun run build
+      - name: Install Chromium
+        working-directory: app
+        run: bun x playwright install chromium
+      - name: Real browser end-to-end journeys against isolated local daemons
+        working-directory: app
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-source
+        run: bun x playwright test --project=chromium --output=test-results/windows-source
+      - name: Compile native Windows application
+        run: bun scripts/build-bun.ts --target=bun-windows-x64 --skip-ui
+      - name: Exercise the executable outside the source checkout
+        shell: pwsh
+        run: |
+          $stateRoot = Join-Path $env:RUNNER_TEMP "runphantom-native-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $daemon = $null
+          try {
+            New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
+            $profile = Join-Path $stateRoot 'profile'
+            New-Item -ItemType Directory -Path $profile -Force | Out-Null
+            $installed = Join-Path $stateRoot 'runphantom.exe'
+            Copy-Item 'build/bun/runphantom-bun-windows-x64.exe' $installed
+            $env:RUNPHANTOM_PORT = '5987'
+            $env:RUNPHANTOM_BIND_HOST = '127.0.0.1'
+            $env:RUNPHANTOM_DB_PATH = Join-Path $stateRoot 'runphantom.db'
+            $env:RUNPHANTOM_SECRET_STORE_PATH = Join-Path $stateRoot 'secrets.json'
+            $env:RUNPHANTOM_COMPILED_URL = 'http://127.0.0.1:5987'
+            $env:RUNPHANTOM_SCREENSHOT_DIR = Join-Path $env:GITHUB_WORKSPACE 'app/output/windows-installed'
+            $daemon = Start-Process -FilePath $installed -ArgumentList 'serve' -WorkingDirectory $stateRoot -Environment @{ USERPROFILE = $profile } -PassThru -RedirectStandardOutput (Join-Path $stateRoot 'daemon-out.log') -RedirectStandardError (Join-Path $stateRoot 'daemon-error.log')
+            $deadline = [DateTime]::UtcNow.AddSeconds(60)
+            $healthy = $false
+            while ([DateTime]::UtcNow -lt $deadline) {
+              $daemon.Refresh()
+              if ($daemon.HasExited) { throw 'Compiled daemon exited before becoming healthy' }
+              try {
+                $response = Invoke-WebRequest -Uri "$env:RUNPHANTOM_COMPILED_URL/health" -TimeoutSec 2
+                if ($response.StatusCode -eq 200) { $healthy = $true; break }
+              } catch { }
+              Start-Sleep -Milliseconds 250
+            }
+            if (-not $healthy) { throw 'Compiled daemon failed its health deadline' }
+            Set-Location app
+            $env:PLAYWRIGHT_HTML_OUTPUT_DIR = 'playwright-report-installed'
+            bun x playwright test tests-e2e/compiled-binary.spec.ts tests-e2e/evaluations.spec.ts tests-e2e/verification.spec.ts --grep compiled --project=chromium --workers=1 --output=test-results/windows-installed
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            if ($null -ne $daemon) {
+              $daemon.Refresh()
+              if (-not $daemon.HasExited) {
+                try { Stop-Process -Id $daemon.Id -Force -ErrorAction Stop }
+                catch {
+                  $daemon.Refresh()
+                  if (-not $daemon.HasExited) { throw }
+                }
+              }
+              if (-not $daemon.WaitForExit(10000)) { throw 'Owned daemon did not exit; retaining locked diagnostic files' }
+              $daemon.Dispose()
+            }
+            if (Test-Path $stateRoot) { Remove-Item $stateRoot -Recurse -Force }
+          }
+      - name: Preserve browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-browser-evidence-${{ github.sha }}
+          path: |
+            app/test-results/
+            app/playwright-report-source/
+            app/playwright-report-installed/
+            app/output/windows-installed/
+          if-no-files-found: ignore
