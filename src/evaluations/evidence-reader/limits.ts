@@ -12,16 +12,16 @@ export const DEFAULT_READER_LIMITS: Readonly<ReaderLimits> = Object.freeze({
 });
 const NativeBytes = Uint8Array;
 const bytePrototype = Object.getPrototypeOf(NativeBytes.prototype);
-const byteLengthGetter = Object.getOwnPropertyDescriptor(bytePrototype, "byteLength")!.get!;
-const byteTypeGetter = Object.getOwnPropertyDescriptor(bytePrototype, Symbol.toStringTag)!.get!;
+const byteLengthDescriptor = Object.getOwnPropertyDescriptor(bytePrototype, "byteLength")!;
+const byteTypeDescriptor = Object.getOwnPropertyDescriptor(bytePrototype, Symbol.toStringTag)!;
 const byteSet = Object.getOwnPropertyDescriptor(bytePrototype, "set")!.value;
 
 /** Read internal slots and copy without caller properties, species or Buffer view semantics. */
 export function snapshotEvidenceBytes(value: unknown, sourceLimit: number, remainingBytes: number): Uint8Array {
   let length: number;
   try {
-    length = byteLengthGetter.call(value);
-    if (byteTypeGetter.call(value) !== "Uint8Array") throw new Error("Not an octet array");
+    length = byteLengthDescriptor.get!.call(value);
+    if (byteTypeDescriptor.get!.call(value) !== "Uint8Array") throw new Error("Not an octet array");
   } catch { throw new ReaderRefusal("source_rejected"); }
   if (!Number.isSafeInteger(sourceLimit) || sourceLimit < 1 || sourceLimit > EVIDENCE_LIMITS.MAX_SOURCE_BYTES ||
     !Number.isSafeInteger(remainingBytes) || remainingBytes < 0 || remainingBytes > EVIDENCE_LIMITS.MAX_IMPORT_BYTES ||
