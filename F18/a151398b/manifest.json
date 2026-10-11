@@ -1,0 +1,71 @@
+{
+  "feature": "F18",
+  "sourceHead": "a151398b6418a4898a07747134d53edd2c5f0f40",
+  "baseHead": "19b81d93f17136ddd712dd57f4c2481e0d824ea8",
+  "verification": {
+    "backendPassed": 717,
+    "backendPlatformSkipped": 1,
+    "backendFailed": 0,
+    "assertions": 4062,
+    "sourceChromiumPassed": 122,
+    "sourceChromiumExplicitSkipped": 11,
+    "sourceChromiumFailed": 0,
+    "copiedMacArm64Passed": 4,
+    "copiedMacArm64Skipped": 0,
+    "copiedMacArm64Failed": 0,
+    "lintBuildRootAppBrowserTypes": "passed"
+  },
+  "behavior": [
+    "Actual synchronous before/after readings correlated to the SDK action",
+    "Zero-to-one counter transition passes; already true one-to-one remains inconclusive",
+    "Missing/private/incomplete/mismatched readings never establish causal success",
+    "Saved flow and persisted report controls preserve capture identity"
+  ],
+  "observationAuthority": "SDK-reported synchronous observations; no trusted browser or asynchronous business completion claim",
+  "copiedExecutable": {
+    "binarySha256": "e13adf76ebac4957bed9d6e3f2189c758b11c89d2ae9367da3a02d5c4190c527",
+    "outsideCheckout": true,
+    "emptyExecutionCwd": true,
+    "privateProfile": true,
+    "actualProcessExecutableAndCwdObserved": true,
+    "ownedProcessReaped": true,
+    "temporaryRuntimeRemoved": true
+  },
+  "screenshots": [
+    {
+      "name": "causal-desktop-already-true-report.png",
+      "sha256": "71260f5d3f2651af320655a97419aeb0404a71a2dbdb402f24a8508b722f9bd0",
+      "profile": "Actual synthetic application screenshot"
+    },
+    {
+      "name": "causal-desktop-passed-report.png",
+      "sha256": "ad88634a837b6e64dc69bb87b747c7aa9489b4484eb338de1bd1e1aa42e62bc5",
+      "profile": "Actual synthetic application screenshot"
+    },
+    {
+      "name": "causal-desktop.png",
+      "sha256": "7994b70adc58266a88b93cc3b62ff7837cd0c734713950000c676bc1a5605fca",
+      "profile": "Actual synthetic application screenshot"
+    },
+    {
+      "name": "causal-mobile-already-true-report.png",
+      "sha256": "314d00b242e47338664083de11e484a922eb8cc6d8ed521dfb2c06bcbaadec9b",
+      "profile": "Actual synthetic application screenshot"
+    },
+    {
+      "name": "causal-mobile.png",
+      "sha256": "e5e44956b0ffedb199cfd758d44a12599de6cb4b1162c8482c5319a89ed1949f",
+      "profile": "Actual synthetic application screenshot"
+    }
+  ],
+  "screenshotsScope": "Actual source application with controlled synthetic fixture, before separate V1 composition",
+  "providerSpendUsd": 0,
+  "nativeWindowsCurrentHead": "pending",
+  "rootFinalReview": {
+    "decision": "APPROVE bounded causal action feature",
+    "privateArtifactHashesChecked": 25,
+    "screenshotsViewed": 5,
+    "cleanup": "Justified no-op"
+  },
+  "globalAcceptance": "Pending composed application, installed/platform/provider qualification"
+}

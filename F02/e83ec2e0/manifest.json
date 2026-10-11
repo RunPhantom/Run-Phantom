@@ -1,0 +1,54 @@
+{
+  "feature": "F02",
+  "sourceHead": "e83ec2e0453341bcefa1a78a1b4e8d208621f384",
+  "baseHead": "19b81d93f17136ddd712dd57f4c2481e0d824ea8",
+  "verification": {
+    "backendPassed": 738,
+    "backendPlatformSkipped": 1,
+    "backendFailed": 0,
+    "assertions": 4155,
+    "sourceChromiumPassed": 114,
+    "sourceChromiumExplicitSkipped": 10,
+    "sourceChromiumFailed": 0,
+    "copiedMacArm64ExistingChecksPassed": 3,
+    "copiedChecksFailed": 0,
+    "lintBuildRootAppBrowserTypes": "passed"
+  },
+  "compiledMigration": {
+    "evidenceTables": 10,
+    "immutableTriggers": 7,
+    "freshAndActualProcessReopen": "passed",
+    "migrationHistoryEntries": 8,
+    "lastSqlHashMatchedBuiltAsset": true,
+    "runtimeOutsideCheckout": true,
+    "ownedProcessesReaped": true,
+    "temporaryRuntimeRemoved": true,
+    "binarySha256": "393aa1f77d01a78447234582bcd7efaeb94938abfadc0e4491e55a42b0151610"
+  },
+  "scope": "Immutable storage foundation; application import/team/evidence UI acceptance is downstream",
+  "screenshots": [
+    {
+      "name": "runphantom-desktop-detail.png",
+      "sha256": "f8b79923e4726061635221bb60a0cbcb3861bf89d639ab9bc1a5dfd296f48d32",
+      "profile": "Actual synthetic application screenshot"
+    },
+    {
+      "name": "runphantom-desktop.png",
+      "sha256": "658fff0882262bceb1a1c269d45724f40b9188ef458fd267c584653e7e6d899c",
+      "profile": "Actual synthetic application screenshot"
+    },
+    {
+      "name": "runphantom-mobile.png",
+      "sha256": "7d7e70ab740476b7c8b4cf9a4eee8aee660d0224ca76534244a78c7d9311d92a",
+      "profile": "Actual synthetic application screenshot"
+    }
+  ],
+  "screenshotsScope": "Existing embedded UI boot/detail regression on the actual migrated database; no evidence upload UI claim",
+  "providerSpendUsd": 0,
+  "nativeWindowsCurrentHead": "pending",
+  "rootFinalReview": {
+    "decision": "APPROVE storage foundation publication",
+    "sourceAndArtifactHashesChecked": 22
+  },
+  "globalAcceptance": "Pending composed application, installed/platform/provider qualification"
+}
