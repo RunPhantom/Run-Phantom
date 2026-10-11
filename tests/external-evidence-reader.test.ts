@@ -108,6 +108,13 @@ describe("real bounded report byte interpretation", () => {
     expect(read(JSON.stringify(statement({ predicateType: "https://in-toto.io/attestation/test-result/v2" })), "in-toto-statement/v1").reasonCodes).toContain("unsupported_schema");
     expect(read('{}\n{}\n', "dsse-envelope-jsonl/v1").parseState).not.toBe("parsed");
   });
+  test("one declared DSSE JSONL envelope preserves its assertions without execution", () => {
+    const envelope = { payloadType: "application/vnd.in-toto+json", payload: Buffer.from(JSON.stringify(statement())).toString("base64"), signatures: [] };
+    const result = read("\n" + JSON.stringify(envelope) + "\n", "dsse-envelope-jsonl/v1");
+    expect(result.parseState).toBe("parsed");
+    expect(result.attestation?.signatureCount).toBe("0");
+    expect(result.reportOutcome).toBe("unknown");
+  });
   test("source and leaf limits are applied before a success can be produced", () => {
     expect(read(" ".repeat(2 * 1024 * 1024 + 1)).reasonCodes).toContain("source_limit");
     expect(read('<testsuite>' + '<testcase/>'.repeat(50_001) + '</testsuite>').reasonCodes).toContain("source_limit");
@@ -116,6 +123,13 @@ describe("real bounded report byte interpretation", () => {
     expect(read('<?xml version="1.1"?><testsuite><testcase name="one"/></testsuite>').reasonCodes).toContain("unsupported_schema");
     expect(read('<testsuite>unrecognized outcome<testcase name="one"/></testsuite>').reportOutcome).toBe("unknown");
     expect(read('<testsuite><testcase name="one">FAILED</testcase></testsuite>').reportOutcome).toBe("unknown");
+  });
+  test("valid XML can exceed normalized output or log budgets without exceeding source bytes", () => {
+    const many = '<testsuite>' + '<testcase name="one"/>'.repeat(49_000) + '</testsuite>';
+    expect(Buffer.byteLength(many)).toBeLessThan(2 * 1024 * 1024);
+    expect(read(many).reasonCodes).toContain("normalization_limit");
+    expect(read('<testsuite><testcase name="one"/><system-out>' + "x".repeat(4097) + '</system-out></testsuite>').reasonCodes).toContain("normalization_limit");
+    expect(read('<testsuite><testcase name="one"/><system-out>small control</system-out></testsuite>').reportOutcome).toBe("reports_pass");
   });
   test("the real byte parser never resolves a report-supplied external resource", async () => {
     let requests = 0;

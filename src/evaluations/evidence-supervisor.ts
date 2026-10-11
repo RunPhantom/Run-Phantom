@@ -131,6 +131,7 @@ export class EvidenceSupervisor {
       sources: [], workers: [], queueMs: performance.now() - job.admitted, totalMs: 0, cpuMs: null, rssBytes: null };
     for (const source of job.request.sources) {
       if (job.failure) throw new EvidenceSupervisorError(job.failure);
+      if (performance.now() - job.admitted >= this.#importMs) throw new EvidenceSupervisorError("import_timeout");
       if (job.request.isCurrent && !job.request.isCurrent()) throw new EvidenceSupervisorError("stale_publication");
       let child: WorkerProcess;
       try { child = this.#factory(); } catch { throw new EvidenceSupervisorError("worker_unavailable"); }
@@ -141,7 +142,7 @@ export class EvidenceSupervisor {
       job.controller.signal.addEventListener("abort", kill, { once: true });
       try {
         const request: EvidenceWorkerRequest = { version: 1, id, sourceId: source.sourceId, dialect: source.dialect, limits: this.#limits, bytes: Buffer.from(source.bytes).toString("base64") };
-        child.stdin.write(JSON.stringify(request));
+        await child.stdin.write(JSON.stringify(request));
         await child.stdin.end();
         let output: Uint8Array;
         try { output = await readBoundedStream(child.stdout, EVIDENCE_WORKER_OUTPUT_BYTES); }
@@ -159,6 +160,8 @@ export class EvidenceSupervisor {
         if (normalized.sourceId !== source.sourceId || Buffer.byteLength(JSON.stringify(normalized)) > this.#limits.maxNormalizedBytes) throw new EvidenceSupervisorError("worker_protocol");
         result.sources.push(normalized);
       } catch (error) {
+        if (job.failure) throw new EvidenceSupervisorError(job.failure);
+        if (timedOut) throw new EvidenceSupervisorError("source_timeout");
         if (error instanceof EvidenceSupervisorError) throw error;
         throw new EvidenceSupervisorError("worker_protocol");
       } finally {
@@ -167,6 +170,7 @@ export class EvidenceSupervisor {
       }
     }
     if (job.failure) throw new EvidenceSupervisorError(job.failure);
+    if (performance.now() - job.admitted >= this.#importMs) throw new EvidenceSupervisorError("import_timeout");
     if (job.request.isCurrent && !job.request.isCurrent()) throw new EvidenceSupervisorError("stale_publication");
     result.totalMs = performance.now() - job.admitted;
     return result;

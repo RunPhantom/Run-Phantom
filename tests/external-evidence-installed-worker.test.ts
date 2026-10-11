@@ -19,7 +19,7 @@ test("native standalone worker binary parses outside the checkout without a Bun 
       const env: Record<string, string> = { LANG: "C.UTF-8", TZ: "UTC" };
       if (process.platform === "win32" && process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
       const child = Bun.spawn([executable], { cwd, env, stdin: "pipe", stdout: "pipe", stderr: "ignore" });
-      child.stdin.write(JSON.stringify({ version: 1, id: "installed", sourceId: "one", dialect: "junit-xml/v1", limits: DEFAULT_READER_LIMITS, bytes: Buffer.from(xml).toString("base64") }));
+      await child.stdin.write(JSON.stringify({ version: 1, id: "installed", sourceId: "one", dialect: "junit-xml/v1", limits: DEFAULT_READER_LIMITS, bytes: Buffer.from(xml).toString("base64") }));
       await child.stdin.end();
       const normalized = JSON.parse(new TextDecoder().decode(await readBoundedStream(child.stdout, 5 * 1024 * 1024))).normalized;
       expect(await child.exited).toBe(0);

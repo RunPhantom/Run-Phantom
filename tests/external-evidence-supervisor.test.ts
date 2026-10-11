@@ -54,6 +54,15 @@ test("source timeout kills the actual process and rejects before publishing its 
     expect(supervisor.state.active).toBe(0);
   } finally { await supervisor.shutdown(); }
 });
+test("a blocked input pipe retains the timeout reason while its worker is reaped", async () => {
+  let pid = 0;
+  const supervisor = new EvidenceSupervisor({ maxSourceMs: 100, workerFactory: () => { const child = fixtureProcess("while(true) {} "); pid = child.pid; return child; } });
+  try {
+    const input = request("blocked-input", { sources: [{ sourceId: "large", dialect: "junit-xml/v1", bytes: new Uint8Array(2 * 1024 * 1024).fill(32) }] });
+    await refused(supervisor.submit(input).result, "source_timeout");
+    expect(() => process.kill(pid, 0)).toThrow();
+  } finally { await supervisor.shutdown(); }
+});
 test("import deadline includes queue wait and leaves no active process after shutdown", async () => {
   const pids: number[] = [];
   const supervisor = new EvidenceSupervisor({ maxImportMs: 100, workerFactory: () => { const child = fixtureProcess("setInterval(() => {}, 1000)"); pids.push(child.pid); return child; } });
@@ -93,4 +102,15 @@ test("byte admission copies mutable input and rejects source/import count excess
 });
 test("daemon supervisor identity is shared, independent of caller or database scope", () => {
   expect(getEvidenceSupervisor()).toBe(getEvidenceSupervisor());
+});
+test("shutdown cancels live and queued work and waits for actual owned process exit", async () => {
+  const pids: number[] = [];
+  const supervisor = new EvidenceSupervisor({ workerFactory: () => { const child = fixtureProcess("while(true) {} "); pids.push(child.pid); return child; } });
+  const handles = ["one", "two", "queued"].map(id => supervisor.submit(request(id)));
+  const outcomes = handles.map(handle => handle.result.catch(error => error));
+  await supervisor.shutdown();
+  for (const result of await Promise.all(outcomes)) expect(result.code).toBe("shutdown");
+  expect(pids).toHaveLength(2);
+  for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow();
+  expect(supervisor.state).toEqual({ active: 0, queued: 0, closed: true });
 });
