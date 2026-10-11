@@ -20,7 +20,7 @@ function request(key = "operation-1"): EvidenceImportRequest {
 }
 function normalized(sourceId = "source-1"): NormalizedEvidenceSource {
   const leaves = [{ id: "leaf-1", name: "Synthetic assertion", status: "passed" as const, file: null, durationMs: 0, detail: null }];
-  return { version: 1, sourceId, parseState: "parsed", interpretationComplete: true, reportOutcome: "reports_pass", leafCounts: deriveEvidenceCounts(leaves), observedExecutedLowerBound: "1", producerCounts: { tests: "1" },
+  return { version: 1, sourceId, parseState: "parsed", interpretationComplete: true, reportOutcome: "reports_pass", leafCounts: deriveEvidenceCounts(leaves), observedExecutedLowerBound: "1", producerCounts: { tests: "1" }, producerSummaries: [],
     countsConsistent: true, assertedIdentity: { runnerId: null, commit: null, sourceSha256: null }, attestation: null, reasonCodes: [], leaves };
 }
 function attestation(sourceId: string, claimedReport = evidenceDigest(raw)): NormalizedEvidenceSource {
@@ -29,7 +29,8 @@ function attestation(sourceId: string, claimedReport = evidenceDigest(raw)): Nor
     observedExecutedLowerBound: null, countsConsistent: null, producerCounts: null, reportOutcome: "unknown", attestation: {
       statementType: EVIDENCE_STATEMENT_TYPE, predicateType: EVIDENCE_PREDICATE_TYPE, payloadType: "application/vnd.in-toto+json", signatureCount: "2", signaturesChecked: false,
       producerResult: "PASSED", producerTests: { passed: ["producer test assertion"], warned: null, failed: null },
-      subjects: [{ name: "unit-report.xml", digests: [{ algorithm: "sha256", value: claimedReport }] }],
+      subjects: [{ name: "unit-report.xml", digests: [{ algorithm: "sha256", value: claimedReport }] },
+        { name: "source-commit", digests: [{ algorithm: "gitCommit", value: "a".repeat(40) }] }],
       assertedCommits: ["a".repeat(40)], reportReferences: [{ subjectName: "unit-report.xml", sha256: claimedReport }],
     } };
 }
@@ -284,6 +285,27 @@ describe("immutable attestation assertions", () => {
     summary.parseState = "unparsed"; summary.interpretationComplete = false; summary.reasonCodes = ["unsupported_schema"];
     const set = store.publish(admitted.job.id, admitted.publicationToken, sources)!;
     expect(set.sources[1]).toMatchObject({ parseState: "unparsed", reportOutcome: "unknown", leafCounts: { executed: null }, authentication: "not_checked" });
+  });
+  test("generic commit text and unsupported attestations cannot establish a commit match", () => {
+    for (const unsupported of [false, true]) {
+      const { requestValue, assertionRaw } = draft(); requestValue.operationKey = `commit-boundary-${unsupported}`;
+      const inventory = store.saveInventory(`commit-roster-${unsupported}`, 0, [{ shardId: "assertion", kind: "attestation",
+        constraints: { runnerId: null, commit: "a".repeat(40), sourceSha256: null } }], "prospective");
+      requestValue.inventory = { id: inventory.id, revision: 1 };
+      const summary = attestation("assertion"); summary.assertedIdentity.commit = "a".repeat(40);
+      if (unsupported) {
+        summary.parseState = "unparsed"; summary.interpretationComplete = false; summary.attestation!.predicateType = "unsupported/v9";
+        summary.reasonCodes = ["unsupported_schema"];
+      } else {
+        summary.attestation!.subjects[1].digests[0].algorithm = "sha1";
+        summary.attestation!.assertedCommits = [];
+      }
+      const admitted = store.admit(requestValue); store.start(admitted.job.id, admitted.publicationToken);
+      const set = store.publish(admitted.job.id, admitted.publicationToken, [{ sourceId: "source-1", raw, normalized: normalized() },
+        { sourceId: "assertion", raw: assertionRaw, normalized: summary }])!;
+      expect(set.sources[1].commitAssertionMatches).toBeNull();
+      expect(set.sources[1].authentication).toBe("not_checked");
+    }
   });
 });
 

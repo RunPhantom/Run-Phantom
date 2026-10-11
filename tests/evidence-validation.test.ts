@@ -12,7 +12,7 @@ function request(): EvidenceImportRequest {
 function normalized(): NormalizedEvidenceSource {
   const leaves = [{ id: "leaf-1", name: "Synthetic assertion", status: "passed" as const, file: null, durationMs: 0, detail: null }];
   return { version: 1, sourceId: "source-1", parseState: "parsed", interpretationComplete: true, reportOutcome: "reports_pass", leafCounts: deriveEvidenceCounts(leaves), observedExecutedLowerBound: "1",
-    producerCounts: { tests: "1", failures: "0" }, countsConsistent: true, assertedIdentity: { runnerId: null, commit: null, sourceSha256: null },
+    producerCounts: { tests: "1", failures: "0" }, producerSummaries: [], countsConsistent: true, assertedIdentity: { runnerId: null, commit: null, sourceSha256: null },
     attestation: null, reasonCodes: [], leaves };
 }
 describe("versioned immutable evidence contracts", () => {
@@ -128,5 +128,39 @@ describe("versioned immutable evidence contracts", () => {
     }
     expect(() => parseEvidenceImportRequest({ ...draft, sources: [{ ...draft.sources[0], kind: "json", dialect: "test-report-json/v1" }] })).toThrow("dialect");
     expect(() => parseNormalizedEvidence(normalized(), "json")).toThrow("cannot assert executed");
+  });
+  test("nested suite assertions keep exact context without adding producer totals into observed counts", () => {
+    const source = normalized(); source.countsConsistent = false; source.reportOutcome = "unknown";
+    source.producerSummaries = [{ suiteId: "outer", parentSuiteId: null, name: "Root suite", counts: { tests: "9007199254740993" }, countsConsistent: false },
+      { suiteId: "inner", parentSuiteId: "outer", name: "Nested suite", counts: { tests: "1" }, countsConsistent: true }];
+    const result = parseNormalizedEvidence(source, "junit"); expect(result.producerSummaries).toEqual(source.producerSummaries);
+    expect(result.leafCounts).toMatchObject({ passed: "1", executed: "1" });
+    expect(() => parseNormalizedEvidence({ ...source, countsConsistent: true }, "junit")).toThrow("Conflicting suite counts");
+    source.producerSummaries[0].parentSuiteId = "inner";
+    expect(() => parseNormalizedEvidence(source, "junit")).toThrow("cycle");
+  });
+  test("commit assertions preserve every gitCommit subject and cannot upgrade sha1 or gitTree", () => {
+    const source = normalized(); source.leaves = [];
+    source.leafCounts = { executed: null, passed: null, failed: null, errored: null, skipped: null, disabled: null, unknown: null };
+    source.observedExecutedLowerBound = null; source.producerCounts = null; source.countsConsistent = null; source.reportOutcome = "unknown";
+    source.attestation = { statementType: EVIDENCE_STATEMENT_TYPE, predicateType: EVIDENCE_PREDICATE_TYPE,
+      payloadType: "application/vnd.in-toto+json", signatureCount: "0", signaturesChecked: false, producerResult: null,
+      producerTests: { passed: null, warned: null, failed: null },
+      subjects: [{ name: "commit", digests: [{ algorithm: "gitCommit", value: "a".repeat(40) }, { algorithm: "gitCommit", value: "b".repeat(64) }] }],
+      assertedCommits: ["a".repeat(40), "b".repeat(64)], reportReferences: [] };
+    expect(parseNormalizedEvidence(source, "attestation").attestation!.assertedCommits).toEqual(source.attestation.assertedCommits);
+    source.attestation.assertedCommits.pop();
+    expect(() => parseNormalizedEvidence(source, "attestation")).toThrow("every distinct gitCommit");
+    source.attestation.subjects[0].digests.pop(); source.attestation.assertedCommits.push("a".repeat(40));
+    expect(() => parseNormalizedEvidence(source, "attestation")).toThrow("every distinct gitCommit");
+    source.attestation.assertedCommits.pop();
+    for (const algorithm of ["sha1", "gitTree"] as const) {
+      source.attestation.subjects[0].digests[0].algorithm = algorithm;
+      expect(() => parseNormalizedEvidence(source, "attestation")).toThrow("every distinct gitCommit");
+    }
+    source.attestation.assertedCommits = [];
+    expect(parseNormalizedEvidence(source, "attestation").attestation!.subjects[0].digests[0].algorithm).toBe("gitTree");
+    source.attestation.payloadType = "application/vnd.in-toto.test-result+json";
+    expect(() => parseNormalizedEvidence(source, "attestation")).toThrow("MIME is unsupported");
   });
 });

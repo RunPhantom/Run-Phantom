@@ -12,10 +12,12 @@ export const EVIDENCE_LIMITS = Object.freeze({
   MAX_COUNT_DIGITS: 128,
   MAX_SUBJECTS: 128,
   MAX_PRODUCER_TEST_NAMES: 256,
+  MAX_SUITE_SUMMARIES: 4_096,
+  MAX_SUITE_DEPTH: 64,
 });
 export const EVIDENCE_STATEMENT_TYPE = "https://in-toto.io/Statement/v1" as const;
 export const EVIDENCE_PREDICATE_TYPE = "https://in-toto.io/attestation/test-result/v0.1" as const;
-export const EVIDENCE_PAYLOAD_TYPES = ["application/vnd.in-toto+json", "application/vnd.in-toto.test-result+json"] as const;
+export const EVIDENCE_PAYLOAD_TYPES = ["application/vnd.in-toto+json"] as const;
 
 export type EvidenceScope = { kind: "local"; id: "local" } | { kind: "project"; id: string };
 export type EvidenceCapability = "normalized_read" | "import" | "inventory_edit" | "raw_export" | "delete";
@@ -37,6 +39,13 @@ export type EvidenceReason = "source_unparsed" | "source_rejected" | "counts_mis
 /** Producer counts use exact decimal strings; leaf-derived counts remain separately identified. */
 export type EvidenceCounts = Record<"executed" | "passed" | "failed" | "errored" | "skipped" | "disabled" | "unknown", string | null>;
 export type EvidenceProducerCounts = Partial<Record<"tests" | "executed" | "passed" | "failures" | "errors" | "skipped" | "disabled" | "unknown", string>>;
+export interface EvidenceProducerSummary {
+  suiteId: string;
+  parentSuiteId: string | null;
+  name: string;
+  counts: EvidenceProducerCounts;
+  countsConsistent: boolean | null;
+}
 export interface EvidenceSourceDescriptor {
   sourceId: string;
   kind: EvidenceKind;
@@ -87,6 +96,7 @@ export interface EvidenceAttestationSummary {
   producerResult: "PASSED" | "WARNED" | "FAILED" | null;
   producerTests: { passed: string[] | null; warned: string[] | null; failed: string[] | null };
   subjects: { name: string; digests: { algorithm: "sha256" | "gitCommit" | "sha1" | "gitTree"; value: string }[] }[];
+  /** Every distinct subject gitCommit digest; sha1, gitTree and generic text cannot establish this list. */
   assertedCommits: string[];
   reportReferences: { subjectName: string; sha256: string }[];
 }
@@ -105,6 +115,7 @@ export interface NormalizedEvidenceSource {
   leafCounts: EvidenceCounts;
   observedExecutedLowerBound: string | null;
   producerCounts: EvidenceProducerCounts | null;
+  producerSummaries: EvidenceProducerSummary[];
   countsConsistent: boolean | null;
   assertedIdentity: { runnerId: string | null; commit: string | null; sourceSha256: string | null };
   attestation: EvidenceAttestationSummary | null;

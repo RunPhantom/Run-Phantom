@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { redactText } from "../verification/serialization";
 import { EVIDENCE_LIMITS as L, EVIDENCE_VERSION, EVIDENCE_STATEMENT_TYPE, EVIDENCE_PREDICATE_TYPE, EVIDENCE_PAYLOAD_TYPES, EvidenceError, type EvidenceAttestationSummary, type EvidenceAttachment, type EvidenceCounts,
-  type EvidenceExpectedSource, type EvidenceImportRequest, type EvidenceKind, type EvidenceLeaf,
+  type EvidenceExpectedSource, type EvidenceImportRequest, type EvidenceKind, type EvidenceLeaf, type EvidenceProducerSummary,
   type EvidenceReason, type EvidenceScope, type NormalizedEvidenceSource } from "./evidence-protocol";
 
 const kinds = ["junit", "json", "jsonl", "attestation"] as const;
@@ -149,13 +149,16 @@ function parseAttestation(value: unknown, parsed: boolean): EvidenceAttestationS
     if (typeof commit !== "string" || !/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/.test(commit)) invalid("Commit assertion requires an exact full commit digest");
     return commit;
   });
+  const subjectCommits = new Set(subjects.flatMap(subject => subject.digests.filter(digest => digest.algorithm === "gitCommit").map(digest => digest.value.toLowerCase())));
+  const commitClaims = new Set(assertedCommits.map(commit => commit.toLowerCase()));
+  if (commitClaims.size !== assertedCommits.length || commitClaims.size !== subjectCommits.size || [...subjectCommits].some(commit => !commitClaims.has(commit))) invalid("Commit assertions must preserve every distinct gitCommit subject digest");
   return { statementType, predicateType, payloadType, signatureCount: summary.signatureCount === null ? null : evidenceDecimal(summary.signatureCount), signaturesChecked: false,
     producerResult: summary.producerResult === null ? null : oneOf(summary.producerResult, ["PASSED", "WARNED", "FAILED"] as const, "producer result"),
     producerTests: Object.fromEntries(["passed", "warned", "failed"].map(key => [key, tests[key] === null ? null : evidenceArray(tests[key], L.MAX_PRODUCER_TEST_NAMES, "producer test assertions").map(name => evidenceText(name, "producer test name", 512, true))])) as EvidenceAttestationSummary["producerTests"],
     subjects, assertedCommits, reportReferences };
 }
 export function parseNormalizedEvidence(value: unknown, kind: EvidenceKind): NormalizedEvidenceSource {
-  const source = evidenceObject(value, ["version", "sourceId", "parseState", "interpretationComplete", "reportOutcome", "leafCounts", "observedExecutedLowerBound", "producerCounts", "countsConsistent", "assertedIdentity", "attestation", "reasonCodes", "leaves"], "normalized source");
+  const source = evidenceObject(value, ["version", "sourceId", "parseState", "interpretationComplete", "reportOutcome", "leafCounts", "observedExecutedLowerBound", "producerCounts", "producerSummaries", "countsConsistent", "assertedIdentity", "attestation", "reasonCodes", "leaves"], "normalized source");
   if (source.version !== EVIDENCE_VERSION) invalid("Unsupported evidence version");
   const parseState = oneOf(source.parseState, ["parsed", "unparsed", "rejected"], "parse state");
   let leafBytes = 0;
@@ -172,7 +175,29 @@ export function parseNormalizedEvidence(value: unknown, kind: EvidenceKind): Nor
   if (canonicalEvidenceJson(leafCounts) !== canonicalEvidenceJson(expectedCounts)) invalid("Leaf counts must match observed leaves without producer-count substitution");
   const producer = source.producerCounts === null ? null : evidenceObject(source.producerCounts, producerKeys, "producer counts");
   const producerCounts = producer ? Object.fromEntries(Object.entries(producer).map(([key, count]) => [key, evidenceDecimal(count)])) : null;
+  const producerSummaries: EvidenceProducerSummary[] = evidenceArray(source.producerSummaries, L.MAX_SUITE_SUMMARIES, "suite summaries").map(raw => {
+    const summary = evidenceObject(raw, ["suiteId", "parentSuiteId", "name", "counts", "countsConsistent"], "suite summary");
+    const counts = evidenceObject(summary.counts, producerKeys, "suite producer counts");
+    if (summary.countsConsistent !== null && typeof summary.countsConsistent !== "boolean") invalid("Suite count consistency must be explicit or unavailable");
+    const result = { suiteId: evidenceText(summary.suiteId, "suite ID"), parentSuiteId: nullableText(summary.parentSuiteId, "parent suite ID"),
+      name: evidenceText(summary.name, "suite name", 512, true), counts: Object.fromEntries(Object.entries(counts).map(([key, count]) => [key, evidenceDecimal(count)])), countsConsistent: summary.countsConsistent as boolean | null };
+    leafBytes += Buffer.byteLength(canonicalEvidenceJson(result)) + 1;
+    if (leafBytes > L.MAX_NORMALIZED_BYTES) throw new EvidenceError("Normalized suite observations exceed 4 MiB", 413);
+    return result;
+  });
+  const suites = new Map(producerSummaries.map(summary => [summary.suiteId, summary]));
+  if (suites.size !== producerSummaries.length) invalid("Suite IDs must preserve distinct producer assertions");
+  for (const summary of producerSummaries) {
+    const seen = new Set<string>(); let current: EvidenceProducerSummary | undefined = summary;
+    while (current) {
+      if (seen.has(current.suiteId) || seen.size >= L.MAX_SUITE_DEPTH) invalid("Suite context has a cycle or exceeds its depth limit");
+      seen.add(current.suiteId);
+      if (current.parentSuiteId && !suites.has(current.parentSuiteId)) invalid("Suite context references a missing parent");
+      current = current.parentSuiteId ? suites.get(current.parentSuiteId) : undefined;
+    }
+  }
   if (source.countsConsistent !== null && typeof source.countsConsistent !== "boolean") invalid("Count consistency must be explicit or unavailable");
+  if (source.countsConsistent === true && producerSummaries.some(summary => summary.countsConsistent === false)) invalid("Conflicting suite counts cannot establish consistent source counts");
   const lowerBound = parseState === "parsed" && kind === "junit" ? observedExecutedLowerBound(leaves) : null;
   if (source.observedExecutedLowerBound !== lowerBound) invalid("Observed execution lower bound cannot become an exact denominator");
   if ((parseState !== "parsed" || kind !== "junit") && source.countsConsistent !== null) invalid("No leaf consistency is established for unparsed or attestation evidence");
@@ -190,7 +215,7 @@ export function parseNormalizedEvidence(value: unknown, kind: EvidenceKind): Nor
   const attestation = source.attestation === null ? null : parseAttestation(source.attestation, parseState === "parsed");
   if (parseState === "parsed" && kind !== "junit" && !attestation) invalid("Parsed JSON evidence requires its selected attestation schema");
   if (kind === "junit" && attestation) invalid("Attestation metadata is separate from report leaf execution");
-  return { version: EVIDENCE_VERSION, sourceId: evidenceText(source.sourceId, "source ID"), parseState, interpretationComplete: source.interpretationComplete, reportOutcome, leafCounts, observedExecutedLowerBound: lowerBound, producerCounts,
+  return { version: EVIDENCE_VERSION, sourceId: evidenceText(source.sourceId, "source ID"), parseState, interpretationComplete: source.interpretationComplete, reportOutcome, leafCounts, observedExecutedLowerBound: lowerBound, producerCounts, producerSummaries,
     countsConsistent: source.countsConsistent as boolean | null, assertedIdentity: { runnerId: nullableText(identity.runnerId, "runner ID"),
       commit: nullableText(identity.commit, "commit", 256), sourceSha256: identity.sourceSha256 === null ? null : evidenceSha256(identity.sourceSha256) },
     attestation, reasonCodes, leaves };

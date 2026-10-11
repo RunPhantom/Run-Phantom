@@ -271,7 +271,8 @@ export class EvidenceStore {
         reportIdentityAsserted: references.some(group => group.some(reference => reference.resolution === "matched" && reference.linkedSourceId === descriptor.sourceId)),
         commitAssertionMatches: (() => {
           const trustedCommit = inventory?.expected.find(source => source.shardId === descriptor.shardId)?.constraints.commit;
-          const claims = [...(normalized.assertedIdentity.commit ? [normalized.assertedIdentity.commit] : []), ...(normalized.attestation?.assertedCommits ?? [])];
+          const claims = normalized.parseState === "parsed" ? descriptor.kind === "junit" ?
+            normalized.assertedIdentity.commit ? [normalized.assertedIdentity.commit] : [] : normalized.attestation?.assertedCommits ?? [] : [];
           parsed.forEach((source, index) => { if (references[index].some(reference => reference.linkedSourceId === descriptor.sourceId)) claims.push(...(source.normalized.attestation?.assertedCommits ?? [])); });
           return trustedCommit && claims.length ? claims.every(commit => commit.toLowerCase() === trustedCommit.toLowerCase()) : null;
         })(),
