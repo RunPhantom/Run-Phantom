@@ -1,0 +1,168 @@
+{
+  "feature": "F10 bounded portable trace provenance",
+  "source_commit": "e789344034c9e5cef89cc7aec4bb9f8b07d27e4a",
+  "base_commit": "e83ec2e0453341bcefa1a78a1b4e8d208621f384",
+  "independent_review": "APPROVE corrected provenance and exact test-only migration delta",
+  "cleanup": "standard no-op",
+  "fresh_backend": {
+    "passed": 800,
+    "skipped": 1,
+    "failed": 0,
+    "assertions": 5270,
+    "files": 71,
+    "exitCode": 0,
+    "skipReason": "Native Windows ancestor-junction fixture requires real Windows."
+  },
+  "fresh_lint_and_browser_types": "passed",
+  "reused_build_root_ui_types_and_source_browser": {
+    "execution_commit": "5082ac4fa4daf9366eea81470f0ad83c691cb81b",
+    "source_chromium": {
+      "passed": 115,
+      "skipped": 10,
+      "failed": 0,
+      "retries": 0,
+      "workers": 1
+    },
+    "reason": "Only two native migration test files changed; 423 tracked blobs and 317 built assets are unchanged",
+    "scope": "Reused evidence is labelled with its actual execution commit"
+  },
+  "copied_native_macos_arm64": {
+    "passed": true,
+    "captureRestartExportIndependentImportControls": 16,
+    "legacyV1": true,
+    "savedCacheRestartProvenance": true,
+    "idempotentImport": true,
+    "corruptCacheExportStatus": 413,
+    "corruptTransferImportStatus": 400,
+    "newInvalidTraceExportStatus": 404,
+    "existingDestinationAndAnnotationUnchanged": true,
+    "compiledBrowserTests": {
+      "passed": 3,
+      "skipped": 0,
+      "failed": 0,
+      "flaky": 0,
+      "retries": 0
+    },
+    "F10BrowserJourney": "Passed original and focused framing repeat of the same actual Save/cache-clear/file-import/reload/download/refusal journey; one unique feature journey.",
+    "binarySha256": "a85509dc9d9bacf89b1206b5ecddc243d804c74099cdb3cceffafbb23004f1b4",
+    "binaryBytes": 68284912,
+    "copiedExecutableOutsideCheckout": true,
+    "processHealthPidEqualsSpawnedPid": true,
+    "processCwdAndExecutableObservedWithLsof": true,
+    "ownedDaemonPidsReaped": 21,
+    "temporaryRuntimeTreesRemoved": true
+  },
+  "screenshots": [
+    {
+      "file": "fidelity-import-refusal.png",
+      "sha256": "ab2e4d6dd22f32839d1b2dae4f4f597d84d2d5bc7fbe594c77cd156e2bf47fb9",
+      "width": 1440,
+      "height": 1000,
+      "runtime": "copied macOS arm64 Run Phantom",
+      "fixture": "synthetic local checkout trace",
+      "visually_inspected_by_writer_and_root": true
+    },
+    {
+      "file": "fidelity-imported.png",
+      "sha256": "842291daaa9e3a46c1cad2ea94befe35a2395dd49b671297e0aa482b1cfd5d51",
+      "width": 1440,
+      "height": 1000,
+      "runtime": "copied macOS arm64 Run Phantom",
+      "fixture": "synthetic local checkout trace",
+      "visually_inspected_by_writer_and_root": true
+    },
+    {
+      "file": "fidelity-saved-cache.png",
+      "sha256": "932ebe0244d8be6807e60ed7c6140b5310a47eb8f59f09b6604d29301536989f",
+      "width": 1440,
+      "height": 1000,
+      "runtime": "copied macOS arm64 Run Phantom",
+      "fixture": "synthetic local checkout trace",
+      "visually_inspected_by_writer_and_root": true
+    },
+    {
+      "file": "fidelity-source.png",
+      "sha256": "6a696c4e2ca01d37ddfdb957c89d2409f219795b8f057876a5edc0191eca1ae6",
+      "width": 1440,
+      "height": 1000,
+      "runtime": "copied macOS arm64 Run Phantom",
+      "fixture": "synthetic local checkout trace",
+      "visually_inspected_by_writer_and_root": true
+    },
+    {
+      "file": "fidelity-import-refusal.png",
+      "sha256": "33236b0a291d8085790169ebee44ca0e965be117e4516453801737b14f8e3270",
+      "width": 1440,
+      "height": 1000,
+      "runtime": "copied macOS arm64 Run Phantom",
+      "fixture": "synthetic local checkout trace",
+      "visually_inspected_by_writer_and_root": true
+    },
+    {
+      "file": "fidelity-imported.png",
+      "sha256": "e5f7d9c0f0566113ce756442d904c75e8ee2c945d8cc99eacea5c14afa2e1012",
+      "width": 1440,
+      "height": 1000,
+      "runtime": "copied macOS arm64 Run Phantom",
+      "fixture": "synthetic local checkout trace",
+      "visually_inspected_by_writer_and_root": true
+    },
+    {
+      "file": "fidelity-saved-cache.png",
+      "sha256": "932ebe0244d8be6807e60ed7c6140b5310a47eb8f59f09b6604d29301536989f",
+      "width": 1440,
+      "height": 1000,
+      "runtime": "copied macOS arm64 Run Phantom",
+      "fixture": "synthetic local checkout trace",
+      "visually_inspected_by_writer_and_root": true
+    },
+    {
+      "file": "fidelity-source.png",
+      "sha256": "6b69d2f904176c5279c0b5cee283aef2e7f3662015229a65e9431247c22c4c30",
+      "width": 1440,
+      "height": 1000,
+      "runtime": "copied macOS arm64 Run Phantom",
+      "fixture": "synthetic local checkout trace",
+      "visually_inspected_by_writer_and_root": true
+    },
+    {
+      "file": "runphantom-desktop-detail.png",
+      "sha256": "027b7b612640798beb4969f442e55e47a1369221eb6a0ca77a1bf37d2322967f",
+      "width": 1280,
+      "height": 720,
+      "runtime": "copied macOS arm64 Run Phantom",
+      "fixture": "synthetic local checkout trace",
+      "visually_inspected_by_writer_and_root": true
+    },
+    {
+      "file": "runphantom-desktop.png",
+      "sha256": "904c086ed5cdc422cc9a2a3848775a6a7319fbda78fcc184267dede572d2ae29",
+      "width": 1280,
+      "height": 720,
+      "runtime": "copied macOS arm64 Run Phantom",
+      "fixture": "synthetic local checkout trace",
+      "visually_inspected_by_writer_and_root": true
+    },
+    {
+      "file": "runphantom-mobile.png",
+      "sha256": "f14ac9418ba43c25ba63a4acec82f6e29a278836d0e9882d1b5294661d479afd",
+      "width": 390,
+      "height": 844,
+      "runtime": "copied macOS arm64 Run Phantom",
+      "fixture": "synthetic local checkout trace",
+      "visually_inspected_by_writer_and_root": true
+    }
+  ],
+  "preserved_failure_history": [
+    "Three independently reproduced portable-envelope boundary findings corrected and reviewed",
+    "Two historical migration expected-row shapes corrected for the additive nullable column",
+    "Initial manually supplied browser-type command used incorrect ambient types; canonical config passed"
+  ],
+  "limits": [
+    "The additional portable envelope is sanitized; original raw diagnostic and replay/output fields preserve existing behavior",
+    "Native Windows qualification pending",
+    "Global V1 UI composition pending",
+    "Seven live-provider opt-in cells remain unexecuted; zero paid calls"
+  ],
+  "maintained_by": "Divyam Talwar"
+}
