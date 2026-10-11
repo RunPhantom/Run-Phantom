@@ -3,7 +3,7 @@ import { EvidenceStore } from "./evidence-store";
 import { EVIDENCE_LIMITS as L, EvidenceError, type EvidenceAttachment, type EvidenceCapability, type EvidenceImportRequest,
   type EvidenceInventoryRevision, type EvidenceScope } from "./evidence-protocol";
 import { canonicalEvidenceJson, evidenceDigest, evidenceInteger, evidenceObject, evidenceSha256, evidenceText,
-  parseEvidenceAttachment, parseEvidenceExpectedSources } from "./evidence-validation";
+  parseEvidenceAttachment, parseEvidenceExpectedSources, parseEvidenceImportRequest } from "./evidence-validation";
 import { strictEvidenceJson } from "./evidence-reader/json";
 import { readerLimits } from "./evidence-reader/limits";
 
@@ -111,4 +111,19 @@ export function createLocalEvidenceOwner(database: Database): EvidenceOwner {
     return { actorId: "local-owner" };
   };
   return { database, scope, resolveAnchor, authorize, store: new EvidenceStore(database, scope, { authorize: (capability, _scope, attachment) => authorize(capability, attachment) }) };
+}
+
+/** Called inside the existing owner's insertion/eviction transaction; corruption blocks eviction. */
+export function activeLocalEvidenceAttachmentIds(database: Database, kind: EvidenceAttachment["kind"]): Set<string> {
+  const count = database.query("SELECT count(*) AS n FROM evaluation_evidence_jobs WHERE scope_key='local:local' AND status IN ('queued','running')").get() as { n: number };
+  if (count.n > 1_000) throw new EvidenceError("Active evidence retention metadata exceeds its integrity boundary", 409);
+  const rows = database.query("SELECT CASE WHEN typeof(id)='text' AND length(cast(id AS BLOB))<=128 THEN id ELSE NULL END AS id, CASE WHEN typeof(request_data)='text' AND length(cast(request_data AS BLOB))<=65536 THEN request_data ELSE NULL END AS request FROM evaluation_evidence_jobs WHERE scope_key='local:local' AND status IN ('queued','running')").all() as { id: string | null; request: string | null }[];
+  const owner = createLocalEvidenceOwner(database), result = new Set<string>();
+  for (const row of rows) {
+    if (row.id === null || row.request === null) throw new EvidenceError("Active evidence retention metadata exceeds its integrity boundary", 409);
+    owner.store.getJob(row.id); // Reuses the exact frozen request digest and current attachment integrity check.
+    const request = parseEvidenceImportRequest(strictEvidenceJson(row.request, readerLimits()));
+    if (request.attachment.kind === kind) result.add(request.attachment.id);
+  }
+  return result;
 }

@@ -8,7 +8,7 @@
  * sprinkle of live events. Replays use the same tables and shapes real
  * ingestion produces, with no special UI path.
  */
-import { upsertRun, insertSpan, upsertLiveEvent, deleteRun } from "./db";
+import { getDrizzleDb, upsertRun, insertSpan, upsertLiveEvent, deleteRun } from "./db";
 
 type BroadcastFn = (event: string, data: unknown) => void;
 
@@ -537,9 +537,9 @@ let pendingReplayTimers: Array<ReturnType<typeof setTimeout>> = [];
 
 export function replayDefaultDemoTraces(opts: { broadcast?: BroadcastFn } = {}): { runIds: string[] } {
   clearPendingReplayTimers();
-  for (const runId of DEMO_RUN_IDS) {
-    deleteRun(runId);
-  }
+  getDrizzleDb().transaction(() => {
+    for (const runId of DEMO_RUN_IDS) deleteRun(runId);
+  });
   opts.broadcast?.("spans", { runIds: DEMO_RUN_IDS, count: 0 });
 
   for (let i = 0; i < FIXTURES.length; i++) {
