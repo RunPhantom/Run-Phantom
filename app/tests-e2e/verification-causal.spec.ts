@@ -54,7 +54,7 @@ test.describe("causal action verification through the real SDK", () => {
       const runAction = page.getByRole("button", { name: "Run action", exact: true });
       await runAction.focus(); await runAction.press("Enter");
       await expect(app.getByText("Synchronous result", { exact: true })).toBeVisible();
-      await expect(page.getByText("Action completed. Check the expected outcome next.", { exact: true })).toBeVisible();
+      await expect(page.getByRole("paragraph").filter({ hasText: /^Action completed\. Check the expected outcome next\.$/ })).toBeVisible();
       await page.getByRole("button", { name: "Check outcome", exact: true }).click();
       const passed = page.getByRole("article", { name: "Synchronous counter: pass", exact: true });
       await expect(passed).toBeVisible();
@@ -68,15 +68,38 @@ test.describe("causal action verification through the real SDK", () => {
       const replay = page.getByRole("button", { name: "Replay Counter transition replay", exact: true });
       await expect(replay).toBeVisible(); await replay.focus(); await replay.press("Enter");
       await expect(page.getByRole("article", { name: "Counter transition replay: pass", exact: true })).toBeVisible();
+      await page.getByLabel(/^Action selector/).fill("#noop");
+      await page.getByRole("combobox", { name: "Transition target", exact: true }).selectOption("element");
+      await page.getByRole("combobox", { name: "Required change", exact: true }).selectOption("becomes");
+      await page.getByLabel(/^Element selector/).fill("#synchronous-result");
+      await page.getByLabel("Check name (optional)", { exact: true }).fill("Already satisfied result");
+      await runAction.click();
+      await expect(page.getByRole("paragraph").filter({ hasText: /^Action completed\. Check the expected outcome next\.$/ })).toBeVisible();
+      await page.getByRole("button", { name: "Check outcome", exact: true }).click();
+      const already = page.getByRole("article", { name: "Already satisfied result: inconclusive", exact: true });
+      await expect(already).toBeVisible(); await expect(already).toContainText("already held");
+      await expect(already.getByLabel("Action transition readings")).toContainText("Before: 1 (complete)");
+      await expect(already.getByLabel("Action transition readings")).toContainText("After: 1 (complete)");
       const output = path.join(REPO_ROOT_PATH, "output", "playwright", "F18");
       mkdirSync(output, { recursive: true });
+      await page.getByRole("group", { name: "Expected outcome 1", exact: true }).scrollIntoViewIfNeeded();
       await page.screenshot({ path: path.join(output, "causal-desktop.png"), fullPage: true });
       await testInfo.attach("causal-desktop", { path: path.join(output, "causal-desktop.png"), contentType: "image/png" });
+      await passed.scrollIntoViewIfNeeded();
+      await expect(passed.getByLabel("Action transition readings")).toBeInViewport();
+      await passed.screenshot({ path: path.join(output, "causal-desktop-passed-report.png") });
+      await testInfo.attach("causal-desktop-passed-report", { path: path.join(output, "causal-desktop-passed-report.png"), contentType: "image/png" });
+      await already.scrollIntoViewIfNeeded();
+      await already.screenshot({ path: path.join(output, "causal-desktop-already-true-report.png") });
+      await testInfo.attach("causal-desktop-already-true-report", { path: path.join(output, "causal-desktop-already-true-report.png"), contentType: "image/png" });
       await page.setViewportSize({ width: 390, height: 844 });
-      await expect(page.getByRole("article", { name: "Counter transition replay: pass", exact: true })).toBeVisible();
+      await page.getByRole("heading", { name: "Verification reports", exact: true }).scrollIntoViewIfNeeded();
+      await expect(already.getByLabel("Action transition readings")).toBeInViewport();
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
       await page.screenshot({ path: path.join(output, "causal-mobile.png"), fullPage: true });
       await testInfo.attach("causal-mobile", { path: path.join(output, "causal-mobile.png"), contentType: "image/png" });
+      await already.screenshot({ path: path.join(output, "causal-mobile-already-true-report.png") });
+      await testInfo.attach("causal-mobile-already-true-report", { path: path.join(output, "causal-mobile-already-true-report.png"), contentType: "image/png" });
       expect(consoleErrors).toEqual([]);
     } finally { await app.close(); }
   });
@@ -96,34 +119,48 @@ test.describe("causal action verification through the real SDK", () => {
     const session = await connectTarget(page, request, runPhantom, targetApp.origin);
     const since = await act(request, runPhantom, session.id, click("#background"));
     await expect(page.getByText("Synchronous result", { exact: true })).toBeVisible();
-    const background = await assertRuntime(request, runPhantom, session.id, transition(stateTarget, "becomes", 1), since);
+    const background = await assertRuntime(request, runPhantom, session.id, transition(stateTarget, "becomes", 1), since, "Background changed later");
     expect(background.status).toBe("fail");
     expect(background.context?.checks[0].causal?.readings[0]).toMatchObject({ before: { value: 0 }, after: { value: 0 } });
     const current = await assertRuntime(request, runPhantom, session.id, { kind: "state", store: "checkout", path: "requests", equals: 1 }, since);
     expect(current.status).toBe("pass");
-  });
-
-  test("an SDK without the negotiated capability refuses the click before application mutation", async ({ page, request, runPhantom, targetApp }) => {
-    const session = await connectTarget(page, request, runPhantom, targetApp.origin, undefined, false);
-    const action = await request.post(`${runPhantom.url}/api/verification/sessions/${session.id}/command`, { data: click("#increment") });
-    expect(action.ok()).toBe(true);
-    expect(await action.json()).toMatchObject({ ok: false, error: expect.stringContaining("no action was executed") });
-    await expect(page.getByText("Synchronous result", { exact: true })).toHaveCount(0);
-    expect(await page.evaluate(() => window.checkoutState.requests)).toBe(0);
-    const observed = await observe(request, runPhantom, session.id);
-    expect(observed.events.some(event => event.type === "action.boundary")).toBe(false);
-    const saved = await request.post(`${runPhantom.url}/api/verification/flows`, { data: { name: "Capture unavailable", origin: targetApp.origin,
-      steps: [{ command: { type: "click", selector: "#increment" }, predicate: transition(stateTarget, "changed") }] } });
-    const flow = await saved.json() as { id: string };
-    const replay = await request.post(`${runPhantom.url}/api/verification/flows/${flow.id}/run`, { data: { sessionId: session.id } });
-    expect((await replay.json() as VerificationReport).status).toBe("inconclusive");
     await page.goto(`${runPhantom.url}/verification`);
-    const report = page.getByRole("article", { name: "Capture unavailable: inconclusive", exact: true });
-    await expect(report).toBeVisible(); await expect(report.getByLabel("Action transition readings")).toContainText("Before: unavailable");
-    await expect(report).toContainText("no action was executed");
+    const retained = page.getByRole("article", { name: "Background changed later: fail", exact: true });
+    await expect(retained).toBeVisible(); await expect(retained.getByLabel("Action transition readings")).toContainText("After: 0 (complete)");
   });
 
-  test("missing, privacy-redacted and mismatched scopes never borrow another captured reading", async ({ page, request, runPhantom, targetApp }) => {
+  test("an SDK without the negotiated capability refuses the click before application mutation", async ({ page, context, request, runPhantom, targetApp }) => {
+    const app = await context.newPage();
+    try {
+      const session = await connectTarget(app, request, runPhantom, targetApp.origin, undefined, false);
+      const action = await request.post(`${runPhantom.url}/api/verification/sessions/${session.id}/command`, { data: click("#increment") });
+      expect(action.ok()).toBe(true);
+      expect(await action.json()).toMatchObject({ ok: false, error: expect.stringContaining("no action was executed") });
+      await expect(app.getByText("Synchronous result", { exact: true })).toHaveCount(0);
+      expect(await app.evaluate(() => window.checkoutState.requests)).toBe(0);
+      const observed = await observe(request, runPhantom, session.id);
+      expect(observed.events.some(event => event.type === "action.boundary")).toBe(false);
+      const saved = await request.post(`${runPhantom.url}/api/verification/flows`, { data: { name: "Capture unavailable", origin: targetApp.origin,
+        steps: [{ command: { type: "click", selector: "#increment" }, predicate: transition(stateTarget, "changed") }] } });
+      const flow = await saved.json() as { id: string };
+      const replay = await request.post(`${runPhantom.url}/api/verification/flows/${flow.id}/run`, { data: { sessionId: session.id } });
+      expect((await replay.json() as VerificationReport).status).toBe("inconclusive");
+      await page.goto(`${runPhantom.url}/verification`);
+      const report = page.getByRole("article", { name: "Capture unavailable: inconclusive", exact: true });
+      await expect(report).toBeVisible(); await expect(report.getByLabel("Action transition readings")).toContainText("Before: unavailable");
+      await expect(report).toContainText("no action was executed");
+      await page.getByRole("combobox", { name: "Action", exact: true }).selectOption("click");
+      await page.getByLabel(/^Action selector/).fill("#increment");
+      await page.getByRole("combobox", { name: "Check type", exact: true }).selectOption("relative");
+      await page.getByLabel("Registered store", { exact: true }).fill("checkout");
+      await page.getByLabel(/^State path/).fill("requests");
+      await page.getByRole("button", { name: "Run action", exact: true }).click();
+      await expect(page.getByRole("alert")).toContainText("no action was executed");
+      expect(await app.evaluate(() => window.checkoutState.requests)).toBe(0);
+    } finally { await app.close(); }
+  });
+
+  test("missing, privacy-redacted and mismatched scopes never borrow another captured reading", async ({ page, context, request, runPhantom, targetApp }) => {
     const session = await connectTarget(page, request, runPhantom, targetApp.origin);
     const missingTarget: RelativeTarget = { kind: "state", store: "notRegistered", path: "" };
     const missingCursor = await act(request, runPhantom, session.id, click("#increment", [missingTarget]));
@@ -131,7 +168,7 @@ test.describe("causal action verification through the real SDK", () => {
     expect(missing.status).toBe("inconclusive");
     expect(missing.context?.checks[0].causal?.readings[0].before?.availability).toBe("unavailable");
     const healthy = await act(request, runPhantom, session.id, click("#increment"));
-    const mismatched = await assertRuntime(request, runPhantom, session.id, transition(elementTarget, "changed"), healthy);
+    const mismatched = await assertRuntime(request, runPhantom, session.id, transition(elementTarget, "changed"), healthy, "Unmatched result scope");
     expect(mismatched.status).toBe("inconclusive"); expect(mismatched.context?.checks[0].causal?.readings[0].before).toBeNull();
     const sentinel = "causal-fixture-only-private-fill";
     await act(request, runPhantom, session.id, { type: "fill", selector: "#password", value: sentinel });
@@ -142,6 +179,13 @@ test.describe("causal action verification through the real SDK", () => {
       predicate: transition(stateTarget, "changed"), since: partialCursor, proof: partial.context?.checks[0].causal,
     } });
     expect(forged.status()).toBe(400);
+    const ui = await context.newPage();
+    try {
+      await ui.goto(`${runPhantom.url}/verification`);
+      const report = ui.getByRole("article", { name: "Unmatched result scope: inconclusive", exact: true });
+      await expect(report).toBeVisible(); await expect(report.getByLabel("Action transition readings")).toContainText("Attribution unavailable");
+      await expect(report.getByLabel("Action transition readings")).toContainText("Before: unavailable");
+    } finally { await ui.close(); }
   });
 
   test("document replacement invalidates the owned action rather than reusing its result", async ({ page, request, runPhantom, targetApp }) => {
@@ -189,5 +233,25 @@ test.describe("causal action verification through the real SDK", () => {
       expect(unavailable.status).toBe("inconclusive"); expect(unavailable.context.checks[0].causal.readings[0].before).toBeNull();
       expect(await page.evaluate(() => window.checkoutState.requests)).toBe(0);
     } finally { await client.close(); await transport.close(); }
+  });
+
+  test("compiled SDK: causal clicks persist scoped before and after readings in the executable", async ({ page, request, targetApp }) => {
+    const url = process.env.RUNPHANTOM_COMPILED_URL;
+    test.skip(!url, "RUNPHANTOM_COMPILED_URL is required for packaged causal verification");
+    const daemon = { url: url!, port: Number(new URL(url!).port), dbPath: "" };
+    const session = await connectTarget(page, request, daemon, targetApp.origin);
+    try {
+      const since = await act(request, daemon, session.id, click("#increment", [stateTarget, elementTarget]));
+      const report = await assertRuntime(request, daemon, session.id, { kind: "allOf", predicates: [
+        transition(stateTarget, "increased"), transition(elementTarget, "becomes", 1),
+      ] }, since, "Packaged causal transition");
+      expect(report.status).toBe("pass"); expect(report.context?.checks[0].causal?.source).toBe("sdk-reported");
+      expect(report.context?.checks[0].causal?.readings).toMatchObject([
+        { before: { value: 0 }, after: { value: 1 } }, { before: { value: 0 }, after: { value: 1 } },
+      ]);
+      await expect(page.getByText("Synchronous result", { exact: true })).toBeVisible();
+      const retained = await request.get(`${daemon.url}/api/verification/reports`);
+      expect((await retained.json() as VerificationReport[]).find(entry => entry.id === report.id)?.context).toEqual(report.context);
+    } finally { await page.evaluate(() => window.runtime.disconnect()); await request.delete(`${daemon.url}/api/verification/sessions/${session.id}`); }
   });
 });
