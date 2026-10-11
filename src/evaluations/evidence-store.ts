@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Database, SQLQueryBindings } from "bun:sqlite";
-import { EVIDENCE_LIMITS as L, EVIDENCE_VERSION, EvidenceError, type EvidenceAttachment, type EvidenceCapability,
+import { EVIDENCE_LIMITS as L, EVIDENCE_VERSION, EVIDENCE_IMPORT_FAILURE_CODES, EvidenceError, type EvidenceAttachment, type EvidenceCapability,
+  type EvidenceImportFailureCode,
   type EvidenceExpectedSource, type EvidenceImportRequest, type EvidenceInventoryRevision, type EvidenceJob,
   type EvidencePublicationSource, type EvidenceReason, type EvidenceReportReference, type EvidenceScope, type EvidenceSetRevision, type EvidenceSetView,
   type EvidenceSourceObservation, type NormalizedEvidenceSource } from "./evidence-protocol";
@@ -263,6 +264,16 @@ export class EvidenceStore {
   }
   cancel(id: string): boolean {
     return this.#transaction(() => { this.#authorize("import", null); const job = this.#job(id); this.#authorize("import", this.#request(job).attachment); this.#generation(); return this.#finish(job, "cancelled", "cancelled"); });
+  }
+  /** The owner calls this before releasing current attachment/session authority or closing its database. */
+  fail(id: string, token: string, code: EvidenceImportFailureCode): boolean {
+    token = evidenceText(token, "publication token");
+    if (typeof code !== "string" || !(EVIDENCE_IMPORT_FAILURE_CODES as readonly string[]).includes(code)) throw new EvidenceError("Unsupported evidence failure code");
+    return this.#transaction(() => {
+      this.#authorize("import", null); const job = this.#job(id); this.#authorize("import", this.#request(job).attachment); const generation = this.#generation();
+      if (job.job_token !== token || job.scope_generation !== generation || !["queued", "running"].includes(job.status)) return false;
+      return this.#finish(job, "failed", code);
+    });
   }
   /** Called once by the database owner on restart, before admitting work; it never reruns reports. */
   recoverUnfinished(): number {
