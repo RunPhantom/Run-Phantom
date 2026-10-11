@@ -171,10 +171,13 @@ export class EvidenceStore {
       if (this.#get<{ n: number }>("SELECT count(*) AS n FROM evaluation_evidence_jobs WHERE status='queued'")!.n >= L.MAX_QUEUED) throw new EvidenceError("Evidence queue is full", 409);
       const sets = this.#get<{ n: number }>("SELECT count(*) AS n FROM evaluation_evidence_sets WHERE scope_key=?", this.#key)!.n;
       const pending = this.#get<{ n: number }>("SELECT count(*) AS n FROM evaluation_evidence_jobs WHERE scope_key=? AND status IN ('queued','running')", this.#key)!.n;
-      if (sets + pending >= this.#revisionLimit) throw new EvidenceError("Evidence revision retention is full", 409);
+      const jobs = this.#get<{ n: number }>("SELECT count(*) AS n FROM evaluation_evidence_jobs WHERE scope_key=?", this.#key)!.n;
+      if (sets + pending >= this.#revisionLimit || jobs >= this.#revisionLimit) throw new EvidenceError("Evidence job or revision retention is full", 409);
       const rawBytes = request.retention === "raw_and_normalized" ? request.sources.reduce((sum, source) => sum + source.byteLength, 0) : 0;
       const rawHeld = this.#get<{ n: number }>("SELECT coalesce(sum(length(bytes)),0) AS n FROM evaluation_evidence_blobs WHERE scope_key=?", this.#key)!.n;
-      const normalizedHeld = this.#get<{ n: number }>("SELECT coalesce(sum(length(cast(data AS BLOB))),0) AS n FROM evaluation_evidence_payloads WHERE scope_key=?", this.#key)!.n;
+      const normalizedHeld = this.#get<{ n: number }>(`SELECT coalesce(sum(n),0) AS n FROM (
+        SELECT length(cast(data AS BLOB)) AS n FROM evaluation_evidence_payloads WHERE scope_key=?
+        UNION ALL SELECT length(cast(data AS BLOB)) AS n FROM evaluation_evidence_sets WHERE scope_key=?)`, this.#key, this.#key)!.n;
       const reserved = this.#get<{ raw: number; normalized: number }>("SELECT coalesce(sum(reserved_raw_bytes),0) AS raw,coalesce(sum(reserved_normalized_bytes),0) AS normalized FROM evaluation_evidence_jobs WHERE scope_key=?", this.#key)!;
       if (rawHeld + reserved.raw + rawBytes > this.#rawLimit || normalizedHeld + reserved.normalized + L.MAX_NORMALIZED_BYTES > this.#normalizedLimit) throw new EvidenceError("Evidence storage quota is full", 409);
       const id = randomUUID(), token = randomUUID(), now = this.#now();
@@ -253,13 +256,15 @@ export class EvidenceStore {
         scope: { ...this.#scope }, scopeGeneration: generation, attachment: request.attachment, inventory, parserVersion: request.parserVersion,
         policyVersion: request.policyVersion, configurationSha256: request.configurationSha256, initialRetention: request.retention, ...coverage, sources, createdAt: this.#now() };
       const set: EvidenceSetRevision = { ...data, digest: evidenceDigest(canonicalEvidenceJson(data)) };
+      const setData = canonicalEvidenceJson(set);
+      if (normalizedBytes + Buffer.byteLength(setData) > L.MAX_NORMALIZED_BYTES) throw new EvidenceError("Retained normalized payload and revision exceed 4 MiB", 413);
       for (const source of parsed) {
         this.#run("INSERT INTO evaluation_evidence_artifacts(scope_key,id,job_id,source_id,sha256,byte_length) VALUES(?,?,?,?,?,?)", this.#key, source.artifactId, id, source.descriptor.sourceId, source.descriptor.artifactSha256, source.raw.byteLength);
         if (request.retention === "raw_and_normalized") this.#run("INSERT INTO evaluation_evidence_blobs(scope_key,artifact_id,bytes) VALUES(?,?,?)", this.#key, source.artifactId, source.raw);
         this.#run("INSERT INTO evaluation_evidence_interpretations(scope_key,id,artifact_id,normalized_sha256,parser_version,policy_version,configuration_sha256,dialect) VALUES(?,?,?,?,?,?,?,?)", this.#key, source.interpretationId, source.artifactId, source.normalizedSha256, request.parserVersion, request.policyVersion, request.configurationSha256, source.descriptor.dialect);
         this.#run("INSERT INTO evaluation_evidence_payloads(scope_key,interpretation_id,data) VALUES(?,?,?)", this.#key, source.interpretationId, source.data);
       }
-      this.#run("INSERT INTO evaluation_evidence_sets(scope_key,id,revision,job_id,data,digest,created_at) VALUES(?,?,?,?,?,?,?)", this.#key, set.id, set.revision, id, canonicalEvidenceJson(set), set.digest, set.createdAt);
+      this.#run("INSERT INTO evaluation_evidence_sets(scope_key,id,revision,job_id,data,digest,created_at) VALUES(?,?,?,?,?,?,?)", this.#key, set.id, set.revision, id, setData, set.digest, set.createdAt);
       const changed = this.#run("UPDATE evaluation_evidence_jobs SET status='completed',set_id=?,reserved_raw_bytes=0,reserved_normalized_bytes=0 WHERE scope_key=? AND id=? AND job_token=? AND status='running' AND scope_generation=?", set.id, this.#key, id, token, generation);
       if (changed !== 1) throw new EvidenceError("Publication ownership changed", 409);
       return set;

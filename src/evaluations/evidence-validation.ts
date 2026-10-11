@@ -158,7 +158,12 @@ export function parseNormalizedEvidence(value: unknown, kind: EvidenceKind): Nor
   const source = evidenceObject(value, ["version", "sourceId", "parseState", "interpretationComplete", "reportOutcome", "leafCounts", "observedExecutedLowerBound", "producerCounts", "countsConsistent", "assertedIdentity", "attestation", "reasonCodes", "leaves"], "normalized source");
   if (source.version !== EVIDENCE_VERSION) invalid("Unsupported evidence version");
   const parseState = oneOf(source.parseState, ["parsed", "unparsed", "rejected"], "parse state");
-  const leaves = evidenceArray(source.leaves, L.MAX_LEAVES, "leaves").map(parseLeaf);
+  let leafBytes = 0;
+  const leaves = evidenceArray(source.leaves, L.MAX_LEAVES, "leaves").map(raw => {
+    const leaf = parseLeaf(raw); leafBytes += Buffer.byteLength(canonicalEvidenceJson(leaf)) + 1;
+    if (leafBytes > L.MAX_NORMALIZED_BYTES) throw new EvidenceError("Normalized leaves exceed 4 MiB", 413);
+    return leaf;
+  });
   if (new Set(leaves.map(leaf => leaf.id)).size !== leaves.length) invalid("Leaf IDs must retain distinct observations");
   if ((parseState !== "parsed" || kind !== "junit") && leaves.length) invalid("Unparsed or attestation sources cannot assert executed leaves");
   const rawCounts = evidenceObject(source.leafCounts, countKeys, "leaf counts");

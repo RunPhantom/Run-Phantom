@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { EvidenceStore, EVIDENCE_STORAGE_SQL, type EvidenceStoreOptions } from "../src/evaluations/evidence-store";
 import { EVIDENCE_PREDICATE_TYPE, EVIDENCE_STATEMENT_TYPE, EvidenceError, type EvidenceCapability, type EvidenceExpectedSource, type EvidenceImportRequest, type NormalizedEvidenceSource } from "../src/evaluations/evidence-protocol";
 import { canonicalEvidenceJson, deriveEvidenceCounts, evidenceDigest } from "../src/evaluations/evidence-validation";
@@ -284,4 +285,69 @@ describe("immutable attestation assertions", () => {
     const set = store.publish(admitted.job.id, admitted.publicationToken, sources)!;
     expect(set.sources[1]).toMatchObject({ parseState: "unparsed", reportOutcome: "unknown", leafCounts: { executed: null }, authentication: "not_checked" });
   });
+});
+
+describe("transactional evidence resource reservations", () => {
+  test("identical retries reuse admission even at quota, while changed bytes or configuration conflict", () => {
+    const limited = new EvidenceStore(db, scope, options({ maxRawBytes: raw.byteLength }));
+    const admitted = limited.admit(request()); expect(limited.admit(request())).toMatchObject({ reused: true, job: admitted.job });
+    expect(() => limited.admit(request("another"))).toThrow("quota");
+    for (const change of [{ policyVersion: "different" }, { parserVersion: "different" }, { configurationSha256: evidenceDigest("different") },
+      { retention: "normalized_only" }, { sources: [{ ...request().sources[0], artifactSha256: evidenceDigest("other bytes") }] }]) {
+      expect(() => limited.admit({ ...request(), ...change })).toThrow("different bytes or configuration");
+    }
+    expect(limited.cancel(admitted.job.id)).toBe(true); expect(limited.admit(request("after-cancel")).job.status).toBe("queued");
+  });
+  test("retained normalized revision bytes count toward quota after payload deletion", () => {
+    const { set } = complete(); store.removePayloads(set.id, 1, "normalized_removed");
+    const limited = new EvidenceStore(db, scope, options({ maxNormalizedBytes: 4 * 1024 * 1024 }));
+    expect(() => limited.admit(request("more"))).toThrow("quota");
+    limited.purgeScope(); expect(limited.admit(request("more")).job.status).toBe("queued");
+  });
+  test("terminal failures cannot create unlimited durable job records", () => {
+    const limited = new EvidenceStore(db, scope, options({ maxRevisions: 1 }));
+    const admission = limited.admit(request()); limited.cancel(admission.job.id);
+    expect(limited.admit(request()).reused).toBe(true); expect(() => limited.admit(request("another"))).toThrow("job or revision retention");
+  });
+  test("active and queued limits span every scope within the injected database", () => {
+    db.exec("INSERT INTO evaluation_evidence_scopes(scope_key,generation,active) VALUES('project:other',1,1)");
+    const other = new EvidenceStore(db, { kind: "project", id: "other" }, options());
+    const a = store.admit(request("active-a")), b = other.admit(request("active-b"));
+    expect(store.start(a.job.id, a.publicationToken)).toBe(true); expect(other.start(b.job.id, b.publicationToken)).toBe(true);
+    const pending = Array.from({ length: 8 }, (_, i) => i % 2 ? other.admit(request(`pending-${i}`)) : store.admit(request(`pending-${i}`)));
+    expect(store.start(pending[0].job.id, pending[0].publicationToken)).toBe(false);
+    expect(() => other.admit(request("overflow"))).toThrow("queue is full");
+    store.cancel(a.job.id); expect(store.start(pending[0].job.id, pending[0].publicationToken)).toBe(true);
+  });
+  test("normalized byte bounds reject oversized text before forming one giant retained string", () => {
+    const source = normalized(); source.leaves = Array.from({ length: 2_000 }, (_, i) => ({ ...source.leaves[0], id: `leaf-${i}`, detail: "x".repeat(4096) }));
+    source.leafCounts = deriveEvidenceCounts(source.leaves); source.observedExecutedLowerBound = "2000"; source.producerCounts = null;
+    const admitted = store.admit(request()); store.start(admitted.job.id, admitted.publicationToken);
+    expect(() => store.publish(admitted.job.id, admitted.publicationToken, [{ sourceId: "source-1", raw, normalized: source }])).toThrow("4 MiB");
+    expect(count("payloads")).toBe(0); expect(count("blobs")).toBe(0);
+  });
+  test("two actual processes racing one SQLite quota cannot both reserve the last capacity", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "rp-evidence-quota-")), filename = path.join(directory, "race.db"), barrier = path.join(directory, "go");
+    const fileDb = new Database(filename); const children: ReturnType<typeof Bun.spawn>[] = [];
+    try {
+      initialize(fileDb); fileDb.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=3000");
+      const env = { ...process.env }; for (const key of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]) delete env[key];
+      const ready = [path.join(directory, "ready-a"), path.join(directory, "ready-b")];
+      const worker = fileURLToPath(new URL("./evidence-quota-worker.ts", import.meta.url));
+      ready.forEach((marker, i) => children.push(Bun.spawn([process.execPath, "run", worker, filename, barrier, marker, `race-${i}`], { env, stdout: "pipe", stderr: "pipe" })));
+      const deadline = Date.now() + 5_000;
+      while (!ready.every(marker => existsSync(marker))) { if (Date.now() >= deadline) throw new Error("Quota fixture readiness timed out"); await Bun.sleep(5); }
+      writeFileSync(barrier, "go");
+      const output = await Promise.all(children.map(async child => {
+        const stdout = new Response(child.stdout as ReadableStream).text(), stderr = new Response(child.stderr as ReadableStream).text();
+        const result = await Promise.race([child.exited, Bun.sleep(5_000).then(() => { throw new Error("Quota fixture process timed out"); })]);
+        expect(result).toBe(0); expect(await stderr).toBe(""); return JSON.parse(await stdout) as { admitted: boolean };
+      }));
+      expect(output.filter(result => result.admitted)).toHaveLength(1); expect(output.filter(result => !result.admitted)).toHaveLength(1);
+      expect(fileDb.query("SELECT count(*) AS n,sum(reserved_raw_bytes) AS bytes FROM evaluation_evidence_jobs").get()).toEqual({ n: 1, bytes: raw.byteLength });
+    } finally {
+      for (const child of children) { if (child.exitCode === null) child.kill(); await child.exited; }
+      fileDb.close(); rmSync(directory, { recursive: true, force: true });
+    }
+  }, 15_000);
 });
