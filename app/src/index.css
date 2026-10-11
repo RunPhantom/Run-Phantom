@@ -405,6 +405,11 @@ h1, h2, h3 {
   outline-offset: -2px !important;
 }
 
+.rp-primary-control:focus-visible {
+  outline-color: var(--rp-on-solid) !important;
+  outline-offset: -4px !important;
+}
+
 .skip-link {
   position: fixed;
   left: 16px;
@@ -667,14 +672,6 @@ pre { white-space: pre-wrap; word-break: break-word; font-family: var(--font-mon
    nothing moves visually until the user reaches the end of the list. */
 .rp-list-scroll { padding-bottom: 60px; }
 
-/* ---------------------------------------------------------------------------
-   THE MERIDIAN
-   Rust is not decoration here; it is a position in trace time. Hovering a span
-   in any pane lights the same span in every other pane in the same frame, so
-   the flame chart, the span tree and the transcript read as three projections
-   of one clock rather than three widgets. Nothing else in the app is allowed a
-   solid rust rail, which is what keeps this legible.
-   --------------------------------------------------------------------------- */
 [data-meridian-key] {
   transition: box-shadow var(--rp-motion-state) var(--rp-ease-out);
 }
@@ -763,6 +760,12 @@ html[data-nav="key"] {
    Inline links are deliberately excluded: they appear inside transcript prose,
    where forcing a height would wreck the paragraph flow. */
 @media (pointer: coarse) {
+  input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+
   button:not(.timeline-bar),
   [role="tab"],
   [role="menuitem"],

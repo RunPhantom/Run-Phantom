@@ -1,4 +1,6 @@
 import type { Locator, Page, TestInfo, WebSocketRoute } from "@playwright/test";
+import { readFile } from "node:fs/promises";
+import type { DatasetExport, DatasetRevision } from "../../src/evaluations/protocol";
 import { expect, test } from "./fixtures";
 import {
   FIXTURE_PRIMARY_RUN_ID,
@@ -245,4 +247,127 @@ test("reference shell: real WebSocket closure reports offline and reconnects wit
   await expect.poll(() => serverFrames.length).toBeGreaterThan(before);
   await expect(offline).toBeHidden();
   await expect(page.locator(`[data-run-id="${FIXTURE_PRIMARY_RUN_ID}"]`)).toBeVisible();
+});
+
+test.describe("reference shell touch primitives", () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+
+  test("a coarse-pointer user reads 16px controls and creates a retained dataset", async ({ page, request, runPhantom }, testInfo) => {
+    await seedRunPhantomFixtures(runPhantom.url);
+    const seeded = await request.post(`${runPhantom.url}/api/evaluations/datasets`, { data: { name: "Existing touch dataset" } });
+    expect(seeded.status()).toBe(201);
+    const existing = await seeded.json() as DatasetRevision;
+    await page.goto(`${runPhantom.url}/evaluations`);
+    await expectHeader(page, "Evaluations");
+    expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+    const name = page.getByRole("textbox", { name: "Dataset name", exact: true });
+    const dataset = page.getByRole("combobox", { name: "Dataset", exact: true });
+    await expect(dataset).toHaveValue(existing.datasetId);
+    await page.getByText("Import and export datasets", { exact: true }).tap();
+    const json = page.getByRole("textbox", { name: "Dataset JSON", exact: true });
+    const metrics = [];
+    for (const [label, control] of [["Dataset name", name], ["Dataset", dataset], ["Dataset JSON", json]] as const) {
+      await expect(control).toBeVisible();
+      const metric = await control.evaluate(element => ({
+        tag: element.tagName,
+        fontSize: getComputedStyle(element).fontSize,
+        height: element.getBoundingClientRect().height,
+      }));
+      expect(metric.fontSize, `${label} must stay legible without mobile text zoom`).toBe("16px");
+      expect(metric.height, `${label} touch target`).toBeGreaterThanOrEqual(44);
+      metrics.push({ label, ...metric });
+    }
+    expect(metrics.map(metric => metric.tag)).toEqual(["INPUT", "SELECT", "TEXTAREA"]);
+    await expectNoOverflow(page, 390);
+    const typedJson = '{"format":"runphantom-evaluations/v1","name":"Touch draft","cases":[]}';
+    await json.tap();
+    await json.fill(typedJson);
+    await expect(json).toHaveValue(typedJson);
+    await json.evaluate(element => element.scrollIntoView({ block: "center", behavior: "instant" }));
+    await expectUnobscured(json);
+    await capture(page, testInfo, "reference-touch-readable-json");
+    await name.tap();
+    await name.pressSequentially("Touch-created regression dataset");
+    await expect(name).toHaveValue("Touch-created regression dataset");
+    const createdResponse = page.waitForResponse(response => response.request().method() === "POST"
+      && response.url() === `${runPhantom.url}/api/evaluations/datasets`);
+    await page.getByRole("button", { name: "Create dataset", exact: true }).tap();
+    const created = await createdResponse;
+    expect(created.status()).toBe(201);
+    const saved = await created.json() as DatasetRevision;
+    expect(saved).toMatchObject({ datasetName: "Touch-created regression dataset", version: 1, cases: [] });
+    await expect(dataset).toHaveValue(saved.datasetId);
+    const persisted = await request.get(`${runPhantom.url}/api/evaluations/datasets/${saved.datasetId}`);
+    expect(persisted.status()).toBe(200);
+    expect(await persisted.json()).toEqual(saved);
+    await page.reload();
+    await expectHeader(page, "Evaluations");
+    await dataset.selectOption(saved.datasetId);
+    await expect(dataset).toHaveValue(saved.datasetId);
+    await expect(dataset.locator("option:checked")).toHaveText("Touch-created regression dataset");
+    await expectNoOverflow(page, 390);
+    await capture(page, testInfo, "reference-touch-created-dataset");
+    await testInfo.attach("touch-control-metrics", { body: JSON.stringify({ coarsePointer: true, controls: metrics }), contentType: "application/json" });
+  });
+});
+
+test("reference shell: keyboard focus contrasts on primary and outline controls while create and export work", async ({ page, request, runPhantom }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await seedRunPhantomFixtures(runPhantom.url);
+  await page.goto(`${runPhantom.url}/evaluations`);
+  await expectHeader(page, "Evaluations");
+  const name = page.getByRole("textbox", { name: "Dataset name", exact: true });
+  await name.fill("Keyboard-focused dataset");
+  await name.press("Tab");
+  const primary = page.getByRole("button", { name: "Create dataset", exact: true });
+  await expect(primary).toBeFocused();
+  expect(await primary.evaluate(element => element.matches(":focus-visible"))).toBe(true);
+  const primaryStyle = await primary.evaluate(element => {
+    const style = getComputedStyle(element);
+    return { outlineColor: style.outlineColor, outlineWidth: style.outlineWidth, outlineOffset: style.outlineOffset,
+      outlineStyle: style.outlineStyle, background: style.backgroundColor, shadow: style.boxShadow };
+  });
+  expect(primaryStyle).toMatchObject({ outlineColor: "rgb(255, 255, 255)", outlineWidth: "2px", outlineOffset: "-4px",
+    outlineStyle: "solid", background: "rgb(0, 33, 204)" });
+  expect(primaryStyle.shadow).toContain("rgb(0, 33, 204)");
+  await expectUnobscured(primary);
+  await capture(page, testInfo, "reference-primary-keyboard-focus");
+  const createdResponse = page.waitForResponse(response => response.request().method() === "POST"
+    && response.url() === `${runPhantom.url}/api/evaluations/datasets`);
+  await page.keyboard.press("Enter");
+  const created = await createdResponse;
+  expect(created.status()).toBe(201);
+  const saved = await created.json() as DatasetRevision;
+  await expect(page.getByRole("combobox", { name: "Dataset", exact: true })).toHaveValue(saved.datasetId);
+  const disclosure = page.getByText("Import and export datasets", { exact: true });
+  await disclosure.focus();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("textbox", { name: "Dataset JSON", exact: true })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.getByLabel("Import dataset file", { exact: true })).toBeFocused();
+  await page.keyboard.press("Tab");
+  const outline = page.getByRole("button", { name: "Export selected revision", exact: true });
+  await expect(outline).toBeFocused();
+  expect(await outline.evaluate(element => element.matches(":focus-visible"))).toBe(true);
+  const outlineStyle = await outline.evaluate(element => {
+    const style = getComputedStyle(element);
+    return { outlineColor: style.outlineColor, outlineWidth: style.outlineWidth, outlineOffset: style.outlineOffset,
+      outlineStyle: style.outlineStyle, background: style.backgroundColor };
+  });
+  expect(outlineStyle).toEqual({ outlineColor: "rgb(0, 33, 204)", outlineWidth: "2px", outlineOffset: "-2px",
+    outlineStyle: "solid", background: "rgb(255, 255, 255)" });
+  await expectUnobscured(outline);
+  await capture(page, testInfo, "reference-outline-keyboard-focus");
+  const downloaded = page.waitForEvent("download");
+  await page.keyboard.press("Enter");
+  const download = await downloaded, destination = testInfo.outputPath("keyboard-exported-dataset.json");
+  await download.saveAs(destination);
+  const exported = JSON.parse(await readFile(destination, "utf8")) as DatasetExport;
+  expect(exported).toEqual({ format: "runphantom-evaluations/v1", name: "Keyboard-focused dataset", cases: [] });
+  const persisted = await request.get(`${runPhantom.url}/api/evaluations/datasets/${saved.datasetId}/export?version=1`);
+  expect(persisted.status()).toBe(200);
+  expect(await persisted.json()).toEqual(exported);
+  await expect(page.getByRole("textbox", { name: "Dataset JSON", exact: true })).toHaveValue(JSON.stringify(exported, null, 2));
+  await testInfo.attach("keyboard-control-focus-styles", { body: JSON.stringify({ primary: primaryStyle, outline: outlineStyle }), contentType: "application/json" });
 });
