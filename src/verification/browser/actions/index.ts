@@ -26,7 +26,7 @@ function actionTarget(selector: string): HTMLElement {
 }
 
 export function runDomCommand(
-  command: Exclude<AppCommand, { type: "state" }>,
+  command: Exclude<AppCommand, { type: "state" | "causal-click" }>,
   sanitize: (value: unknown) => { value: unknown; truncated: boolean } = (value) => {
     const safe = sanitizeWithReport(value);
     return { value: safe.value, truncated: Boolean(safe.truncation || safe.redacted) };

@@ -1,5 +1,7 @@
 /** Shared browser/daemon contract for Run Phantom application verification. */
 export const PROTOCOL_VERSION = 1 as const;
+export const CAUSAL_PROTOCOL_VERSION = 2 as const;
+export const CAUSAL_CAPABILITY = "causal-readings" as const;
 
 export const VERIFICATION_LIMITS = {
   MAX_SESSIONS: 16,
@@ -27,6 +29,7 @@ export const VERIFICATION_LIMITS = {
   MAX_NAME_LENGTH: 128,
   MAX_PREDICATE_DEPTH: 6,
   MAX_PREDICATE_NODES: 50,
+  MAX_BASELINE_TARGETS: 20,
 } as const;
 
 export type VerificationStatus = "pass" | "fail" | "inconclusive";
@@ -45,18 +48,33 @@ export interface Coverage {
   signal: boolean;
   route: boolean;
 }
+export type RelativeTarget = { kind: "state"; store: string; path: string } | { kind: "element"; selector: string };
+export type RelativePredicate = { kind: "relative"; target: RelativeTarget } & (
+  | { relation: "changed" | "increased" | "decreased" }
+  | { relation: "becomes"; equals: unknown }
+);
+export function relativeTargetKey(target: RelativeTarget): string {
+  return JSON.stringify(target.kind === "state" ? [target.kind, target.store, target.path] : [target.kind, target.selector]);
+}
+export function relativeTargets(predicate: Predicate): RelativeTarget[] {
+  if (predicate.kind === "relative") return [predicate.target];
+  if (predicate.kind !== "allOf" && predicate.kind !== "anyOf") return [];
+  return [...new Map(predicate.predicates.flatMap(relativeTargets).map((target) => [relativeTargetKey(target), target])).values()];
+}
 export type AppCommand =
   | { type: "snapshot"; selector?: string }
   | { type: "click"; selector: string }
   | { type: "fill"; selector: string; value: string }
-  | { type: "state"; store: string };
+  | { type: "state"; store: string }
+  | { type: "causal-click"; selector: string; targets: RelativeTarget[] };
 export type Predicate =
   | { kind: "network"; urlContains: string; method?: string; status?: number }
   | { kind: "console"; level: "error" | "warn"; absent: boolean }
   | { kind: "signal"; name: string }
   | { kind: "state"; store: string; path: string; equals: unknown }
   | { kind: "element"; selector: string; state: "present" | "absent" }
-  | { kind: "allOf" | "anyOf"; predicates: Predicate[] };
+  | { kind: "allOf" | "anyOf"; predicates: Predicate[] }
+  | RelativePredicate;
 export interface FlowStep { command?: AppCommand; predicate: Predicate }
 export interface VerificationFlow {
   id: string;
@@ -78,6 +96,15 @@ export interface VerificationCheckContext {
   complete: boolean;
   dropped: number;
   settled: boolean;
+  causal?: RetainedCausalContext;
+}
+export interface RetainedReading { cursor: number; availability: "complete" | "partial" | "unavailable"; value: unknown }
+export interface RetainedCausalContext {
+  source: "sdk-reported";
+  attribution: "captured" | "unavailable";
+  actionId?: string;
+  omitted?: true;
+  readings: Array<{ target: RelativeTarget; before: RetainedReading | null; after: RetainedReading | null }>;
 }
 export interface VerificationReportContext {
   origin: string;
@@ -104,6 +131,7 @@ export interface SessionSummary {
   coverage: Coverage;
   cursor: number;
   dropped: number;
+  capabilities?: Array<typeof CAUSAL_CAPABILITY>;
 }
 export interface Observation {
   session: SessionSummary;
@@ -113,6 +141,7 @@ export interface Observation {
 }
 export type BrowserMessage =
   | { type: "hello"; version: typeof PROTOCOL_VERSION; token: string; coverage: Coverage }
+  | { type: "hello"; version: typeof CAUSAL_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: Array<typeof CAUSAL_CAPABILITY> }
   | { type: "event"; event: Omit<RuntimeEvent, "t"> }
   | { type: "result"; id: string; ok: boolean; result?: unknown; error?: string; truncated?: boolean };
 export type DaemonMessage =

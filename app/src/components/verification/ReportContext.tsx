@@ -14,6 +14,11 @@ function expectedOutcome(value: unknown, depth = 0): string {
       const preview = expected === undefined ? "omitted" : expected.length > 240 ? `${expected.slice(0, 240)}…` : expected;
       return `${text(predicate.store)}${predicate.path ? `.${text(predicate.path)}` : ""} equals ${preview}`;
     }
+    case "relative": {
+      const target = predicate.target && typeof predicate.target === "object" ? predicate.target as Record<string, unknown> : {};
+      const scope = target.kind === "element" ? `Matching elements for ${text(target.selector)}` : `${text(target.store)}${target.path ? `.${text(target.path)}` : ""}`;
+      return `${scope} ${predicate.relation === "becomes" ? `became ${JSON.stringify(predicate.equals)?.slice(0, 240) ?? "omitted"}` : text(predicate.relation)} during the click`;
+    }
     case "allOf": case "anyOf": {
       if (!Array.isArray(predicate.predicates)) return "Composite expectations omitted from retained context";
       return `${predicate.kind === "allOf" ? "All" : "Any"} of: ${predicate.predicates.slice(0, 20).map(item => expectedOutcome(item, depth + 1)).join("; ")}`;
@@ -34,6 +39,16 @@ export function ReportContext({ context }: { context?: VerificationReportContext
       <p className="break-words leading-relaxed">{expectedOutcome(check.predicate)}</p>
       <p className="break-words text-[11px] leading-relaxed text-[color:var(--rp-ink-soft)]">{check.reason}</p>
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-[color:var(--rp-ink-soft)]"><span>{check.complete ? "Complete capture" : "Incomplete capture"}</span><span>{check.dropped} events dropped</span><span>{check.settled ? `Settled: ${context.quietMs} ms quiet` : "Did not settle"}</span></div>
+      {check.causal && <div className="space-y-2 rounded-md border border-[color:var(--rp-border)] p-3 text-[11px]" aria-label="Action transition readings">
+        <p className="font-medium">SDK-reported action result · {check.causal.attribution === "captured" ? "Matched captured readings" : "Attribution unavailable"}</p>
+        <p className="leading-relaxed text-[color:var(--rp-ink-soft)]">These saved readings describe the synchronous click. Asynchronous business completion needs a declared operation.</p>
+        {check.causal.omitted && <p className="text-[color:var(--rp-warning)]">Readings were omitted to keep the saved report within its size limit.</p>}
+        <ul className="space-y-2">{check.causal.readings.map((pair, at) => <li className="min-w-0 space-y-1 break-words" key={at}>
+          <p>{pair.target.kind === "element" ? pair.target.selector : `${pair.target.store}${pair.target.path ? `.${pair.target.path}` : ""}`}</p>
+          <p>Before: {pair.before ? `${JSON.stringify(pair.before.value)?.slice(0, 400) ?? "unavailable"} (${pair.before.availability})` : "unavailable"}</p>
+          <p>After: {pair.after ? `${JSON.stringify(pair.after.value)?.slice(0, 400) ?? "unavailable"} (${pair.after.availability})` : "unavailable"}</p>
+        </li>)}</ul>
+      </div>}
       <details><summary className="cursor-pointer text-[11px] text-[color:var(--rp-ink-soft)]">Capture details</summary><dl className="mt-2 space-y-2 text-[11px]">
         <div><dt className="text-[color:var(--rp-ink-muted)]">Observation window</dt><dd className="break-words">After cursor {check.since} through {check.through}. The starting cursor is excluded.</dd></div>
         <div><dt className="text-[color:var(--rp-ink-muted)]">App connection generation</dt><dd>{check.generation}</dd></div>

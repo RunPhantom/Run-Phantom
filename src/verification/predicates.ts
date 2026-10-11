@@ -4,7 +4,7 @@
  * truncation or redaction produce an inconclusive verdict rather than a false
  * pass, because an assertion that cannot see its evidence has not been proven.
  */
-import { VERIFICATION_LIMITS as L, type Coverage, type Predicate, type PredicateContext, type RuntimeEvent, type Verdict } from "./protocol";
+import { relativeTargetKey, VERIFICATION_LIMITS as L, type Coverage, type Predicate, type PredicateContext, type RuntimeEvent, type Verdict } from "./protocol";
 import { selectPath } from "./state-select";
 import { isSensitiveKey } from "./redaction";
 import { sanitizeWithReport } from "./serialization";
@@ -65,10 +65,21 @@ export function boundEvidence(events: RuntimeEvent[]): RuntimeEvent[] {
   return out;
 }
 
-export function evaluatePredicate(predicate: Predicate, context: PredicateContext): Verdict {
+export interface EvaluationContext extends PredicateContext {
+  relative?: ReadonlyMap<string, { scope: BaselineScope; input: CausalPredicateContext }>;
+}
+
+export function evaluatePredicate(predicate: Predicate, context: EvaluationContext): Verdict {
   const verdict = (status: Verdict["status"], reason: string, evidence: RuntimeEvent[] = []): Verdict =>
     ({ status, reason: reason.slice(0, L.MAX_REASON_LENGTH), evidence: boundEvidence(evidence) });
   const unknown = (reason: string, evidence: RuntimeEvent[] = []) => verdict("inconclusive", reason, evidence);
+
+  if (predicate.kind === "relative") {
+    const captured = context.relative?.get(relativeTargetKey(predicate.target));
+    if (!captured) return unknown("A relative check requires a matching captured pre/action/post result; interval observations alone are insufficient.");
+    return evaluateCausalPredicate({ scope: captured.scope, relation: predicate.relation,
+      ...(predicate.relation === "becomes" ? { equals: predicate.equals } : {}) } as CausalPredicate, captured.input);
+  }
 
   if (predicate.kind === "allOf" || predicate.kind === "anyOf") {
     if (predicate.predicates.length === 0) return unknown("An empty composite proves no observable consequence.");

@@ -8,7 +8,7 @@
  * rather than failing the session, which is what lets an assertion return
  * inconclusive instead of a false pass when its evidence was never being collected.
  */
-import { PROTOCOL_VERSION, VERIFICATION_LIMITS, type Coverage, type AppCommand } from "../protocol.js";
+import { CAUSAL_PROTOCOL_VERSION, CAUSAL_CAPABILITY, VERIFICATION_LIMITS, type Coverage, type AppCommand, type RelativeTarget } from "../protocol.js";
 import { parseCommand, validateOrigin } from "../validation.js";
 import { sanitizeWithReport } from "../serialization.js";
 import { installConsole } from "./observers/console.js";
@@ -16,8 +16,9 @@ import { installNetwork } from "./observers/network.js";
 import { installRoute } from "./observers/route.js";
 import { observeSafely, type Emit, type Teardown } from "./observers/types.js";
 import { runDomCommand } from "./actions/index.js";
+import { selectPath } from "../state-select.js";
 
-export interface ConnectionOptions { url: string; sessionId: string; token: string }
+export interface ConnectionOptions { url: string; sessionId: string; token: string; causalReadings?: boolean }
 export interface RuntimeConnection {
   disconnect(): void;
   signal(name: string, data?: unknown): void;
@@ -101,7 +102,7 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
       : type === "network" || type === "network.start" ? ["url", "error"]
       : type === "route" ? ["url"]
       : type === "signal" ? ["data"]
-      : type === "observer.error" ? ["message"] : [];
+      : type === "observer.error" ? ["message"] : type === "action.reading" ? ["value"] : [];
     const value: Record<string, unknown> = {};
     let truncated = false;
     for (const [field, item] of Object.entries(data)) {
@@ -165,7 +166,32 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
     install("console", () => installConsole(emit, prepare));
     install("network", () => installNetwork(emit, () => currentActionId));
     install("route", () => installRoute(emit));
-    observeSafely(() => send({ type: "hello", version: PROTOCOL_VERSION, token: options.token, coverage }), disconnect);
+    observeSafely(() => send({ type: "hello", version: CAUSAL_PROTOCOL_VERSION, token: options.token, coverage,
+      capabilities: options.causalReadings === false ? [] : [CAUSAL_CAPABILITY] }), disconnect);
+  };
+  const actionReading = (id: string, phase: "before" | "after", target: RelativeTarget): void => {
+    let available = false;
+    let value: unknown;
+    let truncated = false;
+    try {
+      if (target.kind === "element") {
+        const output = runDomCommand({ type: "snapshot", selector: target.selector }, prepare);
+        const result = output.result as { count: number };
+        available = !output.truncated;
+        value = result.count;
+        truncated = !!output.truncated;
+      } else {
+        const read = stores.get(target.store);
+        if (read) {
+          const safe = prepare(read());
+          const selected = selectPath(safe.value, target.path);
+          available = !safe.truncated && selected.found;
+          value = selected.value;
+          truncated = safe.truncated;
+        }
+      }
+    } catch { available = false; }
+    emit("action.reading", { phase, target, available, ...(available ? { value } : {}) }, id, truncated);
   };
   const act = (id: string, command: AppCommand): void => {
     try {
@@ -177,7 +203,11 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
         rememberSpelling(command.value);
         secretCharacters += command.value.length;
       }
-      if (command.type === "click" || command.type === "fill") {
+      if (command.type === "causal-click") {
+        if (options.causalReadings === false) throw new Error("Causal readings are not enabled for this runtime");
+        for (const target of command.targets) actionReading(id, "before", target);
+      }
+      if (command.type === "click" || command.type === "fill" || command.type === "causal-click") {
         currentActionId = id;
         emit("action.boundary", {}, id);
         if (!active || !ready) throw new Error("Verification disconnected before action dispatch");
@@ -189,6 +219,9 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
         const safe = prepare(read());
         const store = sanitizeWithReport(command.store);
         output = { result: { store: store.value, value: safe.value }, truncated: Boolean(safe.truncated || store.truncation || store.redacted) };
+      } else if (command.type === "causal-click") {
+        output = runDomCommand({ type: "click", selector: command.selector }, prepare);
+        for (const target of command.targets) actionReading(id, "after", target);
       } else output = runDomCommand(command, prepare);
       // DOM commands redact their text fields before returning. Apply generic size limits
       // to the result envelope without exact-fill rewriting of its typed schema.

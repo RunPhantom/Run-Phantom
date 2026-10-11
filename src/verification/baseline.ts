@@ -1,4 +1,4 @@
-import { VERIFICATION_LIMITS as L } from "./protocol";
+import { VERIFICATION_LIMITS as L, type RelativeTarget } from "./protocol";
 import { sanitizeWithReport } from "./serialization";
 import { parseFlowSteps } from "./validation";
 
@@ -108,6 +108,13 @@ export function captureBaselineScope(raw: unknown): BaselineScope {
 export function sameBaselineScope(left: BaselineScope, right: BaselineScope): boolean {
   return left.sessionId === right.sessionId && left.generation === right.generation && left.kind === right.kind
     && left.target === right.target && left.path === right.path;
+}
+
+/** Dispatchers supply the identity; page events and API bodies never choose it. */
+export function baselineScopeForTarget(sessionId: string, generation: number, target: RelativeTarget): BaselineScope {
+  return captureBaselineScope(target.kind === "state"
+    ? { sessionId, generation, kind: "state", target: target.store, path: target.path }
+    : { sessionId, generation, kind: "element", target: target.selector });
 }
 
 class SnapshotError extends Error {

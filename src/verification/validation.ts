@@ -1,6 +1,6 @@
 import {
-  PROTOCOL_VERSION, VERIFICATION_LIMITS as L,
-  type AppCommand, type BrowserMessage, type Coverage, type FlowStep, type Predicate,
+  PROTOCOL_VERSION, CAUSAL_PROTOCOL_VERSION, CAUSAL_CAPABILITY, relativeTargetKey, relativeTargets, VERIFICATION_LIMITS as L,
+  type AppCommand, type BrowserMessage, type Coverage, type FlowStep, type Predicate, type RelativeTarget,
 } from "./protocol";
 import { isSensitiveKey } from "./redaction";
 import { sanitizeWithReport } from "./serialization";
@@ -103,8 +103,41 @@ export function parseCommand(value: unknown): AppCommand {
     case "state":
       keys(obj, ["type", "store"], "state command");
       return { type: "state", store: text(obj.store, "store", L.MAX_NAME_LENGTH) };
+    case "causal-click": {
+      keys(obj, ["type", "selector", "targets"], "causal click command");
+      const selector = text(obj.selector, "selector", L.MAX_SELECTOR_LENGTH);
+      assertSafeSelector(selector);
+      if (!Array.isArray(obj.targets) || obj.targets.length === 0 || obj.targets.length > L.MAX_BASELINE_TARGETS) invalid("causal click requires 1 to 20 targets");
+      const targets = obj.targets.map(parseRelativeTarget);
+      if (new Set(targets.map(relativeTargetKey)).size !== targets.length) invalid("causal targets must be distinct");
+      return { type: "causal-click", selector, targets };
+    }
     default: return invalid("unsupported command type");
   }
+}
+
+export function parseRelativeTarget(raw: unknown): RelativeTarget {
+  const obj = record(raw, "relative target");
+  if (obj.kind === "element") {
+    keys(obj, ["kind", "selector"], "relative element target");
+    const selector = text(obj.selector, "selector", L.MAX_SELECTOR_LENGTH);
+    assertSafeSelector(selector);
+    const safe = sanitizeWithReport(selector);
+    if (safe.redacted || safe.truncation) invalid("relative targets cannot contain credentials");
+    return { kind: "element", selector };
+  }
+  if (obj.kind === "state") {
+    keys(obj, ["kind", "store", "path"], "relative state target");
+    const store = text(obj.store, "store", L.MAX_NAME_LENGTH);
+    const path = text(obj.path, "state path", L.MAX_SELECTOR_LENGTH, true);
+    const segments = path === "" ? [] : path.split(".");
+    if (segments.length > 32 || segments.some((segment) => !segment || forbiddenKeys.has(segment))) invalid("state path contains an unsupported segment");
+    if ([store, ...segments].some(isSensitiveKey)) invalid("relative targets cannot contain credential-bearing paths");
+    const safe = sanitizeWithReport({ store, path });
+    if (safe.redacted || safe.truncation) invalid("relative targets cannot contain credentials");
+    return { kind: "state", store, path };
+  }
+  return invalid("unsupported relative target");
 }
 
 export function parsePredicate(value: unknown): Predicate {
@@ -113,6 +146,18 @@ export function parsePredicate(value: unknown): Predicate {
     if (depth > L.MAX_PREDICATE_DEPTH || ++nodes > L.MAX_PREDICATE_NODES) invalid("predicate exceeds its complexity limit");
     const obj = record(raw, "predicate");
     switch (obj.kind) {
+      case "relative": {
+        keys(obj, ["kind", "target", "relation", "equals"], "relative predicate");
+        const target = parseRelativeTarget(obj.target);
+        if (obj.relation === "becomes") {
+          if (!Object.hasOwn(obj, "equals")) invalid("becomes requires an expected value");
+          size(obj.equals, L.MAX_EVENT_BYTES, "relative expectation");
+          if (target.kind === "element" && (typeof obj.equals !== "number" || !Number.isSafeInteger(obj.equals) || obj.equals < 0)) invalid("relative element expectations must be nonnegative whole counts");
+          return { kind: "relative", target, relation: "becomes", equals: obj.equals };
+        }
+        if (!["changed", "increased", "decreased"].includes(String(obj.relation)) || Object.hasOwn(obj, "equals")) invalid("unsupported relative comparison or expectation");
+        return { kind: "relative", target, relation: obj.relation as "changed" | "increased" | "decreased" };
+      }
       case "network": {
         keys(obj, ["kind", "urlContains", "method", "status"], "network predicate");
         const method = optionalString(obj, "method", 16);
@@ -148,7 +193,9 @@ export function parsePredicate(value: unknown): Predicate {
       default: return invalid("unsupported predicate kind");
     }
   }
-  return parse(value, 0);
+  const parsed = parse(value, 0);
+  if (relativeTargets(parsed).length > L.MAX_BASELINE_TARGETS) invalid("relative predicate exceeds its 20 target limit");
+  return parsed;
 }
 
 function assertSafeSelector(selector: string): void {
@@ -176,6 +223,12 @@ export function parseFlowSteps(value: unknown): FlowStep[] {
     const predicate = parsePredicate(obj.predicate);
     assertSafePredicate(predicate);
     const command = Object.hasOwn(obj, "command") ? parseCommand(obj.command) : undefined;
+    const targets = relativeTargets(predicate);
+    if (targets.length && command?.type !== "click" && command?.type !== "causal-click") invalid("saved relative checks require an explicit click action");
+    if (targets.length && command?.type === "causal-click"
+      && (command.targets.length !== targets.length || command.targets.some(target => !targets.some(expected => relativeTargetKey(expected) === relativeTargetKey(target))))) {
+      invalid("saved causal targets must match their declared relative checks");
+    }
     if (command?.type === "fill") invalid("saved flows cannot contain fill commands; use live fill so entered values are never persisted");
     if (command?.type === "state" && isSensitiveKey(command.store)) invalid("saved flows cannot read credential-bearing stores");
     if (command && "selector" in command && command.selector !== undefined) assertSafeSelector(command.selector);
@@ -200,6 +253,7 @@ const eventFields: Record<string, string[]> = {
   console: ["level", "message", "stack"], route: ["url"], signal: ["name", "data"],
   state: ["store", "value"], dom: ["selector", "count"],
   "observer.error": ["observer", "message"], "capture.loss": ["reason"], "action.boundary": [],
+  "action.reading": ["phase", "target", "value", "available"],
 };
 function parseEvent(raw: unknown): Extract<BrowserMessage, { type: "event" }>["event"] {
   const obj = record(raw, "event");
@@ -237,8 +291,15 @@ function parseEvent(raw: unknown): Extract<BrowserMessage, { type: "event" }>["e
     if (!["network", "console", "dom", "state", "signal", "route"].includes(String(data.observer))) invalid("unsupported observer");
     text(data.message, "observer error", L.MAX_TEXT_LENGTH, true);
   } else if (type === "capture.loss") text(data.reason, "capture loss reason", L.MAX_TEXT_LENGTH);
+  else if (type === "action.reading") {
+    if (data.phase !== "before" && data.phase !== "after") invalid("unsupported action reading phase");
+    data.target = parseRelativeTarget(data.target);
+    const available = bool(data.available, "reading available");
+    if (available && !Object.hasOwn(data, "value")) invalid("available action readings require a value");
+    if (!available && Object.hasOwn(data, "value")) invalid("unavailable action readings cannot claim a value");
+  }
   const actionId = optionalString(obj, "actionId", L.MAX_NAME_LENGTH);
-  if (type === "action.boundary" && actionId === undefined) invalid("action boundary requires actionId");
+  if (["action.boundary", "action.reading"].includes(type) && actionId === undefined) invalid("action capture requires actionId");
   size(obj, L.MAX_EVENT_BYTES, "event");
   return { type, data, ...(actionId === undefined ? {} : { actionId }),
     ...(Object.hasOwn(obj, "truncated") ? { truncated: bool(obj.truncated, "truncated") } : {}) };
@@ -248,10 +309,16 @@ export function parseBrowserMessage(value: unknown): BrowserMessage {
   size(value, L.MAX_FRAME_BYTES, "browser message");
   const obj = record(value, "browser message");
   switch (obj.type) {
-    case "hello":
-      keys(obj, ["type", "version", "token", "coverage"], "hello");
-      if (obj.version !== PROTOCOL_VERSION) invalid("unsupported verification protocol version");
-      return { type: "hello", version: PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage) };
+    case "hello": {
+      if (obj.version === PROTOCOL_VERSION) {
+        keys(obj, ["type", "version", "token", "coverage"], "hello");
+        return { type: "hello", version: PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage) };
+      }
+      if (obj.version !== CAUSAL_PROTOCOL_VERSION) invalid("unsupported verification protocol version");
+      keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello");
+      if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 1 || obj.capabilities.some((entry) => entry !== CAUSAL_CAPABILITY)) invalid("unsupported causal capabilities");
+      return { type: "hello", version: CAUSAL_PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as Array<typeof CAUSAL_CAPABILITY> };
+    }
     case "event":
       keys(obj, ["type", "event"], "event message");
       return { type: "event", event: parseEvent(obj.event) };

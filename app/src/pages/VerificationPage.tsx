@@ -11,6 +11,7 @@ import { verificationApi, type AppCommand, type CommandResult, type CreatedSessi
 import { useRuns } from "../hooks/use-runs";
 import { runDisplayName } from "../utils/helpers";
 import { C } from "../utils/colors";
+import { relativeTargets } from "../../../src/verification/protocol";
 
 function stateSummary(value: unknown, depth = 0): string {
   if (value === null) return "null";
@@ -34,6 +35,8 @@ function eventSummary(event: RuntimeEvent): string {
     case "dom": return `${String(data.selector ?? "Document")}: ${String(data.count ?? "unknown")} matching elements`;
     case "route": return `Route: ${String(data.url ?? "changed")}`;
     case "action.boundary": return "Application action started";
+    case "action.reading": case "verification.baseline": return `${String(data.phase ?? "Captured")} action reading: ${stateSummary(data.value)}`;
+    case "action.result": return "SDK-reported action result acknowledged";
     default: return String(data.message ?? data.reason ?? event.type);
   }
 }
@@ -111,6 +114,8 @@ export function VerificationPage() {
   }
 
   function currentCommand(): AppCommand {
+    const targets = checks.some(check => check.kind === "relative") ? relativeTargets(currentPredicate()) : [];
+    if (targets.length && action !== "click") throw new Error("Action transitions require a Click action. Configure the outcome before running it.");
     if (action === "state") {
       if (!store.trim()) throw new Error("Registered store is required.");
       return { type: "state", store: store.trim() };
@@ -118,7 +123,7 @@ export function VerificationPage() {
     if (action === "snapshot") return { type: "snapshot", ...(selector.trim() ? { selector: selector.trim() } : {}) };
     if (!selector.trim()) throw new Error("Action selector is required.");
     if (action === "fill") return { type: "fill", selector: selector.trim(), value: fillValue };
-    return { type: "click", selector: selector.trim() };
+    return targets.length ? { type: "causal-click", selector: selector.trim(), targets } : { type: "click", selector: selector.trim() };
   }
 
   function currentPredicate(): Predicate {
@@ -173,6 +178,7 @@ export function VerificationPage() {
     try {
       if (steps.length >= 20) throw new Error("A saved flow supports at most 20 steps.");
       if (includeAction && action === "fill") throw new Error("Saved flows cannot contain fill actions. Fill the app live, then save checks or other actions.");
+      if (!includeAction && checks.some(check => check.kind === "relative")) throw new Error("Include the Click action when saving an action transition.");
       const command = includeAction ? currentCommand() : undefined;
       setSteps(previous => [...previous, { ...(command ? { command } : {}), predicate: currentPredicate() }]);
       setNotice("Step added to the flow draft.");
