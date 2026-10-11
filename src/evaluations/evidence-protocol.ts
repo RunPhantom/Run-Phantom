@@ -137,7 +137,7 @@ export interface EvidenceJob {
   admittedAt: number;
   deadlineAt: number;
   setId: string | null;
-  failureCode: "deadline_exceeded" | "restart_interrupted" | "scope_invalidated" | "revision_conflict" | "cancelled" | null;
+  failureCode: "deadline_exceeded" | "restart_interrupted" | "scope_invalidated" | "revision_conflict" | "retention_changed" | "cancelled" | null;
 }
 export interface EvidencePublicationSource { sourceId: string; raw: Uint8Array; normalized: unknown }
 export class EvidenceError extends Error {

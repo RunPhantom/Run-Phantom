@@ -142,6 +142,14 @@ describe("immutable evidence SQLite publication", () => {
     expect(() => asynchronous.admit(request())).toThrow("plain object"); expect(count("jobs")).toBe(0);
     expect(() => new EvidenceStore(db, scope, {} as EvidenceStoreOptions)).toThrow("authoritative");
   });
+  test("scope capability is checked before identifier lookup can reveal existence", () => {
+    capabilities.clear();
+    expect(() => store.getSet("absent", 1)).toThrow("Current capability");
+    expect(() => store.getJob("absent")).toThrow("Current capability");
+    expect(() => store.exportRaw("absent", 1, "source-1")).toThrow("Current capability");
+    expect(() => store.cancel("absent")).toThrow("Current capability");
+    expect(() => store.removePayloads("absent", 1, "raw_removed")).toThrow("Current capability");
+  });
   test("file-backed identities and retention projections survive a clean database reopen", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "rp-evidence-store-")), filename = path.join(directory, "evidence.db");
     let fileDb = new Database(filename);
@@ -152,5 +160,70 @@ describe("immutable evidence SQLite publication", () => {
       persisted = new EvidenceStore(fileDb, scope, options());
       expect(persisted.getSet(set.id, 1)).toMatchObject({ revision: set, sources: [{ sourceId: "source-1", rawAvailable: false, normalizedAvailable: true }] });
     } finally { fileDb.close(); rmSync(directory, { recursive: true, force: true }); }
+  });
+});
+
+describe("evidence job ownership and recovery", () => {
+  test("wrong publication token and nonterminal status are independent publication predicates", () => {
+    const admission = store.admit(request()), sources = [{ sourceId: "source-1", raw, normalized: normalized() }];
+    expect(store.publish(admission.job.id, admission.publicationToken, sources)).toBeNull();
+    expect(store.start(admission.job.id, "wrong-token")).toBe(false); expect(store.getJob(admission.job.id).status).toBe("queued");
+    expect(store.start(admission.job.id, admission.publicationToken)).toBe(true);
+    expect(store.publish(admission.job.id, "wrong-token", sources)).toBeNull(); expect(count("sets")).toBe(0);
+    const set = store.publish(admission.job.id, admission.publicationToken, sources)!;
+    expect(store.publish(admission.job.id, admission.publicationToken, sources)).toBeNull();
+    expect(store.getJob(admission.job.id)).toMatchObject({ status: "completed", setId: set.id }); expect(count("sets")).toBe(1);
+  });
+  test("explicit cancellation prevents late callbacks and identical retry does not silently rerun it", () => {
+    const admission = store.admit(request()); store.start(admission.job.id, admission.publicationToken);
+    expect(store.cancel(admission.job.id)).toBe(true); expect(store.cancel(admission.job.id)).toBe(false);
+    expect(store.publish(admission.job.id, admission.publicationToken, [{ sourceId: "source-1", raw, normalized: normalized() }])).toBeNull();
+    const retry = store.admit(request()); expect(retry).toMatchObject({ reused: true, job: { id: admission.job.id, status: "cancelled" } });
+    expect(store.start(retry.job.id, retry.publicationToken)).toBe(false); expect(count("sets")).toBe(0);
+  });
+  test("scope generation invalidation rejects a formerly valid running token", () => {
+    const admission = store.admit(request()); store.start(admission.job.id, admission.publicationToken);
+    db.exec("UPDATE evaluation_evidence_scopes SET generation=generation+1 WHERE scope_key='local:local'");
+    expect(store.publish(admission.job.id, admission.publicationToken, [{ sourceId: "source-1", raw, normalized: normalized() }])).toBeNull();
+    expect(count("blobs")).toBe(0); expect(count("sets")).toBe(0);
+  });
+  test("queue time and running time share the immutable admission deadline", () => {
+    let now = 1_000; const timed = new EvidenceStore(db, scope, options({ now: () => now }));
+    const waiting = timed.admit(request()); expect(waiting.job.deadlineAt).toBe(16_000); now = 16_000;
+    expect(timed.start(waiting.job.id, waiting.publicationToken)).toBe(false);
+    expect(timed.getJob(waiting.job.id)).toMatchObject({ status: "failed", failureCode: "deadline_exceeded" });
+    const running = timed.admit(request("running")); expect(timed.start(running.job.id, running.publicationToken)).toBe(true); now = running.job.deadlineAt;
+    expect(timed.publish(running.job.id, running.publicationToken, [{ sourceId: "source-1", raw, normalized: normalized() }])).toBeNull();
+    expect(timed.getJob(running.job.id)).toMatchObject({ status: "failed", failureCode: "deadline_exceeded" });
+    expect(count("sets")).toBe(0);
+  });
+  test("restart recovery terminalizes all unfinished attempts and releases reserved capacity", () => {
+    const active = store.admit(request()), queued = store.admit(request("queued")); store.start(active.job.id, active.publicationToken);
+    const reopened = new EvidenceStore(db, scope, options()); expect(reopened.recoverUnfinished()).toBe(2); expect(reopened.recoverUnfinished()).toBe(0);
+    for (const admission of [active, queued]) {
+      expect(reopened.getJob(admission.job.id)).toMatchObject({ status: "failed", failureCode: "restart_interrupted" });
+      expect(reopened.publish(admission.job.id, admission.publicationToken, [{ sourceId: "source-1", raw, normalized: normalized() }])).toBeNull();
+    }
+    expect(db.query("SELECT sum(reserved_raw_bytes) AS raw,sum(reserved_normalized_bytes) AS normalized FROM evaluation_evidence_jobs").get()).toEqual({ raw: 0, normalized: 0 });
+    expect(reopened.admit(request()).job.id).toBe(active.job.id); expect(count("sets")).toBe(0);
+  });
+  test("retention removal fences already running reparses before removed payloads can be recreated", () => {
+    for (const kind of ["raw_removed", "normalized_removed"] as const) {
+      const { set } = complete(request(`initial-${kind}`));
+      const append = store.admit({ ...request(`append-${kind}`), target: { setId: set.id, expectedRevision: 1 }, parserVersion: "strict-2" });
+      store.start(append.job.id, append.publicationToken); store.removePayloads(set.id, 1, kind);
+      expect(store.getJob(append.job.id)).toMatchObject({ status: "failed", failureCode: "retention_changed" });
+      expect(store.publish(append.job.id, append.publicationToken, [{ sourceId: "source-1", raw, normalized: normalized() }])).toBeNull();
+      expect(store.getSet(set.id).revision.revision).toBe(1);
+    }
+  });
+  test("privacy clear removes all payload and identity copies, advances generation and cannot resurrect late work", () => {
+    store.saveInventory("roster", 0, [expected], "prospective"); const { set } = complete();
+    store.removePayloads(set.id, 1, "raw_removed"); const waiting = store.admit(request("pending")); store.start(waiting.job.id, waiting.publicationToken);
+    store.purgeScope();
+    for (const table of ["inventory_heads", "inventories", "jobs", "artifacts", "blobs", "interpretations", "payloads", "sets", "retention_events"]) expect(count(table)).toBe(0);
+    expect(db.query("SELECT generation FROM evaluation_evidence_scopes WHERE scope_key='local:local'").get()).toEqual({ generation: 2 });
+    expect(() => store.publish(waiting.job.id, waiting.publicationToken, [{ sourceId: "source-1", raw, normalized: normalized() }])).toThrow("not found");
+    const fresh = store.admit(request()); expect(fresh.job).toMatchObject({ scopeGeneration: 2, status: "queued" }); expect(fresh.job.id).not.toBe(waiting.job.id);
   });
 });

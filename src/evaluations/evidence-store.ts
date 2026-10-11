@@ -96,6 +96,7 @@ export class EvidenceStore {
     this.#revisionLimit = evidenceInteger(options.maxRevisions ?? 1_000, "revision quota", Number.MAX_SAFE_INTEGER, 1);
   }
   #get<T>(sql: string, ...bindings: SQLQueryBindings[]): T | null { return this.#db.query(sql).get(...bindings) as T | null; }
+  #all<T>(sql: string, ...bindings: SQLQueryBindings[]): T[] { return this.#db.query(sql).all(...bindings) as T[]; }
   #run(sql: string, ...bindings: SQLQueryBindings[]): number { return this.#db.query(sql).run(...bindings).changes; }
   #transaction<T>(operation: () => T): T { return this.#db.transaction(operation).immediate(); }
   #now(): number { return evidenceInteger((this.#options.now ?? Date.now)(), "clock"); }
@@ -184,7 +185,7 @@ export class EvidenceStore {
     });
   }
   getJob(id: string): EvidenceJob {
-    return this.#transaction(() => { const job = this.#job(id); this.#authorize("normalized_read", this.#request(job).attachment); this.#generation(); return this.#jobView(job); });
+    return this.#transaction(() => { this.#authorize("normalized_read", null); const job = this.#job(id); this.#authorize("normalized_read", this.#request(job).attachment); this.#generation(); return this.#jobView(job); });
   }
   #finish(job: JobRow, status: "cancelled" | "failed", code: EvidenceJob["failureCode"]): boolean {
     return this.#run("UPDATE evaluation_evidence_jobs SET status=?,failure_code=?,job_token=?,reserved_raw_bytes=0,reserved_normalized_bytes=0 WHERE scope_key=? AND id=? AND job_token=? AND status IN ('queued','running')",
@@ -193,7 +194,7 @@ export class EvidenceStore {
   start(id: string, token: string): boolean {
     token = evidenceText(token, "publication token");
     return this.#transaction(() => {
-      const job = this.#job(id); this.#authorize("import", this.#request(job).attachment); const generation = this.#generation();
+      this.#authorize("import", null); const job = this.#job(id); this.#authorize("import", this.#request(job).attachment); const generation = this.#generation();
       if (job.job_token !== token || job.status !== "queued" || job.scope_generation !== generation) return false;
       if (this.#now() >= job.deadline_at) { this.#finish(job, "failed", "deadline_exceeded"); return false; }
       if (this.#get<{ n: number }>("SELECT count(*) AS n FROM evaluation_evidence_jobs WHERE status='running'")!.n >= L.MAX_ACTIVE) return false;
@@ -201,7 +202,7 @@ export class EvidenceStore {
     });
   }
   cancel(id: string): boolean {
-    return this.#transaction(() => { const job = this.#job(id); this.#authorize("import", this.#request(job).attachment); this.#generation(); return this.#finish(job, "cancelled", "cancelled"); });
+    return this.#transaction(() => { this.#authorize("import", null); const job = this.#job(id); this.#authorize("import", this.#request(job).attachment); this.#generation(); return this.#finish(job, "cancelled", "cancelled"); });
   }
   /** Called once by the database owner on restart, before admitting work; it never reruns reports. */
   recoverUnfinished(): number {
@@ -211,7 +212,7 @@ export class EvidenceStore {
   publish(id: string, token: string, value: EvidencePublicationSource[]): EvidenceSetRevision | null {
     token = evidenceText(token, "publication token");
     return this.#transaction(() => {
-      const job = this.#job(id), request = this.#request(job); this.#authorize("import", request.attachment); const generation = this.#generation();
+      this.#authorize("import", null); const job = this.#job(id), request = this.#request(job); this.#authorize("import", request.attachment); const generation = this.#generation();
       if (job.job_token !== token || job.status !== "running" || job.scope_generation !== generation) return null;
       if (this.#now() >= job.deadline_at) { this.#finish(job, "failed", "deadline_exceeded"); return null; }
       if (request.target && this.#set(request.target.setId).revision !== request.target.expectedRevision) { this.#finish(job, "failed", "revision_conflict"); return null; }
@@ -253,7 +254,7 @@ export class EvidenceStore {
   getSet(id: string, revision?: number): EvidenceSetView {
     id = evidenceText(id, "set ID"); if (revision !== undefined) revision = evidenceInteger(revision, "set revision", Number.MAX_SAFE_INTEGER, 1);
     return this.#transaction(() => {
-      const set = this.#set(id, revision); this.#authorize("normalized_read", set.attachment); this.#generation();
+      this.#authorize("normalized_read", null); const set = this.#set(id, revision); this.#authorize("normalized_read", set.attachment); this.#generation();
       return { revision: set, sources: set.sources.map(source => {
         const payload = this.#get<{ data: string }>("SELECT data FROM evaluation_evidence_payloads WHERE scope_key=? AND interpretation_id=?", this.#key, source.interpretationId);
         return { sourceId: source.sourceId, rawAvailable: !!this.#get("SELECT 1 FROM evaluation_evidence_blobs WHERE scope_key=? AND artifact_id=?", this.#key, source.artifactId),
@@ -264,7 +265,7 @@ export class EvidenceStore {
   exportRaw(id: string, revision: number, sourceId: string): Uint8Array {
     id = evidenceText(id, "set ID"); revision = evidenceInteger(revision, "set revision", Number.MAX_SAFE_INTEGER, 1); sourceId = evidenceText(sourceId, "source ID");
     return this.#transaction(() => {
-      const set = this.#set(id, revision); this.#authorize("raw_export", set.attachment); this.#generation();
+      this.#authorize("raw_export", null); const set = this.#set(id, revision); this.#authorize("raw_export", set.attachment); this.#generation();
       const source = set.sources.find(source => source.sourceId === sourceId);
       const blob = source && this.#get<{ bytes: Uint8Array }>("SELECT bytes FROM evaluation_evidence_blobs WHERE scope_key=? AND artifact_id=?", this.#key, source.artifactId);
       if (!blob) throw new EvidenceError("Raw evidence is unavailable", 404);
@@ -276,7 +277,10 @@ export class EvidenceStore {
     id = evidenceText(id, "set ID"); revision = evidenceInteger(revision, "set revision", Number.MAX_SAFE_INTEGER, 1);
     if (kind !== "raw_removed" && kind !== "normalized_removed") throw new EvidenceError("Unsupported retention event");
     return this.#transaction(() => {
-      const set = this.#set(id, revision), actorId = this.#authorize("delete", set.attachment); this.#generation(); let removed = 0;
+      this.#authorize("delete", null); const set = this.#set(id, revision), actorId = this.#authorize("delete", set.attachment); this.#generation(); let removed = 0;
+      for (const job of this.#all<JobRow>("SELECT * FROM evaluation_evidence_jobs WHERE scope_key=? AND status IN ('queued','running')", this.#key)) {
+        if (this.#request(job).target?.setId === id) this.#finish(job, "failed", "retention_changed");
+      }
       for (const source of set.sources) {
         const count = kind === "raw_removed" ? this.#run("DELETE FROM evaluation_evidence_blobs WHERE scope_key=? AND artifact_id=?", this.#key, source.artifactId) :
           this.#run("DELETE FROM evaluation_evidence_payloads WHERE scope_key=? AND interpretation_id=?", this.#key, source.interpretationId);
