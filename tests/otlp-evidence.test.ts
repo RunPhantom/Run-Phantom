@@ -61,13 +61,16 @@ function record(name: string, value: unknown) {
   if (process.env.F10_EVIDENCE_PATH) writeFileSync(path.join(process.env.F10_EVIDENCE_PATH, name), JSON.stringify(value, null, 2) + "\n");
 }
 
-async function verifyCapturedBoundary(label: string, sent: ReturnType<typeof fidelityRequest>) {
+async function verifyCapturedBoundary(label: string, sent: ReturnType<typeof fidelityRequest>, protobuf = false) {
   expect((await post(source, "/v1/traces", fidelityRequest())).status).toBe(200);
   const control = await exported();
   expect((await post(destination, "/api/import-run", control)).status).toBe(200);
   expect((await fetch(`${source}/api/clear`, { method: "POST" })).status).toBe(200);
   const requestDigest = sha(sent);
-  expect((await post(source, "/v1/traces", sent)).status).toBe(200);
+  const ingest = protobuf ? await fetch(`${source}/v1/traces`, { method: "POST", headers: { "Content-Type": "application/x-protobuf", "Content-Encoding": "gzip" }, body: gzipSync(encodeFidelityRequest(sent)) })
+    : await post(source, "/v1/traces", sent);
+  expect(ingest.status).toBe(200);
+  if (protobuf) expect(ingest.headers.get("content-type")).toContain("application/x-protobuf");
   const detail = await fetch(`${source}/api/runs/detail/${fidelityTraceId}`); expect(detail.status).toBe(200);
   const actual = await detail.json(), captured = actual.spans[0];
   expect(captured.output_payload).toBe(fidelityOutput);
@@ -146,6 +149,33 @@ test("review portability: exactly 4096 ordinary values retain the last linked va
   expect(attributeValueCount([evidence, evidence.resource, evidence.scope, ...evidence.events, ...evidence.links])).toBe(4096);
   expect(evidence.links[0].attributes).toEqual(span.links[0].attributes);
   expect(evidence.capture).toMatchObject({ droppedAttributes: 0, truncatedValues: 0, redactedValues: 0 });
+});
+
+test.each(["whitespace", "NUL", "empty", "oversized", "credential", "non-string"])("review portability: JSON %s optional link IDs cannot poison stored/exported evidence", async variant => {
+  const sent = fidelityRequest() as any, span = sent.resourceSpans[0].scopeSpans[0].spans[0];
+  const invalid = variant === "whitespace" ? " \t\n " : variant === "NUL" ? "\0" : variant === "empty" ? ""
+    : variant === "oversized" ? "x".repeat(1025) : variant === "credential" ? `sk-proj-${"x".repeat(48)}` : 42;
+  span.links = [{ traceId: invalid, spanId: invalid, attributes: [] }];
+  const evidence = await verifyCapturedBoundary(`link-${variant}`, sent);
+  expect(evidence.links).toEqual([]); expect(evidence.capture).toMatchObject({ droppedLinks: 1, invalidValues: 1 });
+  expect(evidence.droppedLinksCount).toBe(4);
+});
+
+test("review portability: empty protobuf byte IDs are omitted with explicit link loss after restart/import", async () => {
+  const sent = fidelityRequest() as any, span = sent.resourceSpans[0].scopeSpans[0].spans[0];
+  span.links = [{ traceId: "", spanId: "", attributes: [] }];
+  const evidence = await verifyCapturedBoundary("link-empty-protobuf", sent, true);
+  expect(evidence.links).toEqual([]); expect(evidence.capture).toMatchObject({ droppedLinks: 1, invalidValues: 1 });
+});
+
+test("review portability: hex/base64 and established opaque link identities retain normalized references", async () => {
+  const sent = fidelityRequest() as any, span = sent.resourceSpans[0].scopeSpans[0].spans[0], link = span.links[0];
+  span.links = [{ ...structuredClone(link), traceId: link.traceId.toUpperCase(), spanId: link.spanId.toUpperCase() },
+    { ...structuredClone(link), traceId: Buffer.from(link.traceId, "hex").toString("base64"), spanId: Buffer.from(link.spanId, "hex").toString("base64") },
+    { ...structuredClone(link), traceId: "external:checkout/42", spanId: "external:payment/42" }];
+  const evidence = await verifyCapturedBoundary("valid-link-references", sent);
+  expect(evidence.links.map((item: any) => [item.traceId, item.spanId])).toEqual([[link.traceId, link.spanId], [link.traceId, link.spanId], ["external:checkout/42", "external:payment/42"]]);
+  expect(evidence.capture).toMatchObject({ droppedLinks: 0, invalidValues: 0 });
 });
 
 test.each(["JSON", "gzipped protobuf"])("actual %s ingest, file-backed storage, fresh-process reopen and independent import preserve evidence", async (encoding) => {
@@ -280,6 +310,8 @@ test.each(["JSON", "gzipped protobuf"])("actual %s diagnostic capture preserves 
 });
 
 const invalidEnvelopes: [string, (evidence: any) => void][] = [
+  ["whitespace portable link ID", evidence => { evidence.links[0].traceId = " \t\n "; }],
+  ["NUL portable link ID", evidence => { evidence.links[0].spanId = "\0"; }],
   ["unknown envelope version", evidence => { evidence.schemaVersion = 2; }],
   ["missing status observation", evidence => { delete evidence.status; }],
   ["status code overflow", evidence => { evidence.status.code = 2147483648; }],

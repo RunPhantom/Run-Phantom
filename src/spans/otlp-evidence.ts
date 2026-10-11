@@ -165,7 +165,13 @@ export function captureOtlpEvidence(span: unknown, resourceSpans: unknown, scope
         || traceId.length > 1024 || spanId.length > 1024 || redactText(traceId) !== traceId || redactText(spanId) !== spanId) {
         capture.invalidValues++; capture.droppedLinks++; continue;
       }
-      evidence.links.push({ traceId: normalizeOtelId(traceId, 16) ?? traceId, spanId: normalizeOtelId(spanId, 8) ?? spanId,
+      const normalizedTraceId = normalizeOtelId(traceId, 16) ?? traceId, normalizedSpanId = normalizeOtelId(spanId, 8) ?? spanId;
+      if (!normalizedTraceId.length || !normalizedSpanId.length || normalizedTraceId.length > 1024 || normalizedSpanId.length > 1024
+        || normalizedTraceId.includes("\0") || normalizedSpanId.includes("\0")
+        || redactText(normalizedTraceId) !== normalizedTraceId || redactText(normalizedSpanId) !== normalizedSpanId) {
+        capture.invalidValues++; capture.droppedLinks++; continue;
+      }
+      evidence.links.push({ traceId: normalizedTraceId, spanId: normalizedSpanId,
         traceState: text(own(link, "traceState")), flags: count(own(link, "flags")), ...source(link) });
     }
   }
@@ -250,7 +256,7 @@ export function validateOtlpEvidence(input: unknown): asserts input is OtlpEvide
   }
   for (const item of list(evidence.links, OTLP_EVIDENCE_LIMITS.links)) {
     const link = record(item, ["traceId", "spanId", "traceState", "flags", "attributes", "droppedAttributesCount"]);
-    text(link.traceId, false, 1024); text(link.spanId, false, 1024); if (!link.traceId || !link.spanId) fail();
+    text(link.traceId, false, 1024); text(link.spanId, false, 1024); if (!(link.traceId as string).trim() || !(link.spanId as string).trim()) fail();
     text(link.traceState, true); count(link.flags); source(link);
   }
   const capture = record(evidence.capture, ["sourceCountPolicy", "droppedEvents", "droppedLinks", "droppedAttributes", "truncatedValues", "invalidValues", "redactedValues"]);
