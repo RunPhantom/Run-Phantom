@@ -16,9 +16,9 @@ const catalogueUrl = "https://openrouter.ai/api/v1/models";
 const catalogue = JSON.stringify({ data: [{ id: "fixture/fixture-model", pricing: { prompt: "0.000003", completion: "0.000015" } }] });
 const rates = JSON.stringify([rateFixture()]);
 
-function capture() {
+function capture(missingParent = false) {
   const now = Date.now() - 1_000;
-  return { resourceSpans: [{ scopeSpans: [{ spans: [{ model: "fixture-model", input: 200, output: 300, cost: .123 }, { model: "unpriced-model", input: 100, output: 50, cost: null }, { model: "fixture-model", input: 0, output: 0, cost: 0 }].map((row, index) => ({ traceId, spanId: (0xf150 + index).toString(16).padStart(16, "0"), name: "Synthetic cost analytics", startTimeUnixNano: String(BigInt(now + index * 10) * 1_000_000n), endTimeUnixNano: String(BigInt(now + index * 10 + 5) * 1_000_000n), status: { code: 1 },
+  return { resourceSpans: [{ scopeSpans: [{ spans: [{ model: "fixture-model", input: 200, output: 300, cost: .123 }, { model: "unpriced-model", input: 100, output: 50, cost: null }, { model: "fixture-model", input: 0, output: 0, cost: 0 }].map((row, index) => ({ traceId, spanId: (0xf150 + index).toString(16).padStart(16, "0"), ...(missingParent && index === 0 ? { parentSpanId: "a".repeat(16) } : {}), name: "Synthetic cost analytics", startTimeUnixNano: String(BigInt(now + index * 10) * 1_000_000n), endTimeUnixNano: String(BigInt(now + index * 10 + 5) * 1_000_000n), status: { code: 1 },
     attributes: Object.entries({ "runphantom.span.kind": "llm_call", "gen_ai.response.model": row.model, "gen_ai.provider.name": "fixture-provider", "runphantom.usage.tier": "standard", "gen_ai.usage.input_tokens": row.input, "gen_ai.usage.output_tokens": row.output, ...(row.cost === null ? {} : { "gen_ai.usage.cost_usd": row.cost }) }).map(([key, value]) => ({ key, value: typeof value === "number" ? { doubleValue: value } : { stringValue: value } })),
   })) }] }] };
 }
@@ -67,6 +67,27 @@ test("cost analytics: actual navigation/manual rates preserve reported snapshots
   const afterSnapshotResponse = await page.request.get(`${runPhantom.url}/api/evaluations/runs/${traceId}/snapshot`); expect(afterSnapshotResponse.ok()).toBe(true); const afterSnapshot = await afterSnapshotResponse.json();
   expect(afterDetail.spans).toEqual(beforeDetail.spans); expect(afterSnapshot.metrics).toEqual(beforeSnapshot.metrics); expect(afterSnapshot.models).toEqual(beforeSnapshot.models);
   await page.getByTestId("reported-cost").scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath("cost-analytics-manual-desktop.png"), fullPage: true });
+});
+
+test("cost analytics: unavailable ancestry is labelled as timed generation candidates", async ({ page, runPhantom }, info) => {
+  const captured = await page.request.post(`${runPhantom.url}/v1/traces`, { data: capture(true) }); expect(captured.ok()).toBe(true);
+  const beforeDetail = await (await page.request.get(`${runPhantom.url}/api/runs/detail/${traceId}`)).json();
+  const to = Date.now();
+  const analytics = await page.request.post(`${runPhantom.url}/api/pricing/analytics`, { data: { from: to - 86_400_000, to, bucket: "hour", estimateMode: "captured", rates: [] } }); expect(analytics.ok()).toBe(true);
+  const report = await analytics.json();
+  expect(report.population).toMatchObject({ selectedGenerations: 3, nestedExcluded: 0, ancestryUnavailable: 1 });
+  expect(report.reportedUsd).toMatchObject({ eligibleCount: 3, knownCount: 1, unavailableCount: 2, zeroCount: 1, knownSum: 0, completeTotal: null });
+  await page.goto(`${runPhantom.url}/costs`);
+  await expect(page.getByText("3 timed generation candidates · 0 nested generations excluded · 0 with unavailable timestamps · 1 with unavailable ancestry", { exact: true })).toBeVisible();
+  await expect(page.getByText(/timed top-level generations/)).toHaveCount(0);
+  await expect(page.getByTestId("reported-cost")).toContainText("1 known · 2 unavailable");
+  await expect(page.getByText("Known subtotal; complete reported spend unavailable.", { exact: false })).toBeVisible();
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport); await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: info.outputPath(`cost-analytics-ancestry-${viewport.width}x${viewport.height}.png`), fullPage: true });
+  }
+  const afterDetail = await (await page.request.get(`${runPhantom.url}/api/runs/detail/${traceId}`)).json(); expect(afterDetail.spans).toEqual(beforeDetail.spans);
+  await info.attach("Unavailable ancestry population", { body: JSON.stringify({ population: report.population, reportedUsd: report.reportedUsd, originalCapturePreserved: true, providerSpendUsd: 0 }), contentType: "application/json" });
 });
 
 test("cost analytics: consented nominal quote is explicit and revocation removes it", async ({ page, context, runPhantom }, info) => {

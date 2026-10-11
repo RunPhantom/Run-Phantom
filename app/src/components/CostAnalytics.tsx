@@ -28,7 +28,7 @@ export function CostAnalytics({ data, controls }: { data: CostAnalyticsReport; c
   const labels = { byModel: "Model", byProvider: "Provider", byProject: "Project", byTime: "Time (UTC)" };
   return <div className="space-y-5 text-[14px] leading-5 text-[#0E121B]">
     {controls}
-    <p className="text-[#525866]">{data.population.selectedGenerations} timed top-level generations · {data.population.nestedExcluded} nested generations excluded · {data.population.untimedGenerations} with unavailable timestamps · {data.population.ancestryUnavailable} with unavailable ancestry</p>
+    <p className="text-[#525866]">{data.population.selectedGenerations} timed generation candidates · {data.population.nestedExcluded} nested generations excluded · {data.population.untimedGenerations} with unavailable timestamps · {data.population.ancestryUnavailable} with unavailable ancestry</p>
     <PopulationSummary data={data} />
     {data.reportedUsd.eligibleCount === 0 && <section className={PANEL}><h2 className="text-[20px]">No captured generations in this window</h2><p className="mt-2 text-[#525866]">Choose a wider window or capture an agent run. An empty population has no measured cost.</p></section>}
     {data.population.untimedGenerations > 0 && <p role="status" className="rounded-[7px] border border-[#D9DEEA] bg-[#EEF2FF] p-4">Untimed captures might belong in this window. Their unavailable rows remain in the denominator, so timed subtotals cannot prove a complete window total.</p>}
