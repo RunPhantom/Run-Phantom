@@ -351,3 +351,39 @@ describe("transactional evidence resource reservations", () => {
     }
   }, 15_000);
 });
+
+describe("bounded stored-evidence readers", () => {
+  test("corrupted normalized bytes are refused instead of displaying a rewritten observation", () => {
+    const { set } = complete(); db.exec("DROP TRIGGER evaluation_evidence_payloads_immutable");
+    const source = normalized(); source.leaves[0].name = "Tampered assertion";
+    db.query("UPDATE evaluation_evidence_payloads SET data=?").run(canonicalEvidenceJson(source));
+    expect(() => store.getSet(set.id, 1)).toThrow("integrity check failed");
+  });
+  test("malformed, oversized or noncanonical stored payloads cannot bypass reader bounds", () => {
+    const { set } = complete(); db.exec("DROP TRIGGER evaluation_evidence_payloads_immutable");
+    for (const data of ["{invalid", " ".repeat(4 * 1024 * 1024 + 1), `${canonicalEvidenceJson(normalized())} `]) {
+      db.query("UPDATE evaluation_evidence_payloads SET data=?").run(data);
+      expect(() => store.getSet(set.id, 1)).toThrow("integrity check failed");
+    }
+  });
+  test("corrupted inventory or revision identity is rejected before admission or normalized export", () => {
+    const inventory = store.saveInventory("roster", 0, [expected], "prospective"), { set } = complete();
+    db.exec("DROP TRIGGER evaluation_evidence_inventories_immutable; DROP TRIGGER evaluation_evidence_sets_immutable");
+    db.query("UPDATE evaluation_evidence_inventories SET data=?").run(canonicalEvidenceJson({ ...inventory, declaration: "retrospective" }));
+    expect(() => store.admit({ ...request("with-inventory"), inventory: { id: inventory.id, revision: 1 } })).toThrow("integrity check failed");
+    db.query("UPDATE evaluation_evidence_sets SET data=?").run(canonicalEvidenceJson({ ...set, coverage: "complete" }));
+    expect(() => store.getSet(set.id, 1)).toThrow("integrity check failed");
+  });
+  test("an unsupported stored protocol version is explicit even if its identity digest is consistent", () => {
+    const { set } = complete(); db.exec("DROP TRIGGER evaluation_evidence_sets_immutable");
+    const { digest: _digest, ...identity } = set; const future = { ...identity, version: 999 }, digest = evidenceDigest(canonicalEvidenceJson(future));
+    db.query("UPDATE evaluation_evidence_sets SET data=?,digest=?").run(canonicalEvidenceJson({ ...future, digest }), digest);
+    expect(() => store.getSet(set.id, 1)).toThrow("version is incompatible");
+  });
+  test("a modified admitted request cannot change attachment or source bytes behind a valid job token", () => {
+    const admission = store.admit(request()); store.start(admission.job.id, admission.publicationToken);
+    db.query("UPDATE evaluation_evidence_jobs SET request_data=? WHERE id=?").run(canonicalEvidenceJson({ ...request(), attachment: { kind: "inspection", id: "other" } }), admission.job.id);
+    expect(() => store.publish(admission.job.id, admission.publicationToken, [{ sourceId: "source-1", raw, normalized: normalized() }])).toThrow("integrity check failed");
+    expect(count("sets")).toBe(0);
+  });
+});

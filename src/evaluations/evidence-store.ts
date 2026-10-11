@@ -4,7 +4,7 @@ import { EVIDENCE_LIMITS as L, EVIDENCE_VERSION, EvidenceError, type EvidenceAtt
   type EvidenceExpectedSource, type EvidenceImportRequest, type EvidenceInventoryRevision, type EvidenceJob,
   type EvidencePublicationSource, type EvidenceReason, type EvidenceReportReference, type EvidenceScope, type EvidenceSetRevision, type EvidenceSetView,
   type EvidenceSourceObservation, type NormalizedEvidenceSource } from "./evidence-protocol";
-import { canonicalEvidenceJson, evidenceArray, evidenceDigest, evidenceInteger, evidenceObject, evidenceText,
+import { canonicalEvidenceJson, evidenceArray, evidenceDigest, evidenceInteger, evidenceObject, evidenceSha256, evidenceText,
   parseEvidenceExpectedSources, parseEvidenceImportRequest, parseEvidenceScope, parseNormalizedEvidence } from "./evidence-validation";
 
 /** Inactive DDL: only the migration coordinator may install this in an application database. */
@@ -107,7 +107,7 @@ export class EvidenceStore {
   #generation(): number {
     const scope = this.#get<{ generation: number; active: number }>("SELECT generation,active FROM evaluation_evidence_scopes WHERE scope_key=?", this.#key);
     if (!scope || !scope.active) throw new EvidenceError("Evidence scope is unavailable", 404);
-    return scope.generation;
+    return evidenceInteger(scope.generation, "stored scope generation", Number.MAX_SAFE_INTEGER, 1);
   }
   #job(id: string): JobRow {
     const job = this.#get<JobRow>("SELECT * FROM evaluation_evidence_jobs WHERE scope_key=? AND id=?", this.#key, evidenceText(id, "job ID"));
@@ -118,17 +118,43 @@ export class EvidenceStore {
     return { id: row.id, scopeGeneration: row.scope_generation, requestDigest: row.request_digest, status: row.status,
       admittedAt: row.admitted_at, deadlineAt: row.deadline_at, setId: row.set_id, failureCode: row.failure_code };
   }
-  #request(job: JobRow): EvidenceImportRequest { return JSON.parse(job.request_data) as EvidenceImportRequest; }
+  #json<T>(data: string | null): T {
+    try {
+      if (data === null || Buffer.byteLength(data) > L.MAX_NORMALIZED_BYTES) throw new Error("Oversized stored JSON");
+      const value: unknown = JSON.parse(data);
+      if (canonicalEvidenceJson(value) !== data) throw new Error("Noncanonical stored JSON");
+      return value as T;
+    } catch { throw new EvidenceError("Stored evidence integrity check failed", 409); }
+  }
+  #record<T extends { digest: string }>(data: string | null, digest: string): T {
+    try {
+      const value = this.#json<T>(data), { digest: storedDigest, ...identity } = value;
+      if (evidenceSha256(digest) !== storedDigest || evidenceDigest(canonicalEvidenceJson(identity)) !== digest) throw new Error("Stored identity mismatch");
+      return value;
+    } catch { throw new EvidenceError("Stored evidence integrity check failed", 409); }
+  }
+  #request(job: JobRow): EvidenceImportRequest {
+    try {
+      const request = parseEvidenceImportRequest(this.#json(job.request_data));
+      const inventory = job.inventory_data ? this.#json<EvidenceInventoryRevision>(job.inventory_data) : null;
+      const digest = evidenceDigest(canonicalEvidenceJson({ scope: this.#scope, generation: job.scope_generation, request, inventoryDigest: inventory?.digest ?? null }));
+      if (digest !== job.request_digest) throw new Error("Stored request identity mismatch");
+      return request;
+    } catch { throw new EvidenceError("Stored evidence integrity check failed", 409); }
+  }
   #inventory(id: string, revision: number): EvidenceInventoryRevision {
-    const row = this.#get<{ data: string }>("SELECT data FROM evaluation_evidence_inventories WHERE scope_key=? AND id=? AND revision=?", this.#key, id, revision);
+    const row = this.#get<{ data: string | null; digest: string }>("SELECT CASE WHEN length(cast(data AS BLOB))<=? THEN data ELSE NULL END AS data,digest FROM evaluation_evidence_inventories WHERE scope_key=? AND id=? AND revision=?", L.MAX_NORMALIZED_BYTES, this.#key, id, revision);
     if (!row) throw new EvidenceError("Inventory revision not found", 404);
-    return JSON.parse(row.data) as EvidenceInventoryRevision;
+    return this.#record<EvidenceInventoryRevision>(row.data, row.digest);
   }
   #set(id: string, revision?: number): EvidenceSetRevision {
-    const row = revision === undefined ? this.#get<{ data: string }>("SELECT data FROM evaluation_evidence_sets WHERE scope_key=? AND id=? ORDER BY revision DESC LIMIT 1", this.#key, id) :
-      this.#get<{ data: string }>("SELECT data FROM evaluation_evidence_sets WHERE scope_key=? AND id=? AND revision=?", this.#key, id, revision);
+    const columns = "CASE WHEN length(cast(data AS BLOB))<=? THEN data ELSE NULL END AS data,digest";
+    const row = revision === undefined ? this.#get<{ data: string | null; digest: string }>(`SELECT ${columns} FROM evaluation_evidence_sets WHERE scope_key=? AND id=? ORDER BY revision DESC LIMIT 1`, L.MAX_NORMALIZED_BYTES, this.#key, id) :
+      this.#get<{ data: string | null; digest: string }>(`SELECT ${columns} FROM evaluation_evidence_sets WHERE scope_key=? AND id=? AND revision=?`, L.MAX_NORMALIZED_BYTES, this.#key, id, revision);
     if (!row) throw new EvidenceError("Evidence revision not found", 404);
-    return JSON.parse(row.data) as EvidenceSetRevision;
+    const set = this.#record<EvidenceSetRevision>(row.data, row.digest);
+    if (set.version !== EVIDENCE_VERSION) throw new EvidenceError("Stored evidence version is incompatible", 409);
+    return set;
   }
   saveInventory(id: string, expectedRevision: number, expected: EvidenceExpectedSource[], declaration: "prospective" | "retrospective"): EvidenceInventoryRevision {
     id = evidenceText(id, "inventory ID"); expectedRevision = evidenceInteger(expectedRevision, "expected inventory revision");
@@ -231,7 +257,8 @@ export class EvidenceStore {
         if (normalizedBytes > L.MAX_NORMALIZED_BYTES || leaves > L.MAX_LEAVES) throw new EvidenceError("Publication exceeds normalized byte or leaf limits", 413);
         return { descriptor, raw: source.raw.slice(), normalized, data, normalizedSha256: evidenceDigest(data), artifactId: randomUUID(), interpretationId: randomUUID() };
       });
-      const inventory = job.inventory_data ? JSON.parse(job.inventory_data) as EvidenceInventoryRevision : null;
+      const inventory = job.inventory_data ? this.#json<EvidenceInventoryRevision>(job.inventory_data) : null;
+      if (inventory) this.#record<EvidenceInventoryRevision>(job.inventory_data, inventory.digest);
       const coverage = accountEvidenceInventory(inventory, parsed.map(source => ({ descriptor: source.descriptor, normalized: source.normalized })));
       const references = parsed.map(source => (source.normalized.attestation?.reportReferences ?? []).map(reference => {
         const matching = source.normalized.parseState === "parsed" ? parsed.filter(candidate => candidate.descriptor.kind === "junit" && candidate.descriptor.artifactSha256 === reference.sha256) : [];
@@ -275,9 +302,17 @@ export class EvidenceStore {
     return this.#transaction(() => {
       this.#authorize("normalized_read", null); const set = this.#set(id, revision); this.#authorize("normalized_read", set.attachment); this.#generation();
       return { revision: set, sources: set.sources.map(source => {
-        const payload = this.#get<{ data: string }>("SELECT data FROM evaluation_evidence_payloads WHERE scope_key=? AND interpretation_id=?", this.#key, source.interpretationId);
+        const payload = this.#get<{ data: string | null }>("SELECT CASE WHEN length(cast(data AS BLOB))<=? THEN data ELSE NULL END AS data FROM evaluation_evidence_payloads WHERE scope_key=? AND interpretation_id=?", L.MAX_NORMALIZED_BYTES, this.#key, source.interpretationId);
+        let normalized: NormalizedEvidenceSource | null = null;
+        if (payload) {
+          try {
+            const value = this.#json<NormalizedEvidenceSource>(payload.data);
+            if (evidenceDigest(payload.data!) !== source.normalizedSha256) throw new Error("Stored interpretation digest mismatch");
+            normalized = parseNormalizedEvidence(value, source.kind);
+          } catch { throw new EvidenceError("Stored evidence integrity check failed", 409); }
+        }
         return { sourceId: source.sourceId, rawAvailable: !!this.#get("SELECT 1 FROM evaluation_evidence_blobs WHERE scope_key=? AND artifact_id=?", this.#key, source.artifactId),
-          normalizedAvailable: !!payload, normalized: payload ? JSON.parse(payload.data) as NormalizedEvidenceSource : null };
+          normalizedAvailable: !!payload, normalized };
       }) };
     });
   }
