@@ -50,8 +50,12 @@ test("protected evaluations: user sees missing graph/modality evidence and downl
     expect(exported.cases[0].checks[0].evaluatorVersion).toBe("code:2");
     expect(content).not.toContain(EVALUATION_INPUT);
   }
-  await expect(results.getByText("Input unavailable: exact comparison is impossible. No model judge was called for this case.", { exact: true })).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath("protected-evidence-unknown-desktop.png"), fullPage: true });
+  const unavailable = results.getByText("Input unavailable: exact comparison is impossible. No model judge was called for this case.", { exact: true });
+  await results.evaluate(element => element.scrollIntoView({ block: "start", behavior: "instant" }));
+  await expect(unavailable).toBeVisible();
+  await expect(unavailable).toBeInViewport({ ratio: 1 });
+  await expect(results.getByRole("button", { name: "Download JSON report", exact: true })).toBeInViewport({ ratio: 1 });
+  await page.screenshot({ path: testInfo.outputPath("protected-evidence-unknown-desktop.png") });
   await testInfo.attach("protected-evidence-unknown-desktop", { path: testInfo.outputPath("protected-evidence-unknown-desktop.png"), contentType: "image/png" });
   const baselineRoot = spansFor(EVALUATION_RUNS.baseline, "Edited source request")[0];
   baselineRoot.spanId = `${EVALUATION_RUNS.baseline.slice(-8)}00000001`;
@@ -77,9 +81,21 @@ test("protected evaluations: user sees missing graph/modality evidence and downl
   }
   await page.getByRole("combobox", { name: "View experiment", exact: true }).selectOption(complete.id);
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(results.getByRole("article", { name: "Checkout result: pass", exact: true })).toBeVisible();
+  const passedArticle = results.getByRole("article", { name: "Checkout result: pass", exact: true });
+  await results.evaluate(element => {
+    element.scrollIntoView({ block: "start", behavior: "instant" });
+    let scroller = element.parentElement;
+    while (scroller && scroller.scrollHeight <= scroller.clientHeight) scroller = scroller.parentElement;
+    scroller?.scrollBy({ top: -56, behavior: "instant" });
+  });
+  await expect(results.getByRole("heading", { name: "Complete text control", exact: true })).toBeInViewport({ ratio: 1 });
+  await expect(passedArticle).toBeVisible();
+  await expect(passedArticle.getByText("Pass", { exact: true })).toBeInViewport({ ratio: 1 });
+  await expect(passedArticle.getByLabel("Code check score", { exact: true })).toHaveText("Score: 1");
+  await expect(passedArticle.getByLabel("Code check score", { exact: true })).toBeInViewport({ ratio: 1 });
+  await expect(results.getByRole("button", { name: "Download JSON report", exact: true })).toBeInViewport({ ratio: 1 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
-  await page.screenshot({ path: testInfo.outputPath("protected-evidence-frozen-mobile.png"), fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath("protected-evidence-frozen-mobile.png") });
   await testInfo.attach("protected-evidence-frozen-mobile", { path: testInfo.outputPath("protected-evidence-frozen-mobile.png"), contentType: "image/png" });
 });
 
@@ -105,13 +121,18 @@ test("protected evaluations: two user tabs reject a stale save and reload the ac
     await expect(page.getByRole("combobox", { name: "Revision", exact: true })).toHaveValue(String(revision.version + 1));
     expect((await save(other)).status()).toBe(409);
     const editor = other.getByRole("region", { name: "Dataset cases", exact: true });
-    await expect(editor.getByRole("alert")).toHaveText("Dataset changed; reload before saving");
-    await expect(editor.getByRole("heading", { name: "Client B stale", exact: true })).toBeVisible();
+    const conflict = editor.getByRole("alert"), staleDraft = editor.getByRole("heading", { name: "Client B stale", exact: true });
+    await expect(conflict).toHaveText("Dataset changed; reload before saving");
+    await expect(staleDraft).toBeVisible();
     const accepted = await request.get(`${runPhantom.url}/api/evaluations/datasets/${revision.datasetId}`);
     const current = await accepted.json() as DatasetRevision;
     expect(current.version).toBe(revision.version + 1);
     expect(current.cases[0].name).toBe("Client A accepted");
-    await other.screenshot({ path: testInfo.outputPath("protected-revision-conflict.png"), fullPage: true });
+    await editor.evaluate(element => element.scrollIntoView({ block: "start", behavior: "instant" }));
+    await expect(conflict).toBeVisible();
+    await expect(conflict).toBeInViewport({ ratio: 1 });
+    await expect(staleDraft).toBeInViewport({ ratio: 1 });
+    await other.screenshot({ path: testInfo.outputPath("protected-revision-conflict.png") });
     await testInfo.attach("protected-revision-conflict", { path: testInfo.outputPath("protected-revision-conflict.png"), contentType: "image/png" });
     await other.reload();
     await expect(other.getByRole("combobox", { name: "Revision", exact: true })).toHaveValue(String(current.version));
