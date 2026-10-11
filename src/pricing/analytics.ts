@@ -6,7 +6,7 @@ import { freezeRateRevision, NOMINAL_CATALOGUE_PROVIDER, NOMINAL_CATALOGUE_TIER,
 import { normalizeUsage } from "./usage";
 
 export const COST_ANALYTICS_VERSION = "runphantom-cost-analytics/1" as const;
-export const ANALYTICS_LIMITS = Object.freeze({ requestBytes: 256 * 1024, rates: 128, spans: 10_000, attributeBytes: 16 * 1024 * 1024, groups: 1_000, ancestryDepth: 256, windowMs: 31 * 86_400_000 });
+export const ANALYTICS_LIMITS = Object.freeze({ requestBytes: 256 * 1024, rates: 128, spans: 10_000, attributeBytes: 16 * 1024 * 1024, projectionBytes: 16 * 1024 * 1024, groups: 1_000, ancestryDepth: 256, windowMs: 31 * 86_400_000 });
 const REPORTED_COST_KEYS = ["gen_ai.usage.cost_usd", "gen_ai.usage.cost", "runphantom.cost.usd", "llm.cost.total", "llm.usage.cost", "ai.usage.cost"] as const;
 const MODEL_KEYS = ["gen_ai.response.model", "ai.response.model", "llm.response.model_name", "gen_ai.request.model", "ai.model.id", "llm.request.model", "llm.model_name"];
 const INPUT_KEYS = ["gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens", "ai.usage.inputTokens", "ai.usage.promptTokens", "ai.usage.prompt_tokens", "llm.token_count.prompt"];
@@ -39,6 +39,37 @@ export interface AnalyticsSpan {
   readonly outputTokens: number | null;
   readonly attributes: string | null;
   readonly attributesUnavailable?: boolean;
+}
+const PROJECTION_STRINGS = ["projectId", "runId", "id", "parentSpanId", "kind", "model", "provider", "attributes"] as const;
+/** Match SQLite BLOB byte admission without allocating an encoded copy of a field. */
+function utf8Bytes(value: string, remaining: number): number {
+  if (value.length > remaining) throw large();
+  let bytes = 0;
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code < 0x80) bytes++;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && value.charCodeAt(index + 1) >= 0xdc00 && value.charCodeAt(index + 1) <= 0xdfff) { bytes += 4; index++; }
+    else bytes += 3;
+    if (bytes > remaining) throw large();
+  }
+  return bytes;
+}
+/** Guard direct callers before hashing, redaction, ancestry keys or normalization. */
+export function assertCostAnalyticsProjection(spans: readonly AnalyticsSpan[]): void {
+  if (spans.length > ANALYTICS_LIMITS.spans) throw large();
+  let projectionBytes = 0, attributeBytes = 0;
+  for (const span of spans) for (const key of PROJECTION_STRINGS) {
+    const value = span[key];
+    if (value === null) {
+      if (key === "projectId" || key === "runId" || key === "id") throw invalid();
+      continue;
+    }
+    if (typeof value !== "string") throw invalid();
+    const bytes = utf8Bytes(value, ANALYTICS_LIMITS.projectionBytes - projectionBytes);
+    projectionBytes += bytes;
+    if (key === "attributes" && (attributeBytes += bytes) > ANALYTICS_LIMITS.attributeBytes) throw large();
+  }
 }
 export interface MetricPopulation {
   readonly eligibleCount: number;
@@ -154,13 +185,10 @@ const spanKey = (span: AnalyticsSpan, id = span.id): string => JSON.stringify([s
 /** Entire selected-run ancestry must be acquired before calling; incomplete graphs never prove a standalone generation. */
 export function aggregateCostAnalytics(spans: readonly AnalyticsSpan[], input: CostAnalyticsRequest): CostAnalytics {
   const request = parseCostAnalyticsRequest(input);
-  if (spans.length > ANALYTICS_LIMITS.spans) throw large();
+  assertCostAnalyticsProjection(spans);
   const byId = new Map<string, AnalyticsSpan>();
   const duplicates = new Set<string>();
-  let attributeBytes = 0;
   for (const span of spans) {
-    attributeBytes += new TextEncoder().encode(span.attributes ?? "").byteLength;
-    if (attributeBytes > ANALYTICS_LIMITS.attributeBytes) throw large();
     const key = spanKey(span);
     if (byId.has(key)) duplicates.add(key);
     byId.set(key, span);

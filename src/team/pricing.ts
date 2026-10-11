@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { aggregateCostAnalytics, CostAnalyticsError, type AnalyticsSpan, type CostAnalyticsReport, type CostAnalyticsRequest } from "../pricing/analytics";
+import { aggregateCostAnalytics, assertCostAnalyticsProjection, CostAnalyticsError, type AnalyticsSpan, type CostAnalyticsReport, type CostAnalyticsRequest } from "../pricing/analytics";
 import { hasDuplicateJsonKeys } from "../json-keys";
 import { parseJsonEvidence } from "../evaluations/json-evidence";
 import { redactTeamText } from "./ingest";
@@ -25,6 +25,7 @@ function safeProjection(span: AnalyticsSpan): AnalyticsSpan {
 
 /** Called only after the owning store acquires the complete projection under current authority. */
 export function buildCostAnalyticsReport(scope: CostAnalyticsReport["scope"], spans: readonly AnalyticsSpan[], request: CostAnalyticsRequest, asOf: number): CostAnalyticsReport {
+  assertCostAnalyticsProjection(spans);
   if (!Number.isSafeInteger(asOf) || asOf < 0 || spans.some(span => span.projectId !== scope.projectId)) throw new CostAnalyticsError("invalid_request", "Invalid cost analytics acquisition");
   if (redactTeamText(JSON.stringify(request.rates)) !== JSON.stringify(request.rates)) throw new CostAnalyticsError("invalid_request", "Invalid cost analytics rates");
   const sourceRevision = "sha256:" + createHash("sha256").update(JSON.stringify({ version: "runphantom-cost-source/1", scope, request, spans })).digest("hex");

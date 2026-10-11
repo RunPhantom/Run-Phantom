@@ -3,6 +3,7 @@ import { aggregateCostAnalytics, ANALYTICS_LIMITS, parseCostAnalyticsRequest, ty
 import { parseNominalCatalogue } from "../src/pricing/rates";
 import { TOKEN_CATEGORIES } from "../src/pricing/protocol";
 import { rateFixture } from "./fixtures/pricing";
+import { buildCostAnalyticsReport } from "../src/team/pricing";
 
 const request = (overrides: Partial<CostAnalyticsRequest> = {}): CostAnalyticsRequest => ({ from: 0, to: 86_400_000, bucket: "hour", estimateMode: "captured", rates: [rateFixture()], ...overrides });
 const span = (overrides: Partial<AnalyticsSpan> = {}, attrs: Record<string, unknown> = {}): AnalyticsSpan => ({ projectId: "project-a", runId: "run-a", id: "generation-a", parentSpanId: null, kind: "LLM_GENERATION", startedAt: 1_000,
@@ -118,6 +119,26 @@ describe("complete captured cost and usage populations", () => {
   });
   test("resource limits refuse a population rather than returning a sample", () => {
     expect(() => aggregateCostAnalytics(Array.from({ length: ANALYTICS_LIMITS.spans + 1 }, () => span()), request())).toThrow("complete-population limit");
+  });
+  test.each(["projectId", "runId", "id", "parentSpanId", "kind", "model", "provider", "attributes"] as const)("complete projection admission includes %s", key => {
+    expect(() => aggregateCostAnalytics([span({ [key]: "p".repeat(ANALYTICS_LIMITS.attributeBytes + 1) })], request())).toThrow("complete-population limit");
+  });
+  test("projection admission measures UTF-8 bytes rather than UTF-16 length", () => {
+    expect(() => aggregateCostAnalytics([span({ parentSpanId: "€".repeat(Math.floor(ANALYTICS_LIMITS.attributeBytes / 3) + 1) })], request())).toThrow("complete-population limit");
+  });
+  test.each(["€", "😀", "\ud800", "\udc00"])("direct UTF-8 boundary matches encoded bytes for %p", character => {
+    const row = span({ parentSpanId: character });
+    const strings = [row.projectId, row.runId, row.id, row.parentSpanId, row.kind, row.model, row.provider, row.attributes];
+    const bytes = strings.reduce<number>((sum, value) => sum + Buffer.byteLength(value ?? ""), 0);
+    const parentSpanId = character + "p".repeat(ANALYTICS_LIMITS.attributeBytes - bytes);
+    expect(aggregateCostAnalytics([span({ parentSpanId })], request()).population.ancestryUnavailable).toBe(1);
+    expect(() => aggregateCostAnalytics([span({ parentSpanId: parentSpanId + "p" })], request())).toThrow("complete-population limit");
+  });
+  test("shared source builder refuses before serializing an oversized roster", () => {
+    const rows = [span({ parentSpanId: "p".repeat(ANALYTICS_LIMITS.attributeBytes + 1) })]; let hashed = false;
+    Object.defineProperty(rows, "toJSON", { value: () => { hashed = true; return []; } });
+    expect(() => buildCostAnalyticsReport({ kind: "local", projectId: "project-a" }, rows, request(), 1000)).toThrow("complete-population limit");
+    expect(hashed).toBe(false);
   });
 });
 

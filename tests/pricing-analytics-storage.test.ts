@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +8,7 @@ import { getLocalCostAnalytics } from "../src/pricing/local";
 import { ANALYTICS_LIMITS } from "../src/pricing/analytics";
 import { TeamStore, hashTeamToken } from "../src/team/store";
 import { normalizeTeamIngest } from "../src/team/ingest";
+import { importTrace } from "../src/trace-export";
 import { rateFixture } from "./fixtures/pricing";
 
 const cleanup: Array<() => void> = [];
@@ -85,9 +86,63 @@ describe("actual private TeamStore cost analytics", () => {
     db.exec("PRAGMA foreign_keys=ON"); db.query("DELETE FROM projects WHERE id=?").run(f.scope.projectId); db.close();
     expect(() => f.store.pricingAnalytics(f.scope, f.request)).toThrow("Resource not found");
   });
+  test("private projection byte refusal precedes acquisition and still reauthorizes", () => {
+    const f = team(); f.ingest();
+    const persisted = new Database(join(f.directory, "team.sqlite"));
+    try { persisted.query("UPDATE spans SET model=? WHERE project_id=?").run("p".repeat(ANALYTICS_LIMITS.attributeBytes + 1), f.scope.projectId); }
+    finally { persisted.close(); }
+    const queryDescriptor = Object.getOwnPropertyDescriptor(Database.prototype, "query")!; let acquired = false;
+    const query = spyOn(Database.prototype, "query").mockImplementation(function (this: Database, sql) {
+      if (sql.startsWith("SELECT s.project_id AS projectId")) { acquired = true; throw new Error("Private projection materialized before admission"); }
+      return Reflect.apply(queryDescriptor.value, this, [sql]);
+    });
+    try {
+      expect(() => f.store.pricingAnalytics(f.scope, f.request)).toThrow("complete-population limit");
+      expect(acquired).toBe(false);
+      f.store.logout(f.owner);
+      expect(() => f.store.pricingAnalytics(f.scope, f.request)).toThrow("Authentication required");
+      expect(acquired).toBe(false);
+    } finally { query.mockRestore(); }
+  });
 });
 
 describe("actual local SQLite analytics acquisition", () => {
+  test("accepted legacy parent IDs are refused before projection materialization", () => {
+    const db = local(); db.query("DELETE FROM spans").run(); db.query("DELETE FROM runs").run();
+    for (let i = 0; i < 5; i++) {
+      const result = importTrace({ run: { id: `large-${i}`, name: "Synthetic projection", started_at: 1000, last_updated_at: 1001 },
+        spans: [{ id: "generation", name: "Synthetic captured generation", span_type: "LLM_GENERATION", parent_span_id: "p".repeat(4 * 1024 * 1024), start_time_ms: 1000, end_time_ms: 1001, duration_ms: 1, input_tokens: 1, output_tokens: 1, output_payload: "Original synthetic answer", attributes: null }] });
+      expect(result.spansImported).toBe(1);
+    }
+    expect(db.query("SELECT SUM(length(CAST(parent_span_id AS BLOB))) AS bytes FROM spans").get()).toEqual({ bytes: 20 * 1024 * 1024 });
+    const originalQuery = db.query.bind(db); let acquired = false;
+    const query = spyOn(db, "query").mockImplementation(sql => {
+      if (sql.startsWith("SELECT 'local' AS projectId")) { acquired = true; throw new Error("Projection materialized before admission"); }
+      return originalQuery(sql);
+    });
+    try { expect(() => getLocalCostAnalytics(input)).toThrow("complete-population limit"); expect(acquired).toBe(false); }
+    finally { query.mockRestore(); }
+    expect(db.query("SELECT COUNT(*) AS n FROM spans WHERE output_payload='Original synthetic answer'").get()).toEqual({ n: 5 });
+  });
+  test("complete projection boundary retains admitted ancestry and exact source identity", () => {
+    const db = local(); db.query("UPDATE spans SET parent_span_id=?").run("p".repeat(ANALYTICS_LIMITS.attributeBytes - 1024));
+    const fields = ["'local'", "run_id", "id", "parent_span_id", "span_type", "model", "provider", "attributes"];
+    const sum = fields.map(field => `length(CAST(COALESCE(${field},'') AS BLOB))`).join("+");
+    const size = (db.query(`SELECT SUM(${sum}) AS bytes FROM spans`).get() as { bytes: number }).bytes;
+    db.query("UPDATE spans SET parent_span_id=parent_span_id||?").run("p".repeat(ANALYTICS_LIMITS.attributeBytes - size));
+    expect(db.query(`SELECT SUM(${sum}) AS bytes FROM spans`).get()).toEqual({ bytes: ANALYTICS_LIMITS.attributeBytes });
+    const result = getLocalCostAnalytics(input);
+    expect(result.population).toMatchObject({ acquiredSpans: 1, selectedGenerations: 1, ancestryUnavailable: 1 });
+    expect(result.reportedUsd.completeTotal).toBeNull();
+    expect(getLocalCostAnalytics(input).sourceRevision).toBe(result.sourceRevision);
+    db.query("UPDATE spans SET parent_span_id=parent_span_id||'p'").run();
+    expect(() => getLocalCostAnalytics(input)).toThrow("complete-population limit");
+  });
+  test.each(["€", "\0"])("local byte admission counts full UTF-8 %p parent data", character => {
+    const db = local();
+    db.query("UPDATE spans SET parent_span_id=?").run(character.repeat(Math.floor(ANALYTICS_LIMITS.attributeBytes / Buffer.byteLength(character)) + 1));
+    expect(() => getLocalCostAnalytics(input)).toThrow("complete-population limit");
+  });
   test("reads persisted rows without modifying their reported snapshot evidence", () => {
     const db = local(); const before = db.query("SELECT * FROM spans").all();
     const result = getLocalCostAnalytics(input);
