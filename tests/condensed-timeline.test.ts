@@ -46,7 +46,7 @@ describe("bounded compact timeline", () => {
     expect(layout.entries[0].row).toBe(MAX_TIMELINE_SPANS - 1); finite(layout);
   });
   test("missing, backwards and subtraction-overflow intervals cannot become measured zero durations", () => {
-    const layout = buildCondensedTimeline([span("zero", 0, 0), span("nan", NaN, 1), span("inf", 0, Infinity), span("backwards", 5, 4), span("overflow", -1e308, 1e308)]);
+    const layout = buildCondensedTimeline([span("zero-duration", 1, 1), span("nan", NaN, 1), span("inf", 0, Infinity), span("backwards", 5, 4), span("overflow", -1e308, 1e308)]);
     expect(layout.unavailableTimeCount).toBe(4); expect(layout.entries[0].timingAvailable).toBe(true);
     expect(layout.entries.slice(1).every(entry => !entry.timingAvailable)).toBe(true); expect(layout.elapsedMs).toBe(0); finite(layout);
     const absent = buildCondensedTimeline([span("absent", NaN, NaN)]); expect(absent.elapsedMs).toBeNull(); finite(absent);
@@ -83,9 +83,14 @@ describe("bounded compact timeline", () => {
     expect(capped.groupingUnavailable).toBe(true); expect(capped.invocations).toEqual([]); finite(capped);
   });
   test("zero-length events at the same point retain distinct reachable rows", () => {
-    const layout = buildCondensedTimeline([span("a", 0, 0), span("b", 0, 0)]);
+    const layout = buildCondensedTimeline([span("a", 1, 1), span("b", 1, 1)]);
     expect(layout.entries[0].row).not.toBe(layout.entries[1].row); finite(layout);
     const empty = buildCondensedTimeline([]); expect(empty.entries).toEqual([]); expect(empty.totalRows).toBe(0); expect(empty.elapsedMs).toBeNull(); finite(empty);
+  });
+  test("zero timestamp sentinel retains its record with unavailable timing instead of inferred execution", () => {
+    const layout = buildCondensedTimeline([span("missing-timestamps", 0, 0)]);
+    expect(layout.entries).toHaveLength(1); expect(layout.unavailableTimeCount).toBe(1);
+    expect(layout.elapsedMs).toBeNull(); expect(layout.entries[0].timingAvailable).toBe(false); finite(layout);
   });
   test("painted minimum widths separate close intervals instead of covering other IDs", () => {
     const spans = [span("root", 0, 1000), span("a", 1, 2, "root"), span("b", 2, 3, "root")];

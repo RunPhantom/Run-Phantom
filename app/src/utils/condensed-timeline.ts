@@ -37,6 +37,12 @@ export interface CondensedTimeline {
 }
 
 type Lane = { row: number; start: number; end: number };
+export function hasTimelineInterval(span: Span): boolean {
+  // The served DTO uses zero for absent OTLP timestamps and does not retain presence.
+  return !(span.start_time_ms === 0 && span.end_time_ms === 0)
+    && Number.isFinite(span.start_time_ms) && Number.isFinite(span.end_time_ms)
+    && span.end_time_ms >= span.start_time_ms && Number.isFinite(span.end_time_ms - span.start_time_ms);
+}
 const earlier = (a: Lane, b: Lane) => a.end < b.end || (a.end === b.end && (a.start < b.start || (a.start === b.start && a.row < b.row)));
 function pushLane(heap: Lane[], lane: Lane): void {
   let index = heap.length;
@@ -73,7 +79,7 @@ export function buildCondensedTimeline(spans: readonly Span[], agents: readonly 
     span, sourceIndex, key: `timeline-${sourceIndex}`, parentIndex: null, parentState: "root",
     // Omitted rows may contain a duplicate. A partial population cannot establish unique actions.
     identityAvailable: !omittedCount && counts.get(span.id) === 1,
-    timingAvailable: Number.isFinite(span.start_time_ms) && Number.isFinite(span.end_time_ms) && span.end_time_ms >= span.start_time_ms && Number.isFinite(span.end_time_ms - span.start_time_ms),
+    timingAvailable: hasTimelineInterval(span),
     depth: 0, row: 0, left: 0, width: 0, invocationRootId: null,
   }));
   const byId = new Map<string, number>();
