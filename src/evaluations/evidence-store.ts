@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Database, SQLQueryBindings } from "bun:sqlite";
-import { EVIDENCE_LIMITS as L, EVIDENCE_VERSION, EvidenceError, type EvidenceAttachment, type EvidenceCapability,
+import { EVIDENCE_LIMITS as L, EVIDENCE_VERSION, EVIDENCE_IMPORT_FAILURE_CODES, EvidenceError, type EvidenceAttachment, type EvidenceCapability,
+  type EvidenceImportFailureCode,
   type EvidenceExpectedSource, type EvidenceImportRequest, type EvidenceInventoryRevision, type EvidenceJob,
   type EvidencePublicationSource, type EvidenceReason, type EvidenceReportReference, type EvidenceScope, type EvidenceSetRevision, type EvidenceSetView,
   type EvidenceSourceObservation, type NormalizedEvidenceSource } from "./evidence-protocol";
@@ -92,6 +93,17 @@ export interface EvidenceStoreOptions {
   maxNormalizedBytes?: number;
   maxRevisions?: number;
 }
+/** Used inside the owner's immediate transaction. Pre-feature fixtures have no additive finding tables. */
+export function heldNormalizedEvidenceBytes(db: Database, key: string): number {
+  let held = (db.query(`SELECT coalesce(sum(n),0) AS n FROM (
+    SELECT length(cast(data AS BLOB)) AS n FROM evaluation_evidence_payloads WHERE scope_key=?
+    UNION ALL SELECT length(cast(data AS BLOB)) AS n FROM evaluation_evidence_sets WHERE scope_key=?
+    UNION ALL SELECT reserved_normalized_bytes AS n FROM evaluation_evidence_jobs WHERE scope_key=?)`).get(key, key, key) as { n: number }).n;
+  for (const table of ["evaluation_finding_mappings", "evaluation_finding_comparisons"]) {
+    if (db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)) held += (db.query(`SELECT coalesce(sum(length(cast(data AS BLOB))),0) AS n FROM ${table} WHERE scope_key=?`).get(key) as { n: number }).n;
+  }
+  return evidenceInteger(held, "held normalized bytes");
+}
 interface JobRow {
   id: string; scope_generation: number; request_digest: string; request_data: string | null; inventory_data: string | null; data_oversized: number;
   status: EvidenceJob["status"]; job_token: string; admitted_at: number; deadline_at: number; set_id: string | null; failure_code: EvidenceJob["failureCode"];
@@ -110,6 +122,7 @@ export class EvidenceStore {
   readonly #rawLimit: number;
   readonly #normalizedLimit: number;
   readonly #revisionLimit: number;
+  get normalizedByteLimit(): number { return this.#normalizedLimit; }
   constructor(database: Database, scope: EvidenceScope, options: EvidenceStoreOptions) {
     this.#db = database; this.#scope = parseEvidenceScope(scope); this.#key = `${this.#scope.kind}:${this.#scope.id}`; this.#options = options;
     if (typeof options.authorize !== "function") throw new EvidenceError("A current authoritative store authorization callback is required", 403);
@@ -232,11 +245,9 @@ export class EvidenceStore {
       if (sets + pending >= this.#revisionLimit || jobs >= this.#revisionLimit) throw new EvidenceError("Evidence job or revision retention is full", 409);
       const rawBytes = request.retention === "raw_and_normalized" ? request.sources.reduce((sum, source) => sum + source.byteLength, 0) : 0;
       const rawHeld = this.#get<{ n: number }>("SELECT coalesce(sum(length(bytes)),0) AS n FROM evaluation_evidence_blobs WHERE scope_key=?", this.#key)!.n;
-      const normalizedHeld = this.#get<{ n: number }>(`SELECT coalesce(sum(n),0) AS n FROM (
-        SELECT length(cast(data AS BLOB)) AS n FROM evaluation_evidence_payloads WHERE scope_key=?
-        UNION ALL SELECT length(cast(data AS BLOB)) AS n FROM evaluation_evidence_sets WHERE scope_key=?)`, this.#key, this.#key)!.n;
+      const normalizedHeld = heldNormalizedEvidenceBytes(this.#db, this.#key);
       const reserved = this.#get<{ raw: number; normalized: number }>("SELECT coalesce(sum(reserved_raw_bytes),0) AS raw,coalesce(sum(reserved_normalized_bytes),0) AS normalized FROM evaluation_evidence_jobs WHERE scope_key=?", this.#key)!;
-      if (rawHeld + reserved.raw + rawBytes > this.#rawLimit || normalizedHeld + reserved.normalized + L.MAX_NORMALIZED_BYTES > this.#normalizedLimit) throw new EvidenceError("Evidence storage quota is full", 409);
+      if (rawHeld + reserved.raw + rawBytes > this.#rawLimit || normalizedHeld + L.MAX_NORMALIZED_BYTES > this.#normalizedLimit) throw new EvidenceError("Evidence storage quota is full", 409);
       const id = randomUUID(), token = randomUUID(), now = this.#now();
       if (now > Number.MAX_SAFE_INTEGER - L.MAX_IMPORT_MS) throw new EvidenceError("Clock cannot represent an import deadline");
       this.#run(`INSERT INTO evaluation_evidence_jobs(id,scope_key,scope_generation,operation_key,request_digest,request_data,inventory_data,status,job_token,admitted_at,deadline_at,reserved_raw_bytes,reserved_normalized_bytes)
@@ -264,6 +275,16 @@ export class EvidenceStore {
   cancel(id: string): boolean {
     return this.#transaction(() => { this.#authorize("import", null); const job = this.#job(id); this.#authorize("import", this.#request(job).attachment); this.#generation(); return this.#finish(job, "cancelled", "cancelled"); });
   }
+  /** The owner calls this before releasing current attachment/session authority or closing its database. */
+  fail(id: string, token: string, code: EvidenceImportFailureCode): boolean {
+    token = evidenceText(token, "publication token");
+    if (typeof code !== "string" || !(EVIDENCE_IMPORT_FAILURE_CODES as readonly string[]).includes(code)) throw new EvidenceError("Unsupported evidence failure code");
+    return this.#transaction(() => {
+      this.#authorize("import", null); const job = this.#job(id); this.#authorize("import", this.#request(job).attachment); const generation = this.#generation();
+      if (job.job_token !== token || job.scope_generation !== generation || !["queued", "running"].includes(job.status)) return false;
+      return this.#finish(job, "failed", code);
+    });
+  }
   /** Called once by the database owner on restart, before admitting work; it never reruns reports. */
   recoverUnfinished(): number {
     return this.#transaction(() => { this.#authorize("import", null); this.#generation();
@@ -285,7 +306,7 @@ export class EvidenceStore {
         if (source.sourceId !== descriptor.sourceId || raw.byteLength !== descriptor.byteLength || evidenceDigest(raw) !== descriptor.artifactSha256) throw new EvidenceError("Publication raw bytes do not match the exact admitted roster");
         const normalized = parseNormalizedEvidence(source.normalized, descriptor.kind);
         if (normalized.sourceId !== descriptor.sourceId) throw new EvidenceError("Normalized source identity does not match its admitted source");
-        const data = canonicalEvidenceJson(normalized); normalizedBytes += Buffer.byteLength(data); leaves += normalized.leaves.length;
+        const data = canonicalEvidenceJson(normalized); normalizedBytes += Buffer.byteLength(data); leaves += normalized.leaves.length + (normalized.findingBatch?.findings.length ?? 0);
         if (normalizedBytes > L.MAX_NORMALIZED_BYTES || leaves > L.MAX_LEAVES) throw new EvidenceError("Publication exceeds normalized byte or leaf limits", 413);
         return { descriptor, raw, normalized, data, normalizedSha256: evidenceDigest(data), artifactId: randomUUID(), interpretationId: randomUUID() };
       });

@@ -49,7 +49,22 @@ describe("team runtime authority boundary", () => {
     const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
     expect(tree.statements.filter(ts.isImportDeclaration)).toHaveLength(0);
     expect(source).toContain('process.argv[2] === "team"');
-    expect(runtimeImports(file).sort()).toEqual(["./local-cli", "./team/cli"]);
+    expect(runtimeImports(file).sort()).toEqual(["./evaluations/evidence-worker", "./evaluations/evidence-worker-environment", "./local-cli", "./team/cli"]);
+  });
+
+  test("bootstrap refusal precedes reader imports without enabling a pre-guard transpiler cache", () => {
+    for (const relative of ["src/index.ts", "src/evaluations/evidence-worker.ts", "src/evaluations/evidence-worker-environment.ts"]) {
+      expect(statSync(path.join(root, relative)).size).toBeLessThan(4096);
+    }
+    const file = path.join(root, "src/evaluations/evidence-worker.ts"), source = readFileSync(file, "utf8");
+    const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
+    const staticRuntime = tree.statements.filter(ts.isImportDeclaration).filter(node => !node.importClause?.isTypeOnly);
+    expect(staticRuntime.map(node => (node.moduleSpecifier as ts.StringLiteral).text)).toEqual(["./evidence-worker-environment"]);
+    expect(source.indexOf("import.meta.main && !prepareEvidenceWorkerEnvironment()")).toBeLessThan(source.indexOf('import("./evidence-protocol")'));
+    expect(source.indexOf("finishEvidenceWorkerEnvironment()")).toBeGreaterThan(source.indexOf('import("./evidence-reader/limits")'));
+    expect(source.indexOf("finishEvidenceWorkerEnvironment()")).toBeLessThan(source.indexOf("Bun.stdin.stream()"));
+    const cli = readFileSync(path.join(root, "src/index.ts"), "utf8");
+    expect(cli.indexOf("!prepareEvidenceWorkerEnvironment()")).toBeLessThan(cli.indexOf('import("./evaluations/evidence-worker")'));
   });
 
   test("transitive team imports exclude local machine and provider services", () => {
@@ -74,5 +89,31 @@ describe("team runtime authority boundary", () => {
     expect(violations).toEqual([]);
     expect(visited.has(path.join(root, "src/team/server.ts"))).toBe(true);
     expect(visited.has(path.join(root, "src/team/store.ts"))).toBe(true);
+  });
+
+  test("transitive reader imports stay inside the reviewed pure graph without database, daemon or provider modules", () => {
+    const allowed = new Set([
+      "src/evaluations/evidence-worker.ts", "src/evaluations/evidence-worker-environment.ts", "src/evaluations/external-evidence.ts", "src/evaluations/evidence-protocol.ts",
+      "src/evaluations/evidence-validation.ts", "src/evaluations/json-evidence.ts", "src/evaluations/evidence-reader/json.ts",
+      "src/evaluations/finding-validation.ts", "src/evaluations/finding-protocol.ts",
+      "src/evaluations/evidence-reader/limits.ts", "src/evaluations/evidence-reader/xml.ts",
+      "src/verification/serialization.ts", "src/verification/redaction.ts", "src/verification/protocol.ts",
+    ]);
+    const visited = new Set<string>(), pending = [path.join(root, "src/evaluations/evidence-worker.ts")];
+    const violations: string[] = [];
+    while (pending.length) {
+      const file = pending.pop()!;
+      if (visited.has(file)) continue;
+      visited.add(file);
+      const relative = path.relative(root, file).split(path.sep).join("/");
+      if (!allowed.has(relative)) violations.push(relative);
+      for (const source of runtimeImports(file)) {
+        const dependency = resolveImport(source, file);
+        if (dependency) pending.push(dependency);
+        else if (source !== "node:crypto") violations.push(`${relative} imports ${source}`);
+      }
+    }
+    expect(violations).toEqual([]);
+    expect([...visited].map(file => path.relative(root, file).split(path.sep).join("/")).sort()).toEqual([...allowed].sort());
   });
 });
