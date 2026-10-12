@@ -1727,6 +1727,7 @@ function connect(options) {
     throw error;
   }
   const stores = new Map;
+  let storeLeaseCount = 0;
   const owners = new WeakMap;
   const teardown = [];
   const coverage = { network: false, console: false, route: false, dom: true, state: true, signal: true };
@@ -1998,6 +1999,8 @@ function connect(options) {
         throw new Error("Verification runtime is disconnected");
       if (!nameValid(name))
         throw new Error("A valid store name is required");
+      if (storeLeaseCount >= 100)
+        throw new Error("Registered store lease limit reached");
       const adapter = storeAdapterDetails(source);
       if (!adapter && typeof source !== "function")
         throw new Error("A reader or explicit store adapter is required");
@@ -2010,97 +2013,107 @@ function connect(options) {
       }
       if (!existing && stores.size >= 100)
         throw new Error("Registered store limit reached");
-      let registration = existing;
-      if (!registration) {
-        let releaseSubscription;
-        let lastComplete;
-        let acquiring = true, observing = false;
-        const entry = {
-          active: true,
-          leases: new Set,
-          ...adapter ? { source: adapter.source, configuration: adapter.configuration } : {},
-          read: () => {
-            if (!entry.active || !active)
-              throw new Error("Registered store is unavailable");
-            if (!adapter)
-              return { value: source(), truncated: false };
-            const snapshot2 = adapter.read();
-            return {
-              value: snapshot2.value,
-              truncated: snapshot2.availability !== "complete",
-              availability: snapshot2.availability,
-              ...snapshot2.reason ? { reason: snapshot2.reason } : {}
-            };
-          },
-          remove: () => {
-            if (!entry.active)
-              return;
-            entry.active = false;
-            entry.leases.clear();
-            if (stores.get(name) === entry)
-              stores.delete(name);
-            if (adapter && owners.get(adapter.source) === entry)
-              owners.delete(adapter.source);
-            const release = releaseSubscription;
-            releaseSubscription = undefined;
-            if (release)
-              observeSafely(release);
-          }
-        };
-        stores.set(name, entry);
-        if (adapter)
-          owners.set(adapter.source, entry);
-        if (adapter) {
-          const changed = () => observeSafely(() => {
-            if (acquiring || !active || !entry.active || stores.get(name) !== entry)
-              return;
-            if (observing) {
-              disconnect();
-              return;
-            }
-            observing = true;
-            try {
-              const reading = entry.read(), safe = prepare(reading.value);
-              const partial = reading.truncated || safe.truncated;
-              const presented = JSON.stringify(safe.value);
-              if (!partial && presented === lastComplete)
-                return;
-              lastComplete = partial ? undefined : presented;
-              emit("state", { store: name, value: safe.value }, currentActionId, partial);
-            } finally {
-              observing = false;
-            }
-          }, disconnect);
-          try {
-            releaseSubscription = adapter.subscribe(changed);
-            acquiring = false;
-            if (!active || !entry.active) {
-              if (releaseSubscription)
-                observeSafely(releaseSubscription);
-              releaseSubscription = undefined;
-              throw new Error("Registration lost its connection");
-            }
-            const initial = entry.read(), safe = prepare(initial.value);
-            if (!active || !entry.active)
-              throw new Error("Registration lost its connection");
-            if (!initial.truncated && !safe.truncated)
-              lastComplete = JSON.stringify(safe.value);
-          } catch {
-            entry.remove();
-            throw new Error("Explicit store subscription is unavailable");
-          }
-        }
-        registration = entry;
-      }
       const lease2 = {};
-      registration.leases.add(lease2);
-      const registered = registration;
-      return () => {
-        if (!registered.leases.delete(lease2))
-          return;
-        if (!registered.leases.size)
-          registered.remove();
-      };
+      storeLeaseCount++;
+      let acquired = false;
+      try {
+        let registration = existing;
+        if (!registration) {
+          let releaseSubscription;
+          let lastComplete;
+          let acquiring = true, observing = false;
+          const entry = {
+            active: true,
+            leases: new Set,
+            ...adapter ? { source: adapter.source, configuration: adapter.configuration } : {},
+            read: () => {
+              if (!entry.active || !active)
+                throw new Error("Registered store is unavailable");
+              if (!adapter)
+                return { value: source(), truncated: false };
+              const snapshot2 = adapter.read();
+              return {
+                value: snapshot2.value,
+                truncated: snapshot2.availability !== "complete",
+                availability: snapshot2.availability,
+                ...snapshot2.reason ? { reason: snapshot2.reason } : {}
+              };
+            },
+            remove: () => {
+              if (!entry.active)
+                return;
+              entry.active = false;
+              storeLeaseCount -= entry.leases.size;
+              entry.leases.clear();
+              if (stores.get(name) === entry)
+                stores.delete(name);
+              if (adapter && owners.get(adapter.source) === entry)
+                owners.delete(adapter.source);
+              const release = releaseSubscription;
+              releaseSubscription = undefined;
+              if (release)
+                observeSafely(release);
+            }
+          };
+          stores.set(name, entry);
+          if (adapter)
+            owners.set(adapter.source, entry);
+          if (adapter) {
+            const changed = () => observeSafely(() => {
+              if (acquiring || !active || !entry.active || stores.get(name) !== entry)
+                return;
+              if (observing) {
+                disconnect();
+                return;
+              }
+              observing = true;
+              try {
+                const reading = entry.read(), safe = prepare(reading.value);
+                const partial = reading.truncated || safe.truncated;
+                const presented = JSON.stringify(safe.value);
+                if (!partial && presented === lastComplete)
+                  return;
+                lastComplete = partial ? undefined : presented;
+                emit("state", { store: name, value: safe.value }, currentActionId, partial);
+              } finally {
+                observing = false;
+              }
+            }, disconnect);
+            try {
+              releaseSubscription = adapter.subscribe(changed);
+              acquiring = false;
+              if (!active || !entry.active) {
+                if (releaseSubscription)
+                  observeSafely(releaseSubscription);
+                releaseSubscription = undefined;
+                throw new Error("Registration lost its connection");
+              }
+              const initial = entry.read(), safe = prepare(initial.value);
+              if (!active || !entry.active)
+                throw new Error("Registration lost its connection");
+              if (!initial.truncated && !safe.truncated)
+                lastComplete = JSON.stringify(safe.value);
+            } catch {
+              entry.remove();
+              throw new Error("Explicit store subscription is unavailable");
+            }
+          }
+          registration = entry;
+        }
+        registration.leases.add(lease2);
+        acquired = true;
+        const registered = registration;
+        return () => {
+          if (!registered.leases.delete(lease2))
+            return;
+          storeLeaseCount--;
+          if (!registered.leases.size)
+            registered.remove();
+        };
+      } finally {
+        if (!acquired)
+          storeLeaseCount--;
+      }
     }
   };
 }

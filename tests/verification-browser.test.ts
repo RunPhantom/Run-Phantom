@@ -382,3 +382,55 @@ test("actual query private identities remain redacted on the socket under applic
     for (const value of ["f23-socket-password", "f23-socket-api-key", "f23-socket-token"]) expect(JSON.stringify(socket.sent)).not.toContain(value);
   } finally { runtime.disconnect(); resetActiveRedactionPolicy(); client.clear(); }
 });
+
+
+describe("connection-wide explicit registration lease budget", () => {
+  test("100 duplicates share one subscriber, 101 refuses before source work and releasing capacity admits a new source", () => {
+    const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+    const original = subscribable(); let reads = 0;
+    const source = { ...original.source, getState: () => { reads++; return original.state; } };
+    const adapter = shapeStore(source, { select: { count: "count" } });
+    const releases = Array.from({ length: 100 }, () => runtime.registerStore("original", adapter));
+    expect(original.counts().subscriptions).toBe(1); expect(reads).toBe(1);
+    expect(() => runtime.registerStore("original", adapter)).toThrow("lease limit");
+    let newReads = 0, newSubscriptions = 0, newReleases = 0;
+    const newAdapter = shapeStore({ getState: () => { newReads++; return { count: 1 }; }, subscribe: () => { newSubscriptions++; return () => { newReleases++; }; } }, { select: { count: "count" } });
+    expect(() => runtime.registerStore("new", newAdapter)).toThrow("lease limit");
+    expect(newReads).toBe(0); expect(newSubscriptions).toBe(0);
+    releases[0](); releases[0]();
+    const next = runtime.registerStore("new", newAdapter);
+    expect(newReads).toBe(1); expect(newSubscriptions).toBe(1);
+    expect(() => runtime.registerStore("original", adapter)).toThrow("lease limit");
+    next(); expect(newReleases).toBe(1);
+    runtime.registerStore("original", adapter);
+    runtime.disconnect(); expect(original.counts().releases).toBe(1); expect(newReleases).toBe(1);
+    for (const release of releases) release();
+    const fresh = connection(); fresh.socket.receive({ type: "ready" });
+    const newFixture = subscribable(); const freshAdapter = shapeStore(newFixture.source, { select: { count: "count" } });
+    const freshReleases = Array.from({ length: 100 }, () => fresh.runtime.registerStore("fresh", freshAdapter));
+    expect(newFixture.counts().subscriptions).toBe(1);
+    for (const release of freshReleases) release();
+    expect(newFixture.counts().releases).toBe(1); fresh.runtime.disconnect();
+  });
+  test("in-progress registration reserves its lease before reentrant initial reads and failed acquisition returns capacity", () => {
+    const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+    const nestedReleases: Array<() => void> = []; let refused = 0;
+    const source = { getState: () => {
+      for (let n = 0; n < 100; n++) {
+        try { nestedReleases.push(runtime.registerStore("reentrant", adapter)); } catch { refused++; }
+      }
+      return { count: 1 };
+    }, subscribe: () => () => {} };
+    const adapter = shapeStore(source, { select: { count: "count" } });
+    const outer = runtime.registerStore("reentrant", adapter);
+    expect(nestedReleases).toHaveLength(99); expect(refused).toBe(1);
+    expect(() => runtime.registerStore("reentrant", adapter)).toThrow("lease limit");
+    outer(); for (const release of nestedReleases) release();
+    const bad = shapeStore({ getState: () => ({ count: 1 }), subscribe: () => { throw new Error("source unavailable"); } }, { select: { count: "count" } });
+    for (let n = 0; n < 100; n++) expect(() => runtime.registerStore("bad", bad)).toThrow("subscription is unavailable");
+    const stable = subscribable(); const stableAdapter = shapeStore(stable.source, { select: { count: "count" } });
+    const releases = Array.from({ length: 100 }, () => runtime.registerStore("stable", stableAdapter));
+    expect(stable.counts().subscriptions).toBe(1);
+    for (const release of releases) release(); expect(stable.counts().releases).toBe(1);
+  });
+});
