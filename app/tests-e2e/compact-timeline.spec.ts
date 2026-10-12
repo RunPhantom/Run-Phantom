@@ -166,6 +166,62 @@ test("compact timeline: exact tool expansion and keyboard span deep link retain 
   expect((await (await request.get(`${runPhantom.url}/api/runs/detail/${COMPACT_RUN}`)).json()).spans).toEqual(before.spans);
 });
 
+test("compact timeline: Escape on the genuine focused bar dismisses details and retains its exact action", async ({ page, request, runPhantom }, info) => {
+  const before = await seedCompactRun(runPhantom.url);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${runPhantom.url}/runs/${COMPACT_RUN}`);
+  const timeline = page.locator("[data-trace-timeline]");
+  await timeline.getByRole("button", { name: "Compact layout", exact: true }).click();
+  const tool = timeline.locator(`[data-timeline-span-id="${spanId(101)}"]`);
+  await tool.scrollIntoViewIfNeeded();
+  await tool.focus();
+  await expect(tool).toBeFocused();
+  await expect(page.locator("[data-span-tooltip]")).toContainText("serial-result-99");
+  await screenshot(page, info, "compact-focused-trigger-details");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("[data-span-tooltip]")).toBeHidden({ timeout: 1_500 });
+  await expect(tool).toBeFocused();
+  expect(await tool.evaluate(element => { const rect = element.getBoundingClientRect(); const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2); return hit !== null && element.contains(hit); })).toBe(true);
+  await screenshot(page, info, "compact-focused-trigger-dismissed");
+  await page.keyboard.press("Enter");
+  const pill = page.locator(`[data-tool-span-id="${spanId(101)}"]`);
+  await expect(pill.getByRole("button").first()).toHaveAttribute("aria-expanded", "true");
+  await expect(pill).toContainText("serial-result-99");
+  expect((await (await request.get(`${runPhantom.url}/api/runs/detail/${COMPACT_RUN}`)).json()).spans).toEqual(before.spans);
+});
+
+test("compact timeline: Escape dismisses hovered details from unrelated focus while passive leave preserves that focus", async ({ page, request, runPhantom }, info) => {
+  const before = await seedCompactRun(runPhantom.url);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${runPhantom.url}/runs/${COMPACT_RUN}`);
+  const timeline = page.locator("[data-trace-timeline]");
+  const compact = timeline.getByRole("button", { name: "Compact layout", exact: true });
+  await compact.click();
+  await compact.focus();
+  const tool = timeline.locator(`[data-timeline-span-id="${spanId(150)}"]`);
+  await tool.hover();
+  await expect(compact).toBeFocused();
+  await expect(page.locator("[data-span-tooltip]")).toContainText("Parallel A");
+  await screenshot(page, info, "compact-hover-unrelated-focus-details");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("[data-span-tooltip]")).toBeHidden({ timeout: 1_500 });
+  await expect(tool).toBeFocused();
+  expect(await tool.evaluate(element => { const rect = element.getBoundingClientRect(); const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2); return hit !== null && element.contains(hit); })).toBe(true);
+  await screenshot(page, info, "compact-hover-escape-restored-trigger");
+  await compact.focus();
+  const other = timeline.locator(`[data-timeline-span-id="${spanId(151)}"]`);
+  await other.hover();
+  await expect(compact).toBeFocused();
+  await expect(page.locator("[data-span-tooltip]")).toContainText("Parallel B");
+  await page.mouse.move(2, 2);
+  await expect(page.locator("[data-span-tooltip]")).toBeHidden();
+  await expect(compact).toBeFocused();
+  await screenshot(page, info, "compact-passive-leave-keeps-unrelated-focus");
+  expect((await (await request.get(`${runPhantom.url}/api/runs/detail/${COMPACT_RUN}`)).json()).spans).toEqual(before.spans);
+});
+
 test("compact timeline: responsive time-axis scrolling stays local and controls remain visible", async ({ page, runPhantom }, info) => {
   await seedCompactRun(runPhantom.url);
   await page.emulateMedia({ reducedMotion: "reduce" });

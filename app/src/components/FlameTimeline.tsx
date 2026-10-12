@@ -145,7 +145,6 @@ function SpanTooltip({
       onMouseLeave={onPointerLeave}
       onFocusCapture={onPointerEnter}
       onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) onPointerLeave(); }}
-      onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onDismiss(); } }}
     >
       <div className="px-3 py-2 flex items-center gap-2 flex-shrink-0" style={{ borderBottom: `1px solid ${C.border}` }}>
         <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded"
@@ -234,7 +233,7 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
     scheduleTooltipDismiss();
   }, [scheduleTooltipDismiss]);
 
-  const dismissTooltip = () => {
+  const dismissTooltip = useCallback(() => {
     cancelTooltipDismiss();
     setHovered(null);
     clearMeridian();
@@ -243,7 +242,18 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
       hovered.trigger.focus({ preventScroll: true });
       hovered.trigger.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
     }
-  };
+  }, [cancelTooltipDismiss, hovered]);
+
+  useEffect(() => {
+    if (!hovered) return;
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      dismissTooltip();
+    };
+    document.addEventListener("keydown", onEscape);
+    return () => document.removeEventListener("keydown", onEscape);
+  }, [hovered, dismissTooltip]);
 
   if (!hasVizSpans) return null;
 
