@@ -31,6 +31,7 @@ test("all selection limits and format/identity refusals happen before any file r
   expect(() => checkEvidenceFiles(Array.from({ length: 5 }, () => new File([new Uint8Array(2 * 1024 * 1024)], "bounded.xml")), capabilities)).toThrow("8 MiB");
   await refuses(prepareEvidenceUpload([draft, draft], capabilities, options), "distinct");
   await refuses(prepareEvidenceUpload([{ ...draft, dialect: "in-toto-statement/v1" }], capabilities, options), "supported");
+  await refuses(prepareEvidenceUpload([{ ...draft, sourceId: "é".repeat(65) }], capabilities, options), "UTF-8");
   expect(reads).toBe(0);
 });
 

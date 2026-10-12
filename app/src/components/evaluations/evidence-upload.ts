@@ -29,7 +29,7 @@ export async function prepareEvidenceUpload(drafts: readonly EvidenceFileDraft[]
   const ids = new Set<string>();
   for (const draft of drafts) {
     if (!capabilities.dialects.includes(draft.dialect) || !Object.prototype.hasOwnProperty.call(kinds, draft.dialect)) throw new Error("Choose a supported report format.");
-    if (!draft.sourceId || draft.sourceId.length > 128 || ids.has(draft.sourceId) || draft.shardId.length > 128) throw new Error("Source identities must be distinct and at most 128 characters.");
+    if (!draft.sourceId || new TextEncoder().encode(draft.sourceId).byteLength > 128 || ids.has(draft.sourceId) || new TextEncoder().encode(draft.shardId).byteLength > 128) throw new Error("Source identities must be distinct and at most 128 UTF-8 bytes.");
     ids.add(draft.sourceId);
   }
   const bytes: ArrayBuffer[] = [], sources: EvidenceImportRequest["sources"] = [];
