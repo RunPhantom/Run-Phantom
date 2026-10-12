@@ -44,7 +44,7 @@ export function readClaudeHookStdin(input: Readable, signal: AbortSignal): Promi
   });
 }
 
-/** No owner authority is active yet. Never infer consent from settings, stdin or ambient URLs. */
+/** Only the installed private descriptor and current daemon authority can admit capture. */
 export async function runClaudeHookCallback(args: string[], input: Readable = process.stdin): Promise<0> {
   if (args.length !== 4 || args[0] !== "--installation-id" || typeof args[1] !== "string" || !/^[a-f0-9]{32}$/.test(args[1]) || args[2] !== "--capability-file" || typeof args[3] !== "string"
     || !path.isAbsolute(args[3]) || path.normalize(args[3]) !== args[3] || args[3].includes("\0") || Buffer.byteLength(args[3]) > 4096) return 0;
@@ -54,7 +54,8 @@ export async function runClaudeHookCallback(args: string[], input: Readable = pr
     if (acquired.status !== "accepted" || controller.signal.aborted) return 0;
     const admitted = parseClaudeHookInput(acquired.text);
     if (admitted.status !== "accepted") return 0;
-    // Installation authority and authenticated daemon transport require the separately reviewed activation.
+    const { captureClaudeHook } = await import("./client");
+    await captureClaudeHook(acquired.text, admitted.value, args[3], args[1], controller.signal);
     return 0;
   } catch { return 0; }
   finally { clearTimeout(timer); input.pause(); }

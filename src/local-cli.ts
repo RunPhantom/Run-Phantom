@@ -17,6 +17,7 @@ import { stopRunPhantomStartup } from "./runphantom-startup";
 import { registerReplayProject } from "./agents-config";
 import { openInBrowser } from "./open-browser";
 import { SOURCE_ENTRY } from "./source-paths";
+import { cmdCodingHooks } from "./coding-hooks/commands";
 
 const STATE_DIR = path.join(os.homedir(), ".runphantom");
 const PID_PATH = path.join(STATE_DIR, "runphantom.pid");
@@ -765,6 +766,9 @@ async function dispatchRunPhantom(verb: string | undefined, rest: string[]): Pro
     case "version":
       console.log(VERSION);
       process.exit(0);
+      break;
+    case "hooks":
+      process.exit(await cmdCodingHooks(process.argv.slice(3)));
       break;
     case "setup":
       process.exit(await cmdSetup(process.argv.slice(3)));

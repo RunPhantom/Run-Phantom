@@ -54,7 +54,7 @@ describe("team runtime authority boundary", () => {
 
   test("silent callback imports exclude daemon, installation and provider authority", () => {
     const visited = new Set<string>(), pending = [path.join(root, "src/coding-hooks/callback.ts")];
-    const forbidden = /^(?:src\/(?:local-cli|server|db|init|uninstall|replay|replay-map|agents-config|active-workspace|secrets|secret-store|claude-cli-chat|codex-cli-chat|runphantom-startup)\.ts|src\/(?:team|install|mcp)\/.+|src\/coding-hooks\/(?:install|service|router)\.ts|src\/evaluations\/(?:service|judge|store|router)\.ts|src\/verification\/(?:service|router)\.ts)$/;
+    const forbidden = /^(?:src\/(?:local-cli|server|db|init|uninstall|replay|replay-map|agents-config|active-workspace|secrets|secret-store|claude-cli-chat|codex-cli-chat|runphantom-startup)\.ts|src\/(?:team|install|mcp|db)\/.+|src\/coding-hooks\/(?:install|service|router|management|owner|store|commands|configuration)\.ts|src\/evaluations\/(?:service|judge|store|router)\.ts|src\/verification\/(?:service|router)\.ts)$/;
     const violations: string[] = [];
     while (pending.length) {
       const file = pending.pop()!;
@@ -63,13 +63,22 @@ describe("team runtime authority boundary", () => {
       const relative = path.relative(root, file).split(path.sep).join("/");
       if (forbidden.test(relative)) violations.push(relative);
       for (const source of runtimeImports(file)) {
-        if (/^(?:node:)?(?:child_process|http|https|net|fs(?:\/promises)?)$/.test(source)) violations.push(`${relative} imports ${source}`);
+        if (/^(?:node:)?(?:child_process|http|https|net|fs(?:\/promises)?)$/.test(source)) {
+          const reviewed = (relative === "src/coding-hooks/client.ts" && source === "node:http")
+            || (["src/coding-hooks/capability.ts", "src/coding-hooks/claude.ts"].includes(relative) && ["node:fs", "node:fs/promises"].includes(source));
+          if (!reviewed) violations.push(`${relative} imports ${source}`);
+        }
+        if (/^(?:bun:sqlite|drizzle-orm(?:\/.*)?)$/.test(source)) violations.push(`${relative} imports ${source}`);
         const dependency = resolveImport(source, file);
         if (dependency) pending.push(dependency);
       }
     }
     expect(violations).toEqual([]);
     expect(visited.has(path.join(root, "src/coding-hooks/shared.ts"))).toBe(true);
+    expect([...visited].map(file => path.relative(root, file).split(path.sep).join("/")).sort()).toEqual([
+      "src/coding-hooks/acquisition.ts", "src/coding-hooks/callback.ts", "src/coding-hooks/capability.ts", "src/coding-hooks/claude.ts", "src/coding-hooks/client.ts", "src/coding-hooks/protocol.ts", "src/coding-hooks/shared.ts",
+      "src/evaluations/json-evidence.ts", "src/json-keys.ts", "src/verification/protocol.ts", "src/verification/redaction.ts", "src/verification/serialization.ts",
+    ]);
   });
 
   test("bootstrap refusal precedes reader imports without enabling a pre-guard transpiler cache", () => {

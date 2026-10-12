@@ -66,7 +66,7 @@ describe("finite callback stdin", () => {
   });
 });
 
-describe("actual silent CLI callback without authority activation", () => {
+describe("actual silent CLI callback without current private authority", () => {
   test.each([
     hookFixture("Stop"), "{broken", '{"session_id":"a","hook_event_name":"Stop","session_id":"b"}',
     '{"session_id":"a","hook_event_name":"Stop","\\u0073ession_id":"b"}',
