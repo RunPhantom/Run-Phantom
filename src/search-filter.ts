@@ -1,13 +1,9 @@
 import { parseJsonEvidence } from "./evaluations/json-evidence";
 import { REPORTED_COST_ALIASES } from "./evaluations/snapshot";
 import { hasDuplicateJsonKeys } from "./json-keys";
-
-export const SEARCH_FILTER_LIMITS = { clauses: 12, bytes: 8192, valueChars: 256, valueBytes: 512, attributeBytes: 65536, tags: 64 } as const;
-export const SEARCH_FILTER_FIELDS = ["status", "model", "provider", "duration_ms", "captured_cost_usd", "tag"] as const;
-export type SearchFilterField = typeof SEARCH_FILTER_FIELDS[number];
-export type SearchFilterOperator = "eq" | "ne" | "lt" | "lte" | "gt" | "gte";
-export interface SearchFilterClause { field: SearchFilterField; op: SearchFilterOperator; value: string | number }
-export interface SearchFilter { version: 1; all: SearchFilterClause[] }
+import { SEARCH_FILTER_LIMITS, SEARCH_FILTER_FIELDS, type SearchFilterField, type SearchFilterOperator, type SearchFilterClause, type SearchFilter } from "./search-protocol";
+export { SEARCH_FILTER_LIMITS, SEARCH_FILTER_FIELDS } from "./search-protocol";
+export type { SearchFilterField, SearchFilterOperator, SearchFilterClause, SearchFilter } from "./search-protocol";
 
 export class SearchFilterError extends Error {
   constructor(message: string) { super(message); this.name = "SearchFilterError"; }
@@ -70,15 +66,26 @@ export function parseSearchFilter(value: unknown): SearchFilter {
 
 const operators: Record<SearchFilterOperator, string> = { eq: "=", ne: "<>", lt: "<", lte: "<=", gt: ">", gte: ">=" };
 
+function capturedAttributesSql(scope: "local" | "team"): string {
+  const attrs = scope === "local" ? "s.attributes" : "json_extract(s.data,'$.attributes')";
+  return `(CASE WHEN length(CAST(${attrs} AS BLOB))<=${SEARCH_FILTER_LIMITS.attributeBytes} AND json_valid(${attrs}) THEN CASE WHEN json_type(${attrs})='object' AND NOT EXISTS (SELECT 1 FROM json_each(${attrs}) member GROUP BY member.key HAVING COUNT(*)>1) THEN ${attrs} END END)`;
+}
+export function capturedTagsSql(scope: "local" | "team"): string {
+  const attrs = capturedAttributesSql(scope), candidate = `json_extract(${attrs},'$.tags')`;
+  // SQLite length counts code points; typed values are bounded in UTF16 units.
+  const characters = `(WITH RECURSIVE chars(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM chars WHERE i<length(member.value)) SELECT SUM(CASE WHEN unicode(substr(member.value,i,1))>65535 THEN 2 ELSE 1 END) FROM chars)`;
+  const control = `(WITH RECURSIVE chars(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM chars WHERE i<length(member.value)) SELECT 1 FROM chars WHERE unicode(substr(member.value,i,1))<32 OR unicode(substr(member.value,i,1))=127)`;
+  return `(CASE WHEN json_type(${attrs},'$.tags')='array' THEN CASE WHEN json_array_length(${candidate})<=${SEARCH_FILTER_LIMITS.tags} AND NOT EXISTS (SELECT 1 FROM json_each(${candidate}) member WHERE CASE WHEN member.type<>'text' OR member.value='' OR length(member.value)>${SEARCH_FILTER_LIMITS.valueChars} OR length(CAST(member.value AS BLOB))>${SEARCH_FILTER_LIMITS.valueBytes} OR instr(member.value,char(0))>0 THEN 1 ELSE ${characters}>${SEARCH_FILTER_LIMITS.valueChars} OR EXISTS ${control} END) THEN ${candidate} END END)`;
+}
+
 /** Caller-owned aliases are fixed. User values can enter only bound parameters. */
-export function compileSearchFilter(filter: SearchFilter, scope: "local" | "team"): { sql: string; params: (string | number)[] } {
+export function compileSearchFilter(filter: SearchFilter, scope: "local" | "team", onSelectedSpan = false): { sql: string; params: (string | number)[] } {
   const checked = parseSearchFilter(filter);
   const runClauses: string[] = [], spanClauses: string[] = [];
   const runParams: (string | number)[] = [], spanParams: (string | number)[] = [];
-  const attrs = scope === "local" ? "s.attributes" : "json_extract(s.data,'$.attributes')";
   // Legacy attributes can contain duplicate keys. Such a record cannot prove
   // an exact captured value or tag absence; bound validation before JSON work.
-  const checkedAttrs = `(CASE WHEN length(CAST(${attrs} AS BLOB))<=${SEARCH_FILTER_LIMITS.attributeBytes} AND json_valid(${attrs}) THEN CASE WHEN json_type(${attrs})='object' AND NOT EXISTS (SELECT 1 FROM json_each(${attrs}) member GROUP BY member.key HAVING COUNT(*)>1) THEN ${attrs} END END)`;
+  const checkedAttrs = capturedAttributesSql(scope);
   const duration = scope === "local" ? "s.duration_ms" : "json_extract(s.data,'$.durationMs')";
   // First present reported-cost alias retains acquisition authority, including
   // an explicit invalid/null value. No nominal rate or unknown-to-zero fallback.
@@ -96,8 +103,7 @@ export function compileSearchFilter(filter: SearchFilter, scope: "local" | "team
     else if (clause.field === "model" || clause.field === "provider") {
       spanClauses.push(`s.${clause.field} IS NOT NULL AND s.${clause.field} ${op} ?`); spanParams.push(clause.value);
     } else if (clause.field === "tag") {
-      const candidate = `json_extract(${checkedAttrs},'$.tags')`;
-      const tags = `(CASE WHEN json_type(${checkedAttrs},'$.tags')='array' THEN CASE WHEN json_array_length(${candidate})<=${SEARCH_FILTER_LIMITS.tags} AND NOT EXISTS (SELECT 1 FROM json_each(${candidate}) member WHERE member.type<>'text' OR member.value='' OR length(member.value)>${SEARCH_FILTER_LIMITS.valueChars} OR length(CAST(member.value AS BLOB))>${SEARCH_FILTER_LIMITS.valueBytes} OR instr(member.value,char(0))>0) THEN ${candidate} END END)`;
+      const tags = capturedTagsSql(scope);
       const contains = `EXISTS (SELECT 1 FROM json_each(${tags}) tag WHERE tag.type='text' AND tag.value=?)`;
       spanClauses.push(`${tags} IS NOT NULL AND ${clause.op === "ne" ? "NOT " : ""}${contains}`);
       spanParams.push(clause.value);
@@ -107,6 +113,6 @@ export function compileSearchFilter(filter: SearchFilter, scope: "local" | "team
       spanParams.push(clause.value);
     }
   }
-  if (spanClauses.length) runClauses.push(`EXISTS (SELECT 1 FROM spans s WHERE s.run_id=r.id${scope === "team" ? " AND s.project_id=r.project_id" : ""} AND (${spanClauses.join(") AND (")}))`);
+  if (spanClauses.length) runClauses.push(onSelectedSpan ? spanClauses.map(item => `(${item})`).join(" AND ") : `EXISTS (SELECT 1 FROM spans s WHERE s.run_id=r.id${scope === "team" ? " AND s.project_id=r.project_id" : ""} AND (${spanClauses.join(") AND (")}))`);
   return { sql: runClauses.length ? runClauses.map(item => `(${item})`).join(" AND ") : "1=1", params: [...runParams, ...spanParams] };
 }

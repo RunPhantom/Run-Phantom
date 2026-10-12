@@ -67,6 +67,16 @@ test("Team typed reads recheck current membership after their worker and never l
   await refused(f.store.searchRuns(viewerScope,{filter:typed([])} as never));
 });
 
+test("Team hit and suggestion resources keep current project authority before and after acquisition", async()=>{
+  const f=fixture();f.seed(f.scope,[{trace:"1".repeat(32),id:"1".repeat(16),model:"own-model",provider:"p",cost:0}]);f.seed(f.foreign,[{trace:"1".repeat(32),id:"1".repeat(16),model:"foreign-model",provider:"p",cost:0}]);
+  expect((await f.store.searchSpanHits(f.scope,{filter:typed([clause("captured_cost_usd",0)])})).items.map(row=>row.runId)).toEqual(["1".repeat(32)]);
+  expect((await f.store.searchSuggestions(f.scope,{field:"model"})).values).toEqual(["own-model"]);
+  const invite=f.store.createInvite(f.scope,{email:"hits-viewer@example.test",role:"viewer"});
+  const viewer=f.store.acceptInvite({tokenHash:hashTeamToken(invite.token),email:"hits-viewer@example.test",expectedAccountId:null,passwordHash:"synthetic",sessionHash:hashTeamToken("hits-viewer")});
+  const scope=f.store.projectScope(viewer.context,f.scope.projectId), pending=f.store.searchSpanHits(scope,{});
+  f.store.removeMember(f.scope,viewer.context.user.id);await refused(pending);await refused(f.store.searchSuggestions(scope,{field:"model"}));
+});
+
 test("actual private HTTP activates typed filters and refuses malformed or duplicate query parameters", async () => {
   const service=await startTeamFixture("typed-search");
   try {
@@ -84,6 +94,9 @@ test("actual private HTTP activates typed filters and refuses malformed or dupli
     const query=new URLSearchParams({filter:JSON.stringify(typed([clause("model","literal%_東京"),clause("captured_cost_usd",0)]))});
     const result=await fetch(`${service.url}${route}?${query}`,{headers:{Cookie:cookie}}); expect(result.status).toBe(200);
     expect((await result.json()).items.map((item:{id:string})=>item.id)).toEqual(["4".repeat(32)]);
+    const hits=await fetch(`${service.url}/api/team/projects/${project.id}/search-hits?${query}`,{headers:{Cookie:cookie}});expect(hits.status).toBe(200);expect((await hits.json()).items[0]).toMatchObject({runId:"4".repeat(32),spanId:"4".repeat(16),input:{state:"unavailable"}});
+    const suggestions=await fetch(`${service.url}/api/team/projects/${project.id}/search-suggestions?field=model&prefix=literal%25_`,{headers:{Cookie:cookie}});expect(suggestions.status).toBe(200);expect((await suggestions.json()).values).toEqual(["literal%_東京"]);
+    for(const path of ["search-hits?filter=%7B%7D","search-suggestions?field=payload","search-suggestions?field=model&field=tag"])expect((await fetch(`${service.url}/api/team/projects/${project.id}/${path}`,{headers:{Cookie:cookie}})).status).toBe(400);
     for (const invalid of ['{"version":1,"version":1,"all":[]}',JSON.stringify(typed([clause("model","x","regex")])),JSON.stringify(typed([clause("unknown","x")]))]) {
       expect((await fetch(`${service.url}${route}?${new URLSearchParams({filter:invalid})}`,{headers:{Cookie:cookie}})).status).toBe(400);
     }

@@ -1,4 +1,5 @@
 import { Worker } from "node:worker_threads";
+import { acquireSearchCapacity, searchCapacity } from "./search-capacity";
 import { createHash } from "node:crypto";
 import { getDbPath } from "./db";
 import { runSearchWorker, type RunSearchWork } from "./run-search-worker";
@@ -131,7 +132,6 @@ function buildQuery(input: SearchInput): { sql: string; params: (string | number
   };
 }
 
-let activeWorkers = 0;
 
 /** Keyset pages are stable for a static store; refresh after new or updated runs.
  * Deadlines are checked between rows; an executing SQLite step may finish later.
@@ -140,20 +140,20 @@ export async function searchRuns(value: unknown = {}, options: ExecutionOptions 
   const dbPath = options.dbPath ?? getDbPath();
   const input = parseInput(value, dbPath);
   if (options.signal?.aborted) throw new RunSearchError("Search cancelled", "cancelled", 499);
-  if (activeWorkers >= RUN_SEARCH_LIMITS.workers) throw new RunSearchError("Search is busy; retry shortly", "search_busy", 503);
+  const release = acquireSearchCapacity("local", RUN_SEARCH_LIMITS.workers);
+  if (!release) throw new RunSearchError("Search is busy; retry shortly", "search_busy", 503);
   const started = Date.now();
   const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(1, Math.min(RUN_SEARCH_LIMITS.timeoutMs, options.timeoutMs!)) : RUN_SEARCH_LIMITS.timeoutMs;
   const maxBytes = Number.isFinite(options.maxBytes) ? Math.max(1024, Math.min(RUN_SEARCH_LIMITS.responseBytes, options.maxBytes!)) : RUN_SEARCH_LIMITS.responseBytes;
   const cancellation = new SharedArrayBuffer(4);
   const workerData: RunSearchWork = { ...buildQuery(input), dbPath, cursorKey: input.cursorKey, limit: input.limit, maxBytes, started, deadline: started + timeoutMs, cancellation };
-  activeWorkers++;
   let worker: Worker;
   try { worker = new Worker(`(${runSearchWorker.toString()})()`, { eval: true, workerData }); }
-  catch (error) { activeWorkers--; throw error; }
+  catch (error) { release(); throw error; }
   return new Promise<RunSearchResult>((resolve, reject) => {
     let settled = false;
-    let released = false;
-    const release = () => { if (!released) { released = true; activeWorkers--; } };
+    let response: { ok: boolean; result?: RunSearchResult; error?: string; code?: string } | undefined;
+    let workerError: Error | undefined;
     const settle = (error?: Error, result?: RunSearchResult) => {
       if (settled) return;
       settled = true;
@@ -165,13 +165,16 @@ export async function searchRuns(value: unknown = {}, options: ExecutionOptions 
     const timer = setTimeout(() => settle(new RunSearchError("Search timed out; narrow the query or filters", "timeout", 504)), timeoutMs);
     options.signal?.addEventListener("abort", abort, { once: true });
     worker.once("message", (message: { ok: boolean; result?: RunSearchResult; error?: string; code?: string }) => {
-      release();
-      settle(message.ok ? undefined : new RunSearchError(message.error ?? "Search failed", message.code ?? "query_failed", message.code === "timeout" ? 504 : 500), message.result);
+      response = message;
     });
-    worker.once("error", error => { settle(new RunSearchError(error.message, "worker_failed", 500)); });
-    worker.once("exit", () => { release(); settle(new RunSearchError("Search worker exited before completing", "worker_failed", 500)); });
+    worker.once("error", error => { workerError = new RunSearchError(error.message, "worker_failed", 500); });
+    worker.once("exit", () => {
+      release();
+      if (response) settle(response.ok ? undefined : new RunSearchError(response.error ?? "Search failed", response.code ?? "query_failed", response.code === "timeout" ? 504 : 500), response.result);
+      else settle(workerError ?? new RunSearchError("Search worker exited before completing", "worker_failed", 500));
+    });
     if (options.signal?.aborted) abort();
   });
 }
 
-export const _runSearchInternal = { activeWorkers: () => activeWorkers };
+export const _runSearchInternal = { activeWorkers: () => searchCapacity("local") };

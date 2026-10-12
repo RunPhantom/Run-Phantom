@@ -8,6 +8,7 @@ import path from "path";
 import { randomUUID } from "crypto";
 import { normalizeOtelId } from "./ids";
 import { searchRuns, RunSearchError } from "./run-search";
+import { searchSpanHits, searchSuggestions, localSearchScope, SearchResourceError } from "./search-resources";
 import { getRunComparison, RunComparisonError } from "./run-comparison";
 import { parseOtlpRequest } from "./parse";
 import { decodeOtlpProtobuf } from "./otlp-protobuf";
@@ -1270,6 +1271,19 @@ export async function createServer(port: number) {
     const raw = Number(req.query.limit);
     const limit = Number.isFinite(raw) && raw > 0 ? Math.min(Math.floor(raw), 5000) : 5000;
     res.json(getRuns(limit));
+  });
+  for (const [resource, read] of [["search-hits", searchSpanHits], ["search-suggestions", searchSuggestions]] as const) app.get(`/api/runs/${resource}`, async (req, res) => {
+    const cancellation = new AbortController();
+    const close = () => { if (!res.writableEnded) cancellation.abort(); };
+    res.on("close", close);
+    try { const result = await read(req.query, { signal: cancellation.signal }); if (!res.destroyed) { res.setHeader("Cache-Control", "no-store"); res.json(result); } }
+    catch (error) { if (!res.destroyed) { const status = error instanceof SearchResourceError ? error.status : 500; if (status === 503) res.setHeader("Retry-After", "1"); res.status(status).json({ error: error instanceof SearchResourceError ? error.message : "Search could not complete" }); } }
+    finally { res.removeListener("close",close); }
+  });
+  app.get("/api/runs/search-scope", (req,res) => {
+    const keys = Object.keys(req.query), resource = req.query.resource;
+    if (keys.length !== 1 || keys[0] !== "resource" || resource !== "runs" && resource !== "span-hits") return res.status(400).json({ error: "Search resource is invalid" });
+    res.setHeader("Cache-Control", "no-store"); res.json({ scope: localSearchScope(resource) });
   });
   app.get("/api/runs/search", async (req, res) => {
     const cancellation = new AbortController();
