@@ -102,6 +102,19 @@ describe("bounded frozen distribution storage",()=>{
       try{expect(()=>readDistributionSelection([...ids],()=>{consumed++;})).toThrow(expected);expect(parse).not.toHaveBeenCalled();expect(consumed).toBe(0);}finally{parse.mockRestore();}
     }
   });
+  test("exact UTF8 admission permits 4 MiB rows and 8 MiB selections, then refuses one extra byte",()=>{
+    const values=[distributionExperiment("a"),distributionExperiment("b")];
+    for(const value of values){
+      insertExperiment(value,value.id);
+      const base=JSON.stringify({...value,padding:"界\u0000\ud800"});
+      const payload=JSON.stringify({...value,padding:"界\u0000\ud800"+"x".repeat(4*1024*1024-Buffer.byteLength(base,"utf8"))});
+      expect(Buffer.byteLength(payload,"utf8")).toBe(4*1024*1024);
+      getDrizzleDb().$client.query("UPDATE evaluation_experiments SET data=? WHERE id=?").run(payload,value.id);
+    }
+    expect(analyzeScoreDistribution(request(["a","b"]),readDistributionSelection).overall.population.total).toBe(2);
+    getDrizzleDb().$client.query("UPDATE evaluation_experiments SET data=data||' ' WHERE id='b'").run();
+    const parse=spyOn(JSON,"parse");try{expect(()=>readDistributionSelection(["a","b"],()=>{})).toThrow("8 MiB");expect(parse).not.toHaveBeenCalled();expect(()=>readDistributionSelection(["b"],()=>{})).toThrow("4 MiB");expect(parse).not.toHaveBeenCalled();}finally{parse.mockRestore();}
+  });
   test("actual HTTP reads the frozen population, refuses incompatible data and survives database reopen",async()=>{
     const a=distributionExperiment("a",[0,1]), b=distributionExperiment("b",[1,0]);
     insertExperiment(a,"a");insertExperiment(b,"b");
