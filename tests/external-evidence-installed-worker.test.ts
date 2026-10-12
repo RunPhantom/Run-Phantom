@@ -19,8 +19,13 @@ test("native standalone worker binary parses outside the checkout without a Bun 
       expect({ exit, output: new TextDecoder().decode(output), errors: new TextDecoder().decode(errors) }).toMatchObject({ exit: 0 });
     } finally { clearTimeout(buildTimer); if (build.exitCode === null) build.kill("SIGKILL"); await build.exited; }
     const cwd = join(directory, "empty-state"), profile = join(directory, "private-profile"); await mkdir(cwd); await mkdir(profile);
-    for (const xml of ['<testsuite><testcase name="one"/></testsuite>', '<testsuite><testcase></testsuite>']) {
-      const env = evidenceWorkerLaunchEnv();
+    const validXml = '<testsuite><testcase name="one"/></testsuite>';
+    const positiveFixtures = [{ xml: validXml, env: evidenceWorkerLaunchEnv() }, { xml: '<testsuite><testcase></testsuite>', env: evidenceWorkerLaunchEnv() }];
+    for (const key of ["SystemRoot", "SYSTEMROOT", "systemroot", "sYsTeMrOoT"]) {
+      const env = evidenceWorkerLaunchEnv(), value = env.SystemRoot ?? "f03-synthetic-system-root"; delete env.SystemRoot; env[key] = value;
+      positiveFixtures.push({ xml: validXml, env });
+    }
+    for (const { xml, env } of positiveFixtures) {
       const child = Bun.spawn([executable], { cwd, env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
       const timer = setTimeout(() => child.kill("SIGKILL"), 3_000);
       try {
@@ -34,7 +39,9 @@ test("native standalone worker binary parses outside the checkout without a Bun 
         expect(await readdir(cwd)).toEqual([]); expect(await readdir(profile, { recursive: true })).toEqual([]);
       } finally { clearTimeout(timer); if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
     }
-    for (const env of [{ ...evidenceWorkerLaunchEnv(), HOME: profile }, { ...evidenceWorkerLaunchEnv(), USERPROFILE: profile },
+    const unicodeEnvs = ["\u017fYSTEMROOT", "SY\u017fTEMROOT", "SY\ufb05EMROOT", "SY\ufb06EMROOT"].flatMap(key =>
+      ["", "f03-synthetic-secret"].map(value => ({ ...evidenceWorkerLaunchEnv(), [key]: value })));
+    for (const env of [...unicodeEnvs, { ...evidenceWorkerLaunchEnv(), HOME: profile }, { ...evidenceWorkerLaunchEnv(), USERPROFILE: profile },
       { ...evidenceWorkerLaunchEnv(), hOmE: profile }, { ...evidenceWorkerLaunchEnv(), UNKNOWN_EMPTY: "" },
       { ...evidenceWorkerLaunchEnv(), PATH: profile }, { ...evidenceWorkerLaunchEnv(), oPeNaI_aPi_KeY: "f03-synthetic-secret" },
       { ...evidenceWorkerLaunchEnv(), rUnPhAnToM_dB_pAtH: join(profile, "local.db") },
@@ -43,6 +50,10 @@ test("native standalone worker binary parses outside the checkout without a Bun 
       const child = Bun.spawn([executable], { cwd, env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
       const timer = setTimeout(() => child.kill("SIGKILL"), 3_000);
       try {
+        if (unicodeEnvs.includes(env)) {
+          await child.stdin.write(JSON.stringify({ version: 1, id: "installed", sourceId: "one", dialect: "junit-xml/v1", limits: DEFAULT_READER_LIMITS, bytes: Buffer.from(validXml).toString("base64") }));
+          await child.stdin.end();
+        }
         const [out, err, exit] = await Promise.all([readBoundedStream(child.stdout, 4096), readBoundedStream(child.stderr, 4096), child.exited]);
         expect(exit).toBe(1); expect(err.byteLength).toBe(0);
         expect(JSON.parse(new TextDecoder().decode(out))).toEqual({ version: 1, id: null, error: "protocol_invalid" });

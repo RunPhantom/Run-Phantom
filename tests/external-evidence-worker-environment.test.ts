@@ -47,6 +47,31 @@ describe("worker bootstrap is narrower than operational authority", () => {
     }
     for (const value of ["", "1", "/untrusted/cache", "0 "]) expectAtomicRefusal({ ...windowsBoot(), [cacheKey]: value });
   });
+  test("Unicode folding cannot grant operational, sentinel or cache key identity", () => {
+    expect("\u017fYSTEMROOT".toUpperCase()).toBe("SYSTEMROOT");
+    expect("SY\ufb06EMROOT".toUpperCase()).toBe("SYSTEMROOT");
+    expect("BUN_RUNT\u0131ME_TRANSPILER_CACHE_PATH".toUpperCase()).toBe(cacheKey);
+    for (const platform of ["darwin", "linux", "win32"] as const) {
+      for (const key of ["\u017fYSTEMROOT", "SY\u017fTEMROOT", "SY\ufb05EMROOT", "SY\ufb06EMROOT", "\uff33YSTEMROOT", "\u03a3YSTEMROOT", "SY\u017fTEMDRIVE", "U\u017fERPROFILE", "BUN_RUNT\u0131ME_TRANSPILER_CACHE_PATH"]) {
+        for (const value of ["", "synthetic-unknown", "0"]) {
+          expectAtomicRefusal({ ...evidenceWorkerLaunchEnv(platform, operational.SystemRoot), [key]: value }, platform);
+          const env = { ...operational, [cacheKey]: "0", [key]: value }, before = Object.getOwnPropertyDescriptors(env);
+          expect(finishEvidenceWorkerEnvironment(env, platform)).toBe(false);
+          expect(Object.getOwnPropertyDescriptors(env)).toEqual(before);
+        }
+      }
+    }
+  });
+  test("valid ASCII SystemRoot case variants retain their existing operational identity", () => {
+    for (const platform of ["darwin", "linux", "win32"] as const) {
+      for (const key of ["SystemRoot", "SYSTEMROOT", "systemroot", "sYsTeMrOoT"]) {
+        const env = evidenceWorkerLaunchEnv(platform, operational.SystemRoot); delete env.SystemRoot; env[key] = operational.SystemRoot;
+        expect(prepareEvidenceWorkerEnvironment(env, platform)).toBe(true);
+        expect(finishEvidenceWorkerEnvironment(env, platform)).toBe(true);
+        expect(env).toEqual({ LANG: "C.UTF-8", TZ: "UTC", [key]: operational.SystemRoot });
+      }
+    }
+  });
   test("Windows spelling aliases allow empty sentinels, never nonempty defaults", () => {
     for (const key of WINDOWS_WORKER_BOOTSTRAP_KEYS) {
       const env = windowsBoot(); delete env[key]; env[key.toLowerCase()] = "";

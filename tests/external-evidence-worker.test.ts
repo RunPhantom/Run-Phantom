@@ -27,6 +27,21 @@ test("actual worker parses bytes and exits without daemon state", async () => {
   expect(result.output.normalized.reportOutcome).toBe("reports_pass");
   expect(() => process.kill(result.pid, 0)).toThrow();
 });
+test("actual source worker refuses empty and nonempty Unicode aliases while accepting ASCII SystemRoot case", async () => {
+  for (const key of ["SystemRoot", "SYSTEMROOT", "systemroot", "sYsTeMrOoT"]) {
+    const env = evidenceWorkerLaunchEnv(), value = env.SystemRoot ?? "f03-synthetic-system-root"; delete env.SystemRoot; env[key] = value;
+    const result = await worker(request, env);
+    expect(result.exit).toBe(0); expect(result.output.normalized.reportOutcome).toBe("reports_pass");
+    expect(() => process.kill(result.pid, 0)).toThrow();
+  }
+  for (const key of ["\u017fYSTEMROOT", "SY\u017fTEMROOT", "SY\ufb05EMROOT", "SY\ufb06EMROOT"]) {
+    for (const value of ["", "f03-synthetic-secret"]) {
+      const result = await worker(request, { ...evidenceWorkerLaunchEnv(), [key]: value });
+      expect(result.exit).toBe(1); expect(result.output).toEqual({ version: 1, id: null, error: "protocol_invalid" });
+      expect(() => process.kill(result.pid, 0)).toThrow();
+    }
+  }
+});
 test("closed worker protocol refuses authority, paths and invalid byte encodings", async () => {
   for (const invalid of [{ ...request, path: "/untrusted" }, { ...request, scope: "local" }, { ...request, bytes: "not base64!" }, { ...request, limits: { ...DEFAULT_READER_LIMITS, maxSourceBytes: 999_999_999 } }]) {
     const result = await worker(invalid);

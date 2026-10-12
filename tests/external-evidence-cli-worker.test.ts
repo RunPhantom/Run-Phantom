@@ -53,6 +53,13 @@ async function qualify(command: string[]) {
     for (const key of ["HOME", "hOmE", "OPENAI_API_KEY", "oPeNaI_aPi_KeY", "ANTHROPIC_API_KEY", "RUNPHANTOM_DB_PATH", "rUnPhAnToM_dB_pAtH", "RUNPHANTOM_TEAM_DATA_DIR", "rUnPhAnToM_tEaM_dAtA_dIr", "UNKNOWN_EMPTY"]) {
       for (const value of ["", profile]) cases.push({ args: [], env: { ...minimalEnv(), [key]: value }, input: "", exit: 1, error: true, leaveOpen: true });
     }
+    for (const key of ["SystemRoot", "SYSTEMROOT", "systemroot", "sYsTeMrOoT"]) {
+      const env = minimalEnv(), value = env.SystemRoot ?? "f03-synthetic-system-root"; delete env.SystemRoot; env[key] = value;
+      cases.push({ args: [], env, input: input(xml), exit: 0, outcome: "reports_pass" });
+    }
+    for (const key of ["\u017fYSTEMROOT", "SY\u017fTEMROOT", "SY\ufb05EMROOT", "SY\ufb06EMROOT"]) {
+      for (const value of ["", "f03-synthetic-secret"]) cases.push({ args: [], env: { ...minimalEnv(), [key]: value }, input: input(xml), exit: 1, error: true });
+    }
     for (const key of WINDOWS_WORKER_BOOTSTRAP_KEYS) {
       cases.push({ args: [], env: { ...minimalEnv(), [key]: "f03-synthetic-default" }, input: "", exit: 1, error: true, leaveOpen: true });
       const alias = minimalEnv(); delete alias[key]; alias[key.toLowerCase()] = "f03-synthetic-default";

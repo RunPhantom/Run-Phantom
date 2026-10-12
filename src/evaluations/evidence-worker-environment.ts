@@ -16,6 +16,7 @@ export function evidenceWorkerLaunchEnv(platform: NodeJS.Platform = process.plat
 function checkedRemovals(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, bootstrap: boolean): string[] | null {
   const removals: string[] = [];
   for (const key of Object.keys(env)) {
+    if (!/^[A-Za-z_]+$/.test(key)) return null;
     const upper = key.toUpperCase();
     if (OPERATIONAL_KEYS.includes(upper)) continue;
     const cache = (platform === "win32" ? upper : key) === CACHE_KEY;
