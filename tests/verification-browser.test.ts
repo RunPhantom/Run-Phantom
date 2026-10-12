@@ -269,3 +269,97 @@ describe("the browser capture boundaries", () => {
     expect(() => runtime.registerStore("x", () => 1)).toThrow("disconnected");
   });
 });
+
+import { shapeStore } from "../src/verification/browser/store-adapters";
+
+function subscribable(initial = { count: 1, text: "ordinary" }) {
+  const listeners = new Set<() => void>();
+  const callbacks: Array<() => void> = [];
+  let subscriptions = 0, releases = 0;
+  return {
+    state: initial, callbacks,
+    source: { getState: () => initial, subscribe(listener: () => void) {
+      subscriptions++; listeners.add(listener); callbacks.push(listener); listener();
+      return () => { releases++; listeners.delete(listener); };
+    } },
+    notify() { for (const listener of [...listeners]) listener(); },
+    counts: () => ({ subscriptions, releases, listeners: listeners.size }),
+  };
+}
+describe("explicit adapter runtime registration and teardown", () => {
+  test("one source/config has one subscriber, no initial event, independent release leases and fresh command reads", () => {
+    const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+    const fixture = subscribable(); const options = { select: { count: "count" } };
+    const release1 = runtime.registerStore("app", shapeStore(fixture.source, options));
+    const release2 = runtime.registerStore("app", shapeStore(fixture.source, options));
+    expect(fixture.counts().subscriptions).toBe(1);
+    expect(socket.sent.filter(message => message.event?.type === "state")).toHaveLength(0);
+    fixture.state.count++; fixture.notify(); fixture.notify();
+    expect(socket.sent.filter(message => message.event?.type === "state")).toHaveLength(1);
+    release1(); release1(); expect(fixture.counts().releases).toBe(0);
+    fixture.state.count++;
+    socket.receive({ type: "command", id: "fresh_read", command: { type: "state", store: "app" } });
+    expect(socket.sent.at(-1)?.result.value.values.count).toBe(3);
+    release2(); release2(); expect(fixture.counts()).toEqual({ subscriptions: 1, releases: 1, listeners: 0 });
+    expect(() => fixture.callbacks[0]()).not.toThrow();
+    expect(fixture.counts().releases).toBe(1);
+  });
+  test("source aliases/config changes refuse, distinct sources work and released names can be reused safely", () => {
+    const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+    const first = subscribable(), second = subscribable();
+    const options = { select: { count: "count" } };
+    const oldRelease = runtime.registerStore("first", shapeStore(first.source, options));
+    expect(() => runtime.registerStore("alias", shapeStore(first.source, options))).toThrow();
+    expect(() => runtime.registerStore("first", shapeStore(first.source, { select: { text: "text" } }))).toThrow();
+    runtime.registerStore("second", shapeStore(second.source, options));
+    oldRelease();
+    const replacement = runtime.registerStore("first", shapeStore(first.source, options));
+    oldRelease(); first.state.count++; first.notify();
+    expect(socket.sent.at(-1)?.event.data.value.values.count).toBe(2);
+    replacement(); runtime.disconnect();
+    expect(first.counts().releases).toBe(2); expect(second.counts().releases).toBe(1);
+  });
+  test("subscription state applies known fill redaction before transport and repeated partial callbacks disclose loss", () => {
+    const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+    const fixture = subscribable(); runtime.registerStore("app", shapeStore(fixture.source, { select: { text: "text" } }));
+    socket.receive({ type: "command", id: "fill_secret", command: { type: "fill", selector: "#missing", value: "user chosen sensitive value" } });
+    fixture.state.text = "user chosen sensitive value"; fixture.notify(); fixture.notify();
+    const events = socket.sent.filter(message => message.event?.type === "state");
+    expect(events).toHaveLength(2); expect(events.every(message => message.event.truncated === true)).toBe(true);
+    expect(JSON.stringify(socket.sent)).not.toContain("user chosen sensitive value");
+    expect(events[0].event.data.value.values.text).toBe("[REDACTED]");
+  });
+  test("adapter buffer loss disconnects and releases the acquired subscriber immediately", () => {
+    const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+    const fixture = subscribable(); runtime.registerStore("app", shapeStore(fixture.source, { select: { count: "count" } }));
+    socket.bufferedAmount = 300000; fixture.state.count++; fixture.notify();
+    expect(socket.readyState).toBe(3); expect(fixture.counts().releases).toBe(1);
+    expect(() => runtime.signal("later")).toThrow("disconnected");
+  });
+  test("pagehide tears down subscriptions and stale callbacks cannot emit into a new connection", () => {
+    const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+    const fixture = subscribable(); const release = runtime.registerStore("app", shapeStore(fixture.source, { select: { count: "count" } }));
+    window_.dispatchEvent(new Event("pagehide"));
+    expect(socket.readyState).toBe(3); expect(fixture.counts().releases).toBe(1);
+    const next = connection(); next.socket.receive({ type: "ready" });
+    const count = next.socket.sent.length; fixture.callbacks[0](); release();
+    expect(next.socket.sent).toHaveLength(count); expect(fixture.counts().releases).toBe(1);
+  });
+  test("failed registration rolls back its name and invalid unsubscriber never advertises a valid store", () => {
+    const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+    const source = { getState: () => ({ count: 1 }), subscribe() { throw new Error("private subscription details"); } };
+    expect(() => runtime.registerStore("app", shapeStore(source, { select: { count: "count" } }))).toThrow();
+    expect(() => runtime.registerStore("app", shapeStore({ getState: () => ({ count: 1 }), subscribe: () => null as unknown as () => void }, { select: { count: "count" } }))).toThrow();
+    expect(() => runtime.registerStore("app", () => ({ count: 2 }))).not.toThrow();
+    expect(JSON.stringify(socket.sent)).not.toContain("private subscription details");
+  });
+});
+
+test("a reentrant initial adapter read cannot advertise registration after losing its runtime", () => {
+  const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+  let listener: (() => void) | undefined, released = 0;
+  const source = { getState() { listener?.(); return { count: 1 }; }, subscribe(callback: () => void) { listener = callback; return () => { released++; }; } };
+  expect(() => runtime.registerStore("recursive", shapeStore(source, { select: { count: "count" } }))).toThrow();
+  expect(socket.readyState).toBe(3); expect(released).toBe(1);
+  expect(() => runtime.signal("later")).toThrow("disconnected");
+});
