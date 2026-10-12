@@ -113,3 +113,25 @@ test("explicit zero chunk roster is complete and missing model/dimensions stay u
   source.embedding.attributes = captureAttributes({ "openinference.span.kind": "EMBEDDING" });
   expect(parseOtlpRequest(source.body)[1].normalized).toMatchObject({ kind: "embedding", model: null, dimensions: null, inputText: null });
 });
+
+test("cached capture DTOs are rederived and invalid owned receipts cannot publish private filter companions", () => {
+  const source = captureTrace(), span = parseOtlpRequest(source.body)[0];
+  const row = { id: span.spanId, run_id: span.traceId, span_type: span.spanType, attributes: JSON.stringify(span.attributes), otlp_evidence: JSON.stringify(span.otlpEvidence),
+    captureVisibility: { secret: filterSecret }, normalized: { kind: "retrieval", filter: filterSecret } };
+  const safe = publicCaptureMetadata(row);
+  expect(JSON.stringify(safe)).not.toContain(filterSecret); expect((safe.captureVisibility as any).retrieval.resultCount).toBe(0);
+  const invalid = publicCaptureMetadata({ ...row, otlp_evidence: row.otlp_evidence.slice(0, -1) });
+  expect(invalid.otlp_evidence).toBeNull(); expect(JSON.stringify(invalid)).not.toContain(filterSecret);
+});
+
+test("UTF-8 projection cap counts JSON escaping and discloses whole-view loss", () => {
+  const source = captureTrace();
+  source.body.resourceSpans[0].scopeSpans[0].scope.name = "\u0001".repeat(4096);
+  source.body.resourceSpans[0].scopeSpans[0].scope.version = "\u0001".repeat(4096);
+  source.llm.events = Array.from({ length: 16 }, (_, sequence) => chunk(sequence, "\u0001".repeat(1024)));
+  source.llm.events.push(terminal("completed", 16));
+  const capture = (parseOtlpRequest(source.body)[2] as any).captureVisibility;
+  expect(Buffer.byteLength(JSON.stringify(capture))).toBeLessThanOrEqual(CAPTURE_LIMITS.bytes);
+  expect(capture.stream.state).toBe("incomplete"); expect(capture.stream.reasons).toContain("content-truncated");
+  expect(capture.stream.chunks).toEqual([]); expect(capture.stream.observedChunkCount).toBe(16);
+});

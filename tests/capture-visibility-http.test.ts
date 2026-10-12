@@ -76,3 +76,28 @@ test("actual OTLP JSON/protobuf, idempotent identity, public privacy and separat
   const portable = await json(`/api/runs/detail/${source.id}`); expect(portable.spans[2].captureVisibility.stream.state).toBe("completed");
   proof("http-two-boot.json", { firstPid, secondPid: daemon.pid, independentProcess: firstPid !== daemon.pid, equalPersistedViews: true, portableReinterpreted: true });
 }, 30000);
+
+test("actual error, metadata-only and missing-roster HTTP evidence never becomes complete", async () => {
+  for (const [offset, state] of [[1, "error"], [2, "unknown"], [3, "incomplete"]] as const) {
+    const capture = captureTrace(1670 + offset);
+    if (state === "unknown") capture.llm.events = [];
+    else if (state === "incomplete") capture.llm.events.pop();
+    else capture.llm.events[capture.llm.events.length - 1].name = "runphantom.stream.error";
+    expect((await post("/v1/traces", capture.body)).status).toBe(200);
+    const detail = await json(`/api/runs/detail/${capture.id}`);
+    expect(detail.spans[2].captureVisibility.stream.state).toBe(state);
+    expect(detail.spans[2].output_payload).toBe(captureOutput);
+    proof(`http-negative-${state}.json`, { id: capture.id, actual: detail.spans[2].captureVisibility.stream });
+  }
+}, 10000);
+
+test("local-only application example exports finite retrieval and stream evidence", async () => {
+  const child = spawn("bun", ["examples/capture-visibility/capture.ts", base], { cwd: path.resolve(import.meta.dir, ".."), stdio: ["ignore", "pipe", "pipe"] });
+  let output = "", error = ""; child.stdout?.on("data", data => output += String(data)); child.stderr?.on("data", data => error += String(data));
+  const [code] = await once(child, "close"); expect(code).toBe(0); expect(error).toBe("");
+  const id = new URL(output.trim()).pathname.split("/").pop()!;
+  const detail = await json(`/api/runs/detail/${id}`);
+  expect(detail.spans[0].normalized).toMatchObject({ kind: "retrieval", resultCount: 0 });
+  expect(detail.spans[2].captureVisibility.stream.state).toBe("completed");
+  proof("http-local-example.json", { id, exported: true, kinds: detail.spans.map((span: any) => span.span_type), streamState: detail.spans[2].captureVisibility.stream.state });
+}, 10000);

@@ -92,6 +92,10 @@ export function publicCaptureMetadata<T extends { attributes?: unknown; otlp_evi
     } catch { /* No ownership inferred from an unparseable carrier. */ }
   }
   const evidence = readCaptureReceipt(receipt);
+  if (!evidence && typeof receipt === "string" && [...filterKeys, ...textKeys].some(key => (receipt as string).includes(key))) {
+    // An invalid owned receipt cannot publish unsanitized companion metadata.
+    receipt = null; changed = true;
+  }
   if (evidence) {
     let receiptChanged = false;
     for (const source of [evidence, evidence.resource, evidence.scope, ...evidence.events, ...evidence.links]) {
@@ -110,7 +114,7 @@ export function publicCaptureMetadata<T extends { attributes?: unknown; otlp_evi
   const spanType = own(row, "span_type");
   if (!["RETRIEVAL", "EMBEDDING", "LLM_GENERATION", "TOOL_CALL", "TRACE", "AGENT_ROOT", "INTERNAL"].includes(String(spanType))) return projected;
   let flat: AdapterInput["attrs"] = {};
-  try { if (typeof attributes === "string") flat = JSON.parse(attributes); } catch { /* Missing metadata stays unavailable. */ }
+  try { if (typeof attributes === "string") { const parsed: unknown = JSON.parse(attributes); if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) flat = parsed as AdapterInput["attrs"]; } } catch { /* Missing metadata stays unavailable. */ }
   const capture = captureVisibility({ spanName: "", spanType: spanType as AdapterInput["spanType"], attrs: flat,
     traceId: typeof own(row, "run_id") === "string" ? own(row, "run_id") as string : undefined,
     spanId: typeof own(row, "id") === "string" ? own(row, "id") as string : undefined, otlpEvidence: readCaptureReceipt(receipt) });
@@ -198,6 +202,7 @@ export function captureVisibility(input: AdapterInput): CaptureVisibilityV1 | un
     const sameTerminal = terminals.length && terminals.every(item => item.state === terminals[0].state && item.count === terminals[0].count);
     if (terminals.length > 1 && !sameTerminal) streamReasons.add("terminal-conflict");
     const reportedTerminal = sameTerminal ? terminals[0].state : null;
+    if (chunks.size && !terminals.length) streamReasons.add("missing-roster");
     const declaredChunkCount = sameTerminal ? terminals[0].count : null;
     const ordered = [...chunks.values()].sort((a, b) => a.sequence - b.sequence);
     if (reportedTerminal === "completed") {
@@ -223,13 +228,18 @@ export function captureVisibility(input: AdapterInput): CaptureVisibilityV1 | un
       timePerOutputChunkMs: timing("gen_ai.server.time_per_output_token", "gen_ai.client.operation.time_per_output_chunk"), finishReasons, reasons: [...streamReasons] };
   }
   const result: CaptureVisibilityV1 = { schemaVersion: 1, source: { traceId: safeText(input.traceId, 1024), spanId: safeText(input.spanId, 1024), scopeName: evidence?.scope?.name ?? null, scopeVersion: evidence?.scope?.version ?? null,
-    kindSource: retrievalKind || embeddingKind ? ["runphantom.span.kind", "openinference.span.kind", "gen_ai.operation.name", "db.operation.name"].find(key => attrs[key] !== undefined) ?? null : null },
+    kindSource: retrievalKind || embeddingKind ? ["runphantom.span.kind", "openinference.span.kind", "gen_ai.operation.name", "db.system.name", "db.operation.name"].filter(key => attrs[key] !== undefined).map(key => `${key}=${safeText(String(attrs[key]), 256)}`).join("; ") : null },
     retrieval, embedding, stream, usage, coverage: { reasons: [...reasons], receiverDroppedEvents: evidence?.capture.droppedEvents ?? 0,
       exporterDroppedEvents: evidence?.droppedEventsCount ?? null, receiverDroppedAttributes: evidence?.capture.droppedAttributes ?? 0, exporterDroppedAttributes: evidence?.droppedAttributesCount ?? null,
       invalidValues: evidence?.capture.invalidValues ?? 0, truncatedValues: evidence?.capture.truncatedValues ?? 0, redactedValues: evidence?.capture.redactedValues ?? 0 } };
   if (Buffer.byteLength(JSON.stringify(result)) > CAPTURE_LIMITS.bytes) {
-    result.retrieval = null; result.embedding = null; result.coverage.reasons = [...new Set([...result.coverage.reasons, "content-truncated" as const])];
+    if (result.retrieval) result.retrieval = { kind: "retrieval", collection: null, topK: null, filter: null, resultCount: null, querySummary: null, queryText: null };
+    if (result.embedding) result.embedding = { kind: "embedding", model: null, dimensions: null, inputText: null };
+    result.coverage.reasons = [...new Set([...result.coverage.reasons, "content-truncated" as const])];
     if (result.stream) { result.stream.chunks = []; result.stream.state = "incomplete"; result.stream.coverage = "unavailable"; result.stream.reasons.push("content-truncated"); }
+  }
+  if (Buffer.byteLength(JSON.stringify(result)) > CAPTURE_LIMITS.bytes) {
+    result.source.scopeName = "[TRUNCATED]"; result.source.scopeVersion = "[TRUNCATED]"; result.source.kindSource = "[TRUNCATED]";
   }
   return result;
 }
