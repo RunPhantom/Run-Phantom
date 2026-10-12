@@ -1,0 +1,79 @@
+{
+  "feature": "Semantic snapshot comparison and transfer",
+  "head": "949da640aaf658d739a0795b2aef497857a2bb22",
+  "source": {
+    "backendExecutedHead": "aa01ed412e03b918d67c4790d3488496792b26da",
+    "backendPass": 911,
+    "backendSkip": 1,
+    "backendFail": 0,
+    "backendAssertions": 6821,
+    "unchangedProductReuse": true,
+    "currentSourceChromiumPass": 162,
+    "currentSourceOptInSkips": 13,
+    "fail": 0,
+    "flaky": 0,
+    "retries": 0,
+    "workers": 1
+  },
+  "copiedMac": {
+    "distinctJourneys": 20,
+    "originalFeatureJourneys": 10,
+    "common": 3,
+    "semantic": 2,
+    "causal": 1,
+    "restartAndImportPhases": 4,
+    "realSameStoreRestarts": 2,
+    "binarySha256": "96a4376f4f3502d3f7bfe7a8b661681abf0cc81ee862785b56575199c52b7268",
+    "embeddedAssets": 319,
+    "independentImportBytes": 4414,
+    "independentImportSha256": "0aad23baf0b427fcb9ae0df5ee90647071b3eabb46890d82e2e03087ea5fff98",
+    "originalInput": "Describe the result of this checkout.",
+    "originalOutput": "{\"status\":\"paid\"}",
+    "originalFailedVerdictPreserved": true,
+    "ownedProcessCleanup": {
+      "pids": 27,
+      "roots": 16,
+      "portObservations": 16,
+      "uniquePorts": 14
+    }
+  },
+  "screenshots": [
+    {
+      "path": "desktop-comparison.png",
+      "sha256": "238d94ac64fdbb0022a703caa1cde935988185b8c3bf17452731aae527d959c7",
+      "bytes": 101381,
+      "runtime": "actual copied macOS arm64 application",
+      "rootViewed": true
+    },
+    {
+      "path": "mobile-controls.png",
+      "sha256": "830ccdbc2c35ae2cd6a4dd2c1a50c9288a9f6c469574505130f96950092b554b",
+      "bytes": 71677,
+      "runtime": "actual copied macOS arm64 application",
+      "rootViewed": true
+    },
+    {
+      "path": "restarted-original-output.png",
+      "sha256": "951a5f8907342b45cb8ec22384b8a248feac2490267ec120b402ceaf40964e8d",
+      "bytes": 111144,
+      "runtime": "actual copied macOS arm64 application",
+      "rootViewed": true
+    },
+    {
+      "path": "independent-import.png",
+      "sha256": "b818c8e180f63d6206207372732768139387c53418a7a00fbc75f7bc8ccf56f0",
+      "bytes": 72157,
+      "runtime": "actual copied macOS arm64 application",
+      "rootViewed": true
+    }
+  ],
+  "remaining": [
+    "Native Windows/Linux feature qualification",
+    "Seven live-provider journeys",
+    "Complete assembled application and theme qualification"
+  ],
+  "providerSpendUsd": 0,
+  "globalAcceptance": false,
+  "author": "Divyam Talwar",
+  "product": "Run Phantom"
+}
