@@ -2,12 +2,17 @@ import { ErrorCode, McpError, type Tool } from "@modelcontextprotocol/sdk/types.
 import { parseCommand, parseFlowSteps, parsePredicate } from "../verification/validation";
 
 const text = { type: "string", minLength: 1 };
+const targetSchema = { oneOf: [
+  { type: "object", required: ["kind", "selector"], properties: { kind: { const: "element" }, selector: text }, additionalProperties: false },
+  { type: "object", required: ["kind", "store", "path"], properties: { kind: { const: "state" }, store: text, path: { type: "string" } }, additionalProperties: false },
+] };
 const commandSchema = {
   oneOf: [
     { type: "object", required: ["type"], properties: { type: { const: "snapshot" }, selector: text }, additionalProperties: false },
     { type: "object", required: ["type", "selector"], properties: { type: { const: "click" }, selector: text }, additionalProperties: false },
     { type: "object", required: ["type", "selector", "value"], properties: { type: { const: "fill" }, selector: text, value: { type: "string" } }, additionalProperties: false },
     { type: "object", required: ["type", "store"], properties: { type: { const: "state" }, store: text }, additionalProperties: false },
+    { type: "object", required: ["type", "selector", "targets"], properties: { type: { const: "causal-click" }, selector: text, targets: { type: "array", minItems: 1, maxItems: 20, items: { $ref: "#/$defs/target" } } }, additionalProperties: false },
   ],
 };
 const predicateSchema = {
@@ -17,11 +22,13 @@ const predicateSchema = {
     { type: "object", required: ["kind", "name"], properties: { kind: { const: "signal" }, name: text }, additionalProperties: false },
     { type: "object", required: ["kind", "store", "path", "equals"], properties: { kind: { const: "state" }, store: text, path: { type: "string" }, equals: {} }, additionalProperties: false },
     { type: "object", required: ["kind", "selector", "state"], properties: { kind: { const: "element" }, selector: text, state: { enum: ["present", "absent"] } }, additionalProperties: false },
+    { type: "object", required: ["kind", "target", "relation"], properties: { kind: { const: "relative" }, target: { $ref: "#/$defs/target" }, relation: { enum: ["changed", "increased", "decreased"] } }, additionalProperties: false },
+    { type: "object", required: ["kind", "target", "relation", "equals"], properties: { kind: { const: "relative" }, target: { $ref: "#/$defs/target" }, relation: { const: "becomes" }, equals: {} }, additionalProperties: false },
     { type: "object", required: ["kind", "predicates"], properties: { kind: { enum: ["allOf", "anyOf"] }, predicates: { type: "array", minItems: 1, maxItems: 20, items: { $ref: "#/$defs/predicate" } } }, additionalProperties: false },
   ],
 };
 const cursor = { type: "integer", minimum: 0, description: "Exclusive observation cursor returned by app_observe or app_act; events at this cursor are excluded." };
-const definitions = { command: commandSchema, predicate: predicateSchema };
+const definitions = { command: commandSchema, predicate: predicateSchema, target: targetSchema };
 
 export const VERIFICATION_TOOLS: Tool[] = [
   {
@@ -36,12 +43,12 @@ export const VERIFICATION_TOOLS: Tool[] = [
   },
   {
     name: "app_act",
-    description: "Issue one explicit snapshot, click, fill or registered-store read to a connected app. Selectors resolve against the current document; there is no eval or navigation command. Capture the returned cursor and use app_assert to verify the outcome. Live fill values are not persisted and cannot be saved in flows.",
+    description: "Issue one explicit snapshot, click, fill, registered-store read, or opt-in causal-click to a connected app. Causal-click requires negotiated causal-readings support and captures declared state paths or DOM counts in the same synchronous SDK turn; unsupported runtimes refuse before executing. Source is SDK-reported, not trusted browser execution. Capture the returned cursor and use app_assert. Live fill values are not persisted or saved in flows.",
     inputSchema: { type: "object", required: ["sessionId", "command"], properties: { sessionId: text, command: { $ref: "#/$defs/command" } }, $defs: definitions, additionalProperties: false },
   },
   {
     name: "app_assert",
-    description: "Evaluate an app outcome and persist a run-linked pass/fail/inconclusive report. Supports network URL/method/status, console error/warning presence or absence, signal, registered state equality, DOM presence/absence, and nested allOf/anyOf. Durable context retains expected predicates, cursor windows, observer coverage, dropped events and quiet/completeness facts; redacted or truncated context is marked. Pass is scoped to the observed interval; unfinished capture, lost coverage and disconnects are inconclusive. Negative checks wait for bounded quiet and no pending requests.",
+    description: "Evaluate and persist a run-linked pass/fail/inconclusive report. Supports network, console, signal, current state/DOM, nested allOf/anyOf, and opt-in relative changed/increased/decreased/becomes against a matching causal-click target and returned cursor. Relative checks require captured pre/action/post readings; already-true expectations or later background changes cannot prove the click. SDK-reported synchronous transitions do not prove asynchronous business completion. Saved context includes expectations, readings, coverage and bounded quiet facts, with redaction/truncation marked.",
     inputSchema: { type: "object", required: ["sessionId", "predicate"], properties: { sessionId: text, predicate: { $ref: "#/$defs/predicate" }, since: cursor, name: text }, $defs: definitions, additionalProperties: false },
   },
   {
