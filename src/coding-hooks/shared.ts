@@ -47,7 +47,7 @@ export type HookAdmission = HookResult<ClaudeHookInput>;
 function refusal<T>(reason: HookFailure): HookResult<T> { return { status: "unavailable", reason }; }
 
 /** The lexical limit runs before JSON.parse, which would otherwise erase duplicate members. */
-export function parseBoundedHookJson(input: unknown, byteLimit = HOOK_LIMITS.stdinBytes): HookResult<HookJson> {
+export function parseBoundedHookJson(input: unknown, byteLimit: number = HOOK_LIMITS.stdinBytes): HookResult<HookJson> {
   if (typeof input !== "string") return refusal("invalid_json");
   if (!Number.isSafeInteger(byteLimit) || byteLimit < 1 || byteLimit > HOOK_LIMITS.stdinBytes || Buffer.byteLength(input, "utf8") > byteLimit) return refusal("byte_limit");
   let depth = 0, quoted = false;

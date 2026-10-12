@@ -236,6 +236,15 @@ function bodyFloor(value: HookJson, state: { nodes: number; bytes: number; parti
   return output;
 }
 
+/** Daemon retention repeats the same mandatory floor; HTTP input cannot rely on callback redaction. */
+export function sanitizeClaudeRetention(value: HookJson): { value: HookJson; partial: boolean; redacted: boolean } {
+  const state = { nodes: 0, bytes: 0, partial: false, redacted: false };
+  const safe = sanitizeWithReport(bodyFloor(value, state));
+  return { value: safe.value as HookJson, partial: state.partial || Boolean(safe.truncation), redacted: state.redacted || Boolean(safe.redacted) };
+}
+
+export function sanitizeClaudeLabel(value: string): string { return value.length <= NORMALIZATION_LIMITS.selectedStringUnits ? floorText(value).slice(0, 256) : "[UNAVAILABLE]"; }
+
 /** Producer data stays partial/unverified even when the actual bounded source layout is supported. */
 export function normalizeClaudeHook(raw: unknown, authority: NormalizationAuthority, snapshot: TranscriptSnapshot | null): NormalizationResult {
   const admitted = parseClaudeHookInput(raw);

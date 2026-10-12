@@ -1,8 +1,9 @@
 # Claude session hooks
 
 Run Phantom's Claude hook components are under development. The source tree has
-bounded hook admission, transcript acquisition, normalization and exact-owned
-settings operations. Daemon publication and owner capture consent are not active.
+bounded hook admission, transcript acquisition, normalization, exact-owned
+settings operations and unregistered store/controller/management helpers. Daemon
+publication and application owner capture consent are not active.
 An installed settings entry alone does not establish captured evidence.
 
 The callback command is:
@@ -63,3 +64,33 @@ The synthetic fixtures and native callback controls qualify these components.
 They do not establish a real installed model session, retained Runs output,
 daemon restart/delete/import fencing or full application acceptance. Those checks
 remain pending activation and the separately authorized provider session.
+
+The unregistered management helper prepares a disabled installation before private
+capability and settings writes, then commits active policy only under the same
+owner and installation generations. Meaningful policy changes and uninstall revoke
+the earlier token; an identical installation preserves it. A private capability
+uses mode 0600 under a mode 0700 directory. Full policy is available only for an
+explicitly consented local installation. Missing capability, installed settings,
+stored policy and unavailable transport are separate diagnostic facts.
+
+A global settings target currently binds only the workspace and exact transcript
+project directory registered by trusted management. Its reported capture coverage
+is `registered_workspace_only`. Multiple-workspace global metadata coverage remains
+pending; another project's path or a forged cwd grants no authority. The registered
+source identity is shared with a local installation over that same actual project,
+while local full consent and global metadata capability remain separate.
+
+The store uses an injected owner SQLite connection, synchronous immediate
+transactions and actual encoded-state quotas. It checks current token, policy,
+owner and installation generations again at publication. Actual canonical span
+changes cause refusal rather than restoration from cached hook data. The standalone
+HTTP controller admits two active and eight queued requests with finite body and
+request lifetimes; closing it aborts and drains owned reservations. It is not
+registered in the application server. Tests bootstrap the exact reviewed proposal
+DDL in temporary owner databases; that fixture is not an installed migration.
+
+Native owner-database, HTTP and filesystem tests cover these helper boundaries,
+including external writer contention, current-policy redaction, quota rollback,
+tombstone refusal, paused-body owner changes and settings failure reconciliation.
+Application startup ownership, migration integration, callback transport, global
+metadata catalog coverage and real installed session acceptance remain pending.

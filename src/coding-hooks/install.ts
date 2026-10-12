@@ -127,6 +127,8 @@ export function mergeClaudeSettings(input: unknown, operation: "install" | "unin
 }
 
 interface FileSnapshot { text: string; sha256: string; stats: BigIntStats; }
+/** Trusted management stages the same bounded settings snapshot that the exact-owned writer admits. */
+export async function readClaudeSettingsText(file: string): Promise<string | null> { return (await readSnapshot(file))?.text ?? null; }
 const sameFile = (left: BigIntStats, right: BigIntStats): boolean => left.dev === right.dev && left.ino === right.ino && left.birthtimeNs === right.birthtimeNs;
 const isMissing = (error: unknown): boolean => error instanceof Error && "code" in error && error.code === "ENOENT";
 async function readSnapshot(file: string): Promise<FileSnapshot | null> {
