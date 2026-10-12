@@ -41,15 +41,18 @@ function resolveMigrationsFolder(): string {
 function ensureEmbeddedMigrationsFolder(): string {
   const cacheRoot = path.join(os.homedir(), ".runphantom", "migrations", VERSION);
   const journalPath = path.join(cacheRoot, "meta", "_journal.json");
-  const hasAllFiles =
-    fs.existsSync(journalPath) &&
-    embeddedMigrationFiles.every((asset) => fs.existsSync(path.join(cacheRoot, asset.relativePath)));
-  if (hasAllFiles) return cacheRoot;
+  const journal = JSON.stringify(embeddedMigrationJournal, null, 2);
+  // Different source builds may share VERSION. File presence alone can retain
+  // an older journal or record modified cached SQL under an unexpected hash.
+  try {
+    if (fs.readFileSync(journalPath, "utf8").trim() === journal
+      && embeddedMigrationFiles.every(asset => fs.readFileSync(path.join(cacheRoot, asset.relativePath)).equals(fs.readFileSync(asset.sourcePath)))) return cacheRoot;
+  } catch { /* A missing or unreadable cache is extracted from the trusted assets below. */ }
 
   const tmp = `${cacheRoot}.extract.${process.pid}.${Date.now()}`;
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.mkdirSync(path.join(tmp, "meta"), { recursive: true });
-  fs.writeFileSync(path.join(tmp, "meta", "_journal.json"), JSON.stringify(embeddedMigrationJournal, null, 2));
+  fs.writeFileSync(path.join(tmp, "meta", "_journal.json"), journal);
   for (const asset of embeddedMigrationFiles) {
     const target = path.join(tmp, asset.relativePath);
     fs.mkdirSync(path.dirname(target), { recursive: true });

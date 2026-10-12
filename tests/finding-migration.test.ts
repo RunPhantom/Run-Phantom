@@ -53,7 +53,7 @@ function fixture(run: (root: string, filename: string) => void) {
 }
 
 for (const prior of [null, 5, 7, 8, "legacy"] as const) test(`canonical finding migration upgrades ${prior ?? "fresh"} with retained bytes and second-boot stability`, () => fixture((root, filename) => {
-  let before: unknown, oldHistory: unknown[] = [];
+  let before: ReturnType<typeof retained> | undefined, oldHistory: unknown[] = [];
   if (prior !== null) {
     const db = new Database(filename); apply(db, priorFolder(root, prior === "legacy" ? 7 : prior, prior === "legacy"));
     seed(db, prior === "legacy"); before = retained(db, prior === "legacy");
