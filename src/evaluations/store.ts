@@ -1,6 +1,6 @@
 import { parseCapturedAgentDefinitions } from "../agent-definitions";
 import { randomUUID, createHash } from "node:crypto";
-import { and, asc, desc, eq, inArray, count, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, notInArray, count, sql } from "drizzle-orm";
 import { getDrizzleDb } from "../db";
 import { evaluation_datasets as datasets, evaluation_revisions as revisions, evaluation_experiments as experiments, evaluation_reviews as reviews } from "../db/schema";
 import { canonicalCaseDefinitions, EvaluationError, parseDatasetExport } from "./validation";
@@ -10,6 +10,7 @@ import type { PromotionRequest, PromotionReceipt } from "../review-queues/protoc
 import { parsePromotionRequest, canonicalReviewJson, reviewHash, compileReviewCase, ReviewQueueError } from "../review-queues/validation";
 import { readReviewQueue, readReviewItem, assertReviewRetention, persistReviewMutation, findReviewPromotion } from "../review-queues/store";
 import { markReviewPromoted } from "../review-queues/state";
+import { activeLocalEvidenceAttachmentIds } from "./evidence-inventory";
 
 export function listDatasets(): Dataset[] {
   return getDrizzleDb().select().from(datasets).orderBy(desc(datasets.created_at)).all()
@@ -81,7 +82,8 @@ export function insertExperiment(experiment: Experiment, token: string): void {
     if (active >= L.MAX_ACTIVE_JOBS) throw new EvaluationError("Two experiments are already queued or running", 409);
     const total = tx.select({ n: count() }).from(experiments).get()?.n ?? 0;
     if (total >= L.MAX_EXPERIMENTS) {
-      const victims = tx.select({ id: experiments.id }).from(experiments).where(inArray(experiments.status, ["completed", "cancelled"]))
+      const protectedIds = [...activeLocalEvidenceAttachmentIds(getDrizzleDb().$client, "experiment")];
+      const victims = tx.select({ id: experiments.id }).from(experiments).where(and(inArray(experiments.status, ["completed", "cancelled"]), protectedIds.length ? notInArray(experiments.id, protectedIds) : undefined))
         .orderBy(asc(experiments.created_at)).limit(total - L.MAX_EXPERIMENTS + 1).all();
       if (victims.length < total - L.MAX_EXPERIMENTS + 1) throw new EvaluationError("Experiment retention is full", 409);
       tx.delete(experiments).where(inArray(experiments.id, victims.map((row) => row.id))).run();

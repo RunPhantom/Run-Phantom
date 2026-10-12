@@ -1,7 +1,6 @@
 import { Database } from "bun:sqlite";
 import { and, asc, count, desc, eq, gte, inArray, isNull, like, ne, or, sql as drizzleSql, type SQL } from "drizzle-orm";
 import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
-import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import path from "path";
 import os from "os";
 import fs from "fs";
@@ -14,6 +13,10 @@ import { SOURCE_MIGRATIONS_DIR } from "./source-paths";
 import { IS_PACKAGED_RUNTIME, VERSION } from "./version";
 import { withholdAgentDefinitionCapture } from "./agent-definitions";
 import { OTLP_EVIDENCE_LIMITS } from "./spans/otlp-evidence";
+import { activeLocalEvidenceAttachmentIds } from "./evaluations/evidence-inventory";
+import { EvidenceError } from "./evaluations/evidence-protocol";
+import { bridgeLegacyFindingMigration } from "./db/legacy-finding-migration";
+import { migrateDatabase } from "./db/migrate";
 
 const RUNPHANTOM_DB_PATH_ENV_VAR = "RUNPHANTOM_DB_PATH";
 
@@ -38,15 +41,18 @@ function resolveMigrationsFolder(): string {
 function ensureEmbeddedMigrationsFolder(): string {
   const cacheRoot = path.join(os.homedir(), ".runphantom", "migrations", VERSION);
   const journalPath = path.join(cacheRoot, "meta", "_journal.json");
-  const hasAllFiles =
-    fs.existsSync(journalPath) &&
-    embeddedMigrationFiles.every((asset) => fs.existsSync(path.join(cacheRoot, asset.relativePath)));
-  if (hasAllFiles) return cacheRoot;
+  const journal = JSON.stringify(embeddedMigrationJournal, null, 2);
+  // Different source builds may share VERSION. File presence alone can retain
+  // an older journal or record modified cached SQL under an unexpected hash.
+  try {
+    if (fs.readFileSync(journalPath, "utf8").trim() === journal
+      && embeddedMigrationFiles.every(asset => fs.readFileSync(path.join(cacheRoot, asset.relativePath)).equals(fs.readFileSync(asset.sourcePath)))) return cacheRoot;
+  } catch { /* A missing or unreadable cache is extracted from the trusted assets below. */ }
 
   const tmp = `${cacheRoot}.extract.${process.pid}.${Date.now()}`;
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.mkdirSync(path.join(tmp, "meta"), { recursive: true });
-  fs.writeFileSync(path.join(tmp, "meta", "_journal.json"), JSON.stringify(embeddedMigrationJournal, null, 2));
+  fs.writeFileSync(path.join(tmp, "meta", "_journal.json"), journal);
   for (const asset of embeddedMigrationFiles) {
     const target = path.join(tmp, asset.relativePath);
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -76,9 +82,10 @@ export function getDrizzleDb(): RunPhantomDb {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   _dbPath = dbPath;
   _sqliteDb = new Database(dbPath, { create: true });
-  _sqliteDb.exec("PRAGMA journal_mode = WAL");
   _drizzleDb = drizzle(_sqliteDb, { schema });
   try {
+    _sqliteDb.exec("PRAGMA busy_timeout = 1000");
+    _sqliteDb.exec("PRAGMA journal_mode = WAL");
     // Both pragmas are required for the table rebuild in
     // 0003_span_identity_per_run.sql, which creates `__new_spans`, drops
     // `spans`, then renames. They must be set on the connection: drizzle runs
@@ -98,9 +105,14 @@ export function getDrizzleDb(): RunPhantomDb {
     // enforcement off while a referenced table is dropped and recreated.
     _sqliteDb.exec("PRAGMA legacy_alter_table = ON");
     _sqliteDb.exec("PRAGMA foreign_keys = OFF");
-    migrate(_drizzleDb, { migrationsFolder: resolveMigrationsFolder() });
+    const migrationsFolder = resolveMigrationsFolder();
+    // SQLite's immediate transaction coordinates the finite legacy backfill;
+    // all startup work stays synchronous, before feature stores or listeners.
+    const validateLegacyUpgrade = bridgeLegacyFindingMigration(_sqliteDb, migrationsFolder);
+    migrateDatabase(_sqliteDb, migrationsFolder);
     _sqliteDb.exec("PRAGMA foreign_keys = ON");
     _sqliteDb.exec("PRAGMA legacy_alter_table = OFF");
+    validateLegacyUpgrade?.();
   } catch (err) {
     closeDb();
     throw new Error(
@@ -616,7 +628,11 @@ export function countReplaysBySource(sourceRunId: string): number {
 }
 
 export function deleteRun(runId: string) {
-  getDrizzleDb().transaction((tx) => {
+  const db = getDrizzleDb();
+  db.transaction((tx) => {
+    const runImports = activeLocalEvidenceAttachmentIds(db.$client, "run"), inspections = activeLocalEvidenceAttachmentIds(db.$client, "inspection"), checks = activeLocalEvidenceAttachmentIds(db.$client, "check");
+    const capturedChecks = tx.select({ id: schema.verification_reports.id }).from(schema.verification_reports).where(eq(schema.verification_reports.run_id, runId)).all();
+    if (runImports.has(runId) || inspections.has(runId) || capturedChecks.some(check => checks.has(check.id))) throw new EvidenceError("Run deletion is blocked by an active evidence import; cancel it first", 409);
     tx.delete(schema.spans).where(eq(schema.spans.run_id, runId)).run();
     tx.delete(schema.live_events).where(eq(schema.live_events.trace_id, runId)).run();
     // Annotations are not FK-cascaded, so leaving them behind orphans every note

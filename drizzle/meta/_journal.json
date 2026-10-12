@@ -64,6 +64,20 @@
       "when": 1791757794360,
       "tag": "0008_otlp_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1791766000000,
+      "tag": "0009_finding_comparisons",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1791766000001,
+      "tag": "0010_coding_hooks",
+      "breakpoints": true
     }
   ]
 }
