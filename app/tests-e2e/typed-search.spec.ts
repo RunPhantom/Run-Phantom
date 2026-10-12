@@ -51,3 +51,30 @@ test("secret queries preserve search meaning while skipping recent storage and m
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
   mkdirSync(evidence,{recursive:true});await page.screenshot({path:path.join(evidence,"mobile-typed-span-hits.png"),fullPage:true});
 });
+
+test("typed original source populations stay unavailable through the actual desktop and mobile controls",async({page,request,runPhantom})=>{
+  const captured={traceId:run(8),spanId:span(1),name:"Complete captured step",startTimeUnixNano:"1800000000000000000",endTimeUnixNano:"1800000000000000000",status:{code:1},attributes:[
+    {key:"tags",value:{arrayValue:{values:[{stringValue:"safe-category"}]}}},{key:"input.value",value:{stringValue:"Exact verified input"}},{key:"output.value",value:{stringValue:"Exact verified output"}},
+  ]};
+  const payload={resourceSpans:[{scopeSpans:[{spans:[captured]}]}]};
+  expect((await request.post(runPhantom.url+"/v1/traces",{data:payload})).status()).toBe(200);
+  const source=JSON.stringify({...payload,resourceSpans:[{scopeSpans:[{spans:[{...captured,traceId:run(7)}]}]}]})
+    .replace('"values":[{"stringValue":"safe-category"}]','"values":[{"stringValue":"[UNAVAILABLE]"}],"values":[{"stringValue":"source-only"}]');
+  expect((await request.post(runPhantom.url+"/v1/traces",{headers:{"content-type":"application/json"},data:source})).status()).toBe(200);
+  const imported=await request.post(runPhantom.url+"/api/import-run",{data:{format:"runphantom-trace/v1",run:{id:run(6),name:"Unavailable imported population",started_at:1800000000000,last_updated_at:1800000000000},spans:[{id:span(1),run_id:run(6),name:"Imported step",status:"OK",parent_span_id:null,start_time_ms:1800000000000,end_time_ms:1800000000000,duration_ms:0,attributes:JSON.stringify({tags:["import-only","[UNAVAILABLE]"]})}],liveEvents:[],annotations:[]}});expect(imported.status()).toBe(200);
+  await page.goto(runPhantom.url+"/search");await page.getByRole("button",{name:"Advanced filters",exact:true}).click();
+  await page.getByLabel("Filter field",{exact:true}).selectOption("tag");
+  for(const value of ["source-only","import-only"]){
+    await page.getByLabel("Filter value",{exact:true}).fill(value);await expect(page.locator(`datalist option[value="${value}"]`)).toHaveCount(0);
+    await page.getByLabel("Filter value",{exact:true}).press("Enter");await expect(page.getByText("No matching runs",{exact:true})).toBeVisible();
+    await page.getByRole("button",{name:`Remove Tag equals ${value}`,exact:true}).click();
+  }
+  await page.getByLabel("Filter operator",{exact:true}).selectOption("ne");await page.getByLabel("Filter value",{exact:true}).fill("missing");await page.getByLabel("Filter value",{exact:true}).press("Enter");
+  await expect(page.locator("[data-run-id]")).toHaveCount(1);await expect(page.locator(`[data-run-id="${run(8)}"]`)).toBeVisible();
+  await page.getByLabel("Search result type",{exact:true}).selectOption("span-hits");await expect(page.locator("[data-span-hit]")).toHaveCount(1);
+  await expect(page.locator("[data-span-hit]")).toContainText("Exact verified input");await expect(page.locator("[data-span-hit]")).toContainText("Exact verified output");
+  await page.reload();await expect(page.locator("[data-span-hit]")).toHaveCount(1);
+  mkdirSync(evidence,{recursive:true});await page.screenshot({path:path.join(evidence,"desktop-complete-tag-populations.png"),fullPage:true});
+  await page.setViewportSize({width:390,height:844});await expect(page.locator("[data-span-hit]")).toHaveCount(1);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);await page.screenshot({path:path.join(evidence,"mobile-complete-tag-populations.png"),fullPage:true});
+});

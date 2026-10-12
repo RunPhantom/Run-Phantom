@@ -253,14 +253,14 @@ function stripNul<T extends string | undefined>(value: T): T {
     : value) as T;
 }
 
-export function parseOtlpRequest(body: any): ParsedSpan[] {
+export function parseOtlpRequest(body: any, ambiguousTags?: WeakSet<object>): ParsedSpan[] {
   const spans: ParsedSpan[] = [];
   if (!body?.resourceSpans) return spans;
   for (const rs of body.resourceSpans) {
     for (const ss of rs.scopeSpans ?? []) {
       for (const s of ss.spans ?? []) {
         const attrs = s.attributes ?? [];
-        const tags = capturedTags(attrs, s.droppedAttributesCount);
+        const tags = ambiguousTags?.has(s) ? "[UNAVAILABLE]" : capturedTags(attrs, s.droppedAttributesCount);
         // BigInt() throws SyntaxError on anything non-numeric, so a single bad
         // timestamp from one exporter used to abort the whole batch with a 500.
         // Yield NaN instead and let the ingest validator reject that span with a

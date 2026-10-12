@@ -1,4 +1,5 @@
 import { parseOtlpRequest } from "../parse";
+import { observeOtlpTagSource, ambiguousOtlpTagSpans } from "../otlp-tag-source";
 import { hasDuplicateJsonKeys } from "../json-keys";
 import { decodeOtlpProtobuf } from "../otlp-protobuf";
 import { parseJsonEvidence } from "../evaluations/json-evidence";
@@ -188,12 +189,18 @@ function dropped(value: ObjectValue | undefined): boolean {
 export function normalizeTeamIngest(bytes: Uint8Array, format: "json" | "protobuf", activeSecret: string): TeamIngestBatch {
   if (bytes.byteLength > L.INGEST_EXPANDED_BYTES) throw large();
   let body: ObjectValue;
+  let ambiguousTags: WeakSet<object> | undefined;
   let rawTimes: Array<{ start: boolean; end: boolean }> | undefined;
   try {
     if (format === "protobuf") {
       rawTimes = checkProtobuf(bytes);
       body = decodeOtlpProtobuf(bytes);
-    } else if (format === "json") body = object(parseJsonEvidence(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+    } else if (format === "json") {
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      const evidence = observeOtlpTagSource(text);
+      body = object(parseJsonEvidence(text));
+      ambiguousTags = ambiguousOtlpTagSpans(body, evidence);
+    }
     else throw invalid();
   } catch (error) { if (error instanceof TeamError) throw error; throw invalid(); }
   validateTree(body);
@@ -259,7 +266,7 @@ export function normalizeTeamIngest(bytes: Uint8Array, format: "json" | "protobu
     }
   }
   let parsed;
-  try { parsed = parseOtlpRequest(body); } catch { throw invalid(); }
+  try { parsed = parseOtlpRequest(body, ambiguousTags); } catch { throw invalid(); }
   const captures: TeamCapture[] = parsed.map((source, index) => {
     if (!/^[0-9a-f]{32}$/.test(source.traceId) || /^0+$/.test(source.traceId)
       || !/^[0-9a-f]{16}$/.test(source.spanId) || /^0+$/.test(source.spanId)) throw invalid();

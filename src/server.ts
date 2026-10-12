@@ -11,6 +11,7 @@ import { searchRuns, RunSearchError } from "./run-search";
 import { searchSpanHits, searchSuggestions, localSearchScope, SearchResourceError } from "./search-resources";
 import { getRunComparison, RunComparisonError } from "./run-comparison";
 import { parseOtlpRequest } from "./parse";
+import { observeOtlpTagSource, ambiguousOtlpTagSpans, unavailableOtlpTagSource, type OtlpTagSourceEvidence } from "./otlp-tag-source";
 import { decodeOtlpProtobuf } from "./otlp-protobuf";
 import {
   upsertRun,
@@ -923,6 +924,7 @@ export async function createServer(port: number) {
     "/otel/v1/traces",
     "/v1/live",
   ]);
+  const tagSources = new WeakMap<object, OtlpTagSourceEvidence>();
 
   // Run Phantom is a local control plane. Enforce loopback at the socket layer so
   // spoofable Host/Origin headers cannot turn a broad listener into LAN access.
@@ -994,7 +996,17 @@ export async function createServer(port: number) {
     limit: EVALUATION_LIMITS.MAX_REQUEST,
     verify: (_req, _res, body, encoding) => { parseJsonEvidence(new TextDecoder(encoding).decode(body)); },
   }));
-  app.use(express.json({ limit: "50mb" }));
+  app.use(express.json({ limit: "50mb", verify: (req, _res, bytes, encoding) => {
+    const pathname = (req as Request).path.replace(/\/+$/, "").toLowerCase();
+    if (!INGEST_PATHS.has(pathname) || pathname === "/v1/live") return;
+    // Other accepted charsets retain middleware behavior, but cannot grant
+    // tags authority from an annotation decoded with uncertain semantics.
+    let evidence = unavailableOtlpTagSource();
+    if (encoding === "utf-8") {
+      try { evidence = observeOtlpTagSource(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { /* tags stay unavailable */ }
+    }
+    tagSources.set(req, evidence);
+  } }));
   // Accept protobuf bodies so Traceloop OTLP exports aren't silently dropped
   app.use(express.raw({ limit: "50mb", type: "application/x-protobuf" }));
 
@@ -1099,7 +1111,9 @@ export async function createServer(port: number) {
         res.json(payload);
       };
 
-      const spans = parseOtlpRequest(body);
+      const source = tagSources.get(req);
+      tagSources.delete(req);
+      const spans = parseOtlpRequest(body, source ? ambiguousOtlpTagSpans(body, source) : undefined);
       if (spans.length === 0) { ok({ ok: true, spansIngested: 0 }); return; }
 
       // Reject structurally impossible spans up front. These are client errors, and

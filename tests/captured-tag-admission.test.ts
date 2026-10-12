@@ -5,11 +5,15 @@ import { parseOtlpRequest } from "../src/parse";
 
 const array = (tags: string[]) => ({ arrayValue: { values: tags.map(stringValue => ({ stringValue })) } });
 function parsed(attributes: unknown[], droppedAttributesCount?: unknown) {
-  return parseOtlpRequest({ resourceSpans: [{ scopeSpans: [{ spans: [{
+  const body = { resourceSpans: [{ scopeSpans: [{ spans: [{
     traceId: "1".repeat(32), spanId: "2".repeat(16), name: "Population admission",
     startTimeUnixNano: "1800000000000000000", endTimeUnixNano: "1800000000000000000",
     attributes: [...attributes, { key: "business", value: { stringValue: "exact payload" } }], droppedAttributesCount,
-  }] }] }] })[0];
+  }] }] }] };
+  const original = JSON.stringify(body);
+  const result = parseOtlpRequest(body)[0];
+  expect(JSON.stringify(body)).toBe(original);
+  return result;
 }
 const families = [
   ["sk_live_", "A", 10], ["sk_test_", "A", 10], ["rk_live_", "A", 10], ["rk_test_", "A", 10], ["sk-ant-", "A", 20], ["sk-proj-", "A", 20],
@@ -22,7 +26,7 @@ const families = [
 const safe = ["東京%_🌈", "quoted'value", "' OR 1=1 --", "a\\b", "Bearer cat", "monkeyJump", "sk-proj-category", "x".repeat(256), "🌈".repeat(128), "界".repeat(170) + "aa"];
 const unavailable = [
   ...families.map(([prefix, character, length]) => `before ${prefix}${character.repeat(length)} after`),
-  "before [REDACTED] after", "[unavailable]", "[TRUNCATED]", "[UNSERIALIZABLE]",
+  "before [REDACTED] after", "[unavailable]", "[TRUNCATED]", "[UNSERIALIZABLE]", "[CIRCULAR]", "before __REDACTED__ after",
   "eyJAAAA.AAAA.AAAA", "Bearer abcdefgh", "Basic\u00a0abcdefgh", "Bearer\u3000  abcdefgh", "RP_TEAM_INGEST_" + "A".repeat(16), "Password = category", '"api_key" : "category"',
   "https://safe.example.test/category", "prefix HTTP://safe.example.test/category", "wss://safe.example.test/category",
   '{"safe":"category"}', "\u3000[\"safe\"]", '"safe category"',
