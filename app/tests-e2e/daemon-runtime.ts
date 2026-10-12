@@ -104,7 +104,7 @@ export async function observeNative(pid: number, executable: string, cwd: string
   }
   if (process.platform === "win32") {
     // CIM exposes executable identity, not a process's current directory.
-    const script = `$ErrorActionPreference='Stop';$p=Get-CimInstance -ClassName Win32_Process -Property ExecutablePath,CommandLine -Filter "ProcessId = ${pid}"; $l=@(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue); @{exe=$p.ExecutablePath;command=$p.CommandLine;owned=(@($l|Where-Object {$_.OwningProcess -eq ${pid}}).Count -gt 0)}|ConvertTo-Json -Compress`;
+    const script = `$ErrorActionPreference='Stop';$env:PSModulePath=[System.IO.Path]::Combine($PSHOME,'Modules');$p=Get-CimInstance -ClassName Win32_Process -Property ExecutablePath,CommandLine -Filter "ProcessId = ${pid}"; $l=@(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue); @{exe=$p.ExecutablePath;command=$p.CommandLine;owned=(@($l|Where-Object {$_.OwningProcess -eq ${pid}}).Count -gt 0)}|ConvertTo-Json -Compress`;
     const raw = JSON.parse(await command("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script])) as { exe: string; command: string; owned: boolean };
     if (!raw.exe || (await realpath(raw.exe)).toLowerCase() !== executable.toLowerCase() || !raw.command?.includes(path.basename(executable)) || !raw.owned) throw refusal("native_identity_mismatch");
     return { executable: raw.exe, cwd: null, command: raw.command, listenerOwned: true, cwdEvidence: "launch-only" };
@@ -169,7 +169,7 @@ const validWindowsPid = (pid: number) => Number.isInteger(pid) && pid > 0 && pid
 export function windowsOwnershipQuery(pid: number | "all"): string {
   if (pid !== "all" && !validWindowsPid(pid)) throw refusal("fixture_process_pid");
   const filter = pid === "all" ? "" : ` -Filter "ProcessId = ${pid}"`;
-  return `$ErrorActionPreference='Stop';$rows=[System.Collections.Generic.List[object]]::new();Get-CimInstance -ClassName Win32_Process -Property ProcessId,ParentProcessId,CreationDate${filter} | ForEach-Object {if($_.ProcessId -gt 0){if($rows.Count -ge 8192){throw 'fixture_process_snapshot_limit'};$birth=$null;if($null -ne $_.CreationDate){$birth=$_.CreationDate.ToUniversalTime().ToString("o")};$rows.Add(@{pid=$_.ProcessId;parent=$_.ParentProcessId;birth=$birth})}};ConvertTo-Json -InputObject @($rows.ToArray()) -Compress`;
+  return `$ErrorActionPreference='Stop';$env:PSModulePath=[System.IO.Path]::Combine($PSHOME,'Modules');$rows=[System.Collections.Generic.List[object]]::new();Get-CimInstance -ClassName Win32_Process -Property ProcessId,ParentProcessId,CreationDate${filter} | ForEach-Object {if($_.ProcessId -gt 0){if($rows.Count -ge 8192){throw 'fixture_process_snapshot_limit'};$birth=$null;if($null -ne $_.CreationDate){$birth=$_.CreationDate.ToUniversalTime().ToString("o")};$rows.Add(@{pid=$_.ProcessId;parent=$_.ParentProcessId;birth=$birth})}};ConvertTo-Json -InputObject @($rows.ToArray()) -Compress`;
 }
 type Ownership = { root: ChildProcess; pid: number | undefined; identity: Promise<string | null>; descendants: Map<number, string>; pending: Promise<void>; running?: boolean; timer?: ReturnType<typeof setInterval>; failure?: Error };
 const ownership = new WeakMap<OwnedProcess, Ownership>();

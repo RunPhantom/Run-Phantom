@@ -167,3 +167,14 @@ async function interruptedQualifier(target: "runner" | "qualifier") {
 
 test.skipIf(!binary || process.platform !== "darwin")("interrupted actual copied qualifier reaps its daemon and private profile independently of the runner", async () => { await interruptedQualifier("runner"); }, 40_000);
 test.skipIf(!binary || process.platform !== "darwin")("catchable qualifier interruption closes its actual copied daemon and runner", async () => { await interruptedQualifier("qualifier"); }, 40_000);
+test("Windows ownership command discovery uses only the fixed intrinsic built-in module path", () => {
+  const modulePath = "$env:PSModulePath=[System.IO.Path]::Combine($PSHOME,'Modules');";
+  const prefix = "$ErrorActionPreference='Stop';" + modulePath;
+  for (const selector of [71, "all"] as const) {
+    const script = windowsOwnershipQuery(selector);
+    expect(script.startsWith(prefix)).toBe(true);
+    expect(script.match(/\$env:PSModulePath=[^;]+;/g)).toEqual([modulePath]);
+    expect(script.indexOf("Get-CimInstance")).toBeGreaterThan(prefix.length);
+    expect(script).not.toMatch(/\$env:(?:APPDATA|ProgramFiles|PSHOME)|Import-Module|CurrentUser|WindowsPowerShell\\Modules/);
+  }
+});
