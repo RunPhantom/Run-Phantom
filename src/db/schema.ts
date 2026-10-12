@@ -1,5 +1,5 @@
 import { asc, desc, sql } from "drizzle-orm";
-import { blob, check, foreignKey, index, integer, primaryKey, real, sqliteTable, sqliteView, text, unique } from "drizzle-orm/sqlite-core";
+import { blob, check, foreignKey, index, integer, primaryKey, real, sqliteTable, sqliteView, text, unique, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const runs = sqliteTable(
   "runs",
@@ -456,7 +456,7 @@ export const review_queue_items = sqliteTable("review_queue_items", {
   check("review_queue_items_created_at", sql`${t.created_at} >= 0`), check("review_queue_items_updated_at", sql`${t.updated_at} >= 0`),
   check("review_queue_items_approval", sql`(${t.state} = 'draft' AND ${t.approved_hash} IS NULL AND ${t.approved_at} IS NULL AND ${t.review_source} IS NULL) OR (${t.state} IN ('approved','promoted') AND ${t.approved_hash} IS NOT NULL AND ${t.approved_at} IS NOT NULL AND ${t.review_source} = 'localOperator')`),
   check("review_queue_items_promotion", sql`(${t.state} != 'promoted' AND ${t.promoted_dataset_id} IS NULL AND ${t.promoted_dataset_version} IS NULL AND ${t.promoted_case_id} IS NULL) OR (${t.state} = 'promoted' AND ${t.promoted_dataset_id} IS NOT NULL AND ${t.promoted_dataset_version} IS NOT NULL AND ${t.promoted_case_id} IS NOT NULL)`),
-  unique("review_queue_items_ordinal_unique").on(t.queue_id, t.ordinal), unique("review_queue_items_source_unique").on(t.queue_id, t.source_run_id, t.source_span_key),
+  uniqueIndex("review_queue_items_ordinal_unique").on(t.queue_id, t.ordinal), uniqueIndex("review_queue_items_source_unique").on(t.queue_id, t.source_run_id, t.source_span_key),
   index("review_queue_items_window").on(t.queue_id, t.ordinal, t.id), index("review_queue_items_state").on(t.queue_id, t.state, t.ordinal, t.id), index("review_queue_items_source").on(t.source_run_id),
 ]);
 
@@ -475,6 +475,6 @@ export const review_queue_promotions = sqliteTable("review_queue_promotions", {
   check("review_queue_promotions_dataset_hash", sql`length(${t.dataset_hash}) = 64`),
   check("review_queue_promotions_result_bytes", sql`length(CAST(${t.result_json} AS BLOB)) <= 16384`),
   check("review_queue_promotions_created_at", sql`${t.created_at} >= 0`),
-  unique("review_queue_promotions_key_unique").on(t.queue_id, t.idempotency_key), index("review_queue_promotions_dataset").on(t.dataset_id, t.dataset_version),
+  uniqueIndex("review_queue_promotions_key_unique").on(t.queue_id, t.idempotency_key), index("review_queue_promotions_dataset").on(t.dataset_id, t.dataset_version),
   foreignKey({ columns: [t.dataset_id, t.dataset_version], foreignColumns: [evaluation_revisions.dataset_id, evaluation_revisions.version] }).onDelete("cascade"),
 ]);

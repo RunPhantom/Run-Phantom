@@ -36,10 +36,12 @@ CREATE TABLE review_queue_items (
   CHECK((state = 'draft' AND approved_hash IS NULL AND approved_at IS NULL AND review_source IS NULL)
     OR (state IN ('approved','promoted') AND approved_hash IS NOT NULL AND approved_at IS NOT NULL AND review_source = 'localOperator')),
   CHECK((state != 'promoted' AND promoted_dataset_id IS NULL AND promoted_dataset_version IS NULL AND promoted_case_id IS NULL)
-    OR (state = 'promoted' AND promoted_dataset_id IS NOT NULL AND promoted_dataset_version IS NOT NULL AND promoted_case_id IS NOT NULL)),
-  UNIQUE(queue_id, ordinal),
-  UNIQUE(queue_id, source_run_id, source_span_key)
+    OR (state = 'promoted' AND promoted_dataset_id IS NOT NULL AND promoted_dataset_version IS NOT NULL AND promoted_case_id IS NOT NULL))
 );
+--> statement-breakpoint
+CREATE UNIQUE INDEX review_queue_items_ordinal_unique ON review_queue_items(queue_id, ordinal);
+--> statement-breakpoint
+CREATE UNIQUE INDEX review_queue_items_source_unique ON review_queue_items(queue_id, source_run_id, source_span_key);
 --> statement-breakpoint
 CREATE INDEX review_queue_items_window ON review_queue_items(queue_id, ordinal, id);
 --> statement-breakpoint
@@ -58,8 +60,9 @@ CREATE TABLE review_queue_promotions (
   dataset_hash TEXT NOT NULL CHECK(length(dataset_hash) = 64),
   result_json TEXT NOT NULL CHECK(length(CAST(result_json AS BLOB)) <= 16384),
   created_at INTEGER NOT NULL CHECK(created_at >= 0),
-  UNIQUE(queue_id, idempotency_key),
   FOREIGN KEY(dataset_id, dataset_version) REFERENCES evaluation_revisions(dataset_id, version) ON DELETE CASCADE
 );
+--> statement-breakpoint
+CREATE UNIQUE INDEX review_queue_promotions_key_unique ON review_queue_promotions(queue_id, idempotency_key);
 --> statement-breakpoint
 CREATE INDEX review_queue_promotions_dataset ON review_queue_promotions(dataset_id, dataset_version);
