@@ -1,3 +1,4 @@
+import { evidenceWorkerLaunchEnv } from "./evidence-worker-environment";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { EVIDENCE_LIMITS as L, type NormalizedEvidenceSource } from "./evidence-protocol";
@@ -59,8 +60,7 @@ function boundedTime(value: number | undefined, max: number): number {
 export function spawnEvidenceWorker(): WorkerProcess {
   const packaged = typeof __RUNPHANTOM_PACKAGED__ !== "undefined" && __RUNPHANTOM_PACKAGED__;
   const command = packaged ? [process.execPath, EVIDENCE_WORKER_ENTRY] : [process.execPath, "--no-env-file", "--no-install", fileURLToPath(new URL("./evidence-worker.ts", import.meta.url))];
-  const env: Record<string, string> = { LANG: "C.UTF-8", TZ: "UTC" };
-  if (process.platform === "win32" && process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
+  const env = evidenceWorkerLaunchEnv();
   return Bun.spawn(command, { env, stdin: "pipe", stdout: "pipe", stderr: "ignore" });
 }
 
