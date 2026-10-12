@@ -6,6 +6,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Inspection } from "../components/verification/Inspection";
 import { SemanticInspector } from "../components/verification/SemanticInspector";
+import { TrustedBrowser } from "../components/verification/TrustedBrowser";
 import { SnapshotDiff } from "../components/verification/SnapshotDiff";
 import { ReportContext } from "../components/verification/ReportContext";
 import { buildPredicate, describePredicate, emptyCheck, Field, PredicateEditor, Select, type CheckDraft } from "../components/verification/PredicateEditor";
@@ -261,6 +262,7 @@ export function VerificationPage() {
       </section>
     </div>}
 
+    <TrustedBrowser runId={linkedRunId || undefined} onReport={() => void reports.refetch()} />
     <SnapshotDiff sessionId={session?.id} connected={connected} capable={(observation.data?.session.capabilities ?? session?.capabilities)?.includes("semantic-tree") ?? false} disabled={!!busy} runId={linkedRunId || undefined} />
     <section aria-labelledby="flows-heading" className="space-y-3 border-t pt-5" style={{ borderColor: C.border }}>
       <h2 id="flows-heading" className="text-sm font-semibold" style={{ color: C.fg3 }}>Saved flows</h2>
