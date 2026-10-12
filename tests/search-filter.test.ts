@@ -76,4 +76,26 @@ describe("closed typed investigation filters", () => {
       expect(ids("tag", "ne", "safe%_tag")).toEqual(["known"]);
     } finally { db.close(); }
   });
+
+  test("ambiguous attributes and malformed tag members cannot establish matches or absence", () => {
+    const db = new Database(":memory:");
+    try {
+      db.exec("CREATE TABLE runs(id TEXT PRIMARY KEY); CREATE TABLE spans(run_id TEXT,id TEXT,parent_span_id TEXT,status TEXT,model TEXT,provider TEXT,duration_ms REAL,attributes TEXT)");
+      const fixtures = [
+        ["mixed", '{"tags":[42]}'],
+        ["empty-member", '{"tags":[""]}'],
+        ["oversized-member", JSON.stringify({ tags: ["x".repeat(513)] })],
+        ["duplicate-tags", '{"tags":[],"tags":["target"]}'],
+        ["duplicate-cost", '{"gen_ai.usage.cost_usd":0,"gen_ai.usage.cost_usd":1}'],
+      ];
+      for (const [id, attributes] of fixtures) {
+        db.query("INSERT INTO runs VALUES(?)").run(id);
+        db.query("INSERT INTO spans VALUES(?,?,NULL,'OK','m','p',1,?)").run(id, "root", attributes);
+      }
+      for (const [field, op, value] of [["tag", "eq", "target"], ["tag", "ne", "target"], ["captured_cost_usd", "eq", 0], ["captured_cost_usd", "ne", 0]] as const) {
+        const compiled = compileSearchFilter(parseSearchFilter(ast(field, op, value)), "local");
+        expect(db.query(`SELECT r.id FROM runs r WHERE ${compiled.sql}`).all(...compiled.params)).toEqual([]);
+      }
+    } finally { db.close(); }
+  });
 });
