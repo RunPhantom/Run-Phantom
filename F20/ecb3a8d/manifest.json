@@ -1,0 +1,86 @@
+{
+  "product": "Run Phantom",
+  "maintainer": "Divyam Talwar",
+  "feature": "Consented React source provenance",
+  "sourceHead": "ecb3a8dea8e753b6e8288bbd94dc52d78879b225",
+  "ownMeaningfulSourceCommits": 9,
+  "fullBackend": {
+    "passed": 764,
+    "skipped": 1,
+    "failed": 0,
+    "assertions": 4855
+  },
+  "fullSourceChromium": {
+    "passed": 141,
+    "skipped": 13,
+    "failed": 0,
+    "flaky": 0,
+    "retries": 0,
+    "skipScope": "seven paid-provider and six compiled-only gates"
+  },
+  "actualCopiedHostFeature": {
+    "passed": 6,
+    "skipped": 0,
+    "failed": 0,
+    "retries": 0
+  },
+  "separateSourceConsumerProduction": {
+    "passed": 1,
+    "runtime": "source Vite/SWC build and actual browser consumer; no copied-host transform claim"
+  },
+  "commonCopied": {
+    "passed": 3,
+    "skipped": 0,
+    "failed": 0,
+    "retries": 0
+  },
+  "artifactSha256": "f23891c22c5a47b3f35427a3833abb5ff3f3b67ddf5b39ebfc72097acc584a77",
+  "currentAssetHashes": 317,
+  "actual20Click": {
+    "visibleOutput": 21,
+    "all20OutcomesPreserved": true,
+    "savedContextBytes": 65179,
+    "sameCopiedExecutableRestartAndApiSqlEquality": true
+  },
+  "syntheticCjk": {
+    "bytes": 62675,
+    "sourceWriterToCopiedReader": true,
+    "compiledSaveInvocationProvedByThisCase": false,
+    "all20OutcomesPreserved": true
+  },
+  "allNineRecordedCopiedRootsReaped": true,
+  "screenshots": [
+    {
+      "file": "react-source-report.png",
+      "sha256": "51061dc22245676aea1e42d62de1bbbda609686b24d3d25c5f74e2c9d80360a8",
+      "runtime": "actual copied macOS arm64 executable",
+      "fixture": "real local React app/browser and captured local SDK outcomes; CJK case explicitly synthetic source-writer to copied-reader"
+    },
+    {
+      "file": "react-source-mobile.png",
+      "sha256": "c5369001169e7c05146884e04d59cc90a8b7d98b1e7ec36a31f2e38aec1d28a5",
+      "runtime": "actual copied macOS arm64 executable",
+      "fixture": "real local React app/browser and captured local SDK outcomes; CJK case explicitly synthetic source-writer to copied-reader"
+    },
+    {
+      "file": "react-source-budget-desktop.png",
+      "sha256": "4f9540968e7552c16cb53861205112d560847a70dc301df2654fcc58b6029b60",
+      "runtime": "actual copied macOS arm64 executable",
+      "fixture": "real local React app/browser and captured local SDK outcomes; CJK case explicitly synthetic source-writer to copied-reader"
+    },
+    {
+      "file": "synthetic-cjk-context-desktop.png",
+      "sha256": "febaae3419be44b07eb8318c63c9561ad4d569844666eec6059dd6006e128296",
+      "runtime": "actual copied macOS arm64 executable",
+      "fixture": "real local React app/browser and captured local SDK outcomes; CJK case explicitly synthetic source-writer to copied-reader"
+    }
+  ],
+  "providerSpendUsd": 0,
+  "unmerged": true,
+  "pending": [
+    "Actual native Windows/Linux",
+    "Exact reference theme/global mobile shell composition; frames retain inherited warm shell",
+    "Full selected-feature/framework/engine and paid-provider output qualification"
+  ],
+  "retainedFixtureDiagnostic": "Two planned successful copied restarts were labelled unexpected exit0 by inherited stopping flag; original logs preserved, no hidden repeat or product change."
+}
