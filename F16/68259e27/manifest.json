@@ -1,0 +1,50 @@
+{
+  "feature": "F16",
+  "sourceHead": "68259e270a69a78065b8813b95f0780cfbcfed3a",
+  "wholeMacArtifactSha256": "a8cd7b2cbf35921127061ded5a0f5f39e0ca1eb51da9452605fb7f8b1f6f1455",
+  "scope": "Reviewed source and current copied Darwin arm64 application; final combined UI composition and other platforms remain pending",
+  "screenshots": [
+    {
+      "file": "desktop-retrieval.png",
+      "sha256": "7ebeadaba2bf877321e6a4dc53bb66dced15873523dafc39c1a9848bef7150c6",
+      "dimensions": [
+        1440,
+        900
+      ],
+      "caption": "Retrieval source metadata preserves numeric zero and redacts sensitive filter values.",
+      "syntheticFixture": true
+    },
+    {
+      "file": "desktop-stream.png",
+      "sha256": "afb4622233bd7395234f9a80c8147daa61428543db96cd81fb17680940c2b70e",
+      "dimensions": [
+        1440,
+        900
+      ],
+      "caption": "Captured stream coverage, cancellation and zero timing values remain distinct.",
+      "syntheticFixture": true
+    },
+    {
+      "file": "mobile-retrieval.png",
+      "sha256": "dc17711e3214c2676367c93803d4a476c19b090663db8e4f5e6525985bd49f65",
+      "dimensions": [
+        390,
+        844
+      ],
+      "caption": "Mobile retrieval detail keeps bounded metadata and redacted filters readable.",
+      "syntheticFixture": true
+    },
+    {
+      "file": "mobile-output.png",
+      "sha256": "14f795001065e8580fc9e307b0ccde1e1b1b4caf7152787bcb7ce88099720987",
+      "dimensions": [
+        390,
+        844
+      ],
+      "caption": "Canonical captured output remains readable after the same-profile native restart.",
+      "syntheticFixture": true
+    }
+  ],
+  "providerCalls": 0,
+  "spendUsd": 0
+}

@@ -1,0 +1,50 @@
+{
+  "feature": "F07",
+  "sourceHead": "324e2e7bb6166a60acdd8fd70ebf86888b1caadd",
+  "wholeMacArtifactSha256": "a4c93c1decfd0a7ceec9f23660d611178cd78380b2136acf51f89ac3ef753eb0",
+  "scope": "Reviewed source and current copied Darwin arm64 application; final combined UI composition and other platforms remain pending",
+  "screenshots": [
+    {
+      "file": "comparison-1440.png",
+      "sha256": "d3d650deb35ceed8c4b2b90efaedc99c51e084048354e78f9bdc24f939d6480c",
+      "dimensions": [
+        1440,
+        950
+      ],
+      "caption": "Completed comparison preserves partial coverage and distinguishes retained, introduced and unresolved findings.",
+      "syntheticFixture": true
+    },
+    {
+      "file": "comparison-320.png",
+      "sha256": "59ca83a8e5d63412203d90a08290eba41559f35848b0ddb6079d2f2f949b08eb",
+      "dimensions": [
+        320,
+        950
+      ],
+      "caption": "Narrow viewport retains finding counts and review controls without horizontal page overflow.",
+      "syntheticFixture": true
+    },
+    {
+      "file": "reviewed-mapping.png",
+      "sha256": "83a707a20f38585a336ed090ae74fe04f58a88bd8b17b0b55964ad28a1830354",
+      "dimensions": [
+        1280,
+        720
+      ],
+      "caption": "Operator review pins an exact source mapping before equivalent finding keys can compare.",
+      "syntheticFixture": true
+    },
+    {
+      "file": "restarted-current-1440.png",
+      "sha256": "a5d154287559ab9d7ec0194c6cd695fec0a5ce24dab0945db22b023fd214e15c",
+      "dimensions": [
+        1440,
+        950
+      ],
+      "caption": "Same-profile native restart reloads the exact comparison and final page of 205 finding occurrences.",
+      "syntheticFixture": true
+    }
+  ],
+  "providerCalls": 0,
+  "spendUsd": 0
+}
