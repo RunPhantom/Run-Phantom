@@ -136,3 +136,17 @@ export function projectCapturedGuardSpan(span: unknown): Record<string, unknown>
   if (raw !== undefined && !parsed.receipt) out.otlp_evidence = null;
   return { ...out, guardEvidence: parsed.receipt ? fromReceipt(parsed.receipt) : empty(parsed.reason!) };
 }
+
+/** Persist source columns only, quarantining invalid carriers without retaining their text. */
+export function guardSpanForPersistence(span: unknown): Record<string, unknown> {
+  const projected = projectCapturedGuardSpan(span);
+  const { guardEvidence: _derived, ...out } = projected;
+  if (own(span, "otlp_evidence") != null && out.otlp_evidence === null) out.otlp_evidence = "[UNAVAILABLE]";
+  return out;
+}
+
+/** Portable files carry the validated source; derived decisions are rebuilt on read. */
+export function guardSpanForExport(span: unknown): Record<string, unknown> {
+  const { guardEvidence: _derived, ...out } = projectCapturedGuardSpan(span);
+  return out;
+}

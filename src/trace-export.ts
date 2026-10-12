@@ -2,6 +2,7 @@ import { getCachedRun, getDrizzleDb, runInTransaction } from "./db";
 import { importAnnotations, parseImportedAnnotations, MAX_IMPORTED_ANNOTATIONS, type Annotation } from "./annotations";
 import { OTLP_EVIDENCE_LIMITS, validateOtlpEvidence } from "./spans/otlp-evidence";
 import { withholdAgentDefinitionCapture } from "./agent-definitions";
+import { guardSpanForExport } from "./guard-evidence";
 
 export const TRACE_FORMAT = "runphantom-trace/v1";
 export const TRACE_EVIDENCE_FORMAT = "runphantom-trace/v2";
@@ -97,13 +98,15 @@ function exportCachedTrace(runId: string, publicProjection: boolean): CachedTrac
   const trace: CachedTrace = {
     ...(spans.some(span => span.otlp_evidence !== undefined && span.otlp_evidence !== null) ? { format: TRACE_EVIDENCE_FORMAT } : {}),
     run,
-    spans: publicProjection ? spans.map(withholdAgentDefinitionCapture) : spans,
+    spans,
     liveEvents: list(data.liveEvents, "liveEvents", TRACE_LIMITS.liveEvents, true) as Row[],
     annotations: client.prepare("SELECT id, run_id, span_id, kind, note, source, created_at FROM annotations WHERE run_id = ? ORDER BY created_at, id").all(runId) as Annotation[],
     exportSource: "saved-cache",
     exportNotice: "Legacy saved trace: payloads reflect the cached view and may be compacted. Only annotations still present in this store are included.",
   };
   parseTrace(trace);
+  if (publicProjection) trace.spans = spans.map(span => guardSpanForExport(withholdAgentDefinitionCapture(span)));
+  boundedJson(trace);
   return trace;
 }
 
@@ -141,12 +144,14 @@ function retainedTrace(runId: string, publicProjection: boolean): ExportedTrace 
     const trace: PortableTrace = {
       format: withEvidence ? TRACE_EVIDENCE_FORMAT : TRACE_FORMAT,
       run,
-      spans: publicProjection ? spans.map(withholdAgentDefinitionCapture) : spans,
+      spans,
       // Numeric live-event IDs belong to the exporting database, not the trace.
       liveEvents: client.prepare(`SELECT ${EVENT_COLUMNS.join(", ")} FROM live_events WHERE trace_id = ? ORDER BY timestamp, id`).all(runId) as Row[],
       annotations: client.prepare("SELECT id, run_id, span_id, kind, note, source, created_at FROM annotations WHERE run_id = ? ORDER BY created_at, id").all(runId) as Annotation[],
     };
     parseTrace(trace);
+    if (publicProjection) trace.spans = spans.map(span => guardSpanForExport(withholdAgentDefinitionCapture(span)));
+    boundedJson(trace);
     return trace;
   });
 }
