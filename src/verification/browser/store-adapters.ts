@@ -1,7 +1,7 @@
 /** Explicit application-owned projections; no store discovery or business verdicts. */
 import { captureBaselineReading, type SnapshotValue } from "../baseline.js";
 import { sanitizeWithReport } from "../serialization.js";
-import { isSensitiveKey } from "../redaction.js";
+import { isSensitiveKey, defaultIsSensitiveKey, REDACTED_VALUE } from "../redaction.js";
 
 export interface StoreAdapter { readonly kind: "query" | "pinia" | "shape" }
 export interface AdapterSnapshot {
@@ -80,6 +80,9 @@ function method(source: unknown, key: string): (...args: unknown[]) => unknown {
   }
   return invalid();
 }
+function sensitiveSelection(name: string): boolean {
+  return defaultIsSensitiveKey(name) || isSensitiveKey(name);
+}
 function selections(raw: unknown): Array<readonly [string, string]> {
   const entries = fields(raw);
   const names = Object.keys(entries).sort();
@@ -88,7 +91,7 @@ function selections(raw: unknown): Array<readonly [string, string]> {
     const path = entries[name];
     if (!/^[A-Za-z0-9_:-]{1,128}$/.test(name) || typeof path !== "string" || path.length > 1024) invalid();
     const parts = path === "" ? [] : path.split(".");
-    if (isSensitiveKey(name) || parts.length > 32 || parts.some(part => !part || forbidden.has(part) || isSensitiveKey(part))) invalid();
+    if (sensitiveSelection(name) || parts.length > 32 || parts.some(part => !part || forbidden.has(part) || sensitiveSelection(part))) invalid();
     return Object.freeze([name, path] as const);
   });
 }
@@ -153,9 +156,25 @@ export function canonicalQueryKey(raw: unknown): string {
   const value = clone(raw, 0);
   const identity = JSON.stringify(value);
   if (encoder.encode(identity).byteLength > 2048) invalid();
-  const clean = sanitizeWithReport(value);
-  if (clean.redacted || clean.truncation || JSON.stringify(clean.value) !== identity) invalid();
   return identity;
+}
+
+function publicQueryIdentity(id: string): { keyId: string; key: unknown; redacted: boolean } {
+  // Only our bounded canonical JSON is decoded. Private lookup identity never crosses the wire.
+  let redacted = false;
+  const floor = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(floor);
+    if (value === null || typeof value !== "object") return value;
+    const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const name of Object.keys(value)) {
+      if (defaultIsSensitiveKey(name)) { result[name] = REDACTED_VALUE; redacted = true; }
+      else result[name] = floor(data(value, name));
+    }
+    return result;
+  };
+  const clean = sanitizeWithReport(floor(JSON.parse(id) as unknown));
+  if (clean.truncation) invalid();
+  return { keyId: JSON.stringify(clean.value), key: clean.value, redacted: redacted || clean.redacted === true };
 }
 
 export function shapeStore(source: ShapeSource, options: StateAdapterOptions): StoreAdapter {
@@ -204,7 +223,7 @@ export function queryStore(source: QuerySource, options: QueryAdapterOptions): S
     const selected = entry.select === undefined ? [] : selections(entry.select);
     selectedCount += selected.length;
     if (selectedCount > 20 || keyBytes > 4096) invalid();
-    return { id, key: JSON.parse(id) as unknown[], selected };
+    return { id, selected };
   });
   if (!keys.length || new Set(keys.map(key => key.id)).size !== keys.length) invalid();
   const getCache = method(source, "getQueryCache"), defaults = method(source, "defaultQueryOptions");
@@ -214,7 +233,8 @@ export function queryStore(source: QuerySource, options: QueryAdapterOptions): S
       try {
         if (getCache() !== cache) return unavailable("query-unavailable");
         let partial = false;
-        const queries = keys.map(({ id, key, selected }) => {
+        const queries = keys.map(({ id, selected }) => {
+          const identity = publicQueryIdentity(id);
           try {
             const hash = data(defaults({ queryKey: JSON.parse(id) as unknown[] }), "queryHash");
             if (typeof hash !== "string" || !hash || hash.length > 4096) invalid();
@@ -226,13 +246,13 @@ export function queryStore(source: QuerySource, options: QueryAdapterOptions): S
               || !["pending", "error", "success"].includes(status) || !["idle", "fetching", "paused"].includes(fetchStatus)
               || typeof dataUpdatedAt !== "number" || !Number.isSafeInteger(dataUpdatedAt) || dataUpdatedAt < 0) invalid();
             const error = data(state, "error");
-            return { keyId: id, key, availability: "complete", status, fetchStatus, dataUpdatedAt, isStale,
+            return { keyId: identity.keyId, key: identity.key, availability: identity.redacted ? "partial" : "complete", status, fetchStatus, dataUpdatedAt, isStale,
               hasError: error !== null && error !== undefined,
               ...(opts.includeErrorMessage === true && error !== null && error !== undefined ? { errorMessage: data(error, "message") } : {}),
               ...(selected.length ? { values: project(data(state, "data"), selected) } : {}) };
           } catch {
             partial = true;
-            return { keyId: id, key, availability: "unavailable", reason: "query-unavailable" };
+            return { keyId: identity.keyId, key: identity.key, availability: "unavailable", reason: "query-unavailable" };
           }
         });
         return snapshot({ adapter: "query", queries }, partial);

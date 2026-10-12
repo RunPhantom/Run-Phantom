@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { buildRedactionPolicy, setActiveRedactionPolicy, resetActiveRedactionPolicy } from "../src/verification/redaction";
 import { canonicalQueryKey, piniaStore, shapeStore, readStoreAdapter } from "../src/verification/browser/store-adapters";
 
 describe("explicit state adapter boundaries", () => {
@@ -189,4 +190,48 @@ test("selected credential paths and renamed credential labels cannot bypass the 
   expect(() => shapeStore(source, { select: { password: "count" } })).toThrow();
   expect(() => queryStore(new QueryClient(), { keys: [{ queryKey: ["account"], select: { ordinary: "password" } }] })).toThrow();
   expect(reads).toBe(0);
+});
+
+
+test("actual QueryClient private keys stay exact while public identities ignore sensitive-field exemptions", () => {
+  const client = new QueryClient();
+  const firstKey = ["account", { nested: { password: "f23-private-password", apiKey: "f23-private-api-key", token: "f23-private-token" } }];
+  const secondKey = ["account", { nested: { password: "f23-second-password", apiKey: "f23-second-api-key", token: "f23-second-token" } }];
+  setActiveRedactionPolicy(buildRedactionPolicy({ allow: ["password", "apiKey", "token"] }));
+  try {
+    client.setQueryData(firstKey, { count: 1 }); client.setQueryData(secondKey, { count: 2 });
+    const adapter = queryStore(client, { keys: [{ queryKey: firstKey, select: { count: "count" } }, { queryKey: secondKey, select: { count: "count" } }] });
+    expect(canonicalQueryKey(firstKey)).not.toBe(canonicalQueryKey(secondKey));
+    const reading = readStoreAdapter(adapter);
+    expect(JSON.stringify(reading)).not.toContain("f23-private-password");
+    expect(reading.availability).toBe("partial");
+    expect(reading.value).toMatchObject({ queries: [{ values: { count: 1 }, key: ["account", { nested: { password: "[REDACTED]", apiKey: "[REDACTED]", token: "[REDACTED]" } }] }, { values: { count: 2 } }] });
+    for (const value of ["f23-private-password", "f23-private-api-key", "f23-private-token", "f23-second-password", "f23-second-api-key", "f23-second-token"]) expect(JSON.stringify(reading)).not.toContain(value);
+    client.setQueryData(firstKey, { count: 3 });
+    expect(readStoreAdapter(adapter).value).toMatchObject({ queries: [{ values: { count: 3 } }, { values: { count: 2 } }] });
+  } finally { resetActiveRedactionPolicy(); client.clear(); }
+});
+
+
+test("selection privacy floor cannot be disabled by application exemptions", () => {
+  let reads = 0;
+  setActiveRedactionPolicy(buildRedactionPolicy({ allow: ["password", "apiKey", "token"] }));
+  try {
+    const source = { getState: () => { reads++; return { password: "f23-selected-password" }; }, subscribe: () => () => {} };
+    expect(() => shapeStore(source, { select: { ordinary: "password" } })).toThrow();
+    expect(() => shapeStore(source, { select: { password: "ordinary" } })).toThrow();
+    expect(() => queryStore(new QueryClient(), { keys: [{ queryKey: ["profile"], select: { ordinary: "nested.apiKey" } }] })).toThrow();
+    expect(reads).toBe(0);
+  } finally { resetActiveRedactionPolicy(); }
+});
+
+test("known credential values in actual query keys are scrubbed before public identity encoding", () => {
+  const client = new QueryClient(); const filler = `sk-proj-${"test".repeat(12)}`;
+  const key = ["profile", { ordinary: filler }]; client.setQueryData(key, { count: 1 });
+  const adapter = queryStore(client, { keys: [{ queryKey: key, select: { count: "count" } }] });
+  expect(canonicalQueryKey(key)).toContain(filler);
+  const reading = readStoreAdapter(adapter);
+  expect(reading.availability).toBe("partial"); expect(JSON.stringify(reading)).not.toContain(filler);
+  expect(reading.value).toMatchObject({ queries: [{ values: { count: 1 }, key: ["profile", { ordinary: "[REDACTED]" }] }] });
+  client.clear();
 });

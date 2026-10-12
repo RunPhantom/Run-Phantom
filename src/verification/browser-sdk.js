@@ -1458,6 +1458,9 @@ function method(source, key) {
   }
   return invalid2();
 }
+function sensitiveSelection(name) {
+  return defaultIsSensitiveKey(name) || isSensitiveKey(name);
+}
 function selections(raw) {
   const entries = fields(raw);
   const names = Object.keys(entries).sort();
@@ -1468,7 +1471,7 @@ function selections(raw) {
     if (!/^[A-Za-z0-9_:-]{1,128}$/.test(name) || typeof path !== "string" || path.length > 1024)
       invalid2();
     const parts = path === "" ? [] : path.split(".");
-    if (isSensitiveKey(name) || parts.length > 32 || parts.some((part) => !part || forbidden2.has(part) || isSensitiveKey(part)))
+    if (sensitiveSelection(name) || parts.length > 32 || parts.some((part) => !part || forbidden2.has(part) || sensitiveSelection(part)))
       invalid2();
     return Object.freeze([name, path]);
   });
@@ -1543,10 +1546,29 @@ function canonicalQueryKey(raw) {
   const identity = JSON.stringify(value);
   if (encoder.encode(identity).byteLength > 2048)
     invalid2();
-  const clean = sanitizeWithReport(value);
-  if (clean.redacted || clean.truncation || JSON.stringify(clean.value) !== identity)
-    invalid2();
   return identity;
+}
+function publicQueryIdentity(id) {
+  let redacted = false;
+  const floor = (value) => {
+    if (Array.isArray(value))
+      return value.map(floor);
+    if (value === null || typeof value !== "object")
+      return value;
+    const result = Object.create(null);
+    for (const name of Object.keys(value)) {
+      if (defaultIsSensitiveKey(name)) {
+        result[name] = REDACTED_VALUE;
+        redacted = true;
+      } else
+        result[name] = floor(data(value, name));
+    }
+    return result;
+  };
+  const clean = sanitizeWithReport(floor(JSON.parse(id)));
+  if (clean.truncation)
+    invalid2();
+  return { keyId: JSON.stringify(clean.value), key: clean.value, redacted: redacted || clean.redacted === true };
 }
 function shapeStore(source, options) {
   const selected = selections(fields(options, ["select"]).select);
@@ -1614,7 +1636,7 @@ function queryStore(source, options) {
     selectedCount += selected.length;
     if (selectedCount > 20 || keyBytes > 4096)
       invalid2();
-    return { id, key: JSON.parse(id), selected };
+    return { id, selected };
   });
   if (!keys2.length || new Set(keys2.map((key) => key.id)).size !== keys2.length)
     invalid2();
@@ -1628,7 +1650,8 @@ function queryStore(source, options) {
         if (getCache() !== cache)
           return unavailable("query-unavailable");
         let partial = false;
-        const queries = keys2.map(({ id, key, selected }) => {
+        const queries = keys2.map(({ id, selected }) => {
+          const identity = publicQueryIdentity(id);
           try {
             const hash = data(defaults({ queryKey: JSON.parse(id) }), "queryHash");
             if (typeof hash !== "string" || !hash || hash.length > 4096)
@@ -1642,9 +1665,9 @@ function queryStore(source, options) {
               invalid2();
             const error = data(state, "error");
             return {
-              keyId: id,
-              key,
-              availability: "complete",
+              keyId: identity.keyId,
+              key: identity.key,
+              availability: identity.redacted ? "partial" : "complete",
               status,
               fetchStatus,
               dataUpdatedAt,
@@ -1655,7 +1678,7 @@ function queryStore(source, options) {
             };
           } catch {
             partial = true;
-            return { keyId: id, key, availability: "unavailable", reason: "query-unavailable" };
+            return { keyId: identity.keyId, key: identity.key, availability: "unavailable", reason: "query-unavailable" };
           }
         });
         return snapshot({ adapter: "query", queries }, partial);

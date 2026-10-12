@@ -270,7 +270,9 @@ describe("the browser capture boundaries", () => {
   });
 });
 
-import { shapeStore } from "../src/verification/browser/store-adapters";
+import { shapeStore, queryStore } from "../src/verification/browser/store-adapters";
+import { QueryClient } from "../app/node_modules/@tanstack/react-query";
+import { buildRedactionPolicy, setActiveRedactionPolicy, resetActiveRedactionPolicy } from "../src/verification/redaction";
 
 function subscribable(initial = { count: 1, text: "ordinary" }) {
   const listeners = new Set<() => void>();
@@ -362,4 +364,21 @@ test("a reentrant initial adapter read cannot advertise registration after losin
   expect(() => runtime.registerStore("recursive", shapeStore(source, { select: { count: "count" } }))).toThrow();
   expect(socket.readyState).toBe(3); expect(released).toBe(1);
   expect(() => runtime.signal("later")).toThrow("disconnected");
+});
+
+
+test("actual query private identities remain redacted on the socket under application exemptions", () => {
+  const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+  const client = new QueryClient(); const key = ["profile", { nested: { password: "f23-socket-password", apiKey: "f23-socket-api-key", token: "f23-socket-token" } }];
+  setActiveRedactionPolicy(buildRedactionPolicy({ allow: ["password", "apiKey", "token"] }));
+  try {
+    client.setQueryData(key, { count: 1 });
+    runtime.registerStore("private-query", queryStore(client, { keys: [{ queryKey: key, select: { count: "count" } }] }));
+    socket.receive({ type: "command", id: "private_key", command: { type: "state", store: "private-query" } });
+    expect(socket.sent.at(-1)?.truncated).toBe(true); expect(socket.sent.at(-1)?.result.availability).toBe("partial");
+    expect(socket.sent.at(-1)?.result.value.queries[0].values.count).toBe(1);
+    client.setQueryData(key, { count: 2 });
+    expect(socket.sent.at(-1)?.event.type).toBe("state"); expect(socket.sent.at(-1)?.event.truncated).toBe(true);
+    for (const value of ["f23-socket-password", "f23-socket-api-key", "f23-socket-token"]) expect(JSON.stringify(socket.sent)).not.toContain(value);
+  } finally { runtime.disconnect(); resetActiveRedactionPolicy(); client.clear(); }
 });
