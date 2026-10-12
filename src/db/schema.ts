@@ -276,3 +276,33 @@ export const evaluation_evidence_retention_events = sqliteTable("evaluation_evid
   set_id: text("set_id").notNull(), revision: integer("revision").notNull(), target_id: text("target_id").notNull(),
   kind: text("kind", { enum: ["raw_removed", "normalized_removed"] }).notNull(), actor_id: text("actor_id").notNull(), created_at: integer("created_at").notNull(),
 }, table => [check("evidence_retention_kind", sql`${table.kind} IN ('raw_removed','normalized_removed')`)]);
+
+export const evaluation_finding_mappings = sqliteTable("evaluation_finding_mappings", {
+  scope_key: text("scope_key").notNull().references(() => evaluation_evidence_scopes.scope_key, { onDelete: "cascade" }),
+  scope_generation: integer("scope_generation").notNull(), id: text("id").notNull(),
+  baseline_set: text("baseline_set").notNull(), baseline_revision: integer("baseline_revision").notNull(),
+  candidate_set: text("candidate_set").notNull(), candidate_revision: integer("candidate_revision").notNull(),
+  data: text("data").notNull(), digest: text("digest").notNull(), created_at: integer("created_at").notNull(),
+}, table => [primaryKey({ columns: [table.scope_key, table.id] }),
+  check("finding_mapping_generation", sql`${table.scope_generation}>0`), check("finding_mapping_bytes", sql`length(cast(${table.data} AS BLOB))<=4194304`),
+  index("finding_mapping_scope").on(table.scope_key, table.scope_generation, table.created_at),
+  foreignKey({ columns: [table.scope_key, table.baseline_set, table.baseline_revision], foreignColumns: [evaluation_evidence_sets.scope_key, evaluation_evidence_sets.id, evaluation_evidence_sets.revision] }).onDelete("cascade"),
+  foreignKey({ columns: [table.scope_key, table.candidate_set, table.candidate_revision], foreignColumns: [evaluation_evidence_sets.scope_key, evaluation_evidence_sets.id, evaluation_evidence_sets.revision] }).onDelete("cascade")]);
+
+export const evaluation_finding_comparisons = sqliteTable("evaluation_finding_comparisons", {
+  scope_key: text("scope_key").notNull().references(() => evaluation_evidence_scopes.scope_key, { onDelete: "cascade" }),
+  scope_generation: integer("scope_generation").notNull(), id: text("id").notNull(),
+  operation_key: text("operation_key").notNull(), request_digest: text("request_digest").notNull(),
+  baseline_set: text("baseline_set").notNull(), baseline_revision: integer("baseline_revision").notNull(),
+  candidate_set: text("candidate_set").notNull(), candidate_revision: integer("candidate_revision").notNull(),
+  baseline_attachment_kind: text("baseline_attachment_kind").notNull(), baseline_attachment_id: text("baseline_attachment_id").notNull(),
+  candidate_attachment_kind: text("candidate_attachment_kind").notNull(), candidate_attachment_id: text("candidate_attachment_id").notNull(),
+  mapping_id: text("mapping_id"), data: text("data").notNull(), digest: text("digest").notNull(), created_at: integer("created_at").notNull(),
+}, table => [primaryKey({ columns: [table.scope_key, table.id] }), unique("finding_comparison_operation").on(table.scope_key, table.scope_generation, table.operation_key),
+  check("finding_comparison_generation", sql`${table.scope_generation}>0`), check("finding_comparison_bytes", sql`length(cast(${table.data} AS BLOB))<=4194304`),
+  index("finding_comparison_scope").on(table.scope_key, table.scope_generation, table.created_at),
+  index("finding_comparison_baseline_attachment").on(table.scope_key, table.scope_generation, table.baseline_attachment_kind, table.baseline_attachment_id, table.created_at),
+  index("finding_comparison_candidate_attachment").on(table.scope_key, table.scope_generation, table.candidate_attachment_kind, table.candidate_attachment_id, table.created_at),
+  foreignKey({ columns: [table.scope_key, table.baseline_set, table.baseline_revision], foreignColumns: [evaluation_evidence_sets.scope_key, evaluation_evidence_sets.id, evaluation_evidence_sets.revision] }).onDelete("cascade"),
+  foreignKey({ columns: [table.scope_key, table.candidate_set, table.candidate_revision], foreignColumns: [evaluation_evidence_sets.scope_key, evaluation_evidence_sets.id, evaluation_evidence_sets.revision] }).onDelete("cascade"),
+  foreignKey({ columns: [table.scope_key, table.mapping_id], foreignColumns: [evaluation_finding_mappings.scope_key, evaluation_finding_mappings.id] }).onDelete("cascade")]);
