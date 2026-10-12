@@ -44,11 +44,84 @@ export class TeamClient {
       const failure = (data as ApiError | undefined)?.error;
       // A response issued under the previous project permission state must not
       // reveal a one-time credential after a later request discovers revocation.
-      if (response.status === 403 && project) this.projectGenerations.set(project, projectGeneration + 1);
+      if ((response.status === 403 || response.status === 404) && project) this.projectGenerations.set(project, projectGeneration + 1);
       if (response.status === 401 || response.status === 403 || response.status === 404) this.onAccessError(response.status, path);
       throw new TeamApiError(response.status, failure?.code ?? "request_failed", failure?.message ?? "The request could not be completed. Please try again.", failure?.requestId);
     }
     return data as T;
+  }
+
+  /** Dedicated external-report transport; the generic Team request budget stays unchanged. */
+  async evidence<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
+    const result = await this.evidenceBody(path, options, false);
+    if (result.bytes.byteLength === 0) return undefined as T;
+    try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(result.bytes)) as T; }
+    catch { throw new TeamApiError(502, "invalid_response", "The evidence response could not be read."); }
+  }
+
+  async evidenceBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+    const result = await this.evidenceBody(path, { signal }, true);
+    return new Blob([result.bytes], { type: result.contentType });
+  }
+
+  private async evidenceBody(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal }, blob: boolean): Promise<{ bytes: Uint8Array<ArrayBuffer>; contentType: string }> {
+    const project = path.match(/^\/projects\/([^/?]+)\/evidence(?:\/|\?|$)/)?.[1];
+    if (!project || path.includes("#")) throw new TeamApiError(400, "invalid_request", "Choose a project evidence endpoint.");
+    const generation = this.generation, projectGeneration = this.projectGenerations.get(project) ?? 0;
+    const current = () => {
+      if (generation !== this.generation || options.signal?.aborted || projectGeneration !== (this.projectGenerations.get(project) ?? 0)) throw new DOMException("Request superseded", "AbortError");
+    };
+    current();
+    const method = options.method ?? "GET", headers: Record<string, string> = { Accept: blob ? "*/*" : "application/json" };
+    let body: BodyInit | undefined;
+    if (options.body instanceof Blob) {
+      if (method !== "POST" || path !== `/projects/${project}/evidence/imports` || options.body.type !== "application/vnd.runphantom.evidence-import.v1+octet-stream") throw new TeamApiError(400, "invalid_request", "Choose a supported evidence upload.");
+      if (options.body.size > 8 * 1024 * 1024 + 64 * 1024 + 4) throw new TeamApiError(413, "too_large", "The evidence upload exceeds its byte limit.");
+      headers["Content-Type"] = options.body.type; body = options.body;
+    } else if (options.body !== undefined) {
+      const json = JSON.stringify(options.body);
+      if (new TextEncoder().encode(json).byteLength > 16 * 1024) throw new TeamApiError(413, "too_large", "The evidence control exceeds 16 KiB.");
+      headers["Content-Type"] = "application/json"; body = json;
+    }
+    if (method !== "GET" && this.csrf) headers["X-RunPhantom-CSRF"] = this.csrf;
+    const response = await fetch(`/api/team${path}`, { method, headers, credentials: "same-origin", cache: "no-store", signal: options.signal, ...(body === undefined ? {} : { body }) });
+    const max = /\/sets\/[^/?]+\/raw\/[^/?]+(?:\?|$)/.test(path) ? 2 * 1024 * 1024 : 8 * 1024 * 1024;
+    const chunks: Uint8Array[] = []; let total = 0;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      current();
+      const encoding = response.headers.get("Content-Encoding");
+      if (encoding && encoding.toLowerCase() !== "identity") throw new TeamApiError(502, "invalid_response", "Evidence responses require identity encoding.");
+      const declared = response.headers.get("Content-Length");
+      if (declared !== null && (!/^[0-9]+$/.test(declared) || !Number.isSafeInteger(Number(declared)))) throw new TeamApiError(502, "invalid_response", "The evidence response has an invalid byte length.");
+      if (declared !== null && Number(declared) > max) throw new TeamApiError(413, "too_large", "The evidence response exceeds its byte limit.");
+      reader = response.body?.getReader();
+      if (reader) for (;;) {
+        current(); const part = await reader.read(); current();
+        if (part.done) break;
+        total += part.value.byteLength;
+        if (total > max) throw new TeamApiError(413, "too_large", "The evidence response exceeds its byte limit.");
+        chunks.push(part.value);
+      }
+      current();
+      const bytes = new Uint8Array(total); let offset = 0;
+      for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+      if (!response.ok) {
+        let data: ApiError | undefined;
+        try { data = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as ApiError; } catch { /* Safe fallback for malformed error responses. */ }
+        current();
+        if (response.status === 403 || response.status === 404) this.projectGenerations.set(project, projectGeneration + 1);
+        if (response.status === 401 || response.status === 403 || response.status === 404) this.onAccessError(response.status, path);
+        const failure = data?.error;
+        throw new TeamApiError(response.status, typeof failure?.code === "string" ? failure.code : "request_failed", typeof failure?.message === "string" ? failure.message : "The request could not be completed. Please try again.", typeof failure?.requestId === "string" ? failure.requestId : undefined);
+      }
+      current();
+      return { bytes, contentType: response.headers.get("Content-Type") ?? "application/octet-stream" };
+    } catch (error) {
+      if (reader) await reader.cancel().catch(() => {});
+      else await response.body?.cancel().catch(() => {});
+      throw error;
+    } finally { reader?.releaseLock(); }
   }
 }
 
