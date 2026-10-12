@@ -4,6 +4,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { CheckCircle2, CircleHelp, Copy, Play, Unplug, XCircle } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { BusinessEvidence } from "../components/verification/BusinessEvidence";
 import { Inspection } from "../components/verification/Inspection";
 import { SemanticInspector } from "../components/verification/SemanticInspector";
 import { ReportContext } from "../components/verification/ReportContext";
@@ -29,6 +30,7 @@ function eventSummary(event: RuntimeEvent): string {
   const data = event.data;
   switch (event.type) {
     case "network": return `${String(data.method ?? "GET")} ${String(data.url ?? "request")} → ${String(data.status ?? "unknown status")}`;
+    case "network.body": return `Response ${String(data.requestId)}: ${String(data.state)} (${String(data.bytes)} bytes)`;
     case "network.start": return `${String(data.method ?? "GET")} ${String(data.url ?? "request")} started`;
     case "console": return `${String(data.level ?? "log")}: ${String(data.message ?? "")}`;
     case "signal": return `Signal: ${String(data.name ?? "unnamed")}`;
@@ -53,15 +55,16 @@ function Report({ report }: { report: VerificationReport }) {
     <p className="break-words text-xs leading-relaxed text-[color:var(--rp-ink-soft)]">{report.reason}</p>
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-[color:var(--rp-ink-muted)]"><time dateTime={new Date(report.createdAt).toISOString()}>{new Date(report.createdAt).toLocaleString()}</time>{report.runId && <Link className="underline underline-offset-2" to={`/runs/${encodeURIComponent(report.runId)}`}>View linked run</Link>}</div>
     <ReportContext context={report.context} />
+    {report.evidence.some(event => event.type === "network.body") && <BusinessEvidence events={report.evidence} enabled connected={false} retained />}
     {report.evidence.length > 0 && <details><summary className="cursor-pointer text-xs text-[color:var(--rp-ink-soft)]">Evidence ({report.evidence.length})</summary><ul className="mt-2 space-y-2 text-xs text-[color:var(--rp-ink)]">{report.evidence.map((event, index) => <li className="break-words" key={`${event.t}-${index}`}>{eventSummary(event)}{event.truncated && <span className="ml-1 text-[color:var(--rp-warning)]">(partial capture)</span>}</li>)}</ul></details>}
   </article>;
 }
 
-function snippet(session: CreatedSession): string {
+function snippet(session: CreatedSession, businessResponses: boolean): string {
   const sdkUrl = new URL(session.sdkUrl, window.location.origin).href;
   const daemon = new URL(session.wsUrl, window.location.origin);
   daemon.protocol = daemon.protocol === "wss:" || daemon.protocol === "https:" ? "https:" : "http:";
-  return `import { connect } from ${JSON.stringify(sdkUrl)};\n\nconst verification = connect({\n  url: ${JSON.stringify(daemon.origin)},\n  sessionId: ${JSON.stringify(session.id)},\n  token: ${JSON.stringify(session.token)},\n});\n\n// Optional application outcomes:\n// verification.signal("checkout.complete");\n// verification.registerStore("cart", () => cartState);\n// verification.disconnect();`;
+  return `import { connect } from ${JSON.stringify(sdkUrl)};\n\nconst verification = connect({\n  url: ${JSON.stringify(daemon.origin)},\n  sessionId: ${JSON.stringify(session.id)},\n  token: ${JSON.stringify(session.token)},\n${businessResponses ? "  businessResponses: true,\n" : ""}});\n\n// Optional application outcomes:\n// verification.signal("checkout.complete");\n// verification.registerStore("cart", () => cartState);\n// verification.disconnect();`;
 }
 
 export function VerificationPage() {
@@ -75,6 +78,8 @@ export function VerificationPage() {
   const [origin, setOrigin] = useState("");
   const [runId, setRunId] = useState(linkedRunId);
   const [selectedId, setSelectedId] = useState("");
+  const [captureResponses, setCaptureResponses] = useState(false);
+  const [setupCapture, setSetupCapture] = useState(false);
   const [setup, setSetup] = useState<CreatedSession | null>(null);
   const session = sessions.data?.find(item => item.id === selectedId) ?? sessions.data?.[0];
   const observation = useQuery({ queryKey: ["verification", "events", session?.id], queryFn: () => verificationApi.observe(session!.id), enabled: !!session, refetchInterval: 1000 });
@@ -141,6 +146,7 @@ export function VerificationPage() {
     void perform("Pairing app…", async () => {
       // Keep the one-time credential out of the React Query cache and browser storage.
       const created = await verificationApi.createSession(origin.trim(), runId || undefined);
+      setSetupCapture(captureResponses);
       setSetup(created);
       setSelectedId(created.id);
       await refresh();
@@ -203,11 +209,12 @@ export function VerificationPage() {
         <div className="min-w-[200px] flex-1"><Field label="Link to run (optional)" hint="Checks appear beside this captured run."><Select value={runId} onChange={event => setRunId(event.target.value)}><option value="">No linked run</option>{runId && !runs.data?.some(run => run.id === runId) && <option value={runId}>Run from link</option>}{runs.data?.map(run => <option key={run.id} value={run.id}>{runDisplayName(run)}</option>)}</Select></Field></div>
         <Button type="submit" disabled={!!busy || !origin.trim()} className="mb-5">Pair app</Button>
       </form>
+      <label className="flex items-start gap-2 text-xs"><input type="checkbox" className="mt-0.5" checked={captureResponses} onChange={event => setCaptureResponses(event.target.checked)} disabled={!!busy} /><span>Capture response evidence<span className="mt-1 block max-w-xl text-[11px] leading-relaxed" style={{ color: C.fg1 }}>Read bounded, redacted copies of app responses. Off by default; reconnect with the setup after changing this choice.</span></span></label>
       {runs.isError && <p className="text-xs" style={{ color: C.orange }}>Run choices could not load. You can still pair an app without a linked run.</p>}
       {setup && <div className="space-y-3 rounded-md border p-4" style={{ background: C.surface, borderColor: C.border }}>
-        <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-sm font-semibold">Connect in {setup.origin}</h3><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => void perform("Copying connection setup…", async () => { await navigator.clipboard.writeText(snippet(setup)); setNotice("Connection setup copied."); })}><Copy aria-hidden="true" />Copy setup</Button><Button variant="ghost" size="sm" onClick={() => setSetup(null)}>Dismiss setup</Button></div></div>
+        <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-sm font-semibold">Connect in {setup.origin}</h3><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => void perform("Copying connection setup…", async () => { await navigator.clipboard.writeText(snippet(setup, setupCapture)); setNotice("Connection setup copied."); })}><Copy aria-hidden="true" />Copy setup</Button><Button variant="ghost" size="sm" onClick={() => setSetup(null)}>Dismiss setup</Button></div></div>
         <p className="max-w-2xl text-xs leading-relaxed" style={{ color: C.fg1 }}>Run this module in your app's development entry point. The connection credential is shown only here; keep it out of committed source. Reloading the app requires reconnecting.</p>
-        <pre aria-label="Application connection snippet" className="max-h-72 overflow-auto rounded-md p-3 text-[11px] leading-relaxed" style={{ background: C.bg }}>{snippet(setup)}</pre>
+        <pre aria-label="Application connection snippet" className="max-h-72 overflow-auto rounded-md p-3 text-[11px] leading-relaxed" style={{ background: C.bg }}>{snippet(setup, setupCapture)}</pre>
       </div>}
     </section>
 
@@ -222,6 +229,7 @@ export function VerificationPage() {
 
     {session && <div className="flex flex-wrap items-start gap-8">
       <div className="min-w-0 flex-[2_1_360px] space-y-7">
+        <BusinessEvidence events={observation.data?.events ?? []} connected={connected} enabled={(observation.data?.session.capabilities ?? session.capabilities)?.includes("business-response-evidence") ?? false} />
         <SemanticInspector sessionId={session.id} connected={connected} capable={(observation.data?.session.capabilities ?? session.capabilities)?.includes("semantic-refs") ?? false} disabled={!!busy} onAction={cursor => { setSince(cursor); setInspection(null); }} />
         <section aria-labelledby="action-heading" className="space-y-4">
           <h2 id="action-heading" className="text-sm font-semibold" style={{ color: C.fg3 }}>1. Exercise the app</h2>

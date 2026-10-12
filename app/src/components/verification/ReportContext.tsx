@@ -6,6 +6,11 @@ function expectedOutcome(value: unknown, depth = 0): string {
   const text = (value: unknown, fallback = "omitted") => typeof value === "string" || typeof value === "number" ? String(value) : fallback;
   switch (predicate.kind) {
     case "network": return `${text(predicate.method, "Any method")} ${text(predicate.urlContains)}${predicate.status === undefined ? " returns a response" : ` returns ${text(predicate.status)}`}`;
+    case "business-response": {
+      const phase = predicate.phase === "acceptance" ? "Acceptance" : predicate.phase === "final" ? "Final persistence" : "Response";
+      const expected = JSON.stringify(predicate.equals);
+      return `${phase} contract for ${text(predicate.operationId)} at ${text(predicate.urlContains)}: ${text(predicate.path)} equals ${expected?.slice(0, 240) ?? "omitted"}${predicate.witness ? " with declared witness" : ""}`;
+    }
     case "console": return `${predicate.absent === true ? "No" : "At least one"} console ${text(predicate.level)} observed`;
     case "signal": return `Signal “${text(predicate.name)}” is observed`;
     case "element": return `${text(predicate.selector)} is ${text(predicate.state)}`;
