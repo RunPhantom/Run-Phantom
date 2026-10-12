@@ -57,7 +57,8 @@ for(const format of ["json","protobuf"] as const) {
       const projectResponse=await fetch(team.url+"/api/team/projects",{method:"POST",headers,body:JSON.stringify({name:"Tag ingress fixture"})});expect(projectResponse.status).toBe(201);const project=await projectResponse.json();
       const keyResponse=await fetch(`${team.url}/api/team/projects/${project.id}/keys`,{method:"POST",headers,body:JSON.stringify({label:"Synthetic exporter"})});expect(keyResponse.status).toBe(201);const key=await keyResponse.json();
       expect((await fetch(team.url+"/api/team/ingest/v1/traces",{method:"POST",headers:{Authorization:`Bearer ${key.token}`,"content-type":contentType},body:bytes})).status).toBe(200);
-      for(const endpoint of [{url:localUrl,prefix:"/api/runs",headers:{}},{url:team.url,prefix:`/api/team/projects/${project.id}`,headers:{Cookie:cookie}}]) {
+      const endpoints:Array<{url:string;prefix:string;headers:Record<string,string>}>=[{url:localUrl,prefix:"/api/runs",headers:{}},{url:team.url,prefix:`/api/team/projects/${project.id}`,headers:{Cookie:cookie}}];
+      for(const endpoint of endpoints) {
         const summaryPath=endpoint.prefix+(endpoint.prefix==="/api/runs"?"/search":"/runs");
         const hitsPath=endpoint.prefix+(endpoint.prefix==="/api/runs"?"/search-hits":"/search-hits");
         for(const path of [summaryPath,hitsPath]){

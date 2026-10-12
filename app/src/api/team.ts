@@ -44,7 +44,7 @@ export class TeamClient {
       const failure = (data as ApiError | undefined)?.error;
       // A response issued under the previous project permission state must not
       // reveal a one-time credential after a later request discovers revocation.
-      if (response.status === 403 && project) this.projectGenerations.set(project, projectGeneration + 1);
+      if ((response.status === 403 || response.status === 404) && project) this.projectGenerations.set(project, projectGeneration + 1);
       if (response.status === 401 || response.status === 403 || response.status === 404) this.onAccessError(response.status, path);
       throw new TeamApiError(response.status, failure?.code ?? "request_failed", failure?.message ?? "The request could not be completed. Please try again.", failure?.requestId);
     }
@@ -54,7 +54,7 @@ export class TeamClient {
 
 export function teamQuery(values: object): string {
   const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(values)) if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
+  for (const [key, value] of Object.entries(values)) if (value !== undefined && value !== null && value !== "") query.set(key, key === "filter" && typeof value === "object" ? JSON.stringify(value) : String(value));
   const text = query.toString();
   return text ? `?${text}` : "";
 }

@@ -1,6 +1,7 @@
 import { Worker } from "node:worker_threads";
 import { acquireSearchCapacity, searchCapacity } from "./search-capacity";
 import { createHash } from "node:crypto";
+import { resolve as resolvePath } from "node:path";
 import { getDbPath } from "./db";
 import { runSearchWorker, type RunSearchWork } from "./run-search-worker";
 import { compileSearchFilter, parseSearchFilter, SearchFilterError, type SearchFilter } from "./search-filter";
@@ -137,7 +138,7 @@ function buildQuery(input: SearchInput): { sql: string; params: (string | number
  * Deadlines are checked between rows; an executing SQLite step may finish later.
  * Capacity stays occupied after callers leave until the read actually finishes. */
 export async function searchRuns(value: unknown = {}, options: ExecutionOptions = {}): Promise<RunSearchResult> {
-  const dbPath = options.dbPath ?? getDbPath();
+  const dbPath = resolvePath(options.dbPath ?? getDbPath());
   const input = parseInput(value, dbPath);
   if (options.signal?.aborted) throw new RunSearchError("Search cancelled", "cancelled", 499);
   const release = acquireSearchCapacity("local", RUN_SEARCH_LIMITS.workers);

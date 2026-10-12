@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
+import { resolve as resolvePath } from "node:path";
 import { getDbPath } from "./db";
 import { acquireSearchCapacity } from "./search-capacity";
 import { capturedTagsSql, compileSearchFilter, parseSearchFilter, type SearchFilter } from "./search-filter";
@@ -15,7 +16,7 @@ export class SearchResourceError extends Error {
 }
 const invalid = (): never => { throw new SearchResourceError("invalid_search", 400); };
 const hash = (value: unknown): string => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-export function localSearchScope(resource: "runs" | "span-hits", dbPath = getDbPath()): string { return hash(["local", dbPath, resource]); }
+export function localSearchScope(resource: "runs" | "span-hits", dbPath = getDbPath()): string { return hash(["local", resolvePath(dbPath), resource]); }
 function inputRecord(value: unknown, keys: string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return invalid();
   const input = value as Record<string, unknown>;
@@ -61,7 +62,9 @@ const asciiLower = (value: string) => value.replace(/[A-Z]/g, character => chara
 function snippet(raw: string | null, q: string, maxChars = 512): SearchSnippet {
   if (raw === null) return { state: "unavailable", text: "", highlights: [], truncated: false };
   // Whole-field admission already occurred in SQL. Scrub before ANY cutting.
-  const clean = redactTeamText(raw), folded = asciiLower(clean), needle = asciiLower(q);
+  const clean = redactTeamText(raw);
+  if (clean === "[UNAVAILABLE]" || clean === "[TRUNCATED]" || clean === "[UNSERIALIZABLE]") return { state: "unavailable", text: "", highlights: [], truncated: false };
+  const folded = asciiLower(clean), needle = asciiLower(q);
   const match = needle ? folded.indexOf(needle) : -1;
   let start = Math.max(0, match - 96), end = Math.min(clean.length, start + maxChars - 2);
   if (start && /[\uDC00-\uDFFF]/.test(clean[start]) && /[\uD800-\uDBFF]/.test(clean[start-1])) start--;
@@ -110,7 +113,7 @@ function project(options: SearchResourceOptions): SearchResourceWork["project"] 
 /** Explicit span evidence resource. Existing run summaries remain payload-free. */
 export async function searchSpanHits(value: unknown = {}, options: SearchResourceOptions = {}): Promise<SearchHitPage> {
   const input=inputRecord(value,["q","model","provider","status","filter","limit","cursor","from","to"]);
-  const q=text(input.q), filter=typedFilter(input), pageSize=limit(input.limit,50,50), dbPath=options.dbPath??getDbPath(), scope=options.projectId?"team":"local";
+  const q=text(input.q), filter=typedFilter(input), pageSize=limit(input.limit,50,50), dbPath=resolvePath(options.dbPath??getDbPath()), scope=options.projectId?"team":"local";
   const window: Record<string,number> = {};
   for(const field of ["from","to"] as const) if(input[field]!==undefined) { if(!Number.isSafeInteger(Number(input[field])) || Number(input[field])<0 || input[field]==="") return invalid(); window[field]=Number(input[field]); }
   if(window.from!==undefined && window.to!==undefined && window.from>=window.to) return invalid();
@@ -147,7 +150,7 @@ export async function searchSuggestions(value: unknown = {}, options: SearchReso
   const column=field==="tag"?"tag.value":`s.${field}`;
   where.push(`typeof(${column})='text'`,`${column}<>''`,`length(CAST(${column} AS BLOB))<=512`,`instr(lower(${column}),lower(?))=1`);params.push(prefix,count+1);
   const sql=`SELECT DISTINCT ${column} AS value FROM ${source} WHERE ${where.join(" AND ")} ORDER BY value LIMIT ?`;
-  const raw=await execute({dbPath:options.dbPath??getDbPath(),sql,params,limit:count,mode:"suggestions",key:"",project:project(options)},options);
+  const raw=await execute({dbPath:resolvePath(options.dbPath??getDbPath()),sql,params,limit:count,mode:"suggestions",key:"",project:project(options)},options);
   if(options.signal?.aborted) throw new SearchResourceError("cancelled",499);
   return {values:raw.values.filter(value=>value.length<=256 && !Array.from(value).some(c=>c.charCodeAt(0)<32 || c.charCodeAt(0)===127) && redactTeamText(value)===value),hasMore:raw.hasMore};
 }

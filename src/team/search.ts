@@ -1,4 +1,5 @@
 import { Worker } from "node:worker_threads";
+import { resolve as resolvePath } from "node:path";
 import { acquireSearchCapacity, searchCapacity } from "../search-capacity";
 import { TeamError, type TeamErrorCode } from "./errors";
 import { TEAM_LIMITS as L, type PageQuery, type RunFilters } from "./protocol";
@@ -40,6 +41,7 @@ function normalizedFilters(query: RunFilters): RunFilters {
 }
 
 export async function searchTeamRuns(dbPath: string, projectId: string, query: PageQuery & RunFilters = {}, signal?: AbortSignal): Promise<TeamSearchResult> {
+  dbPath=resolvePath(dbPath);
   const filters = normalizedFilters(query), paging = pageInput(query, digest(JSON.stringify([dbPath, projectId, "runs", filters])));
   if (signal?.aborted) throw new TeamError("query_timeout", "Search was cancelled", undefined, 1);
   const release = acquireSearchCapacity("team", L.QUERY_CONCURRENCY);

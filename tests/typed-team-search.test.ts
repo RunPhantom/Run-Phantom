@@ -69,12 +69,13 @@ test("Team typed reads recheck current membership after their worker and never l
 
 test("Team hit and suggestion resources keep current project authority before and after acquisition", async()=>{
   const f=fixture();f.seed(f.scope,[{trace:"1".repeat(32),id:"1".repeat(16),model:"own-model",provider:"p",cost:0}]);f.seed(f.foreign,[{trace:"1".repeat(32),id:"1".repeat(16),model:"foreign-model",provider:"p",cost:0}]);
-  expect((await f.store.searchSpanHits(f.scope,{filter:typed([clause("captured_cost_usd",0)])})).items.map(row=>row.runId)).toEqual(["1".repeat(32)]);
+  expect((await f.store.searchSpanHits(f.scope,{filter:{version:1,all:[{field:"captured_cost_usd",op:"eq",value:0}]}})).items.map(row=>row.runId)).toEqual(["1".repeat(32)]);
   expect((await f.store.searchSuggestions(f.scope,{field:"model"})).values).toEqual(["own-model"]);
   const invite=f.store.createInvite(f.scope,{email:"hits-viewer@example.test",role:"viewer"});
   const viewer=f.store.acceptInvite({tokenHash:hashTeamToken(invite.token),email:"hits-viewer@example.test",expectedAccountId:null,passwordHash:"synthetic",sessionHash:hashTeamToken("hits-viewer")});
   const scope=f.store.projectScope(viewer.context,f.scope.projectId), pending=f.store.searchSpanHits(scope,{});
   f.store.removeMember(f.scope,viewer.context.user.id);await refused(pending);await refused(f.store.searchSuggestions(scope,{field:"model"}));
+  expect((await f.store.searchSpanHits(f.scope,{})).items).toHaveLength(1);
 });
 
 test("actual private HTTP activates typed filters and refuses malformed or duplicate query parameters", async () => {

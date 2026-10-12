@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
@@ -45,6 +45,11 @@ test("oversized complete fields are unavailable and never contribute a partial s
   expect(JSON.stringify(row)).not.toContain("sk-proj-");
 });
 
+test("whole-field scrubber unavailability stays unknown instead of an available excerpt",async()=>{
+  seed("ambiguous","root",'{"q":"needle","q":"other","password":"synthetic-password"}',null);
+  expect((await searchSpanHits({q:"needle"})).items[0].input).toMatchObject({state:"unavailable",text:"",highlights:[]});
+});
+
 test("UTF16 excerpt boundaries preserve whole surrogate pairs and the 512 unit cap",async()=>{
   seed("unicode-cut","root","x🌈"+"a".repeat(95)+"needle"+"b".repeat(700),null);
   const text=(await searchSpanHits({q:"needle"})).items[0].input.text;
@@ -57,6 +62,15 @@ test("aggregate raw worker admission continues without truncating or losing comp
   let cursor:string|undefined;const ids:string[]=[];
   do {const page=await searchSpanHits({q:"needle",limit:50,cursor});expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(120_000);expect(page.items.length).toBeLessThan(20);ids.push(...page.items.map(hit=>hit.spanId));cursor=page.nextCursor??undefined;}while(cursor);
   expect(ids).toHaveLength(20);expect(new Set(ids).size).toBe(20);
+});
+
+test("cancelled hit and suggestion callers occupy shared admission until both workers exit",async()=>{
+  seed("cancel","root","needle",null);
+  const controllers=[new AbortController(),new AbortController()];
+  const pending=[searchSpanHits({}, {signal:controllers[0].signal}).catch(e=>e),searchSuggestions({field:"model"},{signal:controllers[1].signal}).catch(e=>e)];
+  controllers.forEach(controller=>controller.abort());expect(_runSearchInternal.activeWorkers()).toBe(2);
+  expect(await searchRuns().catch(e=>e)).toMatchObject({code:"search_busy",status:503});
+  for(const error of await Promise.all(pending))expect(error).toMatchObject({code:"cancelled",status:499});
 });
 
 test("hit predicates bind literal text and typed conditions to the actual same span",async()=>{
@@ -94,6 +108,21 @@ test("suggestions are literal, payload-free, scoped and refuse malformed capture
 test("private local scopes are stable opaque identifiers and resource separated",()=>{
   const a=localSearchScope("runs"), b=localSearchScope("span-hits");
   expect(a).toMatch(/^[a-f0-9]{64}$/); expect(a).toBe(localSearchScope("runs")); expect(a).not.toBe(b); expect(a).not.toContain(dir);
+});
+
+test("relative stores in different private working directories cannot share cursors or scope",async()=>{
+  seed("relative-a","root","needle",null);seed("relative-b","root","needle",null);
+  getDrizzleDb().$client.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  const foreign=join(dir,"foreign");mkdirSync(foreign);copyFileSync(join(dir,"local.db"),join(foreign,"local.db"));
+  const cwd=process.cwd();
+  try {
+    process.chdir(dir);const scope=localSearchScope("runs","local.db");
+    const first=await searchSpanHits({q:"needle",limit:1},{dbPath:"local.db"});
+    const summary=await searchRuns({filter:filter([]),limit:1},{dbPath:"local.db"});
+    process.chdir(foreign);expect(localSearchScope("runs","local.db")).not.toBe(scope);
+    expect(await searchSpanHits({q:"needle",cursor:first.nextCursor},{dbPath:"local.db"}).catch(e=>e)).toBeInstanceOf(Error);
+    expect(await searchRuns({filter:filter([]),cursor:summary.nextCursor},{dbPath:"local.db"}).catch(e=>e)).toBeInstanceOf(Error);
+  } finally {process.chdir(cwd);}
 });
 
 test("actual HTTP and MCP expose safe separate resources and closed refusal",async()=>{
