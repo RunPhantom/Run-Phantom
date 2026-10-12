@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { deriveCapturedAgentDefinitions, withholdAgentDefinitionCapture } from "../src/agent-definitions";
 import { AGENT_DEFINITION_CAPTURE_KEY as KEY, AGENT_DEFINITION_LIMITS as L } from "../src/agent-definitions-protocol";
 import { captureOtlpEvidence } from "../src/spans/otlp-evidence";
+import { parseOtlpRequest } from "../src/parse";
+import { definitionTrace } from "./fixtures/agent-definitions";
 const base = () => ({ version: 1, systemPrompt: "  Exact\n🧪 instructions\r\n", tools: [{ name: "lookup", description: "Find an entry", parameters: { type: "object", properties: { query: { type: "string" } } } }], model: "captured-model", providers: ["local-fixture"], runtime: { temperature: .70001, top_p: .99, maxOutputTokens: 64 } });
 function row(value: unknown = base(), id = "root") {
   const payload = typeof value === "string" ? value : JSON.stringify(value);
@@ -108,14 +110,31 @@ describe("bounded captured agent definition identity", () => {
     expect(() => withholdAgentDefinitionCapture(r)).toThrow("Public definition capture is unavailable");
   });
   test("public projection preserves byte-identical unrelated attributes and receipts and withholds nested ordered definition values", () => {
-    const receipt = captureOtlpEvidence({ attributes: [{ key: "ordinary", value: { kvlistValue: { values: [{ key: KEY, value: { stringValue: "private nested definition" } }] } } }] }, {}, {});
-    const projected = withholdAgentDefinitionCapture({ attributes: '{ "ordinary" : "unchanged" }', otlp_evidence: JSON.stringify(receipt) });
+    const fixture = definitionTrace(97);
+    fixture.body.resourceSpans[0].scopeSpans[0].spans[0].attributes = [
+      { key: "ordinary", value: { stringValue: "unchanged" } },
+      { key: "private.carrier", value: { kvlistValue: { values: [{ key: KEY, value: { stringValue: "private nested definition" } }] } } } as any,
+    ];
+    const actual = parseOtlpRequest(fixture.body)[0];
+    const projected = withholdAgentDefinitionCapture({ attributes: '{ "ordinary" : "unchanged" }', otlp_evidence: JSON.stringify(actual.otlpEvidence) });
     expect(projected.attributes).toBe('{ "ordinary" : "unchanged" }'); expect(projected.otlp_evidence).not.toContain("private nested definition");
+    const companion = withholdAgentDefinitionCapture({ attributes: JSON.stringify(actual.attributes), otlp_evidence: JSON.stringify(actual.otlpEvidence) });
+    expect(JSON.parse(companion.attributes).ordinary).toBe("unchanged");
+    expect(JSON.parse(JSON.parse(companion.attributes)["private.carrier"])[KEY]).toBe("[REDACTED]");
+    expect(actual.attributes["private.carrier"]).toContain("private nested definition");
     const unrelated = { attributes: '{ "ordinary" : "unchanged" }', otlp_evidence: JSON.stringify(captureOtlpEvidence({ attributes: [{ key: "ordinary", value: { stringValue: "safe" } }] }, {}, {})) };
     expect(withholdAgentDefinitionCapture(unrelated)).toBe(unrelated);
     for (const attributes of ['opaque C:\\fixture\\record', '"runphantom.agent.definition is a literal value"', '{"ordinary":"\\u0053afe"}']) {
       const legacy = { attributes }; expect(withholdAgentDefinitionCapture(legacy)).toBe(legacy);
     }
+  });
+  test("the original same-key mismatched private composite is unavailable rather than ordinary source evidence", () => {
+    const receipt = captureOtlpEvidence({ attributes: [{ key: "ordinary", value: { kvlistValue: { values: [{ key: KEY, value: { stringValue: "private nested definition" } }] } } }] }, {}, {});
+    const source = { attributes: '{ "ordinary" : "unchanged" }', otlp_evidence: JSON.stringify(receipt) };
+    const projected = withholdAgentDefinitionCapture(source);
+    expect(JSON.parse(projected.attributes).ordinary).toBe("[UNAVAILABLE]");
+    expect(projected.otlp_evidence).not.toContain("private nested definition");
+    expect(source.attributes).toBe('{ "ordinary" : "unchanged" }'); expect(source.otlp_evidence).toContain("private nested definition");
   });
   test("duplicate tool names, unknown capture fields, and over-limit definitions do not silently drop evidence", () => {
     for (const change of [{ tools: [base().tools[0], base().tools[0]] }, { tools: [{ ...base().tools[0], parameters: null }] }, { unknown: "not-in-contract" }, { tools: Array.from({ length: L.tools + 1 }, (_, i) => ({ name: `tool-${i}` })) }, { systemPrompt: "x".repeat(L.fieldBytes + 1) }]) {
