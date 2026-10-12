@@ -1,0 +1,72 @@
+{
+  "feature": "External report workspace",
+  "head": "82bdadc4b4f48dd434b910b12bc2d9beb4bdb41e",
+  "source": {
+    "backend_pass": 856,
+    "backend_skip": 3,
+    "backend_fail": 0,
+    "backend_assertions": 6790,
+    "source_chromium_pass": 136,
+    "source_skip": 10,
+    "fail": 0,
+    "flaky": 0,
+    "retries": 0,
+    "workers": 1,
+    "seven_gates_exit0": true
+  },
+  "copied_mac": {
+    "original_feature_journeys_pass": 12,
+    "common_journeys_pass": 3,
+    "supplemental_continuity_journeys_pass": 1,
+    "supplemental_browser_phases_pass": 2,
+    "successful_app_boots": 15,
+    "fail": 0,
+    "flaky": 0,
+    "retries": 0,
+    "binary_sha256": "37f15c242332759c2a42b455505d847a2cc5dfaef6eb549d45a838b094cf22cd",
+    "binary_bytes": 68465488,
+    "embedded_assets": 320,
+    "source_fallback": false,
+    "provider_spend_usd": 0
+  },
+  "verified_continuity": [
+    "Exact original input37/output17 payloads via actual payload endpoint; summaries and metadata compared separately",
+    "Same observed upload operationKey, canonical recovered job and independently read stored operation/request data",
+    "Exact normalized/raw exports and seven read-only table hashes through true same-binary stop/restart",
+    "Actual File import, UI rendering, keyboard focus and stale attachment refusal"
+  ],
+  "images": [
+    {
+      "path": "desktop-report.png",
+      "sha256": "de6f39d94fcb0ecace3b112cbb4224d5920246bccf697caeea1186214be762e4",
+      "description": "copied desktop continuity report",
+      "runtime": "actual copied compiled macOS arm64 application"
+    },
+    {
+      "path": "restarted-mobile-report.png",
+      "sha256": "d92e2bd882a108ef2d9184b2053b1ba52b34b24a6c9af7bf9fe9671f58094cce",
+      "description": "copied390 actual reboot reopened report",
+      "runtime": "actual copied compiled macOS arm64 application"
+    },
+    {
+      "path": "mobile-import-focus.png",
+      "sha256": "2bf8ad654a7b68532351f444503be0f5e7f684a39d4e65396eab65bd2d7826c9",
+      "description": "copied320 keyboard primary focus",
+      "runtime": "actual copied compiled macOS arm64 application"
+    },
+    {
+      "path": "restarted-original-output.png",
+      "sha256": "e10b6375c8cc85d14df365f01bc07700af401dbcc7416fbbd49f8ffb990243be",
+      "description": "copied390 actual reboot retained captured payload",
+      "runtime": "actual copied compiled macOS arm64 application"
+    }
+  ],
+  "limitations": [
+    "Copied macOS subset; actual Windows/Linux and final assembled application remain unqualified",
+    "Team-specific evidence roles and provider output quality remain separate pending features",
+    "Existing floating chat dock can cover bottom-edge space; global layout correction pending",
+    "Two incorrect private supplemental harness assumptions preserved and corrected from actual API/wire contracts; no original business assertions changed or retried"
+  ],
+  "owner": "Divyam Talwar",
+  "product": "Run Phantom"
+}
