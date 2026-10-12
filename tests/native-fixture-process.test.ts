@@ -7,6 +7,61 @@ import path from "node:path";
 import { fileSha256, launchOwnedProcess, ownedProcessMatches, startManagedDaemon, startFixtureDaemon, startFixtureSupervisor, stopOwnedProcess, windowsNativeEnvironment, windowsOwnershipQuery, windowsProcessBirth } from "../app/tests-e2e/daemon-runtime";
 
 const root = path.resolve(import.meta.dir, "..");
+const diagnosticSystem = { PATH: "C:\\Windows\\System32", SystemRoot: "C:\\Windows" };
+const diagnosticAppData = "C:\\Users\\fixture\\AppData\\Roaming";
+function diagnosticAppDataEnvironment(input: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const projected = windowsNativeEnvironment(input);
+  let value: string | undefined;
+  for (const [key, field] of Object.entries(Object.getOwnPropertyDescriptors(input))) {
+    if (![...key].every(character => character.charCodeAt(0) <= 0x7f) || key.toLowerCase() !== "appdata") continue;
+    if (!("value" in field) || typeof field.value !== "string" || !field.value || field.value.length > 32767 || field.value.includes("\0"))
+      throw new Error("diagnostic_environment_invalid");
+    if (value !== undefined && value !== field.value) throw new Error("diagnostic_environment_conflict");
+    value = field.value;
+  }
+  if (value === undefined) throw new Error("diagnostic_environment_required");
+  return { ...projected, APPDATA: value };
+}
+function diagnosticSpawnError(code: string | undefined): string | null {
+  return code === undefined ? null : ["ETIMEDOUT", "ENOENT", "EACCES", "EPERM", "ENOBUFS"].includes(code) ? code : "other";
+}
+
+test("test-only APPDATA projection admits one own ASCII system field without module or provider options", () => {
+  let reads = 0;
+  const input = { ...diagnosticSystem, APPDATA: diagnosticAppData, OPENAI_API_KEY: "fixture-secret",
+    PSModulePath: "caller-modules", PSExecutionPolicyPreference: "Bypass" };
+  Object.defineProperty(input, "UNKNOWN_OPTION", { get: () => { reads++; return "option"; } });
+  expect(diagnosticAppDataEnvironment(input)).toEqual({ ...diagnosticSystem, APPDATA: diagnosticAppData, LANG: "C", TZ: "UTC" });
+  expect(diagnosticAppDataEnvironment({ ...diagnosticSystem, appdata: diagnosticAppData, APPDATA: diagnosticAppData }))
+    .toEqual({ ...diagnosticSystem, APPDATA: diagnosticAppData, LANG: "C", TZ: "UTC" });
+  expect(reads).toBe(0);
+});
+
+test("test-only APPDATA projection refuses conflicting aliases and unsupported own data without reading getters", () => {
+  expect(() => diagnosticAppDataEnvironment({ ...diagnosticSystem, APPDATA: diagnosticAppData, appdata: "different" }))
+    .toThrow("diagnostic_environment_conflict");
+  let reads = 0;
+  const accessor = Object.defineProperty({ ...diagnosticSystem }, "APPDATA", { get: () => { reads++; return diagnosticAppData; } });
+  expect(() => diagnosticAppDataEnvironment(accessor)).toThrow("diagnostic_environment_invalid");
+  expect(reads).toBe(0);
+  for (const APPDATA of [42, "", "value\0other", "x".repeat(32768)])
+    expect(() => diagnosticAppDataEnvironment({ ...diagnosticSystem, APPDATA } as unknown as NodeJS.ProcessEnv))
+      .toThrow("diagnostic_environment_invalid");
+});
+
+test("test-only APPDATA projection never obtains its field from Unicode aliases or inherited values", () => {
+  for (const input of [diagnosticSystem, { ...diagnosticSystem, "ＡＰＰＤＡＴＡ": diagnosticAppData },
+    Object.assign(Object.create({ APPDATA: diagnosticAppData }) as NodeJS.ProcessEnv, diagnosticSystem)])
+    expect(() => diagnosticAppDataEnvironment(input)).toThrow("diagnostic_environment_required");
+});
+
+test("test-only diagnostic spawn errors expose a closed category rather than arbitrary error text", () => {
+  expect(diagnosticSpawnError(undefined)).toBeNull();
+  expect(diagnosticSpawnError("ETIMEDOUT")).toBe("ETIMEDOUT");
+  expect(diagnosticSpawnError("ENOENT")).toBe("ENOENT");
+  expect(diagnosticSpawnError("fixture-private-error-data")).toBe("other");
+});
+
 const probeBirth = (pid: number) => {
   const result = process.platform === "win32" ? spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `$p=Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}";if($p){$p.CreationDate.ToUniversalTime().ToString("o")}`], { encoding: "utf8", timeout: 3000 }) :
     spawnSync("ps", ["-p", String(pid), "-o", "lstart=,command="], { encoding: "utf8", timeout: 3000 });
@@ -48,33 +103,48 @@ test("a live registered process acquires an exact native birth before cleanup au
         });
         if (mode === "full" && result.status === 0) independentBirth = result.stdout.trim();
         console.log(JSON.stringify({ probe: "windows-birth-acquisition", mode, pid: owned.child.pid,
-          status: result.status, signal: result.signal, errorCode: (result.error as NodeJS.ErrnoException | undefined)?.code ?? null,
+          status: result.status, signal: result.signal, errorCode: diagnosticSpawnError((result.error as NodeJS.ErrnoException | undefined)?.code),
           hasBirth: !!result.stdout?.trim(), wallMs: Math.round(performance.now() - began) }));
       }
       // Diagnose the actual finite environment/query separately from the historical four-field probe.
-      for (const mode of ["finite-eight-exact-query", "finite-eight-explicit-cim"] as const) {
+      for (const mode of ["finite-eight-exact-query", "finite-eight-explicit-cim", "full-exact-query",
+        "finite-eight-intrinsic-modules", "finite-eight-appdata", "finite-eight-appdata-intrinsic-modules"] as const) {
         const query = windowsOwnershipQuery(owned.child.pid!);
+        let environment: NodeJS.ProcessEnv;
+        try {
+          environment = mode === "full-exact-query" ? process.env : mode.includes("appdata")
+            ? diagnosticAppDataEnvironment(process.env) : windowsNativeEnvironment(process.env);
+        } catch {
+          console.log(JSON.stringify({ probe: "windows-exact-ownership-query", mode, pid: owned.child.pid,
+            configuration: "unavailable", status: null, signal: null, errorCode: "configuration-unavailable",
+            hasBirth: false, sameRecordedBirth: null, stages: [], errorClasses: [], stderrBytes: 0, wallMs: 0 }));
+          continue;
+        }
+        const modulePath = mode.includes("intrinsic-modules")
+          ? "[Console]::Error.WriteLine('rp-stage:before-module-path');$env:PSModulePath=[System.IO.Path]::Combine($PSHOME,'Modules');[Console]::Error.WriteLine('rp-stage:after-module-path');"
+          : "";
         const moduleImport = mode === "finite-eight-explicit-cim"
           ? "[Console]::Error.WriteLine('rp-stage:before-import');Import-Module -Name ([System.IO.Path]::Combine($PSHOME,'Modules','CimCmdlets','CimCmdlets.psd1')) -ErrorAction Stop;[Console]::Error.WriteLine('rp-stage:after-import');"
           : "";
-        const diagnostic = "$ErrorActionPreference='Stop';try{[Console]::Error.WriteLine('rp-stage:entered');" + moduleImport +
+        const diagnostic = "$ErrorActionPreference='Stop';try{[Console]::Error.WriteLine('rp-stage:entered');" + modulePath + moduleImport +
           "[Console]::Error.WriteLine('rp-stage:before-query');" + query +
-          ";[Console]::Error.WriteLine('rp-stage:after-query')}catch{[Console]::Error.WriteLine('rp-error:'+$_.Exception.GetType().Name);exit 1}";
+          ";[Console]::Error.WriteLine('rp-stage:after-query')}catch{$class=switch($_.Exception.GetType().Name){'CommandNotFoundException'{'command-not-found'};'CimException'{'cim'};'FileNotFoundException'{'file-not-found'};'UnauthorizedAccessException'{'access-denied'};'InvalidOperationException'{'invalid-operation'};default{'other'}};[Console]::Error.WriteLine('rp-error:'+$class);exit 1}";
         const began = performance.now();
         const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", diagnostic], {
           encoding: "utf8", timeout: 3000, maxBuffer: 64 * 1024, windowsHide: true,
-          env: windowsNativeEnvironment(process.env),
+          env: environment,
         });
-        let hasBirth = false;
+        let parsedIdentity: string | null = null;
         if (result.status === 0) {
-          try { hasBirth = windowsProcessBirth(result.stdout, owned.child.pid!) !== null; } catch { /* Diagnostics never provide ownership authority. */ }
+          try { parsedIdentity = windowsProcessBirth(result.stdout, owned.child.pid!); } catch { /* Diagnostics never provide ownership authority. */ }
         }
         const stderr = typeof result.stderr === "string" ? result.stderr : "";
-        const stages = [...stderr.matchAll(/\brp-stage:(entered|before-import|after-import|before-query|after-query)\b/g)].map(match => match[1]);
-        const errorClasses = [...stderr.matchAll(/\brp-error:([A-Za-z]{1,80})\b/g)].map(match => match[1]);
+        const stages = [...stderr.matchAll(/\brp-stage:(entered|before-module-path|after-module-path|before-import|after-import|before-query|after-query)\b/g)].map(match => match[1]);
+        const errorClasses = [...stderr.matchAll(/\brp-error:(command-not-found|cim|file-not-found|access-denied|invalid-operation|other)\b/g)].map(match => match[1]);
         console.log(JSON.stringify({ probe: "windows-exact-ownership-query", mode, pid: owned.child.pid,
-          status: result.status, signal: result.signal, errorCode: (result.error as NodeJS.ErrnoException | undefined)?.code ?? null,
-          hasBirth, stages, errorClasses, stderrBytes: Buffer.byteLength(stderr), wallMs: Math.round(performance.now() - began) }));
+          configuration: "ready", status: result.status, signal: result.signal, errorCode: diagnosticSpawnError((result.error as NodeJS.ErrnoException | undefined)?.code),
+          hasBirth: parsedIdentity !== null, sameRecordedBirth: parsedIdentity && independentBirth ? parsedIdentity === `${owned.child.pid}:${independentBirth}` : null,
+          stages, errorClasses, stderrBytes: Buffer.byteLength(stderr), wallMs: Math.round(performance.now() - began) }));
       }
     }
     expect(acquisitionFailure).toBeUndefined();
@@ -91,7 +161,7 @@ test("a live registered process acquires an exact native birth before cleanup au
       await Promise.race([owned.closed, Bun.sleep(3000).then(() => { throw new Error("probe_pipe_not_closed"); })]);
     } else await stopOwnedProcess(owned);
   }
-}, 25_000);
+}, 40_000); // Eight finite 3s probes; the native observation deadline itself remains unchanged.
 
 test("a native digest mismatch and a script artifact refuse before a daemon or private store exists", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "runphantom-native-refusal-"));
