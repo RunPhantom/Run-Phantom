@@ -53,7 +53,10 @@ export function withholdAgentDefinitionCapture<T extends { attributes?: unknown;
   let typed: OtlpEvidence | undefined;
   if (typeof receipt === "string" && (relevantFlat || mayContainKey(receipt))) {
     if (receipt.length > OTLP_EVIDENCE_LIMITS.bytes || size(receipt) > OTLP_EVIDENCE_LIMITS.bytes) fail();
-    let parsed: OtlpEvidence; try { parsed = JSON.parse(receipt); validateOtlpEvidence(parsed); } catch { fail(); }
+    let parsed: OtlpEvidence; try {
+      if (hasDuplicateJsonKeys(receipt)) fail();
+      parsed = JSON.parse(receipt); validateOtlpEvidence(parsed);
+    } catch { fail(); }
     typed = parsed!;
   }
   const nestedDefinition = (value: EvidenceValue): boolean => "kvlistValue" in value
