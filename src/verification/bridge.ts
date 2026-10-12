@@ -12,6 +12,8 @@ import { CAUSAL_CAPABILITY, PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_CAPABI
   type AppCommand, type Coverage, type RelativeTarget, type RuntimeEvent, type SessionSummary, type VerificationCapability, type RetainedControlSource } from "./protocol";
 import { sanitizeControlSource } from "./build/source";
 import { baselineScopeForTarget, captureBaselineReading, captureCausalAttribution, type BaselineReading, type CausalAttribution } from "./baseline";
+import { PERFORMANCE_CAPABILITY } from "./protocol";
+import { parsePerformanceSnapshot, scrubPerformanceMetadata, type RetainedPerformanceEvidence, type PerformanceSnapshot } from "./performance";
 
 export class VerificationHttpError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -69,6 +71,8 @@ export interface VerificationSession {
   currentActionId?: string;
   lastCausalResult?: CapturedCausalDispatch;
   lastControlSource?: RetainedControlSource;
+  lastPerformance?: RetainedPerformanceEvidence;
+  performanceWindow?: PerformanceSnapshot;
   lastCommandCursor: number;
   busy: boolean;
   secrets: string[];
@@ -146,6 +150,8 @@ export class VerificationBridge {
     session.currentActionId = undefined;
     session.lastCausalResult = undefined;
     session.lastControlSource = undefined;
+    session.lastPerformance = undefined;
+    session.performanceWindow = undefined;
     if (session.pending) {
       const pending = session.pending;
       session.pending = null;
@@ -209,9 +215,19 @@ export class VerificationBridge {
         else {
           const pending = session.pending;
           if (!pending || msg.id !== pending.id) throw new Error("unexpected command result");
+          let performanceResult: PerformanceSnapshot | undefined;
           // Validate before resolving: a malformed causal reply must invalidate the owned turn,
           // not leave its promise detached from the generation being closed.
           if (pending.command.type === "causal-click" && msg.ok) this.captureDispatch(session, pending, !!msg.truncated);
+          if (pending.command.type === "performance" && msg.ok) {
+            const snapshot = parsePerformanceSnapshot(msg.result);
+            if (msg.truncated || snapshot.phase !== pending.command.phase) throw new Error("Invalid performance phase or partial response");
+            const previous = session.performanceWindow;
+            if (snapshot.phase === "capture" && (!previous || previous.documentId !== snapshot.documentId || previous.windowId !== snapshot.windowId
+              || previous.clock.timeOriginMs !== snapshot.clock.timeOriginMs || previous.clock.sinceMs !== snapshot.clock.sinceMs
+              || previous.clock.installedAtMs !== snapshot.clock.installedAtMs || (previous.clock.capturedAtMs !== null && snapshot.clock.capturedAtMs !== null && previous.clock.capturedAtMs > snapshot.clock.capturedAtMs))) throw new Error("Unmatched native performance window");
+            performanceResult = scrubPerformanceMetadata(snapshot, value => this.sanitize(session, value).value);
+          }
           session.pending = null;
           clearTimeout(pending.timer);
           const semanticAction = pending.command.type === "ref-click" || pending.command.type === "ref-fill";
@@ -220,9 +236,17 @@ export class VerificationBridge {
             pending.resolve({ ok: false, cursor: pending.cursor, error: "Application did not acknowledge the action boundary" });
             return;
           }
-          const cleaned = this.sanitizeReadResult(session, pending.command, msg.result);
+          const cleaned = pending.command.type === "performance" ? { value: performanceResult, incomplete: false } : this.sanitizeReadResult(session, pending.command, msg.result);
           const result = cleaned.value;
           const truncated = msg.truncated || cleaned.incomplete;
+          if (pending.command.type === "performance") {
+            session.lastPerformance = undefined;
+            if (msg.ok) {
+              const snapshot = result as PerformanceSnapshot;
+              session.performanceWindow = snapshot;
+              session.lastPerformance = { generation: session.generation, cursor: pending.cursor, snapshot };
+            } else session.performanceWindow = undefined;
+          }
           const value = result && typeof result === "object" && !Array.isArray(result) ? result as Record<string, unknown> : {};
           if (pending.command.type === "state") {
             const readable = msg.ok && Object.hasOwn(value, "value");
@@ -372,6 +396,7 @@ export class VerificationBridge {
     const cursor = this.tick(session);
     if (!session.ws || session.ws.readyState !== WebSocket.OPEN) return Promise.resolve({ ok: false, cursor, error: "Application is disconnected" });
     if (session.pending) throw new VerificationHttpError(409, "An application command is already pending");
+    if (command.type === "performance" && !session.capabilities.includes(PERFORMANCE_CAPABILITY)) return Promise.resolve({ ok: false, cursor, unavailable: true, error: "Native performance evidence requires explicit SDK opt-in; no capture was made" });
     if (["find", "semantic-snapshot", "ref-click", "ref-fill"].includes(command.type) && !session.capabilities.includes(SEMANTIC_CAPABILITY)) {
       return Promise.resolve({ ok: false, cursor, unavailable: true,
         error: "Application does not support semantic references; no action was executed" });

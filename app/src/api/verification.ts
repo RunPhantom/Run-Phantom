@@ -4,6 +4,7 @@ import type { AppCommand, FlowStep, Observation, Predicate, SessionSummary, Veri
 export type { AppCommand, FlowStep, Observation, Predicate, RuntimeEvent, SessionSummary, VerificationFlow, VerificationReport, VerificationReportContext, VerificationStatus } from "../../../src/verification/protocol";
 export type CreatedSession = SessionSummary & { token: string; sdkUrl: string; wsUrl: string };
 export type CommandResult = { ok: boolean; cursor: number; result?: unknown; error?: string; truncated?: boolean };
+export type { PerformanceSnapshot, PerformancePredicate, RetainedPerformanceEvidence } from "../../../src/verification/performance";
 const root = "/api/verification";
 const sessionPath = (id: string) => `${root}/sessions/${encodeURIComponent(id)}`;
 
