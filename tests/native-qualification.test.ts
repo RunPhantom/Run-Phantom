@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileSha256, outsideCheckout, launchOwnedProcess, ownedProcessMatches, stopOwnedProcess, startManagedDaemon, windowsNativeEnvironment, windowsProcessSnapshot, windowsProcessBirth, type RuntimeProvenance } from "../app/tests-e2e/daemon-runtime";
+import { fileSha256, outsideCheckout, launchOwnedProcess, ownedProcessMatches, stopOwnedProcess, startManagedDaemon, windowsNativeEnvironment, windowsProcessSnapshot, windowsProcessBirth, windowsOwnershipQuery, type RuntimeProvenance } from "../app/tests-e2e/daemon-runtime";
 
 const systemEnvironment = { PATH: "C:\\Windows\\System32", SystemRoot: "C:\\Windows", windir: "C:\\Windows", TEMP: "C:\\Temp", TMP: "C:\\Temp",
   USERPROFILE: "C:\\Users\\fixture", LOCALAPPDATA: "C:\\Users\\fixture\\AppData\\Local", ProgramFiles: "C:\\Program Files" };
@@ -55,8 +55,28 @@ test("Windows acquisition refuses corrupt, duplicate and unbounded snapshots bef
     expect(() => windowsProcessSnapshot(invalid)).toThrow("fixture_process_birth");
   }
   expect(() => windowsProcessSnapshot(" ".repeat(512 * 1024 + 1))).toThrow("fixture_process_snapshot_limit");
-  expect(() => windowsProcessSnapshot(JSON.stringify(Array.from({ length: 8193 }, (_, i) => ({ ...valid, pid: i + 1 }))))).toThrow("fixture_process_snapshot_limit");
+  const boundedRows = Array.from({ length: 8192 }, (_, i) => ({ pid: i + 1, parent: 0, birth: null }));
+  expect(windowsProcessSnapshot(JSON.stringify(boundedRows))).toHaveLength(8192);
+  expect(() => windowsProcessSnapshot(JSON.stringify([...boundedRows, { pid: 8193, parent: 0, birth: null }]))).toThrow("fixture_process_snapshot_limit");
+  expect(windowsProcessSnapshot("[]".padEnd(512 * 1024, " "))).toEqual([]);
   for (const pid of [0, -1, 1.5, Infinity, 4294967296]) expect(() => windowsProcessBirth("[]", pid)).toThrow("fixture_process_pid");
+  expect(windowsProcessBirth("[]".padEnd(64 * 1024, " "), 71)).toBeNull();
+  expect(() => windowsProcessBirth(null as unknown as string, 71)).toThrow("fixture_process_snapshot_limit");
+  expect(() => windowsProcessBirth(" ".repeat(64 * 1024 + 1), 71)).toThrow("fixture_process_snapshot_limit");
+});
+
+test("Windows ownership queries reject nonlocal selectors before constructing a fixed bounded command", () => {
+  for (const selector of [0, -1, 1.5, Infinity, 4294967296, "71;Stop-Process", "remote"])
+    expect(() => windowsOwnershipQuery(selector as number)).toThrow("fixture_process_pid");
+  const selected = windowsOwnershipQuery(71), snapshot = windowsOwnershipQuery("all");
+  expect(selected).toContain('-Property ProcessId,ParentProcessId,CreationDate -Filter "ProcessId = 71"');
+  expect(snapshot).not.toContain("-Filter");
+  for (const script of [selected, snapshot]) {
+    expect(script).toContain("$ErrorActionPreference='Stop'");
+    expect(script).toContain("$rows.Count -ge 8192");
+    expect(script).toContain("ConvertTo-Json -InputObject @($rows.ToArray())");
+    expect(script).not.toMatch(/ComputerName|CimSession|ExecutablePath|CommandLine/);
+  }
 });
 
 test("qualification refuses missing artifacts, mismatched native digests and ambiguous arguments before creating receipts", async () => {

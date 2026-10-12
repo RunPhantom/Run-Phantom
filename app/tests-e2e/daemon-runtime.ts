@@ -78,6 +78,7 @@ function command(file: string, args: string[], maxBuffer = 64 * 1024): Promise<s
     (error, stdout) => error ? reject(refusal("native_observation_failed")) : resolve(stdout)));
 }
 export async function observeNative(pid: number, executable: string, cwd: string, port: number): Promise<ProcessObservation> {
+  if (!validWindowsPid(pid) || !Number.isInteger(port) || port < 1 || port > 65535) throw refusal("native_identity_mismatch");
   if (process.platform === "darwin") {
     const [cmd, files, listener] = await Promise.all([
       command("/bin/ps", ["-p", String(pid), "-o", "command="]),
@@ -103,7 +104,7 @@ export async function observeNative(pid: number, executable: string, cwd: string
   }
   if (process.platform === "win32") {
     // CIM exposes executable identity, not a process's current directory.
-    const script = `$p=Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"; $l=@(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue); @{exe=$p.ExecutablePath;command=$p.CommandLine;owned=(@($l|Where-Object {$_.OwningProcess -eq ${pid}}).Count -gt 0)}|ConvertTo-Json -Compress`;
+    const script = `$ErrorActionPreference='Stop';$p=Get-CimInstance -ClassName Win32_Process -Property ExecutablePath,CommandLine -Filter "ProcessId = ${pid}"; $l=@(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue); @{exe=$p.ExecutablePath;command=$p.CommandLine;owned=(@($l|Where-Object {$_.OwningProcess -eq ${pid}}).Count -gt 0)}|ConvertTo-Json -Compress`;
     const raw = JSON.parse(await command("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script])) as { exe: string; command: string; owned: boolean };
     if (!raw.exe || (await realpath(raw.exe)).toLowerCase() !== executable.toLowerCase() || !raw.command?.includes(path.basename(executable)) || !raw.owned) throw refusal("native_identity_mismatch");
     return { executable: raw.exe, cwd: null, command: raw.command, listenerOwned: true, cwdEvidence: "launch-only" };
@@ -125,15 +126,11 @@ async function darwinRows(pid: number | "all"): Promise<ProcessRow[]> {
   return rows;
 }
 async function processIdentity(pid: number): Promise<string | null> {
+  if (process.platform === "win32") return windowsProcessBirth(await command("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", windowsOwnershipQuery(pid)]), pid);
   try {
     if (process.platform === "linux") {
       const fields = (await readFile(`/proc/${pid}/stat`, "utf8")).split(")").at(-1)!.trim().split(/\s+/);
       return `${pid}:${fields[19]}`; // Kernel process start ticks, independent of PID reuse.
-    }
-    if (process.platform === "win32") {
-      const script = `$p=Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"; if($p){$p.CreationDate.ToUniversalTime().ToString("o")}`;
-      const stamp = (await command("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script])).trim();
-      return stamp ? `${pid}:${stamp}` : null;
     }
     if (process.platform === "darwin") return (await darwinRows(pid))[0]?.identity ?? null;
     return null;
@@ -169,16 +166,18 @@ export function windowsProcessBirth(raw: string, pid: number): string | null {
   return rows[0].identity;
 }
 const validWindowsPid = (pid: number) => Number.isInteger(pid) && pid > 0 && pid <= 0xffffffff;
+export function windowsOwnershipQuery(pid: number | "all"): string {
+  if (pid !== "all" && !validWindowsPid(pid)) throw refusal("fixture_process_pid");
+  const filter = pid === "all" ? "" : ` -Filter "ProcessId = ${pid}"`;
+  return `$ErrorActionPreference='Stop';$rows=[System.Collections.Generic.List[object]]::new();Get-CimInstance -ClassName Win32_Process -Property ProcessId,ParentProcessId,CreationDate${filter} | ForEach-Object {if($_.ProcessId -gt 0){if($rows.Count -ge 8192){throw 'fixture_process_snapshot_limit'};$birth=$null;if($null -ne $_.CreationDate){$birth=$_.CreationDate.ToUniversalTime().ToString("o")};$rows.Add(@{pid=$_.ProcessId;parent=$_.ParentProcessId;birth=$birth})}};ConvertTo-Json -InputObject @($rows.ToArray()) -Compress`;
+}
 type Ownership = { root: ChildProcess; pid: number | undefined; identity: Promise<string | null>; descendants: Map<number, string>; pending: Promise<void>; running?: boolean; timer?: ReturnType<typeof setInterval>; failure?: Error };
 const ownership = new WeakMap<OwnedProcess, Ownership>();
 const MAX_DESCENDANTS = 64;
 async function processRows(): Promise<ProcessRow[]> {
   if (process.platform === "darwin") return await darwinRows("all");
   if (process.platform === "win32") {
-    const script = '@(Get-CimInstance Win32_Process | ForEach-Object { @{pid=$_.ProcessId;parent=$_.ParentProcessId;birth=$_.CreationDate.ToUniversalTime().ToString("o")} })|ConvertTo-Json -Compress';
-    const rows = JSON.parse(await command("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], 512 * 1024)) as { pid: number; parent: number; birth: string }[];
-    if (!Array.isArray(rows) || rows.length > 8192) throw refusal("fixture_process_snapshot_limit");
-    return rows.map(row => ({ pid: row.pid, parent: row.parent, identity: `${row.pid}:${row.birth}` }));
+    return windowsProcessSnapshot(await command("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", windowsOwnershipQuery("all")], 512 * 1024));
   }
   const output = await command("ps", ["-axo", process.platform === "linux" ? "pid=,ppid=" : "pid=,ppid=,lstart="], 512 * 1024);
   const lines = output.trim().split("\n");
@@ -205,8 +204,13 @@ async function refreshOwnership(owned: OwnedProcess, lease: Ownership): Promise<
   };
   const anchors = new Set<number>();
   const root = await liveRow(pid);
+  if (root && !root.identity) throw refusal("fixture_process_birth");
   if (root?.identity === expected) anchors.add(pid);
-  for (const [member, identity] of lease.descendants) if ((await liveRow(member))?.identity === identity) anchors.add(member);
+  for (const [member, identity] of lease.descendants) {
+    const row = await liveRow(member);
+    if (row && !row.identity) throw refusal("fixture_process_birth");
+    if (row?.identity === identity) anchors.add(member);
+  }
   // Adopt only edges in a bounded OS snapshot whose parent still has its recorded birth.
   for (let changed = true; changed;) {
     changed = false;
@@ -215,6 +219,7 @@ async function refreshOwnership(owned: OwnedProcess, lease: Ownership): Promise<
       const row = await liveRow(candidate.pid), parent = await liveRow(candidate.parent);
       const parentIdentity = candidate.parent === pid ? expected : lease.descendants.get(candidate.parent);
       if (!row || row.parent !== candidate.parent || parent?.identity !== parentIdentity) continue;
+      if (!row.identity) throw refusal("fixture_process_birth");
       if (lease.descendants.has(row.pid) && lease.descendants.get(row.pid) !== row.identity) throw refusal("fixture_process_identity_lost");
       if (lease.descendants.size >= MAX_DESCENDANTS) throw refusal("fixture_process_descendant_limit");
       lease.descendants.set(row.pid, row.identity); anchors.add(row.pid); changed = true;
@@ -229,8 +234,9 @@ function scheduleOwnership(owned: OwnedProcess, lease: Ownership): Promise<void>
 }
 export async function ownedProcessMatches(owned: OwnedProcess): Promise<boolean> {
   const lease = ownership.get(owned);
-  return !!lease && owned.child === lease.root && owned.child.pid === lease.pid && !!lease.pid &&
-    await owned.identity === await lease.identity && await processIdentity(lease.pid) === await lease.identity;
+  if (!lease || owned.child !== lease.root || owned.child.pid !== lease.pid || !lease.pid) return false;
+  const expected = await lease.identity;
+  return !!expected && await owned.identity === expected && await processIdentity(lease.pid) === expected;
 }
 export function launchOwnedProcess(file: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): OwnedProcess {
   const child = spawn(file, args, { cwd, env, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
@@ -286,6 +292,7 @@ export async function stopOwnedProcess(owned: OwnedProcess): Promise<{ pid: numb
     const rows = new Map((await processRows()).map(row => [row.pid, row]));
     const remaining = await Promise.all([...recorded].map(async ([member, identity]) => {
       const row = rows.get(member), current = row && process.platform === "linux" ? (await linuxRow(row))?.identity : row?.identity;
+      if (row && process.platform === "win32" && !current) throw refusal("fixture_process_birth");
       if (current && current !== identity) { identityFailure ??= refusal("fixture_process_identity_lost"); return false; }
       return !!current;
     }));

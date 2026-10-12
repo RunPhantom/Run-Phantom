@@ -36,7 +36,8 @@ test("a live registered process acquires an exact native birth before cleanup au
   let independentBirth = "";
   try {
     await ready(owned);
-    const identity = await owned.identity;
+    let identity: string | null = null, acquisitionFailure: unknown;
+    try { identity = await owned.identity; } catch (error) { acquisitionFailure = error; }
     if (!identity && process.platform === "win32") {
       const script = `$p=Get-CimInstance Win32_Process -Filter "ProcessId = ${owned.child.pid}";if($p){$p.CreationDate.ToUniversalTime().ToString("o")}`;
       for (const mode of ["full", "current-wrapper"] as const) {
@@ -51,6 +52,7 @@ test("a live registered process acquires an exact native birth before cleanup au
           hasBirth: !!result.stdout?.trim(), wallMs: Math.round(performance.now() - began) }));
       }
     }
+    expect(acquisitionFailure).toBeUndefined();
     expect(identity).not.toBeNull();
     expect(identity?.startsWith(`${owned.child.pid}:`)).toBe(true);
     expect(await ownedProcessMatches(owned)).toBe(true);
