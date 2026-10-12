@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { fileSha256, launchOwnedProcess, stopOwnedProcess, type RuntimeProvenance } from "../app/tests-e2e/daemon-runtime";
+import { fileSha256, outsideCheckout, launchOwnedProcess, stopOwnedProcess, type RuntimeProvenance } from "../app/tests-e2e/daemon-runtime";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 type Attachment = { name: string; body?: string; path?: string };
@@ -85,9 +85,8 @@ async function main() {
       if (result.status !== "passed" || result.retry !== 0) throw new Error("native_journey_not_passed");
       const runtime = await receipt<RuntimeProvenance>(result.attachments, "runphantom-runtime-start", output);
       const cleanup = await receipt<Cleanup>(result.attachments, "runphantom-runtime-cleanup", output);
-      const relative = path.relative(root, runtime.stateDirectory);
       if (runtime.mode !== "installed" || runtime.sourceArtifact !== artifact || runtime.sourceSha256 !== selection.sha256 || runtime.copiedSha256 !== selection.sha256 ||
-        !runtime.copiedArtifact || !relative.startsWith("..") || runtime.command[0] !== runtime.copiedArtifact || runtime.command[1] !== "serve" ||
+        !runtime.copiedArtifact || !outsideCheckout(root, runtime.stateDirectory) || runtime.command[0] !== runtime.copiedArtifact || runtime.command[1] !== "serve" ||
         !runtime.observation?.listenerOwned || JSON.stringify(cleanup.runtime) !== JSON.stringify(runtime) || cleanup.process.pid !== runtime.pid ||
         !cleanup.process.closeObserved || !cleanup.process.identity || !cleanup.directoryRemoved || !cleanup.artifactUnchanged ||
         !await removed(runtime.stateDirectory) || alive(runtime.pid)) throw new Error("native_provenance_not_closed");

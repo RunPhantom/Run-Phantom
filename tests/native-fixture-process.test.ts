@@ -89,3 +89,36 @@ test("lost process identity refuses escalation and retains the live process unti
     expect(alive(owned.child.pid!)).toBe(true);
   } finally { owned.identity = identity; await stopOwnedProcess(owned); }
 }, 10_000);
+
+
+test.skipIf(process.platform === "win32")("an exited parent cannot abandon its recorded child holding inherited pipes", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "runphantom-exited-parent-"));
+  const signal = path.join(directory, "exit");
+  const childScript = 'process.on("SIGTERM",()=>{});console.log("child:"+process.pid);setInterval(()=>{},1000);';
+  const parentScript = `require("node:child_process").spawn(process.execPath,["-e",${JSON.stringify(childScript)}],{stdio:["ignore","inherit","inherit"]});setInterval(()=>{if(require("node:fs").existsSync(${JSON.stringify(signal)}))process.exit(0)},25);`;
+  const owned = launchOwnedProcess(process.execPath, ["-e", parentScript], root, process.env);
+  const unrelated = launchOwnedProcess(process.execPath, ["-e", 'console.log("ready");setInterval(()=>{},1000)'], root, process.env);
+  let childPid = 0, childBirth = "";
+  const birth = (pid: number) => spawnSync("ps", ["-p", String(pid), "-o", "lstart=,command="], { encoding: "utf8", timeout: 3000 }).stdout.trim();
+  try {
+    await ready(unrelated);
+    childPid = await new Promise<number>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("descendant_not_ready")), 5000);
+      owned.child.stdout!.on("data", data => { const match = /child:(\d+)/.exec(String(data)); if (match) { clearTimeout(timer); resolve(Number(match[1])); } });
+    });
+    childBirth = birth(childPid); expect(childBirth.length).toBeGreaterThan(0);
+    await Bun.sleep(500); // The live parent/child relationship is observable before exit.
+    const exited = new Promise<void>(resolve => owned.child.once("exit", () => resolve()));
+    await writeFile(signal, "exit"); await exited;
+    expect(alive(owned.child.pid!)).toBe(false); expect(alive(childPid)).toBe(true); expect(owned.closeObserved).toBe(false);
+    let failure: unknown;
+    try { await stopOwnedProcess(owned); } catch (error) { failure = error; }
+    console.log(JSON.stringify({ probe: "exited-parent", parentPid: owned.child.pid, childPid, childBirth, failure: failure instanceof Error ? failure.message : null, childAlive: alive(childPid), closeObserved: owned.closeObserved }));
+    expect(failure).toBeUndefined(); expect(alive(childPid)).toBe(false); expect(owned.closeObserved).toBe(true); expect(alive(unrelated.child.pid!)).toBe(true);
+  } finally {
+    if (childPid && alive(childPid)) { if (birth(childPid) !== childBirth) throw new Error("probe_child_identity_changed"); process.kill(childPid, "SIGKILL"); }
+    if (alive(owned.child.pid!)) await stopOwnedProcess(owned);
+    await Promise.race([owned.closed, Bun.sleep(3000).then(() => { throw new Error("probe_pipe_not_closed"); })]);
+    await stopOwnedProcess(unrelated); await rm(directory, { recursive: true, force: true });
+  }
+}, 15_000);

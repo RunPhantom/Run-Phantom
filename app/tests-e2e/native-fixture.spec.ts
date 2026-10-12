@@ -1,11 +1,15 @@
 import { test, expect } from "./fixtures";
-import { readdir, stat } from "node:fs/promises";
+import { readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 test("runtime fixture starts a fresh daemon for the selected execution mode", async ({ request, runPhantom }) => {
   const health = await request.get(`${runPhantom.url}/health`);
   expect(health.ok()).toBe(true);
   expect(await health.json()).toMatchObject({ service: "runphantom", pid: runPhantom.runtime.pid, port: runPhantom.port });
+  if (process.env.PHANTOM_NATIVE_INTERRUPT_RECEIPT) {
+    await writeFile(process.env.PHANTOM_NATIVE_INTERRUPT_RECEIPT, JSON.stringify({ runtime: runPhantom.runtime, url: runPhantom.url, workerPid: process.pid, runnerPid: process.ppid }));
+    await new Promise<void>(() => {});
+  }
   const runs = await request.get(`${runPhantom.url}/api/runs`);
   expect(runs.ok()).toBe(true);
   expect(await runs.json()).toEqual([]);

@@ -31,6 +31,9 @@ export function runtimeSelection(env: NodeJS.ProcessEnv): RuntimeSelection {
   if (!sha256 || !/^[a-f0-9]{64}$/.test(sha256)) throw refusal("native_digest_required");
   return { mode, artifact, sha256 };
 }
+export function outsideCheckout(checkout: string, directory: string, paths = path): boolean {
+  return paths.relative(checkout, directory).startsWith("..");
+}
 export async function fileSha256(file: string): Promise<string> {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(file)) hash.update(chunk as Buffer);
