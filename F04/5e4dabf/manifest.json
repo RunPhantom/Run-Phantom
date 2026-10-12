@@ -1,0 +1,62 @@
+{
+  "product": "Run Phantom",
+  "maintainer": "Divyam Talwar",
+  "sourceHead": "5e4dabf8bc3cd2e5cfdf4b79963f6474ff20e995",
+  "baseHead": "434e42b12d9547377a31257f067ba19bbc6ca418",
+  "ownMeaningfulNonMergeCommits": 8,
+  "dependencyMergeExcludedFromSourceCount": true,
+  "freshMacSourceBackend": {
+    "passed": 848,
+    "skipped": 3,
+    "failed": 0
+  },
+  "freshMacSourceChromium": {
+    "passed": 114,
+    "explicitOptInSkipped": 10,
+    "unexpected": 0,
+    "flaky": 0,
+    "assertionRetries": 0,
+    "workers": 1
+  },
+  "freshWholeMacArtifact": {
+    "sha256": "4f0e3a29da189116b9d8b787dd70b0e44b3e5e15862c81bdacb7c9a7464a72ea",
+    "bytes": 68366992
+  },
+  "freshMacCopiedCommonChromium": {
+    "passed": 3,
+    "skipped": 0,
+    "failed": 0,
+    "assertionRetries": 0
+  },
+  "copiedNativeLifecycle": {
+    "passed": 1,
+    "failed": 0,
+    "assertions": 25
+  },
+  "all14RecordedOwnedPidsAbsent": true,
+  "scope": "Current Mac fresh source and genuine copied application subset. Separate F05 upload UI, F06 Team roles, all composed features, providers, stage-specific durable clocks and current native Windows remain pending. Legacy inherited warm UI screenshots are bootstrap only.",
+  "providerSpendUsd": 0,
+  "globalAcceptance": false,
+  "screenshots": [
+    {
+      "path": "runphantom-desktop-detail.png",
+      "sha256": "f3c1dcdc35948f50dd55aec8d643cc73f139fabe9a683339049c643f16fa0081",
+      "source": "Actual Chromium screenshot against the current genuine copied macOS arm64 application"
+    },
+    {
+      "path": "runphantom-desktop.png",
+      "sha256": "a595d7d41781bf37415694b74ae64bf35c3384cce9d4801f8b425ce965b971ab",
+      "source": "Actual Chromium screenshot against the current genuine copied macOS arm64 application"
+    },
+    {
+      "path": "runphantom-mobile.png",
+      "sha256": "f3cc1189761eb8fc5f0f2c9fef46a27eb3f2738c776e9cca5fd81a58d716d138",
+      "source": "Actual Chromium screenshot against the current genuine copied macOS arm64 application"
+    },
+    {
+      "path": "activated-evidence-api-output.png",
+      "sha256": "61db6c37e25e10f37d149752d85b35347ac0b08388995099592590765b1f3657",
+      "source": "Actual Chromium screenshot against the current genuine copied macOS arm64 application"
+    }
+  ]
+}
