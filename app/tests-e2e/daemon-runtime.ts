@@ -58,7 +58,7 @@ async function checkedArtifact(selection: Extract<RuntimeSelection, { mode: "ins
   return artifact;
 }
 function command(file: string, args: string[], maxBuffer = 64 * 1024): Promise<string> {
-  return new Promise((resolve, reject) => execFile(file, args, { timeout: 3000, maxBuffer, windowsHide: true },
+  return new Promise((resolve, reject) => execFile(file, args, { timeout: 3000, maxBuffer, windowsHide: true, env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, LANG: "C", TZ: "UTC" } },
     (error, stdout) => error ? reject(refusal("native_observation_failed")) : resolve(stdout)));
 }
 export async function observeNative(pid: number, executable: string, cwd: string, port: number): Promise<ProcessObservation> {
@@ -94,6 +94,20 @@ export async function observeNative(pid: number, executable: string, cwd: string
   }
   throw refusal("native_platform_unsupported");
 }
+// Fixed SDK proc_bsdinfo layout on supported 64-bit Darwin; kernel start microseconds are stable across title changes.
+const DARWIN_BIRTH_QUERY = `import {dlopen,FFIType,ptr} from "bun:ffi";
+const lib=dlopen("/usr/lib/libproc.dylib",{proc_listallpids:{args:[FFIType.ptr,FFIType.i32],returns:FFIType.i32},proc_pidinfo:{args:[FFIType.i32,FFIType.i32,FFIType.u64,FFIType.ptr,FFIType.i32],returns:FFIType.i32}});
+const requested=process.argv.at(-1),pids=new Int32Array(8192);let count=0;
+if(requested==="all"){count=lib.symbols.proc_listallpids(ptr(pids),pids.byteLength);if(count<0||count>=pids.length)throw Error("fixture_process_snapshot_limit");}
+else{const pid=Number(requested);if(!Number.isInteger(pid)||pid<1||pid>2147483647)throw Error("fixture_process_pid");pids[0]=pid;count=1;}
+const rows=[],buffer=new Uint8Array(136),view=new DataView(buffer.buffer);
+for(let i=0;i<count;i++){if(pids[i]<1)continue;buffer.fill(0);if(lib.symbols.proc_pidinfo(pids[i],3,0n,ptr(buffer),buffer.byteLength)!==136)continue;const pid=view.getUint32(12,true),parent=view.getUint32(16,true),seconds=view.getBigUint64(120,true),micros=view.getBigUint64(128,true);if(pid!==pids[i]||seconds===0n||micros>=1000000n)throw Error("fixture_process_birth");rows.push({pid,parent,identity:pid+":"+seconds+":"+micros});}
+lib.close();console.log(JSON.stringify(rows));`;
+async function darwinRows(pid: number | "all"): Promise<ProcessRow[]> {
+  const rows = JSON.parse(await command("bun", ["--no-env-file", "--no-install", "-e", DARWIN_BIRTH_QUERY, "--", String(pid)], 512 * 1024)) as ProcessRow[];
+  if (!Array.isArray(rows) || rows.length > 8192 || rows.some(row => !Number.isSafeInteger(row.pid) || row.pid < 1 || row.pid > 2147483647 || !Number.isSafeInteger(row.parent) || row.parent < 0 || row.parent > 2147483647 || !/^[0-9]{1,10}:[0-9]{1,20}:[0-9]{1,6}$/.test(row.identity) || Number(row.identity.split(":")[0]) !== row.pid)) throw refusal("fixture_process_birth");
+  return rows;
+}
 async function processIdentity(pid: number): Promise<string | null> {
   try {
     if (process.platform === "linux") {
@@ -105,8 +119,8 @@ async function processIdentity(pid: number): Promise<string | null> {
       const stamp = (await command("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script])).trim();
       return stamp ? `${pid}:${stamp}` : null;
     }
-    const stamp = (await command("/bin/ps", ["-p", String(pid), "-o", "lstart=,command="])).trim();
-    return stamp ? `${pid}:${stamp}` : null;
+    if (process.platform === "darwin") return (await darwinRows(pid))[0]?.identity ?? null;
+    return null;
   } catch { return null; }
 }
 type ProcessRow = { pid: number; parent: number; identity: string };
@@ -114,13 +128,14 @@ type Ownership = { root: ChildProcess; pid: number | undefined; identity: Promis
 const ownership = new WeakMap<OwnedProcess, Ownership>();
 const MAX_DESCENDANTS = 64;
 async function processRows(): Promise<ProcessRow[]> {
+  if (process.platform === "darwin") return await darwinRows("all");
   if (process.platform === "win32") {
     const script = '@(Get-CimInstance Win32_Process | ForEach-Object { @{pid=$_.ProcessId;parent=$_.ParentProcessId;birth=$_.CreationDate.ToUniversalTime().ToString("o")} })|ConvertTo-Json -Compress';
     const rows = JSON.parse(await command("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], 512 * 1024)) as { pid: number; parent: number; birth: string }[];
     if (!Array.isArray(rows) || rows.length > 8192) throw refusal("fixture_process_snapshot_limit");
     return rows.map(row => ({ pid: row.pid, parent: row.parent, identity: `${row.pid}:${row.birth}` }));
   }
-  const output = await command("ps", ["-axo", process.platform === "linux" ? "pid=,ppid=" : "pid=,ppid=,lstart=,command="], 512 * 1024);
+  const output = await command("ps", ["-axo", process.platform === "linux" ? "pid=,ppid=" : "pid=,ppid=,lstart="], 512 * 1024);
   const lines = output.trim().split("\n");
   if (lines.length > 8192) throw refusal("fixture_process_snapshot_limit");
   return lines.flatMap(line => {
@@ -167,6 +182,11 @@ function scheduleOwnership(owned: OwnedProcess, lease: Ownership): Promise<void>
   lease.pending = refreshOwnership(owned, lease).catch(error => { lease.failure = error instanceof Error ? error : refusal("fixture_process_snapshot_failed"); }).finally(() => { lease.running = false; });
   return lease.pending;
 }
+export async function ownedProcessMatches(owned: OwnedProcess): Promise<boolean> {
+  const lease = ownership.get(owned);
+  return !!lease && owned.child === lease.root && owned.child.pid === lease.pid && !!lease.pid &&
+    await owned.identity === await lease.identity && await processIdentity(lease.pid) === await lease.identity;
+}
 export function launchOwnedProcess(file: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): OwnedProcess {
   const child = spawn(file, args, { cwd, env, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   const owned: OwnedProcess = { child, closed: Promise.resolve(), closeObserved: false, error: null, identity: child.pid ? processIdentity(child.pid) : Promise.resolve(null) };
@@ -183,20 +203,23 @@ async function closedWithin(owned: OwnedProcess, ms: number): Promise<boolean> {
   finally { clearTimeout(timer); }
 }
 export async function stopOwnedProcess(owned: OwnedProcess): Promise<{ pid: number | null; closeObserved: true; forced: boolean; identity: string | null }> {
+  const cleanupDeadline = Date.now() + 20_000;
+  const withinDeadline = () => { if (Date.now() > cleanupDeadline) throw refusal("fixture_process_cleanup_timeout"); };
   const lease = ownership.get(owned); if (!lease) throw refusal("fixture_process_unknown_owner");
   if (owned.child !== lease.root || owned.child.pid !== lease.pid || await owned.identity !== await lease.identity) throw refusal("fixture_process_identity_lost");
   clearInterval(lease.timer); await lease.pending; await scheduleOwnership(owned, lease);
-  if (lease.failure) throw lease.failure;
+  let identityFailure = lease.failure;
   const pid = owned.child.pid, expected = await owned.identity; let forced = false;
   const rootIdentity = pid ? await processIdentity(pid) : null;
-  if (rootIdentity && rootIdentity !== expected) throw refusal("fixture_process_identity_lost");
-  const recorded = new Map(lease.descendants); if (pid && expected) recorded.set(pid, expected);
+  if (rootIdentity && rootIdentity !== expected) identityFailure ??= refusal("fixture_process_identity_lost");
+  const recorded = new Map(lease.descendants); if (pid && expected && (!rootIdentity || rootIdentity === expected)) recorded.set(pid, expected);
   const signalOwned = async (signal: "SIGTERM" | "SIGKILL") => {
     let found = false;
     for (const [member, identity] of recorded) {
+      withinDeadline();
       const current = await processIdentity(member);
       if (!current) continue;
-      if (current !== identity) throw refusal("fixture_process_identity_lost");
+      if (current !== identity) { identityFailure ??= refusal("fixture_process_identity_lost"); continue; }
       found = true;
       if (process.platform === "win32") {
         forced = true; await command("taskkill.exe", ["/PID", String(member), "/F"]).catch(async error => { if (await processIdentity(member)) throw error; });
@@ -214,9 +237,11 @@ export async function stopOwnedProcess(owned: OwnedProcess): Promise<{ pid: numb
   }
   const deadline = Date.now() + 2000;
   for (;;) {
+    withinDeadline();
+    const rows = new Map((await processRows()).map(row => [row.pid, row]));
     const remaining = await Promise.all([...recorded].map(async ([member, identity]) => {
-      const current = await processIdentity(member);
-      if (current && current !== identity) throw refusal("fixture_process_identity_lost");
+      const row = rows.get(member), current = row && process.platform === "linux" ? (await linuxRow(row))?.identity : row?.identity;
+      if (current && current !== identity) { identityFailure ??= refusal("fixture_process_identity_lost"); return false; }
       return !!current;
     }));
     if (!remaining.some(Boolean)) break;
@@ -224,6 +249,7 @@ export async function stopOwnedProcess(owned: OwnedProcess): Promise<{ pid: numb
     if (Date.now() >= deadline) throw refusal("fixture_process_descendants_not_reaped");
     await sleep(25);
   }
+  if (identityFailure) throw identityFailure;
   return { pid: pid ?? null, closeObserved: true, forced, identity: expected };
 }
 async function reservePort(): Promise<number> {

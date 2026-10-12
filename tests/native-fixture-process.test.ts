@@ -186,3 +186,16 @@ test("the qualifier-owned source supervisor closes normal and interrupted fixtur
     console.log(JSON.stringify({ probe: "source-supervisor-interruption", runnerPid: runner.child.pid, daemonPid: daemon.runtime.pid, jobs: jobs.map(job => ({pid:job.runtime.pid,closeObserved:job.cleanup.process.closeObserved,directoryRemoved:job.cleanup.directoryRemoved})) }));
   } finally { if (runner) await stopOwnedProcess(runner); if (!closed) await supervisor.close(); await stopOwnedProcess(unrelated); await rm(directory, { recursive: true, force: true }); }
 }, 25_000);
+
+
+test.skipIf(process.platform === "win32")("changing an owned process title does not impersonate a different process birth", async () => {
+  const owned = launchOwnedProcess("node", ["-e", 'console.log("ready");setTimeout(()=>{process.title="runphantom-owned-title-change";console.log("changed")},200);setInterval(()=>{},1000);'], root, process.env);
+  let current = "";
+  try {
+    await ready(owned); const original = probeBirth(owned.child.pid!); await Bun.sleep(500); current = probeBirth(owned.child.pid!);
+    expect(original).not.toBe(current); expect(current).toContain("runphantom-owned-title-change");
+    let failure: unknown; try { await stopOwnedProcess(owned); } catch (error) { failure = error; }
+    console.log(JSON.stringify({probe:"mutable-title",pid:owned.child.pid,original,current,failure:failure instanceof Error ? failure.message : null,closeObserved:owned.closeObserved}));
+    expect(failure).toBeUndefined(); expect(owned.closeObserved).toBe(true); expect(alive(owned.child.pid!)).toBe(false);
+  } finally { if (current) terminateRecorded(owned.child.pid!, current, probeBirth); await owned.closed; }
+}, 8000);

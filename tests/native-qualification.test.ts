@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileSha256, outsideCheckout, launchOwnedProcess, stopOwnedProcess, startManagedDaemon, type RuntimeProvenance } from "../app/tests-e2e/daemon-runtime";
+import { fileSha256, outsideCheckout, launchOwnedProcess, ownedProcessMatches, stopOwnedProcess, startManagedDaemon, type RuntimeProvenance } from "../app/tests-e2e/daemon-runtime";
 
 test("qualification refuses missing artifacts, mismatched native digests and ambiguous arguments before creating receipts", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "runphantom-qualifier-negative-"));
@@ -64,12 +64,13 @@ async function interruptedQualifier(target: "runner" | "qualifier") {
   try {
     for (let i = 0; i < 400; i++) { try { probe = JSON.parse(await readFile(receipt, "utf8")) as typeof probe; break; } catch { if (qualifier.closeObserved) throw new Error("qualifier_exited_before_probe"); await Bun.sleep(50); } }
     if (!probe) throw new Error("qualifier_probe_missing");
+    console.log(JSON.stringify({probe:"interruption-owned-pids",target,qualifierPid:qualifier.child.pid,runnerPid:probe.runnerPid,workerPid:probe.workerPid,daemonPid:probe.runtime.pid}));
     for (const pid of [probe.runnerPid, probe.workerPid, probe.runtime.pid]) { const identity = birth(pid); expect(identity.length).toBeGreaterThan(0); births.set(pid, identity); }
     expect((await fetch(`${probe.url}/health`, { signal: AbortSignal.timeout(1000) })).status).toBe(200);
     if (target === "runner") {
       for (const pid of [probe.workerPid, probe.runnerPid]) { if (birth(pid) !== births.get(pid)) throw new Error("probe_runner_identity_changed"); process.kill(pid, "SIGKILL"); }
     } else {
-      if (`${qualifier.child.pid}:${birth(qualifier.child.pid!)}` !== await qualifier.identity) throw new Error("probe_qualifier_identity_changed"); qualifier.child.kill("SIGTERM");
+      if (!await ownedProcessMatches(qualifier)) throw new Error("probe_qualifier_identity_changed"); qualifier.child.kill("SIGTERM");
     }
     await Promise.race([qualifier.closed, Bun.sleep(15_000).then(() => { throw new Error("qualifier_interruption_not_closed"); })]);
     let removed = false; try { await stat(probe.runtime.stateDirectory); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") removed = true; else throw error; }
