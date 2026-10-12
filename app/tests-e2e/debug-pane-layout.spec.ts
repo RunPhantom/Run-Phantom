@@ -2,6 +2,39 @@ import { expect, test } from "./fixtures";
 import { FIXTURE_PRIMARY_RUN_ID, seedRunPhantomFixtures } from "./helpers";
 
 for (const width of [1440, 390, 320]) {
+  test(`trace debug composer remains reachable by keyboard at ${width}px`, async ({ page, request, runPhantom }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    await seedRunPhantomFixtures(runPhantom.url);
+    const detailUrl = `${runPhantom.url}/api/runs/detail/${FIXTURE_PRIMARY_RUN_ID}`;
+    const before = await (await request.get(detailUrl)).json();
+    const sentMessages: string[] = [];
+    page.on("request", message => {
+      if (message.method() === "POST" && /\/api\/(agent|claude)\/.*(message|chat)/.test(message.url())) sentMessages.push(message.url());
+    });
+    await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
+    const debug = page.getByRole("button", { name: "Debug", exact: true });
+    await debug.focus();
+    await page.keyboard.press("Enter");
+    const pane = page.locator('aside[aria-label="Coding-agent debug chat"]');
+    await expect(pane).toBeVisible();
+    const composer = pane.getByRole("combobox", { name: "Ask about this trace", exact: true });
+    await expect(composer).toBeInViewport({ ratio: 1 });
+    const send = pane.getByRole("button", { name: "Send message", exact: true });
+    await expect(send).toBeInViewport({ ratio: 1 });
+    await expect(send).toBeDisabled();
+    await composer.focus();
+    await page.keyboard.type("Inspect the captured output");
+    await expect(composer).toHaveValue("Inspect the captured output");
+    await expect(send).toBeEnabled();
+    await testInfo.attach(`debug-composer-${width}`, { body: await page.screenshot(), contentType: "image/png" });
+    const hide = pane.getByRole("button", { name: /^(Hide|Hide chat)$/, exact: true }).first();
+    await hide.focus(); await page.keyboard.press("Enter");
+    await expect(pane).toBeHidden();
+    expect(sentMessages).toEqual([]);
+    expect(await (await request.get(detailUrl)).json()).toEqual(before);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+  });
+
   test(`closed debug launcher preserves route space at ${width}px`, async ({ page, request, runPhantom }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
     await seedRunPhantomFixtures(runPhantom.url);

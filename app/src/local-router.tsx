@@ -81,7 +81,7 @@ function AppLayout() {
             </div>
           </header>
           <div
-            className={`flex min-h-0 flex-1 transition-opacity duration-200 ${showDisconnectedNotice ? "pointer-events-none select-none opacity-45" : ""}`}
+            className={`flex min-h-0 flex-1 transition-opacity duration-200 has-[[data-debug-launcher]]:pb-11 ${showDisconnectedNotice ? "pointer-events-none select-none opacity-45" : ""}`}
             aria-hidden={showDisconnectedNotice}
           >
             <div className="flex-1 min-w-0 overflow-auto">
