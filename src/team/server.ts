@@ -6,6 +6,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveBuiltAppDir } from "../ui-assets";
 import { parseJsonEvidence } from "../evaluations/json-evidence";
+import { hasDuplicateJsonKeys } from "../json-keys";
+import { ANALYTICS_LIMITS } from "../pricing/analytics";
 import { TeamStore, type SessionContext, type ProjectContext } from "./store";
 import { TeamCheckService } from "./checks";
 import { normalizeTeamIngest } from "./ingest";
@@ -68,7 +70,7 @@ function readBody(req: Request, limit: number): Promise<Buffer> {
   });
 }
 
-function parseJson(body: Buffer): unknown {
+function parseJson(body: Buffer, rejectDuplicateKeys = false): unknown {
   try {
     const text = new TextDecoder("utf8", { fatal: true }).decode(body);
     let depth = 0, quoted = false, escaped = false;
@@ -78,6 +80,7 @@ function parseJson(body: Buffer): unknown {
       else if (character === "{" || character === "[") { if (++depth > L.INGEST_DEPTH) throw new Error(); }
       else if (character === "}" || character === "]") depth--;
     }
+    if (rejectDuplicateKeys && hasDuplicateJsonKeys(text)) throw new Error();
     return parseJsonEvidence(text);
   } catch { throw new TeamError("invalid_request", "JSON request body is invalid or exceeds nesting limits"); }
 }
@@ -162,9 +165,9 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
     return { context, secret };
   }
   function scope(req: Request, role?: Role): ProjectContext { return store.projectScope(authenticate(req).context, req.params.projectId, role); }
-  async function jsonBody(req: Request, limit: number = L.CONTROL_BYTES): Promise<unknown> {
+  async function jsonBody(req: Request, limit: number = L.CONTROL_BYTES, rejectDuplicateKeys = false): Promise<unknown> {
     if (rawHeader(req, "content-type")?.split(";")[0].trim().toLowerCase() !== "application/json" || ![undefined, "identity"].includes(rawHeader(req, "content-encoding"))) throw new TeamError("unsupported_media_type", "This endpoint accepts uncompressed JSON only");
-    return parseJson(await readBody(req, limit));
+    return parseJson(await readBody(req, limit), rejectDuplicateKeys);
   }
   const wrap = (fn: (req: Request, res: Response) => unknown) => (req: Request, res: Response, next: NextFunction) => {
     Promise.resolve().then(() => {
@@ -227,6 +230,11 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
   app.post(`${p}/runs/:runId/notes`, wrap(async (req, res) => { const ctx = scope(req, "editor"), body = fields(await jsonBody(req), ["spanId", "kind", "text"]); send(res, store.createNote(ctx, req.params.runId, body as unknown as NoteCreate), 201); }));
   app.delete(`${p}/runs/:runId/notes/:noteId`, wrap((req, res) => { store.deleteNote(scope(req, "editor"), req.params.runId, req.params.noteId); res.sendStatus(204); }));
   app.get(`${p}/metrics`, wrap((req, res) => { const query = pageQuery(req, ["window"]); if (query.limit !== undefined || query.cursor !== undefined || query.window !== undefined && !["1h", "24h", "7d", "30d"].includes(String(query.window))) throw new TeamError("invalid_request", "Metrics window is invalid"); send(res, store.metrics(scope(req), query.window as "1h" | "24h" | "7d" | "30d" | undefined)); }));
+  app.post(`${p}/pricing/analytics`, wrap(async (req, res) => {
+    const context = scope(req);
+    const body = await jsonBody(req, ANALYTICS_LIMITS.requestBytes, true);
+    send(res, store.pricingAnalytics(context, body));
+  }));
   app.get(`${p}/audit`, wrap((req, res) => send(res, store.listAudit(scope(req, "admin"), pageQuery(req)))));
   app.get(`${p}/checks`, wrap((req, res) => send(res, checks.list(scope(req), pageQuery(req)))));
   app.post(`${p}/checks`, wrap(async (req, res) => { const ctx = scope(req, "editor"); send(res, await checks.create(ctx, await jsonBody(req, L.CHECK_REQUEST_BYTES), states.get(req)!.signal), 201, L.CHECK_BYTES); }));
