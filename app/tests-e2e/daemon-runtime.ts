@@ -32,7 +32,8 @@ export function runtimeSelection(env: NodeJS.ProcessEnv): RuntimeSelection {
   return { mode, artifact, sha256 };
 }
 export function outsideCheckout(checkout: string, directory: string, paths = path): boolean {
-  return paths.relative(checkout, directory).startsWith("..");
+  const relative = paths.relative(checkout, directory);
+  return relative === ".." || relative.startsWith(`..${paths.sep}`) || paths.isAbsolute(relative);
 }
 export async function fileSha256(file: string): Promise<string> {
   const hash = createHash("sha256");
