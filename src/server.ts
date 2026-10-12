@@ -1171,6 +1171,7 @@ export async function createServer(port: number) {
             model: s.model, provider: s.provider,
             input_tokens: s.inputTokens, output_tokens: s.outputTokens,
             attributes: JSON.stringify(s.attributes),
+            otlp_evidence: JSON.stringify(s.otlpEvidence),
           });
         }
 
