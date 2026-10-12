@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createRequire, SourceMap } from "node:module";
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,12 +23,12 @@ if (import.meta.env.DEV) { globalThis.fixtureToken = "${fixtureToken}"; globalTh
 `;
 
 // Vite's Node API is exercised in Node, isolated from Bun's test-worker esbuild lifecycle.
-async function runVite(mode: "dev" | "multi" | "single-disabled"): Promise<any> {
+async function runVite(mode: "dev" | "multi" | "single-disabled" | "single-enabled", source = code): Promise<any> {
   const root = mkdtempSync(path.join(realpathSync(tmpdir()), "rp-source-vite-"));
   const helperDir = mkdtempSync(path.join(repo, ".omx/source-vite-"));
   mkdirSync(path.join(root, "src"));
   writeFileSync(path.join(root, "index.html"), '<!doctype html><div id="root"></div><script type="module" src="/src/main.tsx"></script>');
-  writeFileSync(path.join(root, "src/main.tsx"), code);
+  writeFileSync(path.join(root, "src/main.tsx"), source);
   try {
     const adapter = path.join(helperDir, "adapter.mjs");
     await new Promise<void>((resolve, reject) => execFile("bun", ["build", path.join(repo, "src/verification/build/vite.ts"), "--target=node", "--format=esm", "--external=typescript", `--outfile=${adapter}`], { cwd: repo, timeout: 25_000 }, (error, _stdout, stderr) => error ? reject(new Error(`${error.message}\n${stderr}`)) : resolve()));
@@ -42,10 +43,10 @@ let result;
 ${mode === "dev" ? `const server = await vite.createServer({ ...config, server: { host: "127.0.0.1", port: 0 } });
 try { await server.listen(); result = await server.transformRequest("/src/main.tsx"); } finally { await server.close(); }` : `let mappingCalls = 0;
 const custom = { format: "es", entryFileNames: "first-[name].js", sourcemapPathTransform(source, map) { mappingCalls++; return path.resolve(path.dirname(map), source); } };
-const output = await vite.build({ ...config, build: { write: false, sourcemap: true, rollupOptions: { output: ${mode === "multi" ? '[custom, { format: "es", entryFileNames: "second-[name].js" }]' : "custom"} } } });
-result = { bundles: Array.isArray(output) ? output : [output], mappingCalls };`}
+try { const output = await vite.build({ ...config, build: { write: false, sourcemap: true, rollupOptions: { output: ${mode === "multi" ? '[custom, { format: "es", entryFileNames: "second-[name].js" }]' : "custom"} } } });
+result = { bundles: Array.isArray(output) ? output : [output], mappingCalls }; } catch (error) { result = { buildError: error.message }; }`}
 process.stdout.write(JSON.stringify({ root, result }));`;
-    const raw = await new Promise<string>((resolve, reject) => execFile("node", ["--input-type=module", "-e", script], { cwd: repo, env: { ...process.env, NODE_ENV: mode === "dev" ? "development" : "production" }, timeout: 25_000, maxBuffer: 32 * 1024 * 1024 }, (error, stdout, stderr) => error ? reject(new Error(`${error.message}\n${stderr}`)) : resolve(stdout)));
+    const raw = await new Promise<string>((resolve, reject) => execFile("node", ["--input-type=module", "-e", script], { cwd: repo, env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.includes("API_KEY") && !key.startsWith("RUNPHANTOM_"))), NODE_ENV: mode === "dev" ? "development" : "production" }, timeout: 25_000, maxBuffer: 32 * 1024 * 1024 }, (error, stdout, stderr) => error ? reject(new Error(`${error.message}\n${stderr}`)) : resolve(stdout)));
     return JSON.parse(raw);
   } finally { rmSync(root, { recursive: true, force: true }); rmSync(helperDir, { recursive: true, force: true }); }
 }
@@ -80,4 +81,20 @@ describe("actual Vite composition and production asset privacy", () => {
       expect(js.includes("Pay ")).toBe(true); for (const value of [fixtureToken, runtimeMarker, "data-runphantom-source", root]) expect(js.includes(value)).toBe(false);
     }
   }, 30_000);
+  for (const mode of ["single-enabled", "single-disabled"] as const) test(`real ${mode} build refuses eligible source over the parser bound instead of emitting static private metadata`, async () => {
+    const control = 'import {createRoot} from "react-dom/client";\ncreateRoot(document.getElementById("root")).render(<button data-runphantom-source="/private/f20-source/Checkout.tsx:2:1">Pay</button>);\n';
+    const oversized = control + "/*" + "x".repeat(2 * 1024 * 1024) + "*/";
+    expect(Buffer.byteLength(oversized)).toBe(2_097_337);
+    const positive = await runVite(mode, control);
+    expect(positive.result.buildError).toBeUndefined();
+    const js = positive.result.bundles.flatMap((bundle: any) => bundle.output.filter((asset: any) => asset.type === "chunk").map((asset: any) => asset.code)).join("\n");
+    expect(js).toContain("Pay"); expect(js).not.toContain("data-runphantom-source"); expect(js).not.toContain("/private/f20-source/Checkout.tsx:2:1");
+    const negative = await runVite(mode, oversized);
+    console.info(JSON.stringify({ mode, sourceBytes: Buffer.byteLength(oversized), controlCodeSha256: createHash("sha256").update(js).digest("hex"), oversizedEmitted: Boolean(negative.result.bundles), oversizedCodeSha256: negative.result.bundles ? createHash("sha256").update(negative.result.bundles.flatMap((bundle: any) => bundle.output.filter((asset: any) => asset.type === "chunk").map((asset: any) => asset.code)).join("\n")).digest("hex") : null, buildError: negative.result.buildError ?? null }));
+    expect(Boolean(negative.result.bundles)).toBe(false);
+    expect(negative.result.buildError).toContain("Source provenance refused oversized production JSX: src/main.tsx (limit 2097152 characters)");
+    // Vite can append its own absolute local file diagnostic; the adapter message is relative.
+    expect(negative.result.buildError.split("\n")[0]).not.toContain(negative.root);
+  }, 60_000);
+
 });

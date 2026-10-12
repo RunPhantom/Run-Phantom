@@ -19,8 +19,12 @@ export function transformSource(code: string, id: string, root: string, command:
   if (command === "serve" && !options.enabled) return null;
   if (command === "serve" && options.renderer !== "react-dom") throw new Error("Source stamping requires explicit renderer: react-dom consent");
   const file = eligible(id, root);
-  if (!file || code.length > 2 * 1024 * 1024) return null;
+  if (!file) return null;
   if (options.include && !options.include.some(path => file === path.replace(/\\/g, "/") || file.startsWith(`${path.replace(/\\/g, "/").replace(/\/$/, "")}/`))) return null;
+  if (code.length > 2 * 1024 * 1024) {
+    if (command === "build") throw new Error(`Source provenance refused oversized production JSX: ${file} (limit 2097152 characters)`);
+    return null;
+  }
   if (command === "serve" && ["// @runphantom-source-ignore", "/* @runphantom-source-ignore */"].includes(code.split(/\r?\n/).find(line => line.trim())?.trim() ?? "")) return null;
   const parsed = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   if (command === "serve" && parsed.statements.some(statement => ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && customRenderers.has(statement.moduleSpecifier.text))) return null;

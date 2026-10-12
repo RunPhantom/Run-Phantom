@@ -39,4 +39,13 @@ describe("optional source stamps preserve the actual compiler pipeline", () => {
     expect(output.code).not.toContain("data-runphantom-source"); expect(output.code).toContain('data-testid="pay"'); expect(output.code).toContain("Pay"); expect(output.map).not.toContain("/repo/");
     expect(transformSource(input, "/repo/src/Checkout.tsx", "/repo", "build", { enabled: true, renderer: "react-dom" })).toBeNull();
   });
+  test("source exhaustion keeps disabled development and excluded modules exact while production fails closed", () => {
+    const oversized = input + "/*" + "x".repeat(2 * 1024 * 1024) + "*/";
+    expect(transformSource(oversized, "/repo/src/A.tsx", "/repo", "serve", { enabled: false })).toBeNull();
+    expect(transformSource(oversized, "/repo/src/A.tsx", "/repo", "serve", { enabled: true, renderer: "react-dom" })).toBeNull();
+    for (const id of ["/elsewhere/A.tsx", "/repo/node_modules/A.tsx", "/repo/src/A.test.tsx", "\0virtual.tsx"]) expect(transformSource(oversized, id, "/repo", "build", { enabled: false })).toBeNull();
+    expect(transformSource(oversized, "/repo/src/A.tsx", "/repo", "build", { enabled: false, include: ["other"] })).toBeNull();
+    for (const enabled of [true, false]) expect(() => transformSource(oversized, "/repo/src/A.tsx", "/repo", "build", { enabled, renderer: "react-dom" })).toThrow("Source provenance refused oversized production JSX: src/A.tsx (limit 2097152 characters)");
+  });
+
 });
