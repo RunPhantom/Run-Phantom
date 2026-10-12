@@ -96,22 +96,51 @@ export function listEvidenceSets(owner: EvidenceOwner, value: unknown): { items:
   return owner.database.transaction(() => {
     owner.authorize("normalized_read", null); owner.authorize("normalized_read", attachment); owner.resolveAnchor(attachment);
     const generation = activeEvidenceGeneration(owner);
-    // Bound the SQL acquisition before JSON inspection; no report payload is returned to JavaScript.
-    const heads = `WITH heads AS (SELECT s.id,s.revision,s.created_at,
-      CASE WHEN typeof(s.data)='text' AND length(cast(s.data AS BLOB))<=${L.MAX_NORMALIZED_BYTES} THEN s.data ELSE NULL END AS data
+    // Bounded job metadata establishes attachment identity before inspecting any set payload JSON.
+    // Unrelated known anchors do not consume this attachment's head-count or aggregate byte budget.
+    const heads = `WITH heads AS (SELECT s.id,s.revision,s.created_at,j.id AS job_id,
+      CASE WHEN typeof(j.request_data)='text' AND length(cast(j.request_data AS BLOB))<=65536 THEN j.request_data ELSE NULL END AS request
       FROM evaluation_evidence_sets s JOIN evaluation_evidence_jobs j ON j.id=s.job_id AND j.scope_key=s.scope_key
       WHERE s.scope_key=? AND j.scope_generation=? AND s.revision=(SELECT max(h.revision) FROM evaluation_evidence_sets h WHERE h.scope_key=s.scope_key AND h.id=s.id))`;
+    const candidates = owner.database.prepare(`${heads} SELECT request,
+      CASE WHEN typeof(job_id)='text' AND length(cast(job_id AS BLOB)) BETWEEN 1 AND 128 THEN job_id ELSE NULL END AS job_id FROM heads`);
+    try {
+      for (const value of candidates.iterate(key, generation)) {
+        const row = value as { request: string | null; job_id: string | null };
+        try {
+          if (row.request === null || row.job_id === null) throw new Error("Oversized job metadata");
+          const request = parseEvidenceImportRequest(strictEvidenceJson(row.request, readerLimits()));
+          if (canonicalEvidenceJson(request) !== row.request) throw new Error("Noncanonical job metadata");
+        } catch { throw new EvidenceError("Stored evidence history is unavailable: job metadata integrity check failed", 409); }
+      }
+    } finally { candidates.finalize(); }
+    const matched = `${heads}, matched AS (SELECT * FROM heads WHERE json_extract(request,'$.attachment.kind')=? AND json_extract(request,'$.attachment.id')=?)`;
+    const budget = owner.database.query(`${matched} SELECT count(*) AS count,
+      coalesce(sum(length(cast(s.data AS BLOB))),0) AS bytes,
+      coalesce(max(CASE WHEN typeof(s.data)!='text' OR length(cast(s.data AS BLOB))>${L.MAX_NORMALIZED_BYTES} THEN 1 ELSE 0 END),0) AS oversized
+      FROM matched m JOIN evaluation_evidence_sets s ON s.scope_key=? AND s.id=m.id AND s.revision=m.revision`).get(key, generation, attachment.kind, attachment.id, key) as { count: number; bytes: number; oversized: number };
+    if (budget.count > 1_000 || budget.bytes > 32 * 1024 * 1024) throw new EvidenceError("Stored evidence history is unavailable: discovery metadata budget exceeded", 409);
+    if (budget.oversized !== 0) throw new EvidenceError("Stored evidence history is unavailable: set metadata integrity boundary exceeded", 409);
+    const jobs = owner.database.query(`${matched} SELECT job_id AS jobId,id FROM matched LIMIT 1001`).all(key, generation, attachment.kind, attachment.id) as { jobId: string; id: string }[];
+    for (const row of jobs) {
+      // Reuse the frozen canonical request/inventory digest and current attachment authorization checks.
+      const job = owner.store.getJob(row.jobId);
+      if (job.scopeGeneration !== generation || job.status !== "completed" || job.setId !== row.id) throw new EvidenceError("Stored evidence history is unavailable: published job identity changed", 409);
+    }
+    const payloads = `${matched}, payloads AS (SELECT m.id,m.revision,m.created_at,
+      CASE WHEN typeof(s.data)='text' AND length(cast(s.data AS BLOB))<=${L.MAX_NORMALIZED_BYTES} THEN s.data ELSE NULL END AS data
+      FROM matched m JOIN evaluation_evidence_sets s ON s.scope_key=? AND s.id=m.id AND s.revision=m.revision)`;
     const valid = `CASE WHEN data IS NOT NULL AND json_valid(data) THEN
       typeof(id)='text' AND length(cast(id AS BLOB)) BETWEEN 1 AND 128 AND json_extract(data,'$.id')=id
       AND typeof(revision)='integer' AND revision>0 AND json_extract(data,'$.revision')=revision
       AND typeof(created_at)='integer' AND created_at BETWEEN 0 AND 9007199254740991 AND json_extract(data,'$.createdAt')=created_at
       AND json_extract(data,'$.version')=${EVIDENCE_VERSION} AND json_extract(data,'$.scope.kind')=? AND json_extract(data,'$.scope.id')=?
-      AND json_extract(data,'$.scopeGeneration')=? AND json_extract(data,'$.attachment.kind') IN ('run','inspection','check','experiment')
-      AND json_type(data,'$.attachment.id')='text' AND length(cast(json_extract(data,'$.attachment.id') AS BLOB)) BETWEEN 1 AND 128
+      AND json_extract(data,'$.scopeGeneration')=? AND json_extract(data,'$.attachment.kind')=? AND json_extract(data,'$.attachment.id')=?
       ELSE 0 END`;
-    const integrity = owner.database.query(`${heads} SELECT 1 AS invalid FROM heads WHERE coalesce((${valid}),0)=0 LIMIT 1`).get(key, generation, owner.scope.kind, owner.scope.id, generation);
-    if (integrity) throw new EvidenceError("Stored evidence history is unavailable: integrity check failed", 409);
-    const rows = owner.database.query(`${heads} SELECT id,revision,created_at AS createdAt FROM heads WHERE json_extract(data,'$.attachment.kind')=? AND json_extract(data,'$.attachment.id')=? ORDER BY created_at DESC,id ASC LIMIT 51`).all(key, generation, attachment.kind, attachment.id) as { id: string; revision: number; createdAt: number }[];
+    if (owner.database.query(`${payloads} SELECT 1 FROM payloads WHERE coalesce((${valid}),0)=0 LIMIT 1`).get(key, generation, attachment.kind, attachment.id, key, owner.scope.kind, owner.scope.id, generation, attachment.kind, attachment.id)) {
+      throw new EvidenceError("Stored evidence history is unavailable: integrity check failed", 409);
+    }
+    const rows = owner.database.query(`${payloads} SELECT id,revision,created_at AS createdAt FROM payloads ORDER BY created_at DESC,id ASC LIMIT 51`).all(key, generation, attachment.kind, attachment.id, key) as { id: string; revision: number; createdAt: number }[];
     owner.authorize("normalized_read", null); owner.authorize("normalized_read", attachment); owner.resolveAnchor(attachment);
     if (activeEvidenceGeneration(owner) !== generation) throw new EvidenceError("Evidence scope changed", 409);
     const result = { items: rows.slice(0, 50), truncated: rows.length > 50 };

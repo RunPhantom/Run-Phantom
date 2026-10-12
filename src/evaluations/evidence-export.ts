@@ -31,13 +31,13 @@ export function boundedEvidenceExport(value: string): string {
 /** Plaintext deliberately derives from the same minimized DTO as JSON. */
 export function evidenceExportText(view: EvidenceSetView): string {
   const report = evidenceExport(view), set = report.revision;
-  const lines = ["Run Phantom external evidence", `Set: ${set.id}`, `Revision: ${set.revision}`, `Attachment: ${set.attachment.kind}:${set.attachment.id}`,
-    `Coverage: ${set.coverage}`, "Authentication: not_checked", `Reader: ${set.parserVersion}`, `Policy: ${set.policyVersion}`,
-    `Configuration SHA-256: ${set.configurationSha256}`, `Inventory: ${set.inventory ? `${set.inventory.id} revision ${set.inventory.revision} (${set.inventory.declaration})` : "not declared"}`,
+  const lines = ["Run Phantom external evidence", `Set: ${JSON.stringify(set.id)}`, `Revision: ${set.revision}`, `Attachment: ${set.attachment.kind}:${JSON.stringify(set.attachment.id)}`,
+    `Coverage: ${set.coverage}`, "Authentication: not_checked", `Reader: ${JSON.stringify(set.parserVersion)}`, `Policy: ${JSON.stringify(set.policyVersion)}`,
+    `Configuration SHA-256: ${set.configurationSha256}`, `Inventory: ${set.inventory ? `${JSON.stringify(set.inventory.id)} revision ${set.inventory.revision} (${set.inventory.declaration})` : "not declared"}`,
     `Missing: ${JSON.stringify(set.missing)}`, `Extra: ${JSON.stringify(set.extra)}`, `Duplicates: ${JSON.stringify(set.duplicates)}`, `Rejected: ${JSON.stringify(set.rejected)}`];
   for (const source of report.sources) {
     const summary = set.sources.find(item => item.sourceId === source.sourceId)!, observation = source.observation;
-    lines.push("", `Source: ${source.sourceId}`, `SHA-256: ${summary.artifactSha256}`, `Outcome: ${summary.reportOutcome}`, `Parse: ${summary.parseState}`,
+    lines.push("", `Source: ${JSON.stringify(source.sourceId)}`, `SHA-256: ${summary.artifactSha256}`, `Outcome: ${summary.reportOutcome}`, `Parse: ${summary.parseState}`,
       `Report identity asserted: ${summary.reportIdentityAsserted}`, `Commit assertion matches: ${summary.commitAssertionMatches ?? "unavailable"}`, "Authentication: not_checked",
       `Raw available: ${source.rawAvailable}`, `Normalized available: ${source.normalizedAvailable}`, `Observed counts: ${JSON.stringify(summary.leafCounts)}`,
       `Observed executed lower bound: ${summary.observedExecutedLowerBound}`, `Reasons: ${JSON.stringify(summary.reasonCodes)}`,
