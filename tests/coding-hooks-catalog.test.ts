@@ -106,3 +106,15 @@ test("catalog cannot represent global full or grant a local capability multiple 
   await rejects(install({ ...binding, captureMode: "full" }, registrations)); const settingsPath = path.join(binding.registeredWorkspace, ".claude/settings.local.json"), local = { ...binding, installationId: installationIdForSettings("local", settingsPath), scope: "local" as const, workspace: binding.registeredWorkspace, captureMode: "full" as const, settingsPath };
   await rejects(install(local, registrations)); expect(store.db.query("SELECT id FROM coding_hook_installations").all()).toEqual([]);
 });
+
+test("both actual registered workspace descriptors admit their own source bytes under global metadata", async () => {
+  await install(binding, registrations); const capability = await token();
+  for (const registration of registrations) {
+    const admission = admit(capability, registration), file = path.join(registration.projectDirectory, "11111111-1111-4111-8111-111111111111.jsonl"), rawHook = hookFixture("Stop", { cwd: registration.registeredWorkspace, transcript_path: file });
+    writeFileSync(file, JSON.stringify(transcriptRecord()) + "\n"); const hook = parseClaudeHookInput(rawHook); if (hook.status !== "accepted") throw new Error("fixture");
+    const snapshot = await acquireRegisteredClaudeTranscript(hook.value, admission); expect(snapshot.status).toBe("accepted"); if (snapshot.status !== "accepted") throw new Error("fixture descriptor");
+    const normalized = normalizeClaudeHook(rawHook, { sourceKey: admission.sourceKey, captureMode: admission.captureMode }, snapshot.value); if (normalized.status !== "accepted") throw new Error("fixture normalization");
+    expect(JSON.stringify(normalized.value)).not.toContain("safe exact business result"); expect(store.publish(capability, admission, normalized.value).status).toBe("accepted");
+  }
+  expect(store.db.query("SELECT id FROM runs").all()).toHaveLength(2); expect(store.db.query("SELECT input_tokens,output_tokens FROM spans WHERE span_type='llm'").all()).toEqual([{ input_tokens: 10, output_tokens: 4 }, { input_tokens: 10, output_tokens: 4 }]);
+});
