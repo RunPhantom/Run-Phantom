@@ -1,0 +1,75 @@
+{
+  "feature": "F26",
+  "head": "c07a02711844342546854232bfab42b3ae0684ba",
+  "maintainer": "Divyam Talwar",
+  "backend": {
+    "passed": 692,
+    "skipped": 1,
+    "failed": 0,
+    "assertions": 3854
+  },
+  "sourceChromium": {
+    "passed": 133,
+    "skipped": 10,
+    "failed": 0,
+    "retries": 0,
+    "workers": 1
+  },
+  "copiedMacArm64": {
+    "featurePassed": 9,
+    "commonPassed": 3,
+    "skipped": 0,
+    "failed": 0,
+    "retries": 0,
+    "workers": 1,
+    "binarySha256": "2995f676631ad5a020911744695f905d0547642489d8ad6447fd6d10efa02394",
+    "extractedAssetHashesPerFeatureRuntime": 319,
+    "httpAssetHashesPerFeatureRuntime": 3
+  },
+  "screenshots": [
+    {
+      "file": "compact-coarse-pointer-320.png",
+      "sha256": "751e27baab6deb7ab17d121951384548fe8e45684f83e55b3a4c9e849879779f",
+      "origin": "current source Chromium using synthetic captures"
+    },
+    {
+      "file": "compact-coarse-pointer-details-390.png",
+      "sha256": "24a0f3018bd6b64e7937371b82b6fd6e7cd00c1cb697ad71d325166fe2d6b724",
+      "origin": "current source Chromium using synthetic captures"
+    },
+    {
+      "file": "compact-exact-invocation-b.png",
+      "sha256": "8f6b4c625ed31651ae33bffbaab367a78214be828e9748d78b2813f56db94efb",
+      "origin": "current source Chromium using synthetic captures"
+    },
+    {
+      "file": "compact-keyboard-selection.png",
+      "sha256": "44a5cc3c339b76668fa103db9cfd65449b7c5cb085ebaed548862612e4f1260f",
+      "origin": "current source Chromium using synthetic captures"
+    },
+    {
+      "file": "compact-reachable-error-markers.png",
+      "sha256": "7ee43f100feda8167e57c458e7d0479a88023a63e606aa2f0e0d326ad3867cce",
+      "origin": "current source Chromium using synthetic captures"
+    },
+    {
+      "file": "compact-serial-desktop.png",
+      "sha256": "e3bb66e64d8cdbaa8d476e4c6f8600fe4e45ff105a9862a9093a647553d54d34",
+      "origin": "current source Chromium using synthetic captures"
+    }
+  ],
+  "independentCorrectionReview": "APPROVE",
+  "rootPublicationReviewSha256": "c526b2f613a0b5a36a01e0204e639e98cd080e82fedd92f91d841f82447efd79",
+  "privateManifestSha256": "1e58200e2a48b1b2ced6b422861f3375a2af2f8c4b574acf25eae742aca0e881",
+  "providerSpendUsd": 0,
+  "remainingQualifiers": [
+    "Native Windows pending",
+    "Seven provider cases unexecuted; zero spend",
+    "Only9feature+3common copied journeys, not133copied",
+    "319 extracted assets and3 HTTP assets checked per feature runtime",
+    "Detail acquisition remains unpaginated",
+    "Current mobile floating assistant overlays inherited shell; final F41 composition pending",
+    "Missing timestamp DTO evidence and parent links remain explicit"
+  ],
+  "wholeProjectAccepted": false
+}
