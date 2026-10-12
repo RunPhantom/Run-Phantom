@@ -150,7 +150,8 @@ synchronous operations.
 `POST` or `PUT /inventories` accepts `{anchor,expectedRevision,expected}`.
 `expectedRevision:0` creates an inventory; subsequent edits compare-and-swap its
 current revision. `GET /inventories?anchor=<encoded-json>&revision=N` reads an
-explicit authorized revision. An anchor is a current attachment or
+explicit authorized revision. Omitting `revision` reads the current authorized
+head. An anchor is a current attachment or
 `{kind:"dataset_revision",id,version}`. Each expected entry is
 `{shardId,kind,constraints:{runnerId,commit,sourceSha256}}`, with absent constraints
 represented by null. Upload metadata cannot edit or shrink this roster.
@@ -175,9 +176,11 @@ execution.
 
 | Endpoint | Result |
 | --- | --- |
+| `GET /sets?attachment=<encoded-json>` | Current authorized head locators, at most 50 plus explicit truncated; no report bodies |
 | `GET /sets/:id?revision=N` | Immutable set metadata and currently available normalized observations |
 | `GET /sets/:id/export?revision=N&format=json` | Minimized JSON without raw bytes, leaf detail/name/file or producer test-name assertions |
 | `GET /sets/:id/export?revision=N&format=junit` | Classified observed leaves with explicit coverage and unverified properties; 409 if observations cannot be classified completely |
+| `GET /sets/:id/export?revision=N&format=text` | Plaintext from the same minimized DTO, preserving unknown counts and unchecked trust |
 | `GET /sets/:id/raw/:sourceId?revision=N` | Separate `raw_export` capability; exact supplied bytes as an attachment |
 | `POST /sets/:id/reparse` | `{operationKey,expectedRevision,inventory?,retention?}`; append using this set's own retained bytes and registered reader |
 | `DELETE /sets/:id/retention/raw?revision=N` | `{}`; remove only raw availability, preserving prior normalized interpretation |
@@ -211,7 +214,9 @@ parser duration. Separate durable decode, parse, normalize, inventory and UI
 clocks remain an RX12 follow-up.
 
 Source HTTP, actual MCP, real process cleanup and file-backed restart tests cover
-this service. Evidence upload UI, project middleware/roles, finding comparisons,
+this service. The [external report workspace](evidence-workspace.md) adds real local
+file upload, current inventory editing, source review, minimized exports and
+separate retention controls. Project middleware/roles, finding comparisons,
 a second registered parser, rollback across installed versions, and native Windows
 signal behavior have separate qualification gates. Existing UI smoke journeys
 alone do not prove an evidence-upload UI. Installed checks must execute the copied
