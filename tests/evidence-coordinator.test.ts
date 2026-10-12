@@ -21,7 +21,12 @@ function frame(key: string) {
   const prefix = Buffer.alloc(4); prefix.writeUInt32BE(metadata.length); return Buffer.concat([prefix, metadata, raw]);
 }
 async function setup(maxImportMs?: number, defaultQuota = false, currentAuthority = false) {
-  db = new Database(":memory:"); db.exec("PRAGMA foreign_keys=ON"); migrate(drizzle(db), { migrationsFolder: `${import.meta.dir}/../drizzle` });
+  db = new Database(":memory:");
+  db.exec("PRAGMA legacy_alter_table=ON; PRAGMA foreign_keys=OFF");
+  migrate(drizzle(db), { migrationsFolder: `${import.meta.dir}/../drizzle` });
+  db.exec("PRAGMA foreign_keys=ON; PRAGMA legacy_alter_table=OFF");
+  expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+  expect(db.query("PRAGMA legacy_alter_table").get()).toEqual({ legacy_alter_table: 0 });
   db.exec("INSERT INTO evaluation_evidence_scopes VALUES('local:local',1,1); INSERT INTO runs(id,started_at,last_updated_at) VALUES('run',1,1)");
   const local = createLocalEvidenceOwner(db);
   if (currentAuthority) db.exec("CREATE TABLE current_authority(allowed INTEGER NOT NULL); INSERT INTO current_authority VALUES(1)");

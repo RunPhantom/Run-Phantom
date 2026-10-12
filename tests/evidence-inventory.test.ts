@@ -20,7 +20,12 @@ function experiment(id: string, createdAt: number, hash = datasetHash) {
     .run(id, JSON.stringify({ id, createdAt, datasetId: "dataset-1", datasetVersion: 1, datasetHash: hash }), createdAt);
 }
 beforeEach(() => {
-  db = new Database(":memory:"); db.exec("PRAGMA foreign_keys=ON"); migrate(drizzle(db), { migrationsFolder: `${import.meta.dir}/../drizzle` });
+  db = new Database(":memory:");
+  db.exec("PRAGMA legacy_alter_table=ON; PRAGMA foreign_keys=OFF");
+  migrate(drizzle(db), { migrationsFolder: `${import.meta.dir}/../drizzle` });
+  db.exec("PRAGMA foreign_keys=ON; PRAGMA legacy_alter_table=OFF");
+  expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+  expect(db.query("PRAGMA legacy_alter_table").get()).toEqual({ legacy_alter_table: 0 });
   db.exec("INSERT INTO evaluation_evidence_scopes VALUES('local:local',1,1)");
   db.exec("INSERT INTO runs(id,started_at,last_updated_at) VALUES('run-1',1,1),('run-2',1,1)");
   db.exec("INSERT INTO evaluation_datasets VALUES('dataset-1','Actual dataset',1,0,1)");
