@@ -1,0 +1,50 @@
+{
+  "feature": "F06",
+  "sourceHead": "269e35348088446dad0ad5df008b390b8dcdaae0",
+  "wholeMacArtifactSha256": "e8d03804f5805f44590aa2f8c509083bb9e1e739ac31e2081060f5b074675aaf",
+  "scope": "Actual copied application UI using safe synthetic fixtures; no real provider calls; Team UI composition revamp remains pending",
+  "screenshots": [
+    {
+      "file": "f06-team-viewer-authority.png",
+      "sha256": "00cdc8ab8002501b40ee53824784758e7685d99719da757a2818b2c71a92cbba",
+      "dimensions": [
+        1440,
+        1000
+      ],
+      "caption": "Viewer reads normalized reports with raw export withheld; original frozen check remains Fail.",
+      "syntheticFixture": true
+    },
+    {
+      "file": "f06-team-raw-export.png",
+      "sha256": "cc5bc8caad999e0f9c4e7b58803799c6863e8e552a0e36d095c7c48b544da2ab",
+      "dimensions": [
+        1440,
+        1000
+      ],
+      "caption": "Administrator exports a deliberately selected retained source separately from minimized exports; source 32 reports failure.",
+      "syntheticFixture": true
+    },
+    {
+      "file": "f06-team-report-after-restart.png",
+      "sha256": "953942af6a1a337962f7cb4262bc65bfa5790e095a6704dae9ee84c5d6f6037c",
+      "dimensions": [
+        1440,
+        1000
+      ],
+      "caption": "Editor reloads revision 2 after the second boot of the same Team database; original frozen check remains Fail.",
+      "syntheticFixture": true
+    },
+    {
+      "file": "f06-team-captured-output.png",
+      "sha256": "f90ff7383c2f8aff153cea1e3fd551be9640a9725c9c60563eb4b987dba09126",
+      "dimensions": [
+        1440,
+        1000
+      ],
+      "caption": "Captured declined output retains literal markup as inert text after import, reparse, restart and privacy controls.",
+      "syntheticFixture": true
+    }
+  ],
+  "providerCalls": 0,
+  "spendUsd": 0
+}
