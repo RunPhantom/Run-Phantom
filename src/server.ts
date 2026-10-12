@@ -8,7 +8,7 @@ import path from "path";
 import { randomUUID } from "crypto";
 import { normalizeOtelId } from "./ids";
 import { searchRuns, RunSearchError } from "./run-search";
-import { searchSpanHits, searchSuggestions, localSearchScope, SearchResourceError } from "./search-resources";
+import { searchSpanHits, searchSuggestions, localSearchScope, SearchResourceError } from "./local-search-resources";
 import { getRunComparison, RunComparisonError } from "./run-comparison";
 import { parseOtlpRequest } from "./parse";
 import { observeOtlpTagSource, ambiguousOtlpTagSpans, unavailableOtlpTagSource, type OtlpTagSourceEvidence } from "./otlp-tag-source";

@@ -8,7 +8,8 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createServer } from "../src/server";
 import { runMcpServer } from "../src/mcp";
 import { clearAll, closeDb, getDrizzleDb } from "../src/db";
-import { searchSpanHits, searchSuggestions, localSearchScope } from "../src/search-resources";
+import { searchSpanHits, searchSuggestions, localSearchScope } from "../src/local-search-resources";
+import { searchSpanHits as sharedSearchSpanHits, searchSuggestions as sharedSearchSuggestions, localSearchScope as sharedSearchScope } from "../src/search-resources";
 import { searchRuns, _runSearchInternal } from "../src/run-search";
 
 let dir: string, oldPath: string | undefined;
@@ -139,4 +140,12 @@ test("actual HTTP and MCP expose safe separate resources and closed refusal",asy
     const hit=await client.callTool({name:"search_span_hits",arguments:{q:"literal%_東京"}});expect(JSON.parse((hit.content as {text:string}[])[0].text).items[0].spanId).toBe("root");
     const suggestion=await client.callTool({name:"search_suggestions",arguments:{field:"model",prefix:"captured"}});expect(JSON.parse((suggestion.content as {text:string}[])[0].text).values).toEqual(["captured-model"]);
   } finally {await client.close();await mcp.close();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+});
+test("shared search resources refuse missing store authority rather than selecting a local database", async () => {
+  for (const dbPath of [undefined, null, "", 42]) {
+    const options = { dbPath } as never;
+    expect(await sharedSearchSpanHits({}, options).catch(error => error)).toMatchObject({ code: "invalid_search", status: 400 });
+    expect(await sharedSearchSuggestions({ field: "model" }, options).catch(error => error)).toMatchObject({ code: "invalid_search", status: 400 });
+    expect(() => sharedSearchScope("runs", dbPath as never)).toThrow();
+  }
 });

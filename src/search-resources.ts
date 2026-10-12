@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { resolve as resolvePath } from "node:path";
-import { getDbPath } from "./db";
 import { acquireSearchCapacity } from "./search-capacity";
 import { capturedTagsSql, compileSearchFilter, parseSearchFilter, type SearchFilter } from "./search-filter";
 import { hasDuplicateJsonKeys } from "./json-keys";
@@ -10,13 +9,14 @@ import { TEAM_LIMITS as L } from "./team/protocol";
 import { searchResourceWorker, type RawSearchHit, type RawSearchResource, type SearchResourceWork } from "./search-resource-worker";
 import type { SearchSnippet, SearchSpanHit, SearchHitPage, SearchSuggestionResult } from "./search-protocol";
 export type { SearchSnippet, SearchSpanHit, SearchHitPage, SearchSuggestionResult } from "./search-protocol";
-export interface SearchResourceOptions { dbPath?: string; projectId?: string; signal?: AbortSignal }
+export interface SearchResourceOptions { dbPath: string; projectId?: string; signal?: AbortSignal }
 export class SearchResourceError extends Error {
   constructor(public readonly code: string, public readonly status: number) { super(code === "invalid_search" ? "Search parameters or cursor are invalid" : code === "too_large" ? "Search evidence exceeds its byte limit" : code === "search_busy" ? "Search is busy; retry shortly" : code === "cancelled" ? "Search cancelled" : code === "query_timeout" ? "Search deadline exceeded; narrow the query" : "Search could not complete"); }
 }
 const invalid = (): never => { throw new SearchResourceError("invalid_search", 400); };
 const hash = (value: unknown): string => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-export function localSearchScope(resource: "runs" | "span-hits", dbPath = getDbPath()): string { return hash(["local", resolvePath(dbPath), resource]); }
+function databasePath(value: unknown): string { return typeof value === "string" && value ? resolvePath(value) : invalid(); }
+export function localSearchScope(resource: "runs" | "span-hits", dbPath: string): string { return hash(["local", databasePath(dbPath), resource]); }
 function inputRecord(value: unknown, keys: string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return invalid();
   const input = value as Record<string, unknown>;
@@ -111,9 +111,9 @@ function project(options: SearchResourceOptions): SearchResourceWork["project"] 
   return options.projectId ? {id:options.projectId,bytes:L.PROJECT_BYTES,runs:L.PROJECT_RUNS,spans:L.PROJECT_SPANS} : undefined;
 }
 /** Explicit span evidence resource. Existing run summaries remain payload-free. */
-export async function searchSpanHits(value: unknown = {}, options: SearchResourceOptions = {}): Promise<SearchHitPage> {
+export async function searchSpanHits(value: unknown, options: SearchResourceOptions): Promise<SearchHitPage> {
   const input=inputRecord(value,["q","model","provider","status","filter","limit","cursor","from","to"]);
-  const q=text(input.q), filter=typedFilter(input), pageSize=limit(input.limit,50,50), dbPath=resolvePath(options.dbPath??getDbPath()), scope=options.projectId?"team":"local";
+  const q=text(input.q), filter=typedFilter(input), pageSize=limit(input.limit,50,50), dbPath=databasePath(options.dbPath), scope=options.projectId?"team":"local";
   const window: Record<string,number> = {};
   for(const field of ["from","to"] as const) if(input[field]!==undefined) { if(!Number.isSafeInteger(Number(input[field])) || Number(input[field])<0 || input[field]==="") return invalid(); window[field]=Number(input[field]); }
   if(window.from!==undefined && window.to!==undefined && window.from>=window.to) return invalid();
@@ -141,7 +141,7 @@ export async function searchSpanHits(value: unknown = {}, options: SearchResourc
   if(Buffer.byteLength(JSON.stringify(result))>120_000) throw new SearchResourceError("too_large",413);
   return result;
 }
-export async function searchSuggestions(value: unknown = {}, options: SearchResourceOptions = {}): Promise<SearchSuggestionResult> {
+export async function searchSuggestions(value: unknown, options: SearchResourceOptions): Promise<SearchSuggestionResult> {
   const input=inputRecord(value,["field","prefix","limit"]), field=text(input.field), prefix=text(input.prefix), count=limit(input.limit,20,20);
   if(!["model","provider","tag"].includes(field)) return invalid();
   const scope=options.projectId?"team":"local", params:(string|number)[]=[], where:string[]=[];
@@ -150,7 +150,7 @@ export async function searchSuggestions(value: unknown = {}, options: SearchReso
   const column=field==="tag"?"tag.value":`s.${field}`;
   where.push(`typeof(${column})='text'`,`${column}<>''`,`length(CAST(${column} AS BLOB))<=512`,`instr(lower(${column}),lower(?))=1`);params.push(prefix,count+1);
   const sql=`SELECT DISTINCT ${column} AS value FROM ${source} WHERE ${where.join(" AND ")} ORDER BY value LIMIT ?`;
-  const raw=await execute({dbPath:resolvePath(options.dbPath??getDbPath()),sql,params,limit:count,mode:"suggestions",key:"",project:project(options)},options);
+  const raw=await execute({dbPath:databasePath(options.dbPath),sql,params,limit:count,mode:"suggestions",key:"",project:project(options)},options);
   if(options.signal?.aborted) throw new SearchResourceError("cancelled",499);
   return {values:raw.values.filter(value=>value.length<=256 && !Array.from(value).some(c=>c.charCodeAt(0)<32 || c.charCodeAt(0)===127) && redactTeamText(value)===value),hasMore:raw.hasMore};
 }
