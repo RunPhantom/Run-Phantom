@@ -71,6 +71,22 @@ describe("bounded captured agent definition identity", () => {
     const lost = row(); const typed = JSON.parse(lost.otlp_evidence); typed.capture.droppedAttributes = 1; lost.otlp_evidence = JSON.stringify(typed);
     expect(deriveCapturedAgentDefinitions([lost])!.records[0].sha256).toBeNull();
   });
+  test.each(["resource", "scope", "events", "links"])("SDK-reported %s loss cannot certify an authoritative complete definition", source => {
+    const r = row(), typed = JSON.parse(r.otlp_evidence);
+    if (source === "resource") typed.resource = { attributes: [], schemaUrl: null, droppedAttributesCount: 1 };
+    else if (source === "scope") typed.scope = { attributes: [], name: null, version: null, schemaUrl: null, droppedAttributesCount: 1 };
+    else typed[source === "events" ? "droppedEventsCount" : "droppedLinksCount"] = 1;
+    r.otlp_evidence = JSON.stringify(typed);
+    const result = deriveCapturedAgentDefinitions([r])!.records[0]; expect(result.complete).toBe(false); expect(result.sha256).toBeNull(); expect(result.reasons).toContain("source_receipt_loss");
+  });
+  test("captured negative zero is refused rather than merged with a materially distinct finite runtime value", () => {
+    const raw = JSON.stringify(base()).replace('"temperature":0.70001', '"temperature":-0'), result = capture(raw);
+    expect(result.complete).toBe(false); expect(result.sha256).toBeNull(); expect(result.reasons).toContain("capture_invalid");
+  });
+  test.each(["\0", "\ud800"])("invalid source identity %j remains unavailable without a complete version", id => {
+    const record = deriveCapturedAgentDefinitions([row(base(), id)])!.records[0];
+    expect(record.sourceSpanId).toBeNull(); expect(record.sha256).toBeNull(); expect(record.reasons).toContain("source_identity_unavailable");
+  });
   test("duplicate tool names, unknown capture fields, and over-limit definitions do not silently drop evidence", () => {
     for (const change of [{ tools: [base().tools[0], base().tools[0]] }, { tools: [{ ...base().tools[0], parameters: null }] }, { unknown: "not-in-contract" }, { tools: Array.from({ length: L.tools + 1 }, (_, i) => ({ name: `tool-${i}` })) }, { systemPrompt: "x".repeat(L.fieldBytes + 1) }]) {
       const result = capture({ ...base(), ...change }); expect(result.complete).toBe(false); expect(result.sha256).toBeNull();

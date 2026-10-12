@@ -14,6 +14,7 @@ const own = (value: unknown, key: string): unknown => {
   if (!value || typeof value !== "object") return undefined;
   const d = Object.getOwnPropertyDescriptor(value, key); return d && "value" in d ? d.value : undefined;
 };
+
 class Unavailable extends Error { constructor(readonly status: DefinitionAvailability) { super(status); } }
 function object(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value));
@@ -36,7 +37,7 @@ function canonical(value: unknown): string {
     if (++nodes > L.nodes || depth > L.depth) throw new Unavailable("oversized");
     if (raw === null || typeof raw === "boolean") return JSON.stringify(raw);
     if (typeof raw === "number") {
-      if (!Number.isFinite(raw) || Number.isInteger(raw) && !Number.isSafeInteger(raw)) throw new Unavailable("invalid");
+      if (!Number.isFinite(raw) || Object.is(raw, -0) || Number.isInteger(raw) && !Number.isSafeInteger(raw)) throw new Unavailable("invalid");
       return JSON.stringify(raw);
     }
     if (typeof raw === "string") { safeString(raw); return JSON.stringify(raw); }
@@ -86,6 +87,7 @@ function providers(value: unknown): string[] {
 function explicit(raw: unknown, record: CapturedAgentDefinition): void {
   let value: unknown;
   try {
+    safeString(raw);
     value = decode(raw);
     // Privacy precedes every digest, including a safe-looking prompt inside a secret-bearing definition.
     canonical(value);
@@ -152,15 +154,17 @@ export function deriveCapturedAgentDefinitions(spans: readonly DefinitionCapture
     if (!hasExplicit && !hasLegacy) continue;
     result.observedRecords++;
     if (result.records.length >= L.records) continue;
-    const id = own(row, "id");
-    const record: CapturedAgentDefinition = { sourceSpanId: typeof id === "string" && size(id) <= 4096 && redactText(id) === id && !unavailable.test(id) ? id : null,
+    const id = own(row, "id"); let sourceSpanId: string | null = null;
+    if (typeof id === "string" && id.length <= 4096 && size(id) <= 4096 && !id.includes("\0")) try { safeString(id); sourceSpanId = id; } catch { /* No public source identity from invalid or redacted text. */ }
+    const record: CapturedAgentDefinition = { sourceSpanId,
       provenance: hasExplicit ? "explicit-v1" : "legacy-attributes", complete: false, semanticVersion: FORMAT, sha256: null, components: empty("missing"), reasons: [] };
     if (!record.sourceSpanId || idCounts.get(id as string) !== 1) { record.sourceSpanId = null; record.reasons.push("source_identity_unavailable"); }
     if (hasExplicit) {
       if (!receipt) record.reasons.push("source_receipt_missing");
       else {
         if (observed.length !== 1 || [...receipt.resource?.attributes ?? [], ...receipt.scope?.attributes ?? []].some(a => a.key === KEY)) record.reasons.push("capture_ambiguous");
-        if (Object.values(receipt.capture).some(v => typeof v === "number" && v > 0) || (receipt.droppedAttributesCount ?? 0) > 0) record.reasons.push("source_receipt_loss");
+        if (Object.values(receipt.capture).some(v => typeof v === "number" && v > 0)
+          || [receipt.droppedAttributesCount, receipt.resource?.droppedAttributesCount, receipt.scope?.droppedAttributesCount, receipt.droppedEventsCount, receipt.droppedLinksCount].some(value => (value ?? 0) > 0)) record.reasons.push("source_receipt_loss");
         if (observed.length === 1 && !Object.hasOwn(observed[0].value, "stringValue")) record.reasons.push("capture_invalid");
       }
       const raw = observed.length === 1 ? own(observed[0].value, "stringValue") : attrs[KEY];
@@ -176,5 +180,53 @@ export function deriveCapturedAgentDefinitions(spans: readonly DefinitionCapture
   result.complete = complete();
   while (size(JSON.stringify(result)) > maxBytes && result.records.length) { result.records.pop(); result.omittedRecords++; result.complete = false; }
   if (size(JSON.stringify(result)) > maxBytes) return undefined;
+  return result;
+}
+
+/** Validate frozen safe metadata independently of mutable raw spans; absent legacy metadata is handled by callers. */
+export function parseCapturedAgentDefinitions(value: unknown): CapturedAgentDefinitions {
+  const fail = (): never => { throw new TypeError("Invalid captured definition provenance"); };
+  const closed = (raw: unknown, keys: readonly string[]) => {
+    if (!object(raw)) return fail();
+    const descriptors = Object.getOwnPropertyDescriptors(raw);
+    if (Reflect.ownKeys(raw).length !== keys.length || keys.some(key => !descriptors[key] || !("value" in descriptors[key]))) fail();
+    return raw as Record<string, unknown>;
+  };
+  const list = (raw: unknown, max: number): unknown[] => {
+    if (!Array.isArray(raw) || raw.length > max || Object.getPrototypeOf(raw) !== Array.prototype || Object.keys(raw).length !== raw.length) return fail();
+    for (let i = 0; i < raw.length; i++) if (!("value" in Object.getOwnPropertyDescriptor(raw, String(i))!)) fail();
+    return raw;
+  };
+  const count = (raw: unknown): number => typeof raw === "number" && Number.isSafeInteger(raw) && raw >= 0 && raw <= 5000 ? raw : fail();
+  const digest = (raw: unknown): string | null => raw === null ? null : typeof raw === "string" && /^[0-9a-f]{64}$/.test(raw) ? raw : fail();
+  const bool = (raw: unknown): boolean => typeof raw === "boolean" ? raw : fail();
+  const reasons = ["capture_missing", "capture_unavailable", "capture_ambiguous", "capture_invalid", "capture_partial", "capture_redacted", "capture_oversized", "source_receipt_missing", "source_receipt_loss", "source_identity_unavailable"];
+  const statuses: DefinitionAvailability[] = ["available", "missing", "redacted", "invalid", "oversized", "ambiguous", "incomplete"];
+  const top = closed(value, ["format", "records", "observedRecords", "omittedRecords", "unavailableAttributes", "complete"]);
+  if (top.format !== "runphantom-agent-definitions/v1") fail();
+  const records = list(top.records, L.records).map(raw => {
+    const rec = closed(raw, ["sourceSpanId", "provenance", "complete", "semanticVersion", "sha256", "components", "reasons"]);
+    if (rec.semanticVersion !== FORMAT || !["explicit-v1", "legacy-attributes"].includes(rec.provenance as string)) fail();
+    if (rec.sourceSpanId !== null) {
+      try { safeString(rec.sourceSpanId); } catch { return fail(); }
+      if (!rec.sourceSpanId || rec.sourceSpanId.length > 4096 || size(rec.sourceSpanId) > 4096 || rec.sourceSpanId.includes("\0")) fail();
+    }
+    const rawComponents = closed(rec.components, DEFINITION_COMPONENTS);
+    const components = Object.fromEntries(DEFINITION_COMPONENTS.map(key => {
+      const part = closed(rawComponents[key], ["status", "sha256"]);
+      if (!statuses.includes(part.status as DefinitionAvailability)) fail();
+      const sha256 = digest(part.sha256); if ((part.status === "available") !== (sha256 !== null)) fail();
+      return [key, { status: part.status, sha256 }];
+    })) as CapturedAgentDefinition["components"];
+    const codes = list(rec.reasons, reasons.length).map(code => typeof code === "string" && reasons.includes(code) ? code : fail());
+    if (new Set(codes).size !== codes.length) fail();
+    const complete = bool(rec.complete), sha256 = digest(rec.sha256);
+    if (complete !== (sha256 !== null) || complete && (rec.provenance !== "explicit-v1" || rec.sourceSpanId === null || codes.length || DEFINITION_COMPONENTS.some(key => components[key].status !== "available"))) fail();
+    if (!complete && !codes.length) fail();
+    return { sourceSpanId: rec.sourceSpanId, provenance: rec.provenance, semanticVersion: FORMAT, complete, sha256, components, reasons: codes } as CapturedAgentDefinition;
+  });
+  const ids = records.filter(r => r.sourceSpanId !== null).map(r => r.sourceSpanId); if (new Set(ids).size !== ids.length) fail();
+  const result: CapturedAgentDefinitions = { format: "runphantom-agent-definitions/v1", records, observedRecords: count(top.observedRecords), omittedRecords: count(top.omittedRecords), unavailableAttributes: count(top.unavailableAttributes), complete: bool(top.complete) };
+  if (result.observedRecords !== records.length + result.omittedRecords || result.complete !== (records.length > 0 && !result.omittedRecords && !result.unavailableAttributes && records.every(r => r.complete)) || size(JSON.stringify(result)) > L.metadataBytes) fail();
   return result;
 }
