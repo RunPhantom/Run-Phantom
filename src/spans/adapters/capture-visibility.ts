@@ -70,7 +70,7 @@ export function captureKind(attrs: AdapterInput["attrs"]): "RETRIEVAL" | "EMBEDD
 }
 export function readCaptureReceipt(value: unknown): OtlpEvidence | undefined {
   if (typeof value !== "string" || Buffer.byteLength(value) > OTLP_EVIDENCE_LIMITS.bytes) return undefined;
-  try { const receipt: unknown = JSON.parse(value); validateOtlpEvidence(receipt); return receipt; } catch { return undefined; }
+  try { const receipt: unknown = JSON.parse(value); if (hasDuplicateJsonKeys(value)) return undefined; validateOtlpEvidence(receipt); return receipt; } catch { return undefined; }
 }
 const filterKeys = new Set(["db.filter"]);
 const textKeys = new Set(["db.collection.name", "db.query.summary", "db.query.text", "gen_ai.retrieval.query", "gen_ai.retrieval.query.text", "gen_ai.retrieval.source"]);
@@ -104,7 +104,19 @@ export function publicCaptureMetadata<T extends { attributes?: unknown; otlp_evi
     }
     if (receiptChanged) { receipt = JSON.stringify(evidence); changed = true; }
   }
-  return changed ? { ...row, attributes, otlp_evidence: receipt } : row;
+  const projected = changed ? { ...row, attributes, otlp_evidence: receipt } : row;
+  // Cached DTOs are not source authority. Rebuild only F16's view from the
+  // exact stored receipt, rather than trusting a previously serialized view.
+  const spanType = own(row, "span_type");
+  if (!["RETRIEVAL", "EMBEDDING", "LLM_GENERATION", "TOOL_CALL", "TRACE", "AGENT_ROOT", "INTERNAL"].includes(String(spanType))) return projected;
+  let flat: AdapterInput["attrs"] = {};
+  try { if (typeof attributes === "string") flat = JSON.parse(attributes); } catch { /* Missing metadata stays unavailable. */ }
+  const capture = captureVisibility({ spanName: "", spanType: spanType as AdapterInput["spanType"], attrs: flat,
+    traceId: typeof own(row, "run_id") === "string" ? own(row, "run_id") as string : undefined,
+    spanId: typeof own(row, "id") === "string" ? own(row, "id") as string : undefined, otlpEvidence: readCaptureReceipt(receipt) });
+  return { ...projected, captureVisibility: capture,
+    ...(capture?.retrieval ? { normalized: capture.retrieval } : capture?.embedding ? { normalized: capture.embedding } : {}) };
+
 }
 export function captureVisibility(input: AdapterInput): CaptureVisibilityV1 | undefined {
   const evidence = input.otlpEvidence;
