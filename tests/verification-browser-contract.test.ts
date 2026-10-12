@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { parseBrowserAction, parseBrowserOpen, parseBrowserTarget, parseWorkerFrame, parseExecutionContext, BROWSER_LIMITS } from "../src/verification/browser-contract";
+import { boundReportContext, reopenExecutionContext } from "../src/verification/report-context";
+import type { VerificationReportContext } from "../src/verification/protocol";
+import { parseBrowserAction, parseBrowserOpen, parseBrowserTarget, parseWorkerFrame, parseExecutionContext, scrubBrowserSecrets, BROWSER_LIMITS } from "../src/verification/browser-contract";
 
 describe("trusted-browser closed authority boundary", () => {
   test("owned configuration accepts an exact local page and refuses executable authority", () => {
@@ -34,4 +36,24 @@ describe("trusted-browser closed authority boundary", () => {
     let reads = 0; const ids = ["unused"]; Object.defineProperty(ids, "0", { get() { reads++; return "unused"; } });
     expect(() => parseExecutionContext({ ...source, artifactIds: ids })).toThrow(); expect(reads).toBe(0);
   });
+  test("optional execution yields to the exact context byte budget and old saved context stays byte-identical", () => {
+    const checks: VerificationReportContext["checks"] = Array.from({ length: 20 }, (_, index) => ({ step: index + 1, predicate: { kind: "console", level: "error", absent: true }, status: index % 2 ? "fail" : "pass", reason: "汉".repeat(1000), since: 1, through: 5, generation: 1, coverage: { network: true, console: true, dom: true, state: true, signal: true, route: true }, complete: true, dropped: 0, settled: true }));
+    const input = { origin: "http://localhost:4812", quietMs: 300, redacted: false, truncated: false, checks };
+    const original = JSON.stringify(input); expect(reopenExecutionContext(input)).toBe(input); expect(JSON.stringify(reopenExecutionContext(input))).toBe(original);
+    const control = boundReportContext(input); expect(Buffer.byteLength(JSON.stringify(control))).toBe(65514);
+    const execution = { formatVersion: 1 as const, backend: "trusted-browser" as const, engine: "chromium" as const, providerVersion: "1.62.1", ownership: "owned" as const, generation: 1, inputMode: "trusted-browser" as const, dispatch: "completed" as const };
+    const result = boundReportContext({ ...input, execution }); expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(65536); expect(result.execution).toBeUndefined(); expect(result.executionOmitted).toBe("context-limit"); expect(result.checks).toHaveLength(20);
+    for (let index = 0; index < 20; index++) { const { predicate: _predicate, reason: _reason, ...mandatory } = result.checks[index]; const { predicate: _oldPredicate, reason: _oldReason, ...expected } = checks[index]; expect(mandatory).toEqual(expected); }
+    expect(JSON.stringify(input)).toBe(original); expect(boundReportContext(result)).toEqual(result);
+    const reopened = reopenExecutionContext({ ...control, execution: { ...execution, token: "unsafe-live-authority" } } as VerificationReportContext);
+    expect(reopened.execution).toBeUndefined(); expect(reopened.executionOmitted).toBe("invalid"); expect(reopened.checks).toEqual(control.checks); expect(JSON.stringify(reopened)).not.toContain("unsafe-live-authority");
+  });
+
+  test("short entered values and overlapping redaction markers remain private and bounded", () => {
+    expect(scrubBrowserSecrets("Controlled echo: 猫", ["猫"])).toBe("Controlled echo: [REDACTED]");
+    expect(scrubBrowserSecrets("R E REDACTED", ["R", "E", "REDACTED"])).toBe("[REDACTED] [REDACTED] [REDACTED]");
+    expect(scrubBrowserSecrets("literal .* [a]", [".*", "[a]"])).toBe("literal [REDACTED] [REDACTED]");
+    expect(scrubBrowserSecrets("x".repeat(16385), ["x"])).toBe("[TRUNCATED]");
+  });
+
 });

@@ -181,6 +181,9 @@ export interface VerificationReportContext {
   quietMs: number;
   redacted: boolean;
   truncated: boolean;
+  /** Daemon-generated execution observation; never a live page authority. */
+  execution?: import("./browser-types").ExecutionContext;
+  executionOmitted?: "context-limit" | "invalid";
 }
 export interface VerificationReport extends Verdict {
   id: string;

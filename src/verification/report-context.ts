@@ -3,6 +3,7 @@ import { VERIFICATION_LIMITS as L } from "./protocol";
 import { parseFlowSteps, parseRelativeTarget } from "./validation";
 import { sanitizeWithReport } from "./serialization";
 import { boundControlSource } from "./build/source";
+import { parseExecutionContext } from "./browser-contract";
 
 interface Sanitized { value: unknown; redacted: boolean; truncated: boolean }
 type Scrub = (value: unknown) => Sanitized;
@@ -15,6 +16,10 @@ const persistenceScrub: Scrub = (value) => {
 export function boundReportContext(input: VerificationReportContext, scrub: Scrub = persistenceScrub): VerificationReportContext {
   const context: VerificationReportContext = { origin: input.origin, checks: [], quietMs: input.quietMs,
     redacted: input.redacted, truncated: input.truncated || input.checks.length > L.MAX_STEPS };
+  if (input.execution) {
+    try { context.execution = parseExecutionContext(input.execution); }
+    catch { context.executionOmitted = "invalid"; context.truncated = true; }
+  } else if (input.executionOmitted === "context-limit" || input.executionOmitted === "invalid") { context.executionOmitted = input.executionOmitted; context.truncated = true; }
   const clean = (value: unknown): unknown => {
     const result = scrub(value);
     context.redacted ||= result.redacted;
@@ -88,6 +93,7 @@ export function boundReportContext(input: VerificationReportContext, scrub: Scru
   }
   // Preserve every executed check's outcome/window even when large expected values do not fit.
   while (Buffer.byteLength(JSON.stringify(context)) > L.MAX_CONTEXT_BYTES) {
+    if (context.execution) { delete context.execution; context.executionOmitted = "context-limit"; context.truncated = true; continue; }
     // Optional location context must yield before existing expectations or captured readings.
     // The next loop measures the omission marker and truncated flag as part of the same budget.
     const sources = context.checks.filter(check => check.controlSource).sort((a, b) =>
@@ -131,4 +137,11 @@ export function boundReportContext(input: VerificationReportContext, scrub: Scru
     throw new Error("Saved verification context exceeds its required outcome budget");
   }
   return context;
+}
+
+/** Reopen validates optional browser context without rewriting original SDK report fields. */
+export function reopenExecutionContext(context: VerificationReportContext): VerificationReportContext {
+  if (!Object.hasOwn(context, "execution")) return context;
+  try { return { ...context, execution: parseExecutionContext(context.execution) }; }
+  catch { const { execution: _execution, ...rest } = context; return { ...rest, executionOmitted: "invalid", truncated: true }; }
 }
