@@ -28,7 +28,7 @@ export interface CompletionObservation {
 }
 export interface CompletionReport {
   version: 1;
-  detectorVersion: typeof COMPLETION_DETECTOR;
+  detectorVersion: string;
   state: "enabled";
   selected: { attachment: EvidenceAttachment; setId: string; revision: number };
   source: { kind: "operator_summary"; sha256: string; totalBytes: number; inspectedBytes: number; partial: boolean };
@@ -38,3 +38,15 @@ export interface CompletionReport {
   authentication: "not_authenticated";
 }
 export interface CompletionDisabled { version: 1; detectorVersion: typeof COMPLETION_DETECTOR; state: "disabled" }
+export interface CompletionSavedReport {
+  id: string;
+  createdAt: number;
+  request: CompletionRequest;
+  report: CompletionReport;
+}
+export interface CompletionHistory {
+  items: { id: string; setId: string; revision: number; detectorVersion: string; createdAt: number; payloadAvailable: boolean }[];
+  total: number;
+  offset: number;
+  hasMore: boolean;
+}

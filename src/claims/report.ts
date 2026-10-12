@@ -47,6 +47,7 @@ function observation(text: string, start: number, end: number, kind: CompletionO
 export function observeCompletion(value: unknown, view: EvidenceSetView | null): CompletionReport | CompletionDisabled {
   if (!completionEnabled(value)) return { version: 1, detectorVersion: COMPLETION_DETECTOR, state: "disabled" };
   const input = parseCompletionRequest(value), summary = input.summary, sha256 = evidenceDigest(summary), inspected = prefix(summary, L.INSPECT_BYTES);
+  if (view && (view.revision.id !== input.setId || view.revision.revision !== input.revision || canonicalEvidenceJson(view.revision.attachment) !== canonicalEvidenceJson(input.attachment))) throw new EvidenceError("Completion evidence view does not match the selected scope", 409);
   const observations: CompletionObservation[] = [];
   for (const assertion of input.assertions) {
     const item = observation(assertion.text, 0, assertion.text.length, "operator_assertion", evidenceDigest(assertion.text), "structured", observations.length);
