@@ -105,6 +105,47 @@ test.each(["detail", "span", "export", "search"])("actual nested typed definitio
   const comparison = await json(`/api/runs/compare?baseline=${capture.id}&candidate=${capture.id}`);
   expect(comparison.counts).toMatchObject({ unchanged: 1, changed: 0 });
   expect(comparison.agentDefinitions.baseline.records[0].complete).toBe(true);
+  if (route === "export") {
+    const raw = await request("/api/traces/query", { sql: `SELECT rowid AS identity,id,attributes,otlp_evidence FROM spans WHERE run_id='${capture.id}'` });
+    expect(raw.status).toBe(200); const original = (await raw.json()).rows[0];
+    const privateFile = structuredClone(exported); privateFile.spans[0].attributes = original.attributes; privateFile.spans[0].otlp_evidence = original.otlp_evidence;
+    expect((await request("/api/import-run", privateFile)).status).toBe(200);
+    const reimported = await request("/api/traces/query", { sql: `SELECT rowid AS identity,attributes,otlp_evidence FROM spans WHERE run_id='${capture.id}'` });
+    expect(reimported.status).toBe(200); expect((await reimported.json()).rows[0]).toEqual({ identity: original.identity, attributes: original.attributes, otlp_evidence: original.otlp_evidence });
+    expect((await json(`/api/runs/compare?baseline=${capture.id}&candidate=${capture.id}`)).agentDefinitions).toEqual(comparison.agentDefinitions);
+    const destination = await launch(path.join(directory, "nested-public-destination"));
+    try {
+      const imported = await fetch(destination.url + "/api/import-run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(exported) }); expect(imported.status).toBe(200);
+      const response = await fetch(`${destination.url}/api/runs/detail/${capture.id}`); expect(response.status).toBe(200); const observed = await response.json();
+      expect(JSON.stringify(observed)).not.toContain(marker); expect(observed.spans[0].output_payload).toBe(definitionOutput);
+      expect(JSON.parse(JSON.parse(observed.spans[0].attributes)["ordinary.envelope"])).toEqual([business, { "ordinary.message": "Business metadata unchanged", [definitionKey]: "[REDACTED]" }]);
+      const importedComparison = await fetch(`${destination.url}/api/runs/compare?baseline=${capture.id}&candidate=${capture.id}`); expect(importedComparison.status).toBe(200);
+      expect((await importedComparison.json()).agentDefinitions.baseline.records[0]).toMatchObject({ complete: false, sha256: null });
+      proof("http-nested-private-and-public-import.json", { privateRowIdentityPreserved: true, privateDefinitionHashesUnchanged: true, publicFreshProfileWithholdsNested: true, publicReimportComplete: false, originalOutputEqual: true, sourcePid: daemon.pid, destinationPid: destination.proc.pid });
+    } finally { await stop(destination.proc); }
+  }
+});
+
+test("actual receiver-reported attribute loss withholds an uncertain flattened carrier without changing output", async () => {
+  const capture = definitionTrace(96), marker = "Private nested lossy capture";
+  const span = capture.body.resourceSpans[0].scopeSpans[0].spans[0]; span.droppedAttributesCount = 1;
+  span.attributes.push({ key: "ordinary.envelope", value: { kvlistValue: { values: [{ key: definitionKey, value: { stringValue: marker } }] } } } as any);
+  await ingest(capture); const exported = await json(`/api/runs/${capture.id}/export`);
+  expect(JSON.parse(exported.spans[0].attributes)["ordinary.envelope"]).toBe("[UNAVAILABLE]"); expect(JSON.stringify(exported)).not.toContain(marker);
+  expect(exported.spans[0].output_payload).toBe(definitionOutput);
+  expect((await json(`/api/runs/${capture.id}/search?scope=span_attributes&pattern=${encodeURIComponent(marker)}`)).matches).toEqual([]);
+  const ordinary = await json(`/api/runs/${capture.id}/search?scope=span_attributes&pattern=${encodeURIComponent("span unchanged")}`); expect(ordinary.matches).toHaveLength(1);
+  expect((await json(`/api/runs/compare?baseline=${capture.id}&candidate=${capture.id}`)).agentDefinitions.baseline.records[0].complete).toBe(false);
+});
+
+test("actual accepted OTLP population over the selected search row cap returns explicit HTTP 413", async () => {
+  const capture = definitionTrace(97), original = capture.body.resourceSpans[0].scopeSpans[0].spans[0];
+  capture.body.resourceSpans[0].scopeSpans[0].spans = Array.from({ length: 2001 }, (_, n) => ({ ...original, spanId: (n + 1).toString(16).padStart(16, "0"),
+    attributes: [{ key: "runphantom.input", value: { stringValue: definitionInput } }], events: [], links: [] }));
+  await ingest(capture);
+  const searched = await request(`/api/runs/${capture.id}/search?scope=span_input&pattern=${encodeURIComponent(definitionInput)}`);
+  expect(searched.status).toBe(413); expect(await searched.json()).toEqual({ error: "Selected spans exceed search evidence limits (2,000 rows and 16 MiB acquired text)." });
+  proof("http-search-row-refusal.json", { actualAcceptedOtlpSpans: 2001, selectedScope: "span_input", status: searched.status, partialResultPublished: false });
 });
 
 test("actual corrected root and process reopen update live definition but cannot rewrite frozen JSON/JUnit identity", async () => {

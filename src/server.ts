@@ -18,6 +18,7 @@ import {
   getRuns,
   getDrizzleDb,
   getRunWithSpans,
+  SpanSearchLimitError,
   getRunsByConvoId,
   clearAll,
   upsertLiveEvent,
@@ -1606,7 +1607,7 @@ export async function createServer(port: number) {
       opts.max_matches = n;
     }
     try { res.json(searchRun(req.params.id, opts)); }
-    catch (err: any) { res.status(400).json({ error: err.message }); }
+    catch (err: any) { res.status(err instanceof SpanSearchLimitError ? err.status : 400).json({ error: err.message }); }
   });
   app.get("/api/runs/:id/events", (req, res) => {
     const opts: any = {};

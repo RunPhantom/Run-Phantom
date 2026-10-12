@@ -22,14 +22,59 @@ export function withholdAgentDefinitionCapture<T extends { attributes?: unknown;
   const mayContainKey = (raw: string) => raw.includes(KEY) || raw.includes("\\u")
     && raw.replace(/\\u([\da-f]{4})/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16))).includes(KEY);
   let attributes = span.attributes, receipt = span.otlp_evidence;
-  if (typeof attributes === "string" && mayContainKey(attributes)) {
+  const relevantFlat = typeof attributes === "string" && mayContainKey(attributes);
+  let flat: Record<string, unknown> | undefined, flatAmbiguous = false;
+  if (typeof attributes === "string" && relevantFlat) {
     if (attributes.length > 10 * 1024 * 1024 || size(attributes) > 10 * 1024 * 1024) fail();
     let parsed: unknown; try { parsed = JSON.parse(attributes); } catch { fail(); }
-    if (object(parsed) && Object.hasOwn(parsed, KEY) && parsed[KEY] !== "[REDACTED]") attributes = JSON.stringify({ ...parsed, [KEY]: "[REDACTED]" });
+    if (object(parsed)) { flat = parsed; flatAmbiguous = hasDuplicateJsonKeys(attributes); }
   }
-  if (typeof receipt === "string" && mayContainKey(receipt)) {
+  let typed: OtlpEvidence | undefined;
+  if (typeof receipt === "string" && (relevantFlat || mayContainKey(receipt))) {
     if (receipt.length > OTLP_EVIDENCE_LIMITS.bytes || size(receipt) > OTLP_EVIDENCE_LIMITS.bytes) fail();
     let parsed: OtlpEvidence; try { parsed = JSON.parse(receipt); validateOtlpEvidence(parsed); } catch { fail(); }
+    typed = parsed!;
+  }
+  if (flat) {
+    let changed = false;
+    const replace = (key: string, value: unknown) => { if (flat![key] !== value) { flat![key] = value; changed = true; } };
+    // Only ordered typed composites authorize decoding a flattened companion.
+    // A genuine stringValue, even one that looks like JSON, remains a string.
+    const flatten = (value: EvidenceValue, project: boolean): unknown => {
+      if ("stringValue" in value) return value.stringValue;
+      if ("boolValue" in value) return value.boolValue;
+      if ("bytesValue" in value) return value.bytesValue;
+      if ("doubleValue" in value) return value.doubleValue;
+      if ("intValue" in value) { const n = Number(value.intValue); return Number.isSafeInteger(n) ? n : "[UNAVAILABLE]"; }
+      if ("arrayValue" in value) return value.arrayValue.values.map(child => flatten(child, project));
+      const result: Record<string, unknown> = Object.create(null), seen = new Set<string>();
+      for (const entry of value.kvlistValue.values) {
+        if (seen.has(entry.key)) throw new TypeError("Ambiguous composite");
+        seen.add(entry.key); result[entry.key] = project && entry.key === KEY ? "[REDACTED]" : flatten(entry.value, project);
+      }
+      return result;
+    };
+    const sources = typed ? [typed.resource, typed.scope, typed].filter(source => source !== null) : [];
+    const lossy = typed && (Object.entries(typed.capture).some(([key, value]) => key !== "redactedValues" && typeof value === "number" && value > 0)
+      || sources.some(source => (source!.droppedAttributesCount ?? 0) > 0));
+    for (const [key, value] of Object.entries(flat)) {
+      if (key === KEY) { replace(key, "[REDACTED]"); continue; }
+      if (!mayContainKey(typeof value === "string" ? value : JSON.stringify(value))) continue;
+      const observations = sources.flatMap(source => source!.attributes.filter(entry => entry.key === key));
+      if (flatAmbiguous || observations.length !== 1) { replace(key, "[UNAVAILABLE]"); continue; }
+      const observed = observations[0].value;
+      if ("stringValue" in observed && observed.stringValue === value) continue;
+      if (lossy || !("arrayValue" in observed || "kvlistValue" in observed)) { replace(key, "[UNAVAILABLE]"); continue; }
+      try {
+        const original = JSON.stringify(flatten(observed, false));
+        if (original !== value) { replace(key, "[UNAVAILABLE]"); continue; }
+        replace(key, JSON.stringify(flatten(observed, true)));
+      } catch { replace(key, "[UNAVAILABLE]"); }
+    }
+    if (changed) attributes = JSON.stringify(flat);
+  }
+  if (typed) {
+    const parsed = typed;
     let withheld = 0;
     const value = (entry: EvidenceValue) => {
       if ("kvlistValue" in entry) visit(entry.kvlistValue.values);
@@ -44,14 +89,14 @@ export function withholdAgentDefinitionCapture<T extends { attributes?: unknown;
         } else value(entry.value);
       }
     };
-    for (const source of [parsed!, parsed!.resource, parsed!.scope, ...parsed!.events, ...parsed!.links]) if (source) visit(source.attributes);
+    for (const source of [parsed, parsed.resource, parsed.scope, ...parsed.events, ...parsed.links]) if (source) visit(source.attributes);
     if (withheld) {
-      if (parsed!.capture.redactedValues > 0xffffffff - withheld) fail();
-      parsed!.capture.redactedValues += withheld;
+      if (parsed.capture.redactedValues > 0xffffffff - withheld) fail();
+      parsed.capture.redactedValues += withheld;
       // The fixed marker can expand a short captured value; retain the original
       // closed receipt validator and byte ceiling after projection too.
-      try { validateOtlpEvidence(parsed!); } catch { fail(); }
-      receipt = JSON.stringify(parsed!);
+      try { validateOtlpEvidence(parsed); } catch { fail(); }
+      receipt = JSON.stringify(parsed);
     }
   }
   return attributes === span.attributes && receipt === span.otlp_evidence ? span : { ...span, ...(span.attributes !== undefined ? { attributes } : {}), ...(span.otlp_evidence !== undefined ? { otlp_evidence: receipt } : {}) };
