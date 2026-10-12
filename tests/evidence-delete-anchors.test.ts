@@ -1,16 +1,17 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
-import type { Server } from "node:http";
+import { request as httpRequest, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDb, deleteRun, getDrizzleDb, insertSpan, upsertRun } from "../src/db";
 import { createServer } from "../src/server";
 import { promoteLocalReplayRun } from "../src/replay";
 import { createLocalEvidenceOwner } from "../src/evaluations/evidence-inventory";
-import { EVIDENCE_READER_IDENTITY } from "../src/evaluations/evidence-import";
+import { EVIDENCE_IMPORT_CONTENT_TYPE, EVIDENCE_READER_IDENTITY } from "../src/evaluations/evidence-import";
 import { evidenceDigest } from "../src/evaluations/evidence-validation";
 import type { EvidenceAttachment } from "../src/evaluations/evidence-protocol";
+import { WebSocket } from "ws";
 
 let directory: string, previous: string | undefined, server: Server | undefined, demoDrainUntil = 0;
 beforeEach(() => {
@@ -79,3 +80,48 @@ test("public demo reset refuses atomically before success output, then actual fi
   }
   expect((getDrizzleDb().$client.query("SELECT count(*) AS n FROM spans WHERE run_id LIKE 'demo_%'").get() as { n: number }).n).toBeGreaterThan(10);
 }, 20_000);
+
+test("a refused public reset preserves the already streaming demo timers and live output", async () => {
+  ({ server } = await createServer(0)); server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`, db = getDrizzleDb().$client;
+  const roots = () => db.query("SELECT run_id,status,end_time_ms-start_time_ms AS elapsed FROM spans WHERE run_id LIKE 'demo_%' AND span_type='AGENT_ROOT' ORDER BY run_id").all() as { run_id: string; status: string; elapsed: number }[];
+  const finished = [ { run_id: "demo_research", status: "OK", elapsed: 7_600 }, { run_id: "demo_review", status: "OK", elapsed: 6_200 }, { run_id: "demo_triage", status: "OK", elapsed: 5_200 } ];
+  const until = async (condition: () => boolean, ms: number) => {
+    const deadline = performance.now() + ms;
+    while (!condition()) { if (performance.now() > deadline) throw new Error("Original live demo did not reach its unchanged fixture deadline"); await new Promise(resolve => setTimeout(resolve, 20)); }
+  };
+  const socket = new WebSocket(`${base.replace("http:", "ws:")}/ws`);
+  const delivered: { event: string; data: { traceId?: string; content?: string } }[] = [];
+  socket.on("message", data => delivered.push(JSON.parse(data.toString()))); await once(socket, "open");
+  let upload: ReturnType<typeof httpRequest> | undefined;
+  try {
+    demoDrainUntil = performance.now() + 14_000;
+    const initial = await fetch(`${base}/api/demo-traces/replay`, { method: "POST" }); expect(initial.status).toBe(200); await initial.json();
+    await until(() => roots().length === 2 && roots().every(root => root.status === "UNSET"), 2_000);
+    const originalRuns = db.query("SELECT id,started_at FROM runs WHERE id LIKE 'demo_%' ORDER BY id").all() as { id: string; started_at: number }[];
+    const originalLive = db.query("SELECT * FROM live_events WHERE trace_id LIKE 'demo_%' ORDER BY id").all() as { id: number }[];
+    expect(originalLive.length).toBeGreaterThan(0);
+    const raw = Buffer.from('<testsuite tests="1"><testcase name="actual partial stream"/></testsuite>');
+    const metadata = Buffer.from(JSON.stringify({ version: 1, request: { ...EVIDENCE_READER_IDENTITY, operationKey: "live-demo-refusal", attachment: { kind: "run", id: "demo_review" },
+      target: null, inventory: null, retention: "raw_and_normalized", sources: [{ sourceId: "unit", kind: "junit", dialect: "junit-xml/v1", shardId: "unit", artifactSha256: evidenceDigest(raw), byteLength: raw.length }] } }));
+    const prefix = Buffer.alloc(4); prefix.writeUInt32BE(metadata.length);
+    upload = httpRequest(`${base}/api/evaluations/evidence/imports`, { method: "POST", headers: { "Content-Type": EVIDENCE_IMPORT_CONTENT_TYPE } }, response => response.resume()); upload.on("error", () => {});
+    upload.write(Buffer.concat([prefix, metadata, raw.subarray(0, 1)]));
+    await until(() => db.query("SELECT id FROM evaluation_evidence_jobs WHERE operation_key='live-demo-refusal' AND status='running'").get() !== null, 1_000);
+    const deliveredBeforeRefusal = delivered.length, refused = await fetch(`${base}/api/demo-traces/replay`, { method: "POST" });
+    expect(refused.status).toBe(409); expect(await refused.json()).not.toHaveProperty("ok", true);
+    for (const original of originalRuns) expect(db.query("SELECT id,started_at FROM runs WHERE id=?").get(original.id)).toEqual(original);
+    upload.destroy();
+    await until(() => roots().length === 3 && roots().every(root => root.status === "OK"), 14_000);
+    expect(roots()).toEqual(finished);
+    for (const original of originalRuns) expect(db.query("SELECT id,started_at FROM runs WHERE id=?").get(original.id)).toEqual(original);
+    for (const original of originalLive) expect(db.query("SELECT * FROM live_events WHERE id=?").get(original.id)).toEqual(original);
+    expect(delivered.slice(deliveredBeforeRefusal).some(event => event.event === "live" && event.data.traceId === "demo_research" && Boolean(event.data.content))).toBe(true);
+    const counts = db.query("SELECT trace_id,count(*) AS n FROM live_events WHERE trace_id LIKE 'demo_%' GROUP BY trace_id ORDER BY trace_id").all() as { trace_id: string; n: number }[];
+    expect(counts.map(row => row.trace_id)).toEqual(["demo_research", "demo_review", "demo_triage"]); expect(counts.every(row => row.n > 10)).toBe(true);
+    demoDrainUntil = performance.now() + 14_000;
+    const control = await fetch(`${base}/api/demo-traces/replay`, { method: "POST" }); expect(control.status).toBe(200); await control.json();
+    await until(() => roots().length === 3 && roots().every(root => root.status === "OK"), 14_000); expect(roots()).toEqual(finished);
+    expect(db.query("SELECT status,reserved_raw_bytes,reserved_normalized_bytes FROM evaluation_evidence_jobs WHERE operation_key='live-demo-refusal'").get()).toMatchObject({ status: "failed", reserved_raw_bytes: 0, reserved_normalized_bytes: 0 });
+  } finally { upload?.destroy(); socket.terminate(); }
+}, 35_000);

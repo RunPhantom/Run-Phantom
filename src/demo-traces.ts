@@ -536,10 +536,10 @@ const DEMO_REPLAY_STAGGER_MS = 900;
 let pendingReplayTimers: Array<ReturnType<typeof setTimeout>> = [];
 
 export function replayDefaultDemoTraces(opts: { broadcast?: BroadcastFn } = {}): { runIds: string[] } {
-  clearPendingReplayTimers();
   getDrizzleDb().transaction(() => {
     for (const runId of DEMO_RUN_IDS) deleteRun(runId);
   });
+  clearPendingReplayTimers();
   opts.broadcast?.("spans", { runIds: DEMO_RUN_IDS, count: 0 });
 
   for (let i = 0; i < FIXTURES.length; i++) {
