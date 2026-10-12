@@ -136,3 +136,34 @@ describe("bounded authenticated Team evidence bodies", () => {
     expect(await rejected(client.evidence("/projects/project-a/evidence/imports", { method: "POST", body: new Blob([new Uint8Array(8 * 1024 * 1024 + 64 * 1024 + 5)], { type: "application/vnd.runphantom.evidence-import.v1+octet-stream" }) }))).toMatchObject({ code: "too_large" }); expect(fetched).toBe(0);
   });
 });
+
+
+test.each(["json", "blob"] as const)("an outer-await %s materialization refuses the captured principal after a microtask change", async kind => {
+  const nativeParse = JSON.parse, NativeBlob = globalThis.Blob;
+  const text = '{"private":"fixture-old-principal"}';
+  const observations: { replaceAt: number; accepted: boolean; materializedAfterReplacement: boolean }[] = [];
+  for (let replaceAt = 1; replaceAt <= 8; replaceAt++) {
+    const client = new TeamClient(() => {}); client.setSession(session("principal-a"));
+    let tick = 0, replaced = false, materializedAfterReplacement = false;
+    const fetchMock = spyOn(globalThis, "fetch").mockImplementation(async () => new Response(text, { headers: { "Content-Type": "application/json" } }));
+    const parseMock = spyOn(JSON, "parse").mockImplementation((value: string, reviver?: Parameters<typeof JSON.parse>[1]) => {
+      if (value === text) materializedAfterReplacement = replaced;
+      return nativeParse(value, reviver);
+    });
+    globalThis.Blob = class extends NativeBlob {
+      constructor(parts?: BlobPart[], options?: BlobPropertyBag) { materializedAfterReplacement = replaced; super(parts, options); }
+    } as typeof Blob;
+    try {
+      const request = kind === "json" ? client.evidence(path) : client.evidenceBlob(path + "/raw/report-1?revision=1");
+      const replacement = new Promise<void>(resolve => {
+        const advance = () => { if (++tick === replaceAt) { client.setSession(session("principal-b")); replaced = true; resolve(); } else queueMicrotask(advance); };
+        queueMicrotask(advance);
+      });
+      const accepted = await request.then(() => true, error => { expect(error.name).toBe("AbortError"); return false; });
+      await replacement;
+      observations.push({ replaceAt, accepted, materializedAfterReplacement });
+    } finally { globalThis.Blob = NativeBlob; parseMock.mockRestore(); fetchMock.mockRestore(); }
+  }
+  expect(observations.filter(value => value.accepted && value.materializedAfterReplacement)).toEqual([]);
+  expect(observations.some(value => value.accepted && !value.materializedAfterReplacement)).toBe(true);
+});

@@ -54,6 +54,7 @@ export class TeamClient {
   /** Dedicated external-report transport; the generic Team request budget stays unchanged. */
   async evidence<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
     const result = await this.evidenceBody(path, options, false);
+    result.assertCurrent();
     if (result.bytes.byteLength === 0) return undefined as T;
     try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(result.bytes)) as T; }
     catch { throw new TeamApiError(502, "invalid_response", "The evidence response could not be read."); }
@@ -61,10 +62,11 @@ export class TeamClient {
 
   async evidenceBlob(path: string, signal?: AbortSignal): Promise<Blob> {
     const result = await this.evidenceBody(path, { signal }, true);
+    result.assertCurrent();
     return new Blob([result.bytes], { type: result.contentType });
   }
 
-  private async evidenceBody(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal }, blob: boolean): Promise<{ bytes: Uint8Array<ArrayBuffer>; contentType: string }> {
+  private async evidenceBody(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal }, blob: boolean): Promise<{ bytes: Uint8Array<ArrayBuffer>; contentType: string; assertCurrent: () => void }> {
     const project = path.match(/^\/projects\/([^/?]+)\/evidence(?:\/|\?|$)/)?.[1];
     const canonical = new URL(`/api/team${path}`, "http://team.invalid");
     if (!project || path.includes("#") || path.includes("\\") || canonical.pathname !== `/api/team${path.split("?")[0]}`) throw new TeamApiError(400, "invalid_request", "Choose a project evidence endpoint.");
@@ -120,7 +122,7 @@ export class TeamClient {
         throw new TeamApiError(response.status, typeof failure?.code === "string" ? failure.code : "request_failed", typeof failure?.message === "string" ? failure.message : "The request could not be completed. Please try again.", typeof failure?.requestId === "string" ? failure.requestId : undefined);
       }
       current();
-      return { bytes, contentType: response.headers.get("Content-Type") ?? "application/octet-stream" };
+      return { bytes, contentType: response.headers.get("Content-Type") ?? "application/octet-stream", assertCurrent: current };
     } catch (error) {
       if (reader) await reader.cancel().catch(() => {});
       else await response.body?.cancel().catch(() => {});
