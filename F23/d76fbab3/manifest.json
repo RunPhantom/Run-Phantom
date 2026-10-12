@@ -1,0 +1,29 @@
+{
+  "product": "Run Phantom",
+  "maintainer": "Divyam Talwar",
+  "feature": "F23",
+  "sourceHead": "d76fbab31055e7ac0f6fee3acef963108fad592e",
+  "scope": "Actual copied macOS UI and synthetic local fixtures; explicit selected query/state opt-in. Platform/providers and complete assembled layout remain pending.",
+  "screenshots": [
+    {
+      "file": "current-mobile-shell.png",
+      "bytes": 53352,
+      "sha256": "c9bfa30b281fe365bccf4dd48a1a7d1fc20aac416c8ab2e93c9330afe184cc56"
+    },
+    {
+      "file": "private-query-remains-inconclusive.png",
+      "bytes": 40479,
+      "sha256": "96b491d0a05d25f157d3028f67e73930c2a959acb63f2a7f5523801a45f6c070"
+    },
+    {
+      "file": "selected-count-after-two-restarts.png",
+      "bytes": 53637,
+      "sha256": "e84f294057701dace2624c96b32b52bf3452e305591ecec9f8a37ac7dea5df4b"
+    },
+    {
+      "file": "cached-count-after-two-restarts.png",
+      "bytes": 55134,
+      "sha256": "4002c312eb5ecd446ffad63aba09f09bf059ee6d89e0a98d7c772a21b602925e"
+    }
+  ]
+}
