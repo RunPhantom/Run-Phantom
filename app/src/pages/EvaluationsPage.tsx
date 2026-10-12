@@ -11,6 +11,7 @@ import { textareaClass } from "../components/evaluations/RuleEditor";
 import { evaluationsApi, type DatasetRevision, type Experiment } from "../api/evaluations";
 import { LossyJsonNumberError, parseJsonEvidence } from "../../../src/evaluations/json-evidence";
 import { ExternalEvidencePanel } from "../components/ExternalEvidencePanel";
+import { FindingComparison } from "../components/evaluations/FindingComparison";
 
 export function EvaluationsPage() {
   const [params, setParams] = useSearchParams();
@@ -35,7 +36,9 @@ export function EvaluationsPage() {
   async function importJson(value: string) { if (new TextEncoder().encode(value).byteLength > 2 * 1024 * 1024) throw new Error("Dataset import exceeds 2 MiB."); let parsed: unknown; try { parsed = parseJsonEvidence(value); } catch (cause) { if (cause instanceof LossyJsonNumberError) throw cause; throw new Error("Dataset import is not valid JSON."); } saved(await evaluationsApi.importDataset(parsed)); setPortableJson(""); setNotice("Portable dataset imported. Local source identities were not imported."); }
   const queryError = datasets.error ?? revision.error ?? experiments.error;
   const evidence = params.get("view") === "evidence";
-  const tabs = <nav aria-label="Evaluation workspaces" className="flex flex-wrap gap-2 px-5 pt-14 sm:px-8 lg:pt-5"><Button aria-current={!evidence ? "page" : undefined} variant={!evidence ? "default" : "ghost"} onClick={() => setParams(previous => { const next = new URLSearchParams(previous); next.delete("view"); return next; })}>Regression workbench</Button><Button aria-current={evidence ? "page" : undefined} variant={evidence ? "default" : "ghost"} onClick={() => setParams(previous => { const next = new URLSearchParams(previous); next.set("view", "evidence"); return next; })}>External reports</Button></nav>;
+  const findings = params.get("view") === "findings";
+  const tabs = <nav aria-label="Evaluation workspaces" className="flex flex-wrap gap-2 px-5 pt-14 sm:px-8 lg:pt-5"><Button aria-current={!evidence && !findings ? "page" : undefined} variant={!evidence && !findings ? "default" : "ghost"} onClick={() => setParams(previous => { const next = new URLSearchParams(previous); next.delete("view"); return next; })}>Regression workbench</Button><Button aria-current={evidence ? "page" : undefined} variant={evidence ? "default" : "ghost"} onClick={() => setParams(previous => { const next = new URLSearchParams(previous); next.set("view", "evidence"); return next; })}>External reports</Button><Button aria-current={findings ? "page" : undefined} variant={findings ? "default" : "ghost"} onClick={() => setParams(previous => { const next = new URLSearchParams(previous); next.set("view", "findings"); return next; })}>Finding comparison</Button></nav>;
+  if (findings) return <>{tabs}<FindingComparison experiments={experiments.isError ? [] : experiments.data ?? []} /></>;
   if (evidence) return <>{tabs}<ExternalEvidencePanel datasets={datasets.isError ? [] : datasets.data ?? []} experiments={experiments.isError ? [] : experiments.data ?? []} /></>;
   return <>{tabs}<div className="mx-auto min-h-full max-w-6xl space-y-7 p-5 pt-6 text-[color:var(--rp-ink)] sm:p-8 sm:pt-6">
     <header className="space-y-2"><h1 className="text-2xl font-semibold tracking-tight text-[color:var(--rp-ink-strong)]" style={{ fontFamily: "var(--font-display)" }}>Evaluations</h1><p className="max-w-2xl text-sm leading-relaxed text-[color:var(--rp-ink-soft)]">Turn captured agent behavior into repeatable regression cases. Compare frozen candidates against the same expectations, then add your own review.</p></header>
