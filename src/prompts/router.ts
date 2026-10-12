@@ -1,12 +1,12 @@
 import express, { type Request, type Response, type NextFunction } from "express";
 import { strictEvidenceJson } from "../evaluations/evidence-reader/json";
 import { readerLimits } from "../evaluations/evidence-reader/limits";
-import { PROMPT_LIMITS, PROMPT_POLICY, PromptRegistryError, boundedPromptResult, promptInteger, promptObject, type PromptCapability } from "./protocol";
+import { PROMPT_LIMITS, PROMPT_POLICY, PromptRegistryError, boundedPromptResult, promptInteger, promptObject, type PromptCapability, type PromptFence, samePromptFence } from "./protocol";
 import type { PromptRegistry } from "./registry";
 
 /** Mount behind existing local access guards and before the daemon's global JSON parser. */
 export function createPromptRouter(registry: PromptRegistry): express.Router {
-  const router = express.Router(), fences = new WeakMap<Request, number>();
+  const router = express.Router(), fences = new WeakMap<Request, PromptFence>();
   router.use((req, res, next) => {
     res.setHeader("Cache-Control", "no-store");
     try {
@@ -40,8 +40,8 @@ export function createPromptRouter(registry: PromptRegistry): express.Router {
     } catch (error) { next(error); }
   };
   router.get("/capabilities", route([], req => {
-    if (registry.capture("read") !== fence(req)) throw new PromptRegistryError("authority_changed");
-    return { enabled: true, scope: "local", policy: PROMPT_POLICY, generation: fence(req), limits: PROMPT_LIMITS };
+    if (!samePromptFence(registry.capture("read"), fence(req))) throw new PromptRegistryError("authority_changed");
+    return { enabled: true, scope: "local", policy: PROMPT_POLICY, generation: fence(req).promptGeneration, limits: PROMPT_LIMITS };
   }));
   router.get("/", route(["cursor"], req => registry.list(req.query.cursor, fence(req))));
   router.post("/", route([], req => registry.create(req.body as unknown, fence(req)), 201));

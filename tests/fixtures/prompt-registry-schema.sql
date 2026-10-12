@@ -1,4 +1,10 @@
 -- PROPOSAL ONLY. Coordinator owns canonical migration index 12 and matching Drizzle exports.
+CREATE TABLE prompt_scope_controls (
+  scope_key TEXT PRIMARY KEY NOT NULL REFERENCES evaluation_evidence_scopes(scope_key) ON DELETE CASCADE
+    CHECK(length(cast(scope_key AS BLOB)) BETWEEN 1 AND 128),
+  generation INTEGER NOT NULL DEFAULT 1
+    CHECK(typeof(generation)='integer' AND generation BETWEEN 1 AND 9007199254740991)
+);
 CREATE TABLE prompt_heads (
   scope_key TEXT NOT NULL REFERENCES evaluation_evidence_scopes(scope_key) ON DELETE CASCADE,
   id TEXT NOT NULL CHECK(length(id)=36),

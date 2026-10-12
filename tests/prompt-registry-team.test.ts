@@ -1,7 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { request as httpRequest } from "node:http";
@@ -10,6 +10,8 @@ import { loadTeamConfig } from "../src/team/config";
 import { initializeTeamSchema } from "../src/team/store-schema";
 import type { Project, SessionResponse } from "../src/team/protocol";
 import type { PromptRevision, PromptPage } from "../src/prompts/protocol";
+import { EVIDENCE_READER_IDENTITY, EVIDENCE_IMPORT_CONTENT_TYPE } from "../src/evaluations/evidence-import";
+import { evidenceDigest } from "../src/evaluations/evidence-validation";
 
 interface Identity { cookie: string; csrf: string; userId: string }
 const draft = (template = "Hello {{who}}") => ({ operationKey: randomUUID(), name: "Greeting", template });
@@ -157,6 +159,7 @@ test("genuine frozen Team v2 upgrades atomically to v3, preserves exact old rows
     initializeTeamSchema(database); database.close(); database = new Database(filename); database.exec("PRAGMA foreign_keys=ON"); initializeTeamSchema(database);
     expect(database.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
     expect(database.query("SELECT * FROM evaluation_evidence_scopes").all()).toEqual(old);
+    expect(database.query("SELECT p.scope_key,p.generation,e.generation AS evidence_generation FROM prompt_scope_controls p JOIN evaluation_evidence_scopes e ON e.scope_key=p.scope_key").all()).toEqual([{ scope_key: "project:historical-project", generation: 1, evidence_generation: 7 }]);
     expect(database.query("SELECT * FROM projects").all()).toEqual(projects);
     expect(database.query("SELECT id FROM evaluation_evidence_inventory_heads").all()).toEqual([{ id: "retained" }]);
     expect(database.query("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -183,5 +186,88 @@ test("an interrupted v2 prompt upgrade rolls back new tables and leaves the orig
     initializeTeamSchema(database);
     expect(database.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
     expect(database.query("SELECT name FROM projects").get()).toEqual({ name: "Original project" });
+  } finally { database.close(); }
+});
+
+
+test("prompt-only clear preserves completed report discovery and detail while fencing the original held save", async () => {
+  const f = await fixture(); let restoreSpy: (() => void) | undefined;
+  try {
+    const runId = "3".repeat(32), spanId = "4".repeat(16);
+    const ingestion = (await f.call<{ token: string }>("POST", `/api/team/projects/${f.project.id}/keys`, { label: "Report preservation fixture" }, f.owner)).value;
+    const spans = { resourceSpans: [{ scopeSpans: [{ spans: [{ traceId: runId, spanId, name: "Preserved report anchor", startTimeUnixNano: "1800000000000000000", endTimeUnixNano: "1800000001000000000", status: { code: 1 } }] }] }] };
+    expect((await f.call("POST", "/api/team/ingest/v1/traces", spans, undefined, { Authorization: `Bearer ${ingestion.token}` })).status).toBe(200);
+    const bytes = Buffer.from('<testsuite tests="1"><testcase name="Retained completed report"/></testsuite>');
+    const attachment = { kind: "run", id: runId }, evidence = `/api/team/projects/${f.project.id}/evidence`;
+    const header = Buffer.from(JSON.stringify({ version: 1, request: { ...EVIDENCE_READER_IDENTITY, operationKey: "prompt-clear-preservation-report", target: null, attachment, sources: [{ sourceId: "preserved-report", shardId: "unit", kind: "junit", dialect: "junit-xml/v1", artifactSha256: evidenceDigest(bytes), byteLength: bytes.byteLength }], inventory: null, retention: "raw_and_normalized" } }));
+    const length = Buffer.alloc(4); length.writeUInt32BE(header.byteLength);
+    const admitted = await fetch(f.url + evidence + "/imports", { method: "POST", headers: { Host: new URL(f.config.publicOrigin).host, Origin: f.config.publicOrigin, Cookie: f.owner.cookie, "X-RunPhantom-CSRF": f.owner.csrf, "Content-Type": EVIDENCE_IMPORT_CONTENT_TYPE }, body: Buffer.concat([length, header, bytes]) });
+    expect(admitted.status).toBe(202);
+    let job = (await admitted.json() as { job: { id: string; status: string; setId: string } }).job;
+    const deadline = Date.now() + 10000;
+    while (["queued", "running"].includes(job.status) && Date.now() < deadline) { await Bun.sleep(25); job = (await f.call<{ job: typeof job }>("GET", `${evidence}/imports/${job.id}`, undefined, f.owner)).value.job; }
+    expect(job.status).toBe("completed");
+    const discovery = `${evidence}/sets?${new URLSearchParams({ attachment: JSON.stringify(attachment) })}`;
+    const before = await f.call<{ items: { id: string }[] }>("GET", discovery, undefined, f.owner);
+    expect(before.status).toBe(200); expect(before.value.items).toHaveLength(1); expect(before.value.items[0].id).toBe(job.setId);
+    const detail = await f.call("GET", `${evidence}/sets/${job.setId}?revision=1`, undefined, f.owner);
+    expect(detail.status).toBe(200);
+    const input = draft("Original {{who}}"), prompt = await f.call<PromptRevision>("POST", f.base, input, f.owner);
+    expect(prompt.status).toBe(201);
+    expect((await f.call("POST", f.base, input, f.owner)).value).toEqual(prompt.value);
+    const sharedBefore = f.sql("SELECT generation FROM evaluation_evidence_scopes WHERE scope_key=?", "project:" + f.project.id);
+    const spy = spyOn(f.handle.store, "promptGeneration"); restoreSpy = () => spy.mockRestore();
+    const initial = spy.mock.calls.length, pending = f.held(f.base, draft("queued-before-prompt-clear-canary"), f.owner); await captured(spy, initial);
+    const generation = (await f.call<{ generation: number }>("GET", f.base + "/capabilities", undefined, f.owner)).value.generation;
+    const cleared = await f.call<{ generation: number }>("POST", f.base + "/clear", { expectedGeneration: generation, operationKey: randomUUID() }, f.owner);
+    expect(cleared.status).toBe(200); expect(cleared.value.generation).toBe(generation + 1);
+    pending.finish(); const refused = await pending.result;
+    expect(refused.status).toBe(409); expect(refused.text).not.toContain("queued-before-prompt-clear-canary");
+    expect(f.sql("SELECT count(*) AS n FROM prompt_heads")).toEqual({ n: 0 }); expect(f.sql("SELECT count(*) AS n FROM prompt_revisions")).toEqual({ n: 0 });
+    const after = await f.call("GET", discovery, undefined, f.owner), detailAfter = await f.call("GET", `${evidence}/sets/${job.setId}?revision=1`, undefined, f.owner);
+    const observations = { before: before.value, after: after.value, detailEqual: JSON.stringify(detail.value) === JSON.stringify(detailAfter.value), promptGenerationBefore: generation, promptGenerationAfter: cleared.value.generation, sharedBefore, sharedAfter: f.sql("SELECT generation FROM evaluation_evidence_scopes WHERE scope_key=?", "project:" + f.project.id), heldStatus: refused.status };
+    const directory = `${import.meta.dir}/../.omx/evidence/F33/prompt-generation-correction`; mkdirSync(directory, { recursive: true }); writeFileSync(directory + "/actual-team-preservation-observations.json", JSON.stringify(observations, null, 2));
+    expect(after.status).toBe(200); expect(detailAfter.value).toEqual(detail.value);
+    expect(after.value).toEqual(before.value);
+    expect(observations.sharedAfter).toEqual(sharedBefore);
+    spy.mockRestore(); restoreSpy = undefined; await f.restart();
+    expect((await f.call("GET", discovery, undefined, f.owner)).value).toEqual(before.value);
+    expect((await f.call("GET", `${evidence}/sets/${job.setId}?revision=1`, undefined, f.owner)).value).toEqual(detail.value);
+    expect((await f.call<{ generation: number }>("GET", f.base + "/capabilities", undefined, f.owner)).value.generation).toBe(generation + 1);
+  } finally { restoreSpy?.(); await f.close(); }
+}, 30000);
+
+
+test("ordinary actual report clear fences held prompt requests while retaining fresh pinned reads and replay", async () => {
+  const f = await fixture(); let restoreSpy: (() => void) | undefined;
+  try {
+    const input = draft("Retained {{who}}"), first = (await f.call<PromptRevision>("POST", f.base, input, f.owner)).value;
+    const promptBefore = (await f.call<{ generation: number }>("GET", f.base + "/capabilities", undefined, f.owner)).value.generation;
+    const sharedBefore = f.sql("SELECT generation FROM evaluation_evidence_scopes WHERE scope_key=?", "project:" + f.project.id);
+    const spy = spyOn(f.handle.store, "promptGeneration"); restoreSpy = () => spy.mockRestore();
+    const initial = spy.mock.calls.length, pending = f.held(f.base, draft("queued-before-report-clear-canary"), f.owner); await captured(spy, initial);
+    expect((await f.call("DELETE", `/api/team/projects/${f.project.id}/evidence/all`, undefined, f.owner)).status).toBe(200);
+    pending.finish(); const refused = await pending.result;
+    expect(refused.status).toBe(409); expect(refused.text).not.toContain("queued-before-report-clear-canary");
+    expect((await f.call<{ generation: number }>("GET", f.base + "/capabilities", undefined, f.owner)).value.generation).toBe(promptBefore);
+    expect(f.sql("SELECT generation FROM evaluation_evidence_scopes WHERE scope_key=?", "project:" + f.project.id)).not.toEqual(sharedBefore);
+    expect((await f.call("GET", `${f.base}/${first.id}/revisions/1`, undefined, f.owner)).value).toEqual(first);
+    expect((await f.call("POST", f.base, input, f.owner)).value).toEqual(first);
+    expect((await f.call("POST", `${f.base}/${first.id}/revisions/1/compile`, { variables: { who: "$& {{still_literal}}" } }, f.owner)).value).toMatchObject({ compiled: "Retained $& {{still_literal}}", revision: 1 });
+    expect(f.sql("SELECT count(*) AS n FROM prompt_heads")).toEqual({ n: 1 });
+    expect(f.sql("SELECT count(*) AS n FROM prompt_scope_controls p JOIN evaluation_evidence_scopes e ON e.scope_key=p.scope_key")).toEqual({ n: 1 });
+    expect(f.sql("PRAGMA foreign_key_check")).toBeNull();
+  } finally { restoreSpy?.(); await f.close(); }
+});
+test("v2 prompt upgrade refuses a dangling mapped scope before installing control tables", () => {
+  const database = new Database(":memory:");
+  try {
+    database.exec(readFileSync(`${import.meta.dir}/fixtures/prompt-registry-team-v2.sql`, "utf8"));
+    database.exec("INSERT INTO projects(id,name,created_at) VALUES('mapped-without-parent','Preserved',1); PRAGMA foreign_keys=OFF; DELETE FROM evaluation_evidence_scopes WHERE scope_key='project:mapped-without-parent'; PRAGMA foreign_keys=ON");
+    const before = database.query("SELECT name,sql FROM sqlite_master ORDER BY name").all();
+    expect(() => initializeTeamSchema(database)).toThrow("prompt scopes are unavailable");
+    expect(database.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+    expect(database.query("SELECT name,sql FROM sqlite_master ORDER BY name").all()).toEqual(before);
+    expect(database.query("SELECT name FROM projects").get()).toEqual({ name: "Preserved" });
   } finally { database.close(); }
 });

@@ -18,7 +18,7 @@ function initialize(database: Database) {
   migrate(drizzle(database), { migrationsFolder: `${import.meta.dir}/../drizzle` });
   database.exec("PRAGMA foreign_keys=ON; PRAGMA legacy_alter_table=OFF");
   database.exec(readFileSync(`${import.meta.dir}/fixtures/prompt-registry-schema.sql`, "utf8"));
-  database.exec("INSERT INTO evaluation_evidence_scopes VALUES('local:local',1,1)");
+  database.exec("INSERT INTO evaluation_evidence_scopes VALUES('local:local',1,1); INSERT INTO prompt_scope_controls VALUES('local:local',1)");
 }
 beforeEach(() => {
   db = new Database(":memory:"); initialize(db);
@@ -81,13 +81,13 @@ test("delete removes content and retains bounded identity tombstone without resu
 test("explicit prompt-only clear rotates authority before deletion and invalidates queued operations", () => {
   const input = draft(), first = registry.create(input, registry.capture("edit")), queued = registry.capture("edit");
   db.exec("INSERT INTO runs(id,started_at,last_updated_at) VALUES('unrelated-run',1,1)");
-  const result = registry.clear({ expectedGeneration: queued, operationKey: randomUUID() }, registry.capture("delete"));
-  expect(result.generation).toBe(queued + 1);
+  const result = registry.clear({ expectedGeneration: queued.promptGeneration, operationKey: randomUUID() }, registry.capture("delete"));
+  expect(result.generation).toBe(queued.promptGeneration + 1);
   expect(db.query("SELECT count(*) AS n FROM prompt_heads").get()).toEqual({ n: 0 });
   expect(db.query("SELECT count(*) AS n FROM runs WHERE id='unrelated-run'").get()).toEqual({ n: 1 });
   expect(() => registry.create(input, queued)).toThrow("authority changed");
   expect(() => registry.delete(first.id, 1, queued)).toThrow("authority changed");
-  expect(() => registry.clear({ expectedGeneration: queued, operationKey: randomUUID() }, registry.capture("delete"))).toThrow("authority changed");
+  expect(() => registry.clear({ expectedGeneration: queued.promptGeneration, operationKey: randomUUID() }, registry.capture("delete"))).toThrow("authority changed");
   expect(registry.create(input, registry.capture("edit")).id).not.toBe(first.id);
 });
 test("unknown and malformed explicit revisions or authority fields refuse without fallback", () => {
@@ -149,7 +149,7 @@ test("100 scoped heads including tombstones bound admission and prompt-only clea
   expect(() => registry.create(draft(), registry.capture("edit"))).toThrow("capacity");
   registry.delete(first.id, 1, registry.capture("delete"));
   expect(() => registry.create(draft(), registry.capture("edit"))).toThrow("capacity");
-  registry.clear({ expectedGeneration: registry.capture("delete"), operationKey: randomUUID() }, registry.capture("delete"));
+  registry.clear({ expectedGeneration: registry.capture("delete").promptGeneration, operationKey: randomUUID() }, registry.capture("delete"));
   expect(registry.create(draft(), registry.capture("edit")).revision).toBe(1);
 });
 test("32 revisions cap append while exact old retries still succeed", () => {
@@ -196,6 +196,7 @@ function seedOtherScopes(heads: number, revisions: number, template = "") {
       if (head % 100 === 0) {
         scopeKey = "project:" + randomUUID();
         db.query("INSERT INTO evaluation_evidence_scopes VALUES(?,1,1)").run(scopeKey);
+        db.query("INSERT INTO prompt_scope_controls VALUES(?,1)").run(scopeKey);
       }
       const id = randomUUID(), count = Math.min(32, remaining - (heads - head - 1)), operationKey = randomUUID();
       db.query("INSERT INTO prompt_heads VALUES(?,?,?,0,?,?,1,1)").run(scopeKey, id, Math.max(1, count), operationKey, "a".repeat(64));
@@ -225,6 +226,7 @@ test("actual retained UTF-8 admission counts every row and keeps existing conten
 test("trusted scope selection refuses another scope's prompt IDs and revoked owner requests", () => {
   const first = registry.create(draft("local-only"), registry.capture("edit")), projectId = randomUUID();
   db.query("INSERT INTO evaluation_evidence_scopes VALUES(?,1,1)").run("project:" + projectId);
+  db.query("INSERT INTO prompt_scope_controls VALUES(?,1)").run("project:" + projectId);
   let allowed = true;
   const project = new PromptRegistry({ database: db, scope: { kind: "project", id: projectId }, authorize: () => { if (!allowed) throw new Error("Current actual owner revoked"); } });
   expect(() => project.get(first.id, 1)).toThrow("not found");
@@ -234,4 +236,75 @@ test("trusted scope selection refuses another scope's prompt IDs and revoked own
   expect(() => project.append(created.id, { ...draft("late"), expectedRevision: 1 }, queued)).toThrow("revoked");
   expect(() => project.get(created.id, 1, queued)).toThrow("revoked");
   expect(registry.get(first.id, 1).template).toBe("local-only");
+});
+
+
+test("prompt controls never initialize lazily and unsafe generations refuse before content acquisition", () => {
+  const first = registry.create(draft("preserved body"), registry.capture("edit"));
+  db.exec("DELETE FROM prompt_scope_controls WHERE scope_key='local:local'");
+  expect(() => registry.capture("read")).toThrow("unavailable");
+  expect(() => registry.get(first.id, 1)).toThrow("unavailable");
+  expect(db.query("SELECT count(*) AS n FROM prompt_scope_controls").get()).toEqual({ n: 0 });
+  db.exec("INSERT INTO prompt_scope_controls VALUES('local:local',1); PRAGMA ignore_check_constraints=ON");
+  for (const value of ["0", "-1", "1.5", "9007199254740992", "'not-an-integer'"]) {
+    db.exec(`UPDATE prompt_scope_controls SET generation=${value} WHERE scope_key='local:local'`);
+    expect(() => registry.capture("read")).toThrow("unavailable");
+  }
+  db.exec("UPDATE prompt_scope_controls SET generation=9007199254740991 WHERE scope_key='local:local'; PRAGMA ignore_check_constraints=OFF");
+  const maximum = registry.capture("delete");
+  expect(() => registry.clear({ expectedGeneration: maximum.promptGeneration, operationKey: randomUUID() }, maximum)).toThrow("capacity");
+  expect(registry.get(first.id, 1)).toEqual(first);
+  expect(db.query("SELECT generation FROM evaluation_evidence_scopes WHERE scope_key='local:local'").get()).toEqual({ generation: 1 });
+});
+test("either captured epoch fences mutation and immutable prompt reads survive fresh captures", () => {
+  const first = registry.create(draft(), registry.capture("edit")), initial = registry.capture("read");
+  expect(Object.isFrozen(initial)).toBe(true);
+  db.exec("UPDATE prompt_scope_controls SET generation=generation+1 WHERE scope_key='local:local'");
+  expect(() => registry.get(first.id, 1, initial)).toThrow("authority changed");
+  const fresh = registry.capture("read");
+  expect(fresh.promptGeneration).toBe(initial.promptGeneration + 1); expect(fresh.evidenceGeneration).toBe(initial.evidenceGeneration);
+  expect(registry.get(first.id, 1, fresh)).toEqual(first);
+  db.exec("UPDATE evaluation_evidence_scopes SET generation=generation+1 WHERE scope_key='local:local'");
+  expect(() => registry.create(draft("late save"), fresh)).toThrow("authority changed");
+  expect(registry.capture("read").promptGeneration).toBe(fresh.promptGeneration);
+  expect(registry.get(first.id, 1)).toEqual(first);
+});
+test("actual evidence scope deletion cascades its prompt controls and payloads without touching another scope", () => {
+  const retained = registry.create(draft("local retained"), registry.capture("edit")), projectId = randomUUID(), scopeKey = "project:" + projectId;
+  db.query("INSERT INTO evaluation_evidence_scopes VALUES(?,1,1)").run(scopeKey);
+  db.query("INSERT INTO prompt_scope_controls VALUES(?,1)").run(scopeKey);
+  const project = new PromptRegistry({ database: db, scope: { kind: "project", id: projectId }, authorize: () => {} });
+  const removed = project.create(draft("project removed"), project.capture("edit"));
+  db.query("DELETE FROM evaluation_evidence_scopes WHERE scope_key=?").run(scopeKey);
+  expect(db.query("SELECT count(*) AS n FROM prompt_scope_controls WHERE scope_key=?").get(scopeKey)).toEqual({ n: 0 });
+  expect(db.query("SELECT count(*) AS n FROM prompt_heads WHERE id=?").get(removed.id)).toEqual({ n: 0 });
+  expect(db.query("SELECT count(*) AS n FROM prompt_revisions WHERE id=?").get(removed.id)).toEqual({ n: 0 });
+  expect(() => project.capture("read")).toThrow("unavailable");
+  expect(registry.get(retained.id, 1)).toEqual(retained);
+  expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+});
+test("either epoch changing at the final transaction recheck rolls back the save and generation change", () => {
+  for (const table of ["prompt_scope_controls", "evaluation_evidence_scopes"]) {
+    let checks = 0;
+    const current = registry.capture("edit"), interrupted = new PromptRegistry({ database: db, scope: { kind: "local", id: "local" }, authorize: () => {
+      if (++checks === 2) db.exec(`UPDATE ${table} SET generation=generation+1 WHERE scope_key='local:local'`);
+    } });
+    expect(() => interrupted.create(draft("never published"), current)).toThrow("authority changed");
+    expect(checks).toBe(2);
+    expect(registry.capture("read")).toEqual(current);
+    expect(db.query("SELECT count(*) AS n FROM prompt_heads").get()).toEqual({ n: 0 });
+    expect(db.query("SELECT count(*) AS n FROM prompt_revisions").get()).toEqual({ n: 0 });
+  }
+});
+test("control cardinality is acquired before aggregation and its UTF-8 storage participates in the quota", () => {
+  db.transaction(() => {
+    for (let index = 0; index < 1000; index++) {
+      const scope = "project:" + randomUUID(); db.query("INSERT INTO evaluation_evidence_scopes VALUES(?,1,1)").run(scope); db.query("INSERT INTO prompt_scope_controls VALUES(?,1)").run(scope);
+    }
+  }).immediate();
+  const query = spyOn(db, "query");
+  try { expect(() => registry.list()).toThrow("integrity"); expect(query.mock.calls.some(([sql]) => sql.includes("sum("))).toBe(false); } finally { query.mockRestore(); }
+  db.exec("DELETE FROM prompt_scope_controls WHERE scope_key!='local:local'; DELETE FROM evaluation_evidence_scopes WHERE scope_key!='local:local'; PRAGMA ignore_check_constraints=ON");
+  db.exec("INSERT INTO evaluation_evidence_scopes SELECT cast(zeroblob(33554433) AS TEXT),1,1; INSERT INTO prompt_scope_controls SELECT scope_key,1 FROM evaluation_evidence_scopes WHERE scope_key!='local:local'; PRAGMA ignore_check_constraints=OFF");
+  expect(() => registry.list()).toThrow("integrity");
 });

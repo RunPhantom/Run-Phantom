@@ -10,7 +10,7 @@ import { TeamStore, type SessionContext, type ProjectContext } from "./store";
 import { TeamCheckService } from "./checks";
 import type { TeamEvidenceRead, TeamEvidenceWrite, TeamEvidenceResponse } from "./evidence";
 import type { TeamPromptRead, TeamPromptWrite, TeamPromptResponse } from "./prompts";
-import { PROMPT_LIMITS, PromptRegistryError, promptId, promptInteger, promptObject, type PromptCapability } from "../prompts/protocol";
+import { PROMPT_LIMITS, PromptRegistryError, promptId, promptInteger, promptObject, type PromptCapability, type PromptFence } from "../prompts/protocol";
 import { EvidenceError, type EvidenceCapability } from "../evaluations/evidence-protocol";
 import { EVIDENCE_HEADER_BYTES, EVIDENCE_IMPORT_CONTENT_TYPE } from "../evaluations/evidence-import";
 import { evidenceInteger, evidenceText } from "../evaluations/evidence-validation";
@@ -297,7 +297,7 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
   app.delete(`${evidence}/all`, evidenceRoute("DELETE", [], "delete", (_req, context) => store.writeEvidence(context, { kind: "clear" })));
 
   const prompts = `${p}/prompts`;
-  const promptRoute = (method: string, query: string[], capability: PromptCapability, work: (req: Request, context: ProjectContext, generation: number) => TeamPromptResponse | Promise<TeamPromptResponse>) =>
+  const promptRoute = (method: string, query: string[], capability: PromptCapability, work: (req: Request, context: ProjectContext, generation: PromptFence) => TeamPromptResponse | Promise<TeamPromptResponse>) =>
     (req: Request, res: Response, next: NextFunction) => {
       void (async () => {
         if (req.method !== method || req.path.endsWith("/") || req.path.includes("%") || req.originalUrl.includes("#") || req.originalUrl.includes("\\") || new URL(req.originalUrl, "http://team.invalid").pathname !== req.originalUrl.split("?")[0]) throw new TeamError("invalid_request", "Prompt route is invalid");
@@ -311,7 +311,8 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
         const context = scope(req), generation = store.promptGeneration(context, capability);
         if (states.get(req)!.signal.aborted) throw new TeamError("conflict", "Prompt request was interrupted");
         const response = await work(req, context, generation);
-        if (store.promptGeneration(context, capability) !== response.generation || states.get(req)!.signal.aborted) throw new TeamError("conflict", "Prompt authority changed. Retry with current access.");
+        const current = store.promptGeneration(context, capability);
+        if (current.promptGeneration !== response.generation || current.evidenceGeneration !== response.evidenceGeneration || states.get(req)!.signal.aborted) throw new TeamError("conflict", "Prompt authority changed. Retry with current access.");
         send(res, response.value, response.status, PROMPT_LIMITS.responseBytes);
       })().catch(next);
     };
@@ -325,8 +326,8 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
     try { return strictEvidenceJson(new TextDecoder("utf8", { fatal: true }).decode(bytes), readerLimits({ maxDepth: 4 })); }
     catch { throw new TeamError("invalid_request", "Prompt controls require strict bounded UTF-8 JSON"); }
   };
-  const promptRead = (input: (req: Request) => TeamPromptRead) => (req: Request, context: ProjectContext, generation: number) => store.readPrompt(context, input(req), generation);
-  const promptWrite = (input: (req: Request, body: unknown) => TeamPromptWrite) => async (req: Request, context: ProjectContext, generation: number) => store.writePrompt(context, input(req, await promptBody(req)), generation);
+  const promptRead = (input: (req: Request) => TeamPromptRead) => (req: Request, context: ProjectContext, generation: PromptFence) => store.readPrompt(context, input(req), generation);
+  const promptWrite = (input: (req: Request, body: unknown) => TeamPromptWrite) => async (req: Request, context: ProjectContext, generation: PromptFence) => store.writePrompt(context, input(req, await promptBody(req)), generation);
   app.get(`${prompts}/capabilities`, promptRoute("GET", [], "read", promptRead(() => ({ kind: "capabilities" }))));
   app.get(prompts, promptRoute("GET", ["cursor"], "read", promptRead(req => ({ kind: "list", cursor: req.query.cursor }))));
   app.post(prompts, promptRoute("POST", [], "edit", promptWrite((_req, body) => ({ kind: "create", value: body }))));

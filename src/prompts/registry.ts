@@ -4,16 +4,16 @@ import type { EvidenceScope } from "../evaluations/evidence-protocol";
 import { strictEvidenceJson } from "../evaluations/evidence-reader/json";
 import { readerLimits } from "../evaluations/evidence-reader/limits";
 import { PROMPT_LIMITS as L, PROMPT_POLICY, PromptRegistryError, boundedPromptResult,
-  literalPromptCompilation, parsePromptDraft, promptId, promptInteger, promptObject, promptTemplate, promptText,
+  literalPromptCompilation, parsePromptDraft, promptId, promptInteger, promptObject, promptTemplate, promptText, promptFence, samePromptFence,
   type PromptCapability, type PromptCompilation, type PromptDraft, type PromptExport, type PromptHistoryEntry,
-  type PromptPage, type PromptRevision, type PromptSummary } from "./protocol";
+  type PromptPage, type PromptRevision, type PromptSummary, type PromptFence } from "./protocol";
 
 /** Trusted owner only: local $client or a closure over the actual private TeamStore database. */
 export interface PromptOwner { readonly database: Database; readonly scope: EvidenceScope; authorize(capability: PromptCapability): void }
 const digest = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
 const blobLength = (column: string) => `length(cast(${column} AS BLOB))`;
 const textColumn = (column: string, maximum: number) => `CASE WHEN typeof(${column})='text' AND ${blobLength(column)}<=${maximum} THEN ${column} ELSE NULL END AS ${column}`;
-const integerColumn = (column: string, minimum: number, maximum = Number.MAX_SAFE_INTEGER) => `CASE WHEN typeof(${column})='integer' AND ${column} BETWEEN ${minimum} AND ${maximum} THEN ${column} ELSE NULL END AS ${column}`;
+const integerColumn = (column: string, minimum: number, maximum = Number.MAX_SAFE_INTEGER, alias = column) => `CASE WHEN typeof(${column})='integer' AND ${column} BETWEEN ${minimum} AND ${maximum} THEN ${column} ELSE NULL END AS ${alias}`;
 const headColumns = [textColumn("id", 36), integerColumn("revision", 1, 32), integerColumn("deleted", 0, 1), textColumn("create_operation_key", 36), textColumn("create_request_digest", 64), integerColumn("created_at", 0), integerColumn("updated_at", 0)].join(",");
 const revisionColumns = [textColumn("id", 36), integerColumn("revision", 1, 32), textColumn("name", 256), textColumn("template", 32768), textColumn("template_sha256", 64), textColumn("variable_names", 4353), textColumn("policy", 32), textColumn("operation_key", 36), textColumn("request_digest", 64), integerColumn("created_at", 0)].join(",");
 interface Head { id: string; revision: number; deleted: number; create_operation_key: string; create_request_digest: string; created_at: number; updated_at: number }
@@ -31,31 +31,34 @@ export class PromptRegistry {
     this.#owner = owner; this.#database = owner.database; this.#scopeKey = `${owner.scope.kind}:${owner.scope.id}`;
   }
   #get<T>(sql: string, ...params: SQLQueryBindings[]): T | null { return this.#database.query(sql).get(...params) as T | null; }
-  #generation(capability: PromptCapability): number {
+  #generation(capability: PromptCapability): PromptFence {
     this.#owner.authorize(capability);
-    const row = this.#get<{ generation: number | null; active: number }>(`SELECT ${integerColumn("generation", 1)},active FROM evaluation_evidence_scopes WHERE scope_key=?`, this.#scopeKey);
-    if (!row || row.active !== 1 || row.generation === null) throw new PromptRegistryError("unavailable");
-    return row.generation;
+    const row = this.#get<{ promptGeneration: number | null; evidenceGeneration: number | null; active: number }>(
+      `SELECT ${integerColumn("p.generation", 1, Number.MAX_SAFE_INTEGER, "promptGeneration")},${integerColumn("e.generation", 1, Number.MAX_SAFE_INTEGER, "evidenceGeneration")},e.active
+      FROM prompt_scope_controls p JOIN evaluation_evidence_scopes e ON e.scope_key=p.scope_key WHERE p.scope_key=?`, this.#scopeKey);
+    if (!row || row.active !== 1 || row.promptGeneration === null || row.evidenceGeneration === null) throw new PromptRegistryError("unavailable");
+    return promptFence({ promptGeneration: row.promptGeneration, evidenceGeneration: row.evidenceGeneration });
   }
-  capture(capability: PromptCapability): number { return this.#database.transaction(() => this.#generation(capability)).immediate(); }
-  #transaction<T>(capability: PromptCapability, fence: number | undefined, work: (generation: number) => T): T {
-    if (fence !== undefined) promptInteger(fence);
+  capture(capability: PromptCapability): PromptFence { return this.#database.transaction(() => this.#generation(capability)).immediate(); }
+  #transaction<T>(capability: PromptCapability, fence: PromptFence | undefined, work: (current: PromptFence) => T): T {
+    const original = fence === undefined ? undefined : promptFence(fence);
     return this.#database.transaction(() => {
-      const generation = this.#generation(capability);
-      if (fence !== undefined && generation !== fence) throw new PromptRegistryError("authority_changed");
-      const result = boundedPromptResult(work(generation));
-      if (this.#generation(capability) !== generation) throw new PromptRegistryError("authority_changed");
+      const current = this.#generation(capability);
+      if (original && !samePromptFence(current, original)) throw new PromptRegistryError("authority_changed");
+      const result = boundedPromptResult(work(current));
+      if (!samePromptFence(this.#generation(capability), current)) throw new PromptRegistryError("authority_changed");
       return result;
     }).immediate();
   }
   #totals(): Totals {
     const heads = this.#get<{ n: number }>("SELECT count(*) AS n FROM prompt_heads")!.n;
     const revisions = this.#get<{ n: number }>("SELECT count(*) AS n FROM prompt_revisions")!.n;
+    const controls = this.#get<{ n: number }>("SELECT count(*) AS n FROM prompt_scope_controls")!.n;
     const scopeHeads = this.#get<{ n: number }>("SELECT count(*) AS n FROM prompt_heads WHERE scope_key=?", this.#scopeKey)!.n;
-    if (heads > L.promptsGlobal || revisions > L.revisionsGlobal || scopeHeads > L.promptsPerScope) throw new PromptRegistryError("integrity");
+    if (controls > L.promptsGlobal || heads > L.promptsGlobal || revisions > L.revisionsGlobal || scopeHeads > L.promptsPerScope) throw new PromptRegistryError("integrity");
     const headBytes = ["scope_key", "id", "create_operation_key", "create_request_digest"].map(blobLength).join("+");
     const revisionBytes = ["scope_key", "id", "name", "template", "template_sha256", "variable_names", "policy", "operation_key", "request_digest"].map(blobLength).join("+");
-    const sizes = this.#get<{ bytes: number }>(`SELECT (SELECT coalesce(sum(${headBytes}),0) FROM prompt_heads)+(SELECT coalesce(sum(${revisionBytes}),0) FROM prompt_revisions) AS bytes`)!;
+    const sizes = this.#get<{ bytes: number }>(`SELECT (SELECT coalesce(sum(${headBytes}),0) FROM prompt_heads)+(SELECT coalesce(sum(${revisionBytes}),0) FROM prompt_revisions)+(SELECT coalesce(sum(length(cast(scope_key AS BLOB))),0) FROM prompt_scope_controls) AS bytes`)!;
     if (!Number.isSafeInteger(sizes.bytes) || sizes.bytes < 0 || sizes.bytes > L.retainedBytes) throw new PromptRegistryError("integrity");
     return { heads, scopeHeads, revisions, bytes: sizes.bytes };
   }
@@ -126,8 +129,8 @@ export class PromptRegistry {
       + Buffer.byteLength(JSON.stringify(draft.variableNames)) + Buffer.byteLength(PROMPT_POLICY) + 36 + 64;
     return revision + (extraHead ? Buffer.byteLength(this.#scopeKey) + 36 + 36 + 64 : 0);
   }
-  create(value: unknown, fence: number): PromptRevision {
-    promptInteger(fence); const input = parsePromptDraft(value);
+  create(value: unknown, fence: PromptFence): PromptRevision {
+    fence = promptFence(fence); const input = parsePromptDraft(value);
     return this.#transaction("edit", fence, () => {
       const totals = this.#totals(), requestDigest = this.#requestDigest("create", input), replay = this.#retry("create", input, requestDigest);
       if (replay) return replay;
@@ -138,8 +141,8 @@ export class PromptRegistry {
       return this.#insert(input, id, 1, requestDigest, now);
     });
   }
-  append(idValue: unknown, value: unknown, fence: number): PromptRevision {
-    promptInteger(fence); const id = promptId(idValue), input = parsePromptDraft(value, true), expected = input.expectedRevision!;
+  append(idValue: unknown, value: unknown, fence: PromptFence): PromptRevision {
+    fence = promptFence(fence); const id = promptId(idValue), input = parsePromptDraft(value, true), expected = input.expectedRevision!;
     return this.#transaction("edit", fence, () => {
       const totals = this.#totals(), requestDigest = this.#requestDigest("append", input, id, expected), replay = this.#retry("append", input, requestDigest);
       if (replay) return replay;
@@ -151,21 +154,21 @@ export class PromptRegistry {
       return this.#insert(input, id, expected + 1, requestDigest, now);
     });
   }
-  get(idValue: unknown, revisionValue: unknown, fence?: number): PromptRevision {
+  get(idValue: unknown, revisionValue: unknown, fence?: PromptFence): PromptRevision {
     const id = promptId(idValue), revision = promptInteger(revisionValue, L.revisionsPerPrompt);
     return this.#transaction("read", fence, () => { this.#totals(); this.#head(id); return this.#revision(id, revision); });
   }
-  compile(idValue: unknown, revisionValue: unknown, variables: unknown, fence: number): PromptCompilation {
-    promptInteger(fence); const id = promptId(idValue), revision = promptInteger(revisionValue, L.revisionsPerPrompt);
+  compile(idValue: unknown, revisionValue: unknown, variables: unknown, fence: PromptFence): PromptCompilation {
+    fence = promptFence(fence); const id = promptId(idValue), revision = promptInteger(revisionValue, L.revisionsPerPrompt);
     return this.#transaction("read", fence, () => {
       this.#totals(); this.#head(id); const prompt = this.#revision(id, revision);
       return { id, revision, templateSha256: prompt.templateSha256, compiled: literalPromptCompilation(prompt.template, variables) };
     });
   }
-  export(idValue: unknown, revisionValue: unknown, fence?: number): PromptExport {
+  export(idValue: unknown, revisionValue: unknown, fence?: PromptFence): PromptExport {
     return boundedPromptResult({ format: "runphantom-prompt/v1", prompt: this.get(idValue, revisionValue, fence) });
   }
-  history(idValue: unknown, fence?: number): { items: PromptHistoryEntry[] } {
+  history(idValue: unknown, fence?: PromptFence): { items: PromptHistoryEntry[] } {
     const id = promptId(idValue);
     return this.#transaction("read", fence, () => {
       this.#totals(); const head = this.#head(id), items: PromptHistoryEntry[] = [];
@@ -175,7 +178,7 @@ export class PromptRegistry {
       return { items };
     });
   }
-  list(cursor?: unknown, fence?: number): PromptPage {
+  list(cursor?: unknown, fence?: PromptFence): PromptPage {
     let anchor: [number, string] | null = null;
     if (cursor !== undefined) {
       if (typeof cursor !== "string" || cursor.length > 128) throw new PromptRegistryError("invalid_request");
@@ -196,8 +199,8 @@ export class PromptRegistry {
       return { items, hasMore, cursor: hasMore && last ? `${last.updatedAt}:${last.id}` : null };
     });
   }
-  delete(idValue: unknown, expectedValue: unknown, fence: number): { removed: true } {
-    promptInteger(fence); const id = promptId(idValue), expected = promptInteger(expectedValue, L.revisionsPerPrompt);
+  delete(idValue: unknown, expectedValue: unknown, fence: PromptFence): { removed: true } {
+    fence = promptFence(fence); const id = promptId(idValue), expected = promptInteger(expectedValue, L.revisionsPerPrompt);
     return this.#transaction("delete", fence, () => {
       const head = this.#head(id);
       if (head.revision !== expected) throw new PromptRegistryError("revision_conflict");
@@ -206,20 +209,21 @@ export class PromptRegistry {
       return { removed: true };
     });
   }
-  clear(value: unknown, fence: number): { removed: true; generation: number } {
+  clear(value: unknown, fence: PromptFence): { removed: true; generation: number } {
     const input = promptObject(value, ["expectedGeneration", "operationKey"]), expected = promptInteger(input.expectedGeneration);
-    promptId(input.operationKey); promptInteger(fence);
+    promptId(input.operationKey); const original = promptFence(fence);
     return this.#database.transaction(() => {
-      const generation = this.#generation("delete");
-      if (generation !== expected || generation !== fence) throw new PromptRegistryError("authority_changed");
+      const current = this.#generation("delete"), generation = current.promptGeneration;
+      if (generation !== expected || !samePromptFence(current, original)) throw new PromptRegistryError("authority_changed");
       if (generation === Number.MAX_SAFE_INTEGER) throw new PromptRegistryError("capacity");
-      this.#database.query("UPDATE evaluation_evidence_scopes SET generation=generation+1 WHERE scope_key=? AND generation=? AND active=1").run(this.#scopeKey, generation);
+      this.#database.query("UPDATE prompt_scope_controls SET generation=generation+1 WHERE scope_key=? AND generation=?").run(this.#scopeKey, generation);
       this.#database.query("DELETE FROM prompt_revisions WHERE scope_key=?").run(this.#scopeKey);
       this.#database.query("DELETE FROM prompt_heads WHERE scope_key=?").run(this.#scopeKey);
-      if (this.#generation("delete") !== generation + 1) throw new PromptRegistryError("authority_changed");
+      if (!samePromptFence(this.#generation("delete"), { promptGeneration: generation + 1, evidenceGeneration: current.evidenceGeneration })) throw new PromptRegistryError("authority_changed");
       return { removed: true as const, generation: generation + 1 };
     }).immediate();
   }
+
 }
 
 export function createLocalPromptRegistry(database: Database): PromptRegistry {

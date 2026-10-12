@@ -21,7 +21,8 @@ draft has unsaved changes.
 Team viewers can read, compile and export; editors can create and append;
 administrators can remove prompts or clear all prompt content. The server uses
 the authenticated project membership and its existing private SQLite connection.
-It rechecks current role and request authority before reading an awaited body,
+It captures independent prompt and evidence request generations and rechecks the
+current role and both counters before reading an awaited body,
 inside the transaction and before publishing a response. Project identifiers or
 authority supplied in a body cannot select another owner. Ingestion keys do not
 grant prompt access.
@@ -30,9 +31,10 @@ Removing a prompt permanently removes every revision's content and retains only
 a reserved identity and operation digest to prevent old saves from recreating
 it. These reservations count toward capacity. **Clear all prompts** requires an
 explicit irreversible-removal confirmation. It removes prompt content and those
-reservations only, rotates current request authority before deletion, and retains
+reservations only, rotates prompt request authority before deletion, and retains
 other captured work. Clearing external reports or restarting the application
-preserves prompt history.
+preserves prompt history. Prompt clear also preserves exact completed report
+discovery; report clear fences held prompt requests through its evidence counter.
 
 Storage is limited to 100 reserved prompt identities per scope, 1,000 globally,
 32 revisions per prompt, 10,000 revisions globally and 32 MiB of retained logical
@@ -50,5 +52,6 @@ The local workspace and its bounded router use the existing selected local
 SQLite owner. In this branch the local server mount and canonical migration
 registration remain pending the coordinator's migration sequence. The local UI
 reports an unavailable registry until that installation is complete. Team schema
-version 3 installs the same two additive prompt tables and immutable-update
-trigger through a preservation upgrade from the supported version 2 database.
+version 3 installs the same two additive content tables, one prompt scope-control
+table and immutable-update trigger through a preservation upgrade from the
+supported version 2 database.

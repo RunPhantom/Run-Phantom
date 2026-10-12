@@ -29,6 +29,15 @@ export class PromptRegistryError extends Error {
   }
 }
 export type PromptCapability = "read" | "edit" | "delete";
+/** Internal request authority only; never accepted as a public request field. */
+export interface PromptFence { readonly promptGeneration: number; readonly evidenceGeneration: number }
+export function promptFence(value: unknown): PromptFence {
+  const input = promptObject(value, ["promptGeneration", "evidenceGeneration"]);
+  return Object.freeze({ promptGeneration: promptInteger(input.promptGeneration), evidenceGeneration: promptInteger(input.evidenceGeneration) });
+}
+export function samePromptFence(left: PromptFence, right: PromptFence): boolean {
+  return left.promptGeneration === right.promptGeneration && left.evidenceGeneration === right.evidenceGeneration;
+}
 export interface PromptDraft { operationKey: string; name: string; template: string; variableNames: string[] }
 export interface PromptRevision {
   id: string; revision: number; name: string; template: string; templateSha256: string;
