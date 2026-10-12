@@ -221,6 +221,48 @@ test("Team evidence reparse and retention report current availability without ch
   } finally { await f.close(); }
 });
 
+test("Team editors reparse retained reports without gaining raw download authority", async () => {
+  const f = await fixture();
+  try {
+    await f.capture();
+    const editor = await f.member("editor"), viewer = await f.member("viewer");
+    const upload = await f.call("POST", f.base + "/imports", f.frame("editor-reparse-original"), editor, { "Content-Type": EVIDENCE_IMPORT_CONTENT_TYPE });
+    expect(upload.status).toBe(202);
+    const original = await f.completed(upload.json.job.id, editor);
+    expect(original.json.job.status).toBe("completed");
+    const id = original.json.job.setId;
+    const before = await f.call("GET", `${f.base}/sets/${id}?revision=1`, undefined, viewer);
+    expect(before.status).toBe(200);
+    expect((await f.call("GET", `${f.base}/sets/${id}/raw/report-1?revision=1`, undefined, editor)).status).toBe(403);
+    const body = { expectedRevision: 1, operationKey: "editor-reparse-next" };
+    expect((await f.call("POST", `${f.base}/sets/${id}/reparse`, body, viewer)).status).toBe(403);
+    const reparse = await f.call("POST", `${f.base}/sets/${id}/reparse`, body, editor);
+    expect(reparse.status).toBe(202);
+    const completed = await f.completed(reparse.json.job.id, editor);
+    expect(completed.json.job.status).toBe("completed");
+    expect(completed.json.job.setId).toBe(id);
+    const next = await f.call("GET", `${f.base}/sets/${id}?revision=2`, undefined, viewer);
+    expect(next.status).toBe(200);
+    expect(next.json.sources[0].normalized).toEqual(before.json.sources[0].normalized);
+    expect((await f.call("GET", `${f.base}/sets/${id}?revision=1`, undefined, viewer)).json).toEqual(before.json);
+    const retry = await f.call("POST", `${f.base}/sets/${id}/reparse`, body, editor);
+    expect(retry.status).toBe(202);
+    expect(retry.json.reused).toBe(true);
+    expect(retry.json.job.id).toBe(reparse.json.job.id);
+    expect(f.sql("SELECT count(*) AS n FROM evaluation_evidence_sets WHERE id=?", id)).toEqual({ n: 2 });
+    expect((await f.call("GET", `${f.base}/capabilities`, undefined, editor)).json.access).toEqual(["normalized_read", "import"]);
+    expect((await f.call("GET", `${f.base}/sets/${id}/raw/report-1?revision=2`, undefined, editor)).status).toBe(403);
+    expect((await f.call("GET", `${f.base}/sets/${id}/raw/report-1?revision=2`, undefined, f.owner)).text).toBe(new TextDecoder().decode(sourceBytes));
+    expect((await f.call("DELETE", `${f.base}/sets/${id}/retention/raw?revision=2`, undefined, f.owner)).json.removed).toBe(1);
+    expect((await f.call("POST", `${f.base}/sets/${id}/reparse`, { expectedRevision: 2, operationKey: "editor-reparse-removed" }, editor)).status).toBe(404);
+    expect((await f.call("PATCH", `/api/team/projects/${f.project.id}/members/${editor.userId}`, { role: "viewer" }, f.owner)).status).toBe(200);
+    const jobs = f.sql("SELECT count(*) AS n FROM evaluation_evidence_jobs");
+    expect((await f.call("POST", `${f.base}/sets/${id}/reparse`, { expectedRevision: 2, operationKey: "editor-reparse-revoked" }, editor)).status).toBe(403);
+    expect(f.sql("SELECT count(*) AS n FROM evaluation_evidence_jobs")).toEqual(jobs);
+    expect((await f.call("GET", `/api/team/projects/${f.project.id}/runs/${runId}/spans/${spanId}`, undefined, viewer)).json.outputPayload).toBe("Exact captured output");
+  } finally { await f.close(); }
+});
+
 test("actual admin clear reaps a revoked editor held frame and preserves another project's generation", async () => {
   const f = await fixture(); let upload: ReturnType<typeof httpRequest> | undefined;
   try {

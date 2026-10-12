@@ -166,11 +166,11 @@ export class EvidenceImportService {
           sourceId: source.sourceId, kind: source.kind, dialect: source.dialect, shardId: source.shardId, artifactSha256: source.artifactSha256, byteLength: source.byteLength,
         })), inventory: Object.hasOwn(input, "inventory") ? input.inventory : previous.inventory ? { id: previous.inventory.id, revision: previous.inventory.revision } : null,
         retention: input.retention ?? previous.initialRetention });
-      owner.database.transaction(() => owner.authorize("raw_export", previous.attachment)).immediate();
+      owner.database.transaction(() => owner.authorize("import", previous.attachment)).immediate();
       entry.draft = draft; entry.admission = new EvidenceInventories(owner).admit(draft);
       if (entry.admission.reused) { const job = owner.store.getJob(entry.admission.job.id); this.#release(entry); return { job, reused: true, timings: this.timings(owner, job.id) }; }
       await this.#wait(entry, entry.controller.signal);
-      const acquired = performance.now(), sources = previous.sources.map(source => ({ sourceId: source.sourceId, bytes: owner.store.exportRaw(previous.id, revision, source.sourceId) }));
+      const acquired = performance.now(), sources = previous.sources.map(source => ({ sourceId: source.sourceId, bytes: owner.store.readRawForReparse(previous.id, revision, source.sourceId) }));
       entry.captured = true;
       entry.acquisitionWallMs = performance.now() - acquired;
       entry.worker = this.#supervisor.submit({ jobId: entry.admission.job.id, publicationToken: entry.admission.publicationToken, scopeGeneration: entry.admission.job.scopeGeneration,
