@@ -47,6 +47,38 @@ test("metadata-only and missing-roster streams never become complete from ended 
 
 import { publicCaptureMetadata, CAPTURE_LIMITS, sanitizeCaptureFilter } from "../src/spans/adapters/capture-visibility";
 
+test("every cached kind removes F16 DTOs when source does not establish captured operations", () => {
+  for (const spanType of [null, undefined, 0, {}, "FUTURE_KIND", "UNKNOWN", "INTERNAL", "TRACE", "AGENT_ROOT", "LLM_GENERATION", "TOOL_CALL", "RETRIEVAL", "EMBEDDING"]) {
+    for (const kind of ["retrieval", "embedding"]) {
+      const row = { id: "original-span", run_id: "original-run", span_type: spanType, status: "ERROR", attributes: "{}", otlp_evidence: null,
+        input_payload: '{"db.filter":"ordinary literal input"}', output_payload: "ordinary output",
+        normalized: { kind, filter: filterSecret }, captureVisibility: { schemaVersion: 1, stream: { state: "completed" }, retrieval: { filter: filterSecret } } };
+      const projected = publicCaptureMetadata(row);
+      expect(projected.captureVisibility).toBeUndefined(); expect(projected.normalized).toBeUndefined();
+      for (const key of ["id", "run_id", "span_type", "status", "input_payload", "output_payload"] as const) expect(projected[key]).toEqual(row[key]);
+    }
+  }
+});
+test("contradictory cached kind cannot grant capture authority and legitimate LLM/tool normalization stays literal", () => {
+  const source = captureTrace(), retrieval = parseOtlpRequest(source.body)[0], embedding = parseOtlpRequest(source.body)[1];
+  for (const [spanType, attrs, receipt] of [
+    ["RETRIEVAL", { "gen_ai.operation.name": "embeddings" }, null],
+    ["EMBEDDING", retrieval.attributes, JSON.stringify(retrieval.otlpEvidence)],
+    ["RETRIEVAL", retrieval.attributes, JSON.stringify(embedding.otlpEvidence)],
+    ["RETRIEVAL", { ...retrieval.attributes, "runphantom.span.kind": "tool_call" }, null],
+    ["RETRIEVAL", { ...retrieval.attributes, "openinference.span.kind": "LLM" }, null],
+    ["RETRIEVAL", { ...retrieval.attributes, "runphantom.span.kind": "retrieval", "openinference.span.kind": "EMBEDDING" }, null],
+  ] as const) {
+    const row = { span_type: spanType, attributes: JSON.stringify(attrs), otlp_evidence: receipt, normalized: { kind: "retrieval", filter: filterSecret }, captureVisibility: { stream: { state: "completed" } } };
+    const projected = publicCaptureMetadata(row); expect(projected.captureVisibility).toBeUndefined(); expect(projected.normalized).toBeUndefined();
+  }
+  for (const [span_type, kind] of [["LLM_GENERATION", "llm"], ["TOOL_CALL", "tool"]]) {
+    const normalized = { kind, content: '{"db.filter":"literal authoritative content"}' };
+    const projected = publicCaptureMetadata({ span_type, attributes: "{}", otlp_evidence: null, normalized, captureVisibility: { stream: { state: "completed" } } });
+    expect(projected.normalized).toBe(normalized); expect(projected.captureVisibility).toBeUndefined();
+  }
+});
+
 test("malformed and ambiguous decoded owned carriers are withheld without reinterpreting ordinary bodies", () => {
   const business = '{"db.filter":"literal authoritative body"}';
   for (const attributes of [

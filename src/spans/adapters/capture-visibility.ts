@@ -146,16 +146,32 @@ export function publicCaptureMetadata<T extends { attributes?: unknown; otlp_evi
     if (receiptChanged) { receipt = JSON.stringify(evidence); changed = true; }
   }
   const projected = changed ? { ...row, attributes, otlp_evidence: receipt } : row;
-  // Cached DTOs are not source authority. Rebuild only F16's view from the
-  // exact stored receipt, rather than trusting a previously serialized view.
+  // Strip owned serialized views before every kind branch. LLM/tool
+  // normalization and ordinary payloads retain their existing authority.
+  let clean = projected as T & { captureVisibility?: unknown; normalized?: unknown };
+  const staleOperation = ["retrieval", "embedding"].includes(own(own(projected, "normalized"), "kind") as string);
+  if (Object.hasOwn(projected, "captureVisibility") || staleOperation) {
+    clean = { ...projected }; delete clean.captureVisibility;
+    if (staleOperation) delete clean.normalized;
+  }
   const spanType = own(row, "span_type");
-  if (!["RETRIEVAL", "EMBEDDING", "LLM_GENERATION", "TOOL_CALL", "TRACE", "AGENT_ROOT", "INTERNAL"].includes(String(spanType))) return projected;
+  if (typeof spanType !== "string" || !["RETRIEVAL", "EMBEDDING", "LLM_GENERATION", "TOOL_CALL", "TRACE", "AGENT_ROOT", "INTERNAL"].includes(spanType)) return clean;
   let flat: AdapterInput["attrs"] = {};
   try { if (typeof attributes === "string") { const parsed: unknown = JSON.parse(attributes); if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) flat = parsed as AdapterInput["attrs"]; } } catch { /* Missing metadata stays unavailable. */ }
-  const capture = captureVisibility({ spanName: "", spanType: spanType as AdapterInput["spanType"], attrs: flat,
+  const source = readCaptureReceipt(receipt), sourceAttrs = source ? fields(source.attributes) : flat;
+  const oiKind = sourceAttrs["openinference.span.kind"];
+  const sourceKind = oiKind === "EMBEDDING" ? "EMBEDDING" : oiKind === "RETRIEVER" ? "RETRIEVAL" : captureKind(sourceAttrs as AdapterInput["attrs"]);
+  const priorRole = ["agent_root", "trace", "llm_call", "tool_call"].includes(sourceAttrs["runphantom.span.kind"] as string)
+    || ["tool", "llm"].includes(sourceAttrs["traceloop.span.kind"] as string)
+    || ["LLM", "TOOL", "AGENT", "CHAIN", "RERANKER", "GUARDRAIL", "EVALUATOR", "PROMPT"].includes(sourceAttrs["openinference.span.kind"] as string)
+    || ["execute_tool", "invoke_agent", "invoke_workflow"].includes(sourceAttrs["gen_ai.operation.name"] as string)
+    || ["ai.toolCall.name", "tool.name", "lk.function_tool.name"].some(key => typeof sourceAttrs[key] === "string" && sourceAttrs[key]);
+  const captureType = ["RETRIEVAL", "EMBEDDING"].includes(spanType)
+    && (priorRole || sourceKind !== spanType) ? "INTERNAL" : spanType;
+  const capture = captureVisibility({ spanName: "", spanType: captureType as AdapterInput["spanType"], attrs: flat,
     traceId: typeof own(row, "run_id") === "string" ? own(row, "run_id") as string : undefined,
-    spanId: typeof own(row, "id") === "string" ? own(row, "id") as string : undefined, otlpEvidence: readCaptureReceipt(receipt) });
-  return { ...projected, captureVisibility: capture,
+    spanId: typeof own(row, "id") === "string" ? own(row, "id") as string : undefined, otlpEvidence: source });
+  return { ...clean, captureVisibility: capture,
     ...(capture?.retrieval ? { normalized: capture.retrieval } : capture?.embedding ? { normalized: capture.embedding } : {}) };
 
 }

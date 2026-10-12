@@ -48,6 +48,50 @@ afterAll(async () => {
 });
 async function json(route: string) { const response = await fetch(base + route); expect(response.status).toBe(200); return response.json(); }
 async function post(route: string, data: unknown) { return fetch(base + route, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }); }
+for (const spanType of [null, "INTERNAL"] as const) {
+  test(`actual saved-cache ${spanType} strips untrusted capture and operation DTOs`, async () => {
+    const fixture = captureTrace(1810); expect((await post("/v1/traces", fixture.body)).status).toBe(200);
+    const original = await json(`/api/runs/detail/${fixture.id}`), id = (spanType === null ? 1811 : 1812).toString(16).padStart(32, "0");
+    const row = { ...original.spans[0], run_id: id, span_type: spanType, attributes: "{}", otlp_evidence: null,
+      input_payload: '{"db.filter":"literal authoritative body"}', output_payload: "Ordinary output remains literal",
+      normalized: { kind: "retrieval", filter: filterSecret }, captureVisibility: { schemaVersion: 1, retrieval: { filter: filterSecret }, stream: { state: "completed" } } };
+    const data = { run: { ...original.run, id }, spans: [row], liveEvents: [] };
+    expect((await fetch(`${base}/api/saved-runs/cache/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })).status).toBe(200);
+    const database = new Database(path.join(directory, "capture.db"), { readonly: true });
+    const stored = database.query("SELECT data FROM saved_run_cache WHERE id=?").get(id) as { data: string }; database.close();
+    expect(stored.data).toBe(JSON.stringify(data)); expect(stored.data).toContain(filterSecret);
+    const responses = [];
+    for (const route of [`/api/runs/detail/${id}`, `/api/saved-runs/cache/${id}`, `/api/runs/${id}/export`]) {
+      const response = await fetch(base + route), text = await response.text(); expect(response.status).toBe(200); expect(text).not.toContain(filterSecret);
+      const projected = JSON.parse(text).spans[0]; expect(projected.captureVisibility).toBeUndefined(); expect(projected.normalized).toBeUndefined();
+      for (const key of ["id", "run_id", "span_type", "status", "input_payload", "output_payload"] as const) expect(projected[key]).toEqual(row[key]);
+      responses.push({ route, status: response.status, credentialWithheld: !text.includes(filterSecret), sourceFieldsPreserved: true, staleDtosRemoved: true });
+    }
+    proof(`http-cache-dto-${spanType}.json`, { ownedPid: daemon.pid, spanType, privateBytesUnchanged: stored.data === JSON.stringify(data), responses });
+  });
+}
+test("actual saved cache rebuilds canonical operations and lifecycle from valid source rather than serialized DTOs", async () => {
+  const fixture = captureTrace(1820), parsed = parseOtlpRequest(fixture.body);
+  expect((await post("/v1/traces", fixture.body)).status).toBe(200);
+  const original = await json(`/api/runs/detail/${fixture.id}`), id = "0000000000000000000000000000071d";
+  const spans = original.spans.map((span: any, index: number) => ({ ...span, run_id: id,
+    attributes: JSON.stringify(parsed[index].attributes), otlp_evidence: JSON.stringify(parsed[index].otlpEvidence),
+    ...(index < 2 ? { normalized: { kind: index === 0 ? "embedding" : "retrieval", filter: filterSecret } } : {}),
+    captureVisibility: { schemaVersion: 1, stream: { state: "completed", chunks: [{ text: filterSecret }] }, retrieval: { filter: filterSecret } } }));
+  const data = { run: { ...original.run, id }, spans, liveEvents: [] };
+  expect((await fetch(`${base}/api/saved-runs/cache/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })).status).toBe(200);
+  const database = new Database(path.join(directory, "capture.db"), { readonly: true });
+  const stored = database.query("SELECT data FROM saved_run_cache WHERE id=?").get(id) as { data: string }; database.close(); expect(stored.data).toBe(JSON.stringify(data));
+  for (const route of [`/api/runs/detail/${id}`, `/api/saved-runs/cache/${id}`, `/api/runs/${id}/export`]) {
+    const response = await fetch(base + route); expect(response.status).toBe(200); const current = await response.json(); expect(JSON.stringify(current)).not.toContain(filterSecret);
+    expect(current.spans[0].normalized).toMatchObject({ kind: "retrieval", collection: "manuals", resultCount: 0 });
+    expect(current.spans[1].normalized).toMatchObject({ kind: "embedding", dimensions: 1536 });
+    expect(current.spans[2].captureVisibility.stream).toMatchObject({ state: "completed", chunks: [{ text: "Hello " }, { text: "world" }] });
+    expect(current.spans[3].captureVisibility.stream.state).toBe("cancelled");
+    expect(current.spans[2].normalized).toEqual(original.spans[2].normalized); expect(current.spans[2].output_payload).toBe(captureOutput);
+  }
+  proof("http-cache-dto-source-positive.json", { ownedPid: daemon.pid, privateBytesUnchanged: true, canonicalOperationsRebuilt: true, streamSourceRosterUsed: true, cancellationPreserved: true, authoritativeLlmNormalizationPreserved: true });
+});
 for (const variant of ["valid", "escaped-invalid-receipt", "malformed-attributes"] as const) {
   test(`actual saved-cache ${variant} never publishes owned filter credentials`, async () => {
     const fixture = captureTrace(1710), parsed = parseOtlpRequest(fixture.body)[0];
