@@ -45,6 +45,68 @@ async function screenshot(page: import("@playwright/test").Page, info: import("@
   await info.attach(name, { path, contentType: "image/png" });
 }
 
+type TimelineTouchProbe = { starts: number; moves: number; untrusted: number; singleFinger: boolean; cleanup: () => void };
+type ObservedTouchElement = Element & { timelineTouchProbe?: TimelineTouchProbe };
+
+async function scrollWithDeliveredTouch(
+  page: import("@playwright/test").Page, touch: import("@playwright/test").CDPSession,
+  target: import("@playwright/test").Locator, vertical: import("@playwright/test").Locator,
+  direction: "vertical" | "horizontal", info: import("@playwright/test").TestInfo,
+) {
+  const region = (await vertical.boundingBox())!, box = (await target.boundingBox())!, viewport = page.viewportSize()!;
+  expect(region).not.toBeNull(); expect(box).not.toBeNull(); expect(viewport).not.toBeNull();
+  const left = Math.max(0, region.x, box.x) + 24, right = Math.min(viewport.width, region.x + region.width, box.x + box.width) - 24;
+  const top = Math.max(0, region.y, box.y) + 24, bottom = Math.min(viewport.height, region.y + region.height, box.y + box.height) - 24;
+  expect(right - left).toBeGreaterThan(32); expect(bottom - top).toBeGreaterThan(32);
+  const start = direction === "vertical" ? { x: left, y: bottom } : { x: right, y: top };
+  const end = direction === "vertical" ? { x: start.x, y: Math.max(top, start.y - 120) } : { x: Math.max(left, start.x - 120), y: start.y };
+  const points = Array.from({ length: 13 }, (_, step) => ({ x: start.x + (end.x - start.x) * step / 12, y: start.y + (end.y - start.y) * step / 12 }));
+  expect(await target.evaluate((element, points) => points.every(point => {
+    const hit = document.elementFromPoint(point.x, point.y);
+    return hit !== null && element.contains(hit);
+  }), points)).toBe(true);
+  const before = await target.evaluate(element => ({ top: element.scrollTop, left: element.scrollLeft }));
+  await target.evaluate(element => {
+    const probe: TimelineTouchProbe = { starts: 0, moves: 0, untrusted: 0, singleFinger: true, cleanup: () => {
+      element.removeEventListener("touchstart", observe); element.removeEventListener("touchmove", observe);
+    } };
+    function observe(event: Event) {
+      if (!(event instanceof TouchEvent)) return;
+      if (!event.isTrusted) probe.untrusted++;
+      if (event.touches.length !== 1) probe.singleFinger = false;
+      if (event.type === "touchstart") probe.starts++;
+      if (event.type === "touchmove") probe.moves++;
+    }
+    element.addEventListener("touchstart", observe, { passive: true });
+    element.addEventListener("touchmove", observe, { passive: true });
+    (element as ObservedTouchElement).timelineTouchProbe = probe;
+  });
+  let receipt;
+  try {
+    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ ...start, id: 1, radiusX: 1, radiusY: 1, force: 1 }] });
+    for (const point of points.slice(1)) {
+      await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ ...point, id: 1, radiusX: 1, radiusY: 1, force: 1 }] });
+      // Advance browser frames so the gesture reaches default scrolling rather than a synchronous input burst.
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+    }
+  } finally {
+    try { await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] }); }
+    finally {
+      receipt = await target.evaluate(element => {
+        const probe = (element as ObservedTouchElement).timelineTouchProbe!;
+        probe.cleanup(); delete (element as ObservedTouchElement).timelineTouchProbe;
+        return { starts: probe.starts, moves: probe.moves, untrusted: probe.untrusted, singleFinger: probe.singleFinger };
+      });
+    }
+  }
+  expect(receipt.starts).toBe(1); expect(receipt.moves).toBeGreaterThan(0);
+  expect(receipt.untrusted).toBe(0); expect(receipt.singleFinger).toBe(true);
+  await info.attach(`delivered-touch-${direction}-${viewport.width}`, { contentType: "application/json", body: JSON.stringify({
+    source: "CDP single-finger browser input", direction, region, box, viewport, start, end, hitTestedPoints: points.length,
+    receipt, before, after: await target.evaluate(element => ({ top: element.scrollTop, left: element.scrollLeft })),
+  }) });
+}
+
 test("timeline baseline: exact span population, tool action and captured output survive layout work", async ({ page, request, runPhantom }, testInfo) => {
   await seedRunPhantomFixtures(runPhantom.url);
   const detailUrl = `${runPhantom.url}/api/runs/detail/${FIXTURE_PRIMARY_RUN_ID}`;
@@ -334,13 +396,11 @@ test.describe("compact timeline touch", () => {
           return offsets;
         });
         const beforeOffsets = await ancestorOffsets();
-        const box = (await vertical.boundingBox())!;
-        await touch.send("Input.synthesizeScrollGesture", { x: box.x + 24, y: Math.min(box.y + box.height - 24, page.viewportSize()!.height - 96), yDistance: -600, speed: 800, gestureSourceType: "touch", preventFling: true });
+        await scrollWithDeliveredTouch(page, touch, vertical, vertical, "vertical", info);
         await expect.poll(() => vertical.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
         expect(await ancestorOffsets()).toEqual(beforeOffsets);
         const axis = timeline.getByRole("region", { name: "Trace time axis", exact: true });
-        const axisBox = (await axis.boundingBox())!;
-        await touch.send("Input.synthesizeScrollGesture", { x: axisBox.x + 40, y: Math.min(box.y + 40, page.viewportSize()!.height - 96), xDistance: -600, speed: 800, gestureSourceType: "touch", preventFling: true });
+        await scrollWithDeliveredTouch(page, touch, axis, vertical, "horizontal", info);
         await expect.poll(() => axis.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
         const last = timeline.locator(`[data-timeline-span-id="${spanId(212)}"]`);
         await last.scrollIntoViewIfNeeded();
