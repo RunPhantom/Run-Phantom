@@ -10,6 +10,7 @@ import { Database } from "bun:sqlite";
 import { createVerificationService } from "../src/verification/service";
 import { createVerificationRouter } from "../src/verification/router";
 import { closeDb, getDrizzleDb } from "../src/db";
+import { VERIFICATION_LIMITS as L } from "../src/verification/protocol";
 const coverage = { network: true, console: true, state: true, signal: true, dom: true, route: true };
 let dir: string, previous: string | undefined;
 beforeAll(() => { dir = mkdtempSync(path.join(tmpdir(), "rp-business-")); previous = process.env.RUNPHANTOM_DB_PATH; closeDb(); process.env.RUNPHANTOM_DB_PATH = path.join(dir, "business.db"); getDrizzleDb(); });
@@ -82,4 +83,56 @@ test("delayed response preserves start action identity across the next action", 
     const response = await f.api(`/sessions/${f.created.id}/assert`, { predicate, since: next.body.cursor }); expect(response.body.status).toBe("inconclusive");
     const observed = await f.api(`/sessions/${f.created.id}/events`); expect(observed.body.events.filter((event: any) => event.type === "network.body").every((event: any) => event.actionId === old)).toBe(true);
   } finally { await f.close(); }
+});
+
+for (const mode of ["reuse", "headers", "start", "different-operation"]) test(`later ${mode} lifecycle cannot borrow an earlier business PASS`, async () => {
+    const f = await fixture();
+    try {
+      f.source("n1");
+      if (mode === "different-operation") f.source("n2", undefined, { operationId: "another-order", result: "paid" });
+      else {
+        const id = mode === "reuse" ? "n1" : "n2";
+        f.send("network.start", { requestId: id, url: "http://localhost:4321/order", method: "POST", initiator: "fetch" });
+        if (mode !== "start") f.send("network", { requestId: id, url: "http://localhost:4321/order", method: "POST", initiator: "fetch", status: 200, ok: true, durationMs: 1 });
+        if (mode === "reuse") f.send("network.body", { requestId: id, source: "sdk-reported", state: "pending", format: "json", bytes: 0, chunks: 0 });
+      }
+      await pause();
+      const result = await f.api(`/sessions/${f.created.id}/assert`, { predicate, since: f.cursor });
+      expect(result.status).toBe(200); expect(result.body.status, mode).toBe("inconclusive");
+      const db = new Database(process.env.RUNPHANTOM_DB_PATH!, { readonly: true });
+      try { expect((db.query("SELECT status FROM verification_reports WHERE id = ?").get(result.body.id) as { status: string }).status).toBe("inconclusive"); } finally { db.close(); }
+      if (mode === "reuse") {
+        const observed = await f.api(`/sessions/${f.created.id}/events`);
+        expect(observed.body.complete).toBe(false); expect(observed.body.events.some((event: any) => event.type === "capture.loss")).toBe(true);
+      }
+      if (mode === "headers") {
+        const metadata = await f.api(`/sessions/${f.created.id}/assert`, { predicate: { kind: "network", urlContains: "/order", status: 200 }, since: f.cursor });
+        expect(metadata.body.status).toBe("pass");
+      }
+    } finally { await f.close(); }
+});
+
+test("generation request identity history is bounded and reset only by connection invalidation", async () => {
+  const f = await fixture(); let replacement: WebSocket | undefined;
+  try {
+    for (let index = 0; index < L.MAX_EVENTS; index++) f.source(`n${index}`);
+    const session = f.service.bridge.get(f.created.id);
+    for (let attempt = 0; attempt < 200 && session.responseRequestIds?.size !== L.MAX_EVENTS; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+    expect(session.responseRequestIds.size).toBe(L.MAX_EVENTS); expect(session.bodyRequests.size).toBe(0);
+    f.send("network.start", { requestId: "over-cap", url: "http://localhost:4321/order", method: "POST", initiator: "fetch" }); await pause();
+    expect(session.responseRequestIds.size).toBe(L.MAX_EVENTS); expect(session.requests.has("over-cap")).toBe(false); expect(session.captureLost).toBe(true);
+    f.ws.close(); await once(f.ws, "close"); await pause();
+    expect(session.responseRequestIds.size).toBe(0); expect(session.bodyRequests.size).toBe(0);
+    replacement = new WebSocket(f.ws.url, { headers: { Origin: f.created.origin } }); await once(replacement, "open");
+    const ready = once(replacement, "message"); replacement.send(JSON.stringify({ type: "hello", version: 4, token: f.created.token, coverage, capabilities: ["business-response-evidence"] })); await ready;
+    replacement.on("message", raw => { const message = JSON.parse(raw.toString()); if (message.type === "command") replacement!.send(JSON.stringify({ type: "result", id: message.id, ok: true, result: { count: 1 } })); });
+    const cursor = session.cursor;
+    const send = (type: string, data: unknown) => replacement!.send(JSON.stringify({ type: "event", event: { type, data } }));
+    send("network.start", { requestId: "n0", url: "http://localhost:4321/order", method: "POST", initiator: "fetch" });
+    send("network", { requestId: "n0", url: "http://localhost:4321/order", method: "POST", initiator: "fetch", status: 200, ok: true, durationMs: 1 });
+    send("network.body", { requestId: "n0", source: "sdk-reported", state: "pending", format: "json", bytes: 0, chunks: 0 });
+    send("network.body", { requestId: "n0", source: "sdk-reported", state: "complete", format: "json", bytes: 60, chunks: 1, body: { operationId: "order-21", result: "paid" } }); await pause();
+    const healthy = await f.api(`/sessions/${f.created.id}/assert`, { predicate, since: cursor });
+    expect(healthy.body.status).toBe("pass"); expect(session.responseRequestIds.size).toBe(1); expect(session.captureLost).toBe(false);
+  } finally { replacement?.terminate(); await f.close(); }
 });

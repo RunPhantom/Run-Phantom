@@ -84,3 +84,20 @@ test("strict body envelope refuses partial content and impossible completion", (
   expect(() => parsePredicate({ ...contract, path: "password" })).toThrow();
   expect(() => parsePredicate({ ...contract, operationPath: "__proto__.id" })).toThrow();
 });
+
+test("later matching starts and headers remain unresolved even without a body event", () => {
+  const p = parsePredicate(contract);
+  for (const type of ["network.start", "network"]) {
+    const extra = event(type, { requestId: "n2", url: "http://localhost/order", method: "POST", status: 200 }, 5);
+    expect(evaluatePredicate(p, context({ operationId: "order-21", result: "paid" }, [extra])).status).toBe("inconclusive");
+  }
+  const reused = event("network.start", { requestId: "n1", url: "http://localhost/order", method: "POST" }, 5);
+  expect(evaluatePredicate(p, context({ operationId: "order-21", result: "paid" }, [reused])).status).toBe("inconclusive");
+  const concurrent = context({ operationId: "order-21", result: "paid" });
+  concurrent.events.splice(2, 0, event("network.start", { requestId: "n2", url: "http://localhost/order", method: "POST" }, 2.5));
+  expect(evaluatePredicate(p, concurrent).status).toBe("inconclusive");
+  const unrelated = event("network.start", { requestId: "n2", url: "http://localhost/unrelated", method: "POST" }, 5);
+  expect(evaluatePredicate(p, context({ operationId: "order-21", result: "paid" }, [unrelated])).status).toBe("pass");
+  const newer = context({ operationId: "order-21", result: "paid" }).events.map(entry => ({ ...entry, t: entry.t + 4, data: { ...entry.data, requestId: "n2" } }));
+  expect(evaluatePredicate(p, context({ operationId: "order-21", result: "paid" }, newer)).status).toBe("pass");
+});

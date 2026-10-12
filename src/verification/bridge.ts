@@ -65,6 +65,7 @@ export interface VerificationSession {
   pending: Pending | null;
   requests: Map<string, { actionId?: string }>;
   bodyRequests: Map<string, { actionId?: string; url: unknown; method: unknown; status?: number; pending: boolean }>;
+  responseRequestIds: Set<string>;
   currentActionId?: string;
   lastCausalResult?: CapturedCausalDispatch;
   lastCommandCursor: number;
@@ -111,7 +112,7 @@ export class VerificationBridge {
     const session: VerificationSession = { id, origin: appOrigin, runId: runId as string | null ?? null,
       token: randomBytes(32).toString("hex"), createdAt: Date.now(), expires, ws: null, generation: 0,
       coverage: emptyCoverage(), capabilities: [], cursor: 0, events: new RingBuffer(), dropped: 0, lossCursor: 0, captureLost: false, generationCursor: 0,
-      lastActivity: Date.now(), pending: null, requests: new Map(), bodyRequests: new Map(), lastCommandCursor: 0, busy: false, secrets: [] };
+      lastActivity: Date.now(), pending: null, requests: new Map(), bodyRequests: new Map(), responseRequestIds: new Set(), lastCommandCursor: 0, busy: false, secrets: [] };
     session.secrets.push(session.token);
     this.sessions.set(id, session);
     this.options.broadcast("verification_session", this.summary(session));
@@ -142,6 +143,7 @@ export class VerificationBridge {
     session.capabilities = [];
     session.requests.clear();
     session.bodyRequests.clear();
+    session.responseRequestIds.clear();
     session.currentActionId = undefined;
     session.lastCausalResult = undefined;
     if (session.pending) {
@@ -290,6 +292,15 @@ export class VerificationBridge {
       if (typeof requestId !== "string" || !requestId || requestId.length > 128 || session.requests.has(requestId)) throw new Error("invalid request identity");
       if (session.requests.size >= L.MAX_EVENTS) { this.loss(session, "Pending network capture limit reached"); return; }
       if (event.actionId !== session.currentActionId) { this.loss(session, "Network request action attribution did not match its observed start boundary"); return; }
+      if (session.capabilities.includes(BUSINESS_CAPABILITY)) {
+        if (session.responseRequestIds.has(requestId)) {
+          // Retain the bounded observed lifecycle for inspection; this generation has permanently lost proof authority.
+          this.loss(session, "Response request identity was reused within its connection generation");
+        } else {
+          if (session.responseRequestIds.size >= L.MAX_EVENTS) { this.loss(session, "Response identity history limit reached"); return; }
+          session.responseRequestIds.add(requestId);
+        }
+      }
       session.requests.set(requestId, { actionId: event.actionId });
       if (session.capabilities.includes(BUSINESS_CAPABILITY)) {
         if (session.bodyRequests.has(requestId) || session.bodyRequests.size >= L.MAX_EVENTS) { this.loss(session, "Response identity capture limit or duplicate start"); return; }

@@ -105,9 +105,11 @@ export function evaluatePredicate(predicate: Predicate, context: EvaluationConte
     }
     if (hasUnavailableValue(predicate.equals) || hasUnavailableValue(predicate.operationId)) return unknown("Unavailable expectations cannot establish a business contract.");
     const relevant = context.events.filter(event => context.actionId === undefined || event.actionId === context.actionId || event.type === "state");
-    const starts = new Map(relevant.filter(event => event.type === "network.start" && !event.truncated
+    const matchingStarts = relevant.filter(event => event.type === "network.start"
       && typeof event.data.url === "string" && !hasUnavailableValue(event.data.url) && event.data.url.includes(predicate.urlContains)
-      && (predicate.method === undefined || event.data.method === predicate.method)).map(event => [event.data.requestId, event]));
+      && (predicate.method === undefined || event.data.method === predicate.method));
+    if (new Set(matchingStarts.map(event => event.data.requestId)).size !== matchingStarts.length) return unknown("Response request identities were reused; an older body cannot identify a later request.", matchingStarts);
+    const starts = new Map(matchingStarts.filter(event => !event.truncated).map(event => [event.data.requestId, event]));
     const responses = relevant.filter(event => event.type === "network" && !event.truncated && starts.has(event.data.requestId));
     const identities = new Set(responses.map(event => event.data.requestId));
     const bodies = relevant.filter(event => event.type === "network.body" && identities.has(event.data.requestId));
@@ -117,6 +119,12 @@ export function evaluatePredicate(predicate: Predicate, context: EvaluationConte
     const body = matched.at(-1);
     if (!body) return unknown("No complete response with the declared operation identity was observed. Headers and idle streams do not establish completion.", bodies);
     if (body.truncated || body.data.redacted === true || hasUnavailableValue(body.data.body)) return unknown("The response body was redacted or truncated; the business contract remains unknown.", [body]);
+    const start = starts.get(body.data.requestId)!;
+    const laterLifecycles = relevant.filter(event => (event.type === "network.start" || event.type === "network")
+      && event.t > start.t && event.data.requestId !== body.data.requestId
+      && (starts.has(event.data.requestId) || typeof event.data.url === "string" && event.data.url.includes(predicate.urlContains)
+        && (predicate.method === undefined || event.data.method === predicate.method)));
+    if (laterLifecycles.length) return unknown("A later matching request has unresolved identity or completion; an older response cannot establish its business contract.", [body, ...laterLifecycles]);
     // A later incomplete request for this URL can carry the same operation. It cannot be silently ignored.
     if (bodies.some(event => event.t > body.t && event.data.requestId !== body.data.requestId)) return unknown("A later matching response has unresolved identity or completion.", bodies);
     const response = responses.find(event => event.data.requestId === body.data.requestId)!;
