@@ -1,42 +1,29 @@
 /** Independent host-controlled browser protocol. Page SDK authority is never accepted here. */
 import { validateOrigin } from "./validation";
 import { sanitizeWithReport } from "./serialization";
-import type { Coverage, RuntimeEvent } from "./protocol";
+import { scrubKnownSecrets } from "./redaction";
 
 export const BROWSER_LIMITS = { FRAME_BYTES: 128 * 1024, SESSIONS: 2, ACTION_MS: 5000, START_MS: 15000,
   CLOSE_MS: 10000, PAGES: 32, REQUESTS: 1000, SECRET_COUNT: 100, SECRET_BYTES: 64 * 1024,
   WIDTH: 1920, HEIGHT: 1080, PNG_BYTES: 8 * 1024 * 1024, VIDEO_MS: 60000, VIDEO_BYTES: 32 * 1024 * 1024,
   ARTIFACTS: 100, ARTIFACT_BYTES: 256 * 1024 * 1024 } as const;
-export type BrowserEngine = "chromium" | "firefox" | "webkit";
-export type BrowserTarget = { kind: "css"; selector: string } | { kind: "role"; role: string; name?: string; exact: true }
-  | { kind: "label"; label: string; exact: true } | { kind: "test-id"; testId: string };
-export type BrowserAction = { type: "click" | "hover" | "focus"; target: BrowserTarget }
-  | { type: "fill"; target: BrowserTarget; value: string }
-  | { type: "press"; target: BrowserTarget; key: string }
-  | { type: "select"; target: BrowserTarget; value: string }
-  | { type: "drag"; target: BrowserTarget; to: BrowserTarget };
-export interface BrowserOpen { engine: BrowserEngine; url: string; runId?: string; recordVideo: boolean; rawConsent?: true }
-export interface ExecutionContext {
-  formatVersion: 1; backend: "trusted-browser"; engine: BrowserEngine; providerVersion: string;
-  ownership: "owned" | "attached"; generation: number; inputMode: "trusted-browser" | "none" | "unknown";
-  dispatch: "not-dispatched" | "completed" | "unknown"; actionId?: string; artifactIds?: string[];
-}
-export interface BrowserSummary {
-  id: string; origin: string | null; runId: string | null; ownership: "owned" | "attached";
-  engine: BrowserEngine; providerVersion: string; engineVersion: string; generation: number;
-  state: "opening" | "selecting" | "ready" | "busy" | "closed" | "unavailable";
-  coverage: Coverage; history: "from-open" | "from-selection"; loss: boolean; pending: number;
-  reason?: string; video: "off" | "recording" | "stopped";
-}
-export interface BrowserActionResult {
-  actionId: string; generationBefore: number; generationAfter: number;
-  dispatch: ExecutionContext["dispatch"]; inputMode: ExecutionContext["inputMode"]; reason?: string;
-}
-export interface BrowserObservation { session: BrowserSummary; events: RuntimeEvent[]; cursor: number; complete: boolean; dropped: number }
+export const BROWSER_HTTP_LIMITS = { active: 4, requests: 1000, headers: 16 * 1024, headerFields: 100,
+  requestBody: 64 * 1024, responseBody: 2 * 1024 * 1024, totalBody: 16 * 1024 * 1024, ms: 5000 } as const;
+export type { BrowserEngine, BrowserTarget, BrowserAction, BrowserOpen, ExecutionContext, BrowserSummary, BrowserActionResult, BrowserObservation } from "./browser-types";
+import type { BrowserEngine, BrowserTarget, BrowserAction, BrowserOpen, ExecutionContext } from "./browser-types";
 export class BrowserInputError extends Error { constructor(public status: number, message: string) { super(message); } }
 const invalid = (message: string): never => { throw new BrowserInputError(400, message); };
 export const OPAQUE_ID = /^[0-9a-f]{32}$/;
 export const ARTIFACT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+export function scrubBrowserSecrets(text: string, secrets: readonly string[]): string {
+  if (text.length > 16 * 1024) return "[TRUNCATED]";
+  const values = secrets.filter(Boolean).sort((a, b) => b.length - a.length);
+  // Replace original matches once: short values are private too, and inserted
+  // placeholders must not be rescanned into exponential redaction expansion.
+  const pattern = values.length ? new RegExp(values.map(value => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g") : null;
+  const safe = pattern ? text.replace(pattern, () => "[REDACTED]") : text;
+  return scrubKnownSecrets(safe);
+}
 export function browserObject(value: unknown, keys: readonly string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) invalid("Object required");
   const object = value as Record<string, unknown>;
@@ -124,7 +111,9 @@ export function parseExecutionContext(value: unknown): ExecutionContext {
   const b = browserObject(value, ["formatVersion", "backend", "engine", "providerVersion", "ownership", "generation", "inputMode", "dispatch", "actionId", "artifactIds"]);
   if (b.formatVersion !== 1 || b.backend !== "trusted-browser" || !["owned", "attached"].includes(b.ownership as string)
     || !["trusted-browser", "none", "unknown"].includes(b.inputMode as string) || !["not-dispatched", "completed", "unknown"].includes(b.dispatch as string)) invalid("Invalid saved browser observation");
-  const result: ExecutionContext = { formatVersion: 1, backend: "trusted-browser", engine: browserEngine(b.engine), providerVersion: browserText(b.providerVersion, 32), ownership: b.ownership as ExecutionContext["ownership"], generation: browserGeneration(b.generation), inputMode: b.inputMode as ExecutionContext["inputMode"], dispatch: b.dispatch as ExecutionContext["dispatch"], ...(b.actionId === undefined ? {} : { actionId: browserId(b.actionId) }) };
+  const providerVersion = browserText(b.providerVersion, 32);
+  if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}(?:[-+][A-Za-z0-9.-]{1,16})?$/.test(providerVersion) || b.dispatch === "not-dispatched" && b.inputMode !== "none" || b.dispatch === "unknown" && b.inputMode === "trusted-browser") invalid("Invalid saved browser observation");
+  const result: ExecutionContext = { formatVersion: 1, backend: "trusted-browser", engine: browserEngine(b.engine), providerVersion, ownership: b.ownership as ExecutionContext["ownership"], generation: browserGeneration(b.generation), inputMode: b.inputMode as ExecutionContext["inputMode"], dispatch: b.dispatch as ExecutionContext["dispatch"], ...(b.actionId === undefined ? {} : { actionId: browserId(b.actionId) }) };
   if (b.artifactIds !== undefined) {
     const ids = browserArray(b.artifactIds, 3);
     if (ids.some(id => typeof id !== "string" || !ARTIFACT_ID.test(id))) invalid("Invalid saved artifact identifiers");
