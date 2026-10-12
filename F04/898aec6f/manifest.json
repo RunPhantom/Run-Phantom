@@ -1,0 +1,101 @@
+{
+  "project": "Run Phantom",
+  "owner": "Divyam Talwar",
+  "feature": "F04 authorized evidence import service",
+  "head": "898aec6f62d2c78d3230c1d8dfcee06e2aa3dcbb",
+  "platform": "darwin-arm64",
+  "featureCommits": 7,
+  "binarySha256": "528b32d9291c040311ee0c80e84e2a24a91fa75ea7cdbe6887d4517edfbdeb16",
+  "binaryBytes": 68366992,
+  "independentCorrectionReview": "APPROVED; actual HTTP/WebSocket refused-demo reset regression",
+  "standardCleanup": "documented no-op",
+  "backend": {
+    "pass": 836,
+    "skip": 3,
+    "fail": 0,
+    "assertions": 4951,
+    "total": 839,
+    "files": 82
+  },
+  "sourceChromium": {
+    "startTime": "2026-10-12T00:15:08.244Z",
+    "duration": 229007.553,
+    "expected": 114,
+    "skipped": 10,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "lintBuildAndAllTypes": "passed",
+  "copiedNative": {
+    "commonBrowserPasses": 3,
+    "lifecyclePasses": 1,
+    "lifecycleAssertions": 25,
+    "strictSixKeyWorkerControls": true,
+    "unknownAndUnverifiedReportOutputs": true,
+    "foreignOriginAndMissingAnchorNoWrite": true,
+    "idempotentRetryAndStaleRefusal": true,
+    "reparseRawAndNormalizedRetentionDistinct": true,
+    "restartPreservedOutput": true,
+    "currentDaemonWallTiming": true,
+    "afterRestartWallTimingUnavailable": true,
+    "observedFiveDaemonsTwoWorkers": true,
+    "recordedQualificationPidsAbsent": 13,
+    "ownedTemporaryStateGone": true
+  },
+  "rootHashVerification": {
+    "featureSources": 25,
+    "proofArtifacts": 79,
+    "publicPNGCRCAndVisualInspection": 4
+  },
+  "screenshots": [
+    {
+      "path": "activated-evidence-api-output.png",
+      "sha256": "670192bb347bc8f87f22fbe2e4552a6ce69b58fc5c0e1b03d392d1dfabee130e",
+      "dimensions": [
+        1440,
+        1000
+      ],
+      "scope": "Actual activated evidence JSON endpoint output; F05 upload UI pending"
+    },
+    {
+      "path": "runphantom-desktop-detail.png",
+      "sha256": "e7223d1f1d0fc4541c11799e79fe0b07230feb92ef317066adf6641aa9e9cf05",
+      "dimensions": [
+        1280,
+        720
+      ],
+      "scope": "Existing embedded Run Phantom desktop/detail/mobile bootstrap; no evidence-upload UI claim"
+    },
+    {
+      "path": "runphantom-desktop.png",
+      "sha256": "6dfc8a98a0e92d8889199f29589fd0c2b40de494028f886c6f105cb47132d770",
+      "dimensions": [
+        1280,
+        720
+      ],
+      "scope": "Existing embedded Run Phantom desktop/detail/mobile bootstrap; no evidence-upload UI claim"
+    },
+    {
+      "path": "runphantom-mobile.png",
+      "sha256": "c71851877b2db95b3e0980fc8b3fdf4feacc8f445201b225f3d9ff43a4a0231e",
+      "dimensions": [
+        390,
+        844
+      ],
+      "scope": "Existing embedded Run Phantom desktop/detail/mobile bootstrap; no evidence-upload UI claim"
+    }
+  ],
+  "providerSpendUsd": 0,
+  "sourceChangesAfterReview": 0,
+  "remainingGates": [
+    "F05 dedicated evidence upload/review UI",
+    "F06 actual team role/private owner mapping",
+    "F07 findings and comparison integration",
+    "F48 installed rollback across versions",
+    "Root-owned F03 native Windows remediation and F04 Windows process qualification",
+    "Second registered reader version reparse",
+    "RX12 durable decode/parse/normalize/inventory/API/UI clocks",
+    "Whole master-program acceptance/shared V1 composition"
+  ],
+  "failureHistory": "Preserved original rejected demo-reset regression and private copied-harness route setup failure; corrected exact-source run passed."
+}
