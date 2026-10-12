@@ -221,3 +221,21 @@ export function parseReviewJson(text: string): unknown {
   canonicalReviewJson(value);
   return value;
 }
+export function parseQueueCreate(value: unknown): { name: string; schema: ReviewSchema } {
+  const row = object(value, "queue"); fields(row, ["name", "schema"], "queue");
+  return { name: safeText(row.name, "queue name", 128), schema: parseReviewSchema(row.schema === undefined ? DEFAULT_REVIEW_SCHEMA : row.schema) };
+}
+export function parseQueueInsert(value: unknown): { runId: string; outputSpanId: string | null } {
+  const row = object(value, "source selection"); fields(row, ["runId", "outputSpanId"], "source selection");
+  return { runId: parseId(row.runId), outputSpanId: row.outputSpanId === undefined ? null : parseId(row.outputSpanId) };
+}
+export function parsePromotionReceipt(value: unknown): import("./protocol").PromotionReceipt {
+  const row = object(value, "promotion receipt");
+  fields(row, ["promotionId", "datasetId", "datasetVersion", "datasetHash", "itemIds", "caseIds", "createdAt"], "promotion receipt");
+  const itemIds = list(row.itemIds, "receipt items", L.MAX_PROMOTION_ITEMS, 1).map(reviewDigest);
+  const caseIds = list(row.caseIds, "receipt cases", L.MAX_PROMOTION_ITEMS, 1).map(reviewDigest);
+  if (itemIds.length !== caseIds.length || new Set(itemIds).size !== itemIds.length || new Set(caseIds).size !== caseIds.length) fail("receipt membership is invalid");
+  const receipt = { promotionId: reviewDigest(row.promotionId), datasetId: parseId(row.datasetId), datasetVersion: parseVersion(row.datasetVersion),
+    datasetHash: reviewDigest(row.datasetHash), itemIds, caseIds, createdAt: reviewTimestamp(row.createdAt) };
+  boundedReviewBytes(canonicalReviewJson(receipt), L.MAX_RECEIPT_BYTES, "receipt"); return receipt;
+}
