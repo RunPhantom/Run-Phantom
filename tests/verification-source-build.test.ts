@@ -31,6 +31,7 @@ describe("optional source stamps preserve the actual compiler pipeline", () => {
     const output = transformSource('export const x = <><App/><mesh/><group/><text/><line/><audio/><button data-runphantom-source="old.tsx:1:1">Pay</button></>;', "/repo/src/A.tsx", "/repo", "serve", { enabled: true, renderer: "react-dom" })!;
     expect(output.code.match(/data-runphantom-source/g)).toHaveLength(1);
     expect(output.code).not.toContain("old.tsx"); expect(output.code).toContain("<mesh />");
+    expect(transformSource('export const x = <><App data-runphantom-source="component-owned"/><mesh data-runphantom-source="renderer-owned"/></>;', "/repo/src/A.tsx", "/repo", "serve", { enabled: true, renderer: "react-dom" })).toBeNull();
     for (const renderer of ["@react-three/fiber", "ink", "@react-pdf/renderer", "react-reconciler"]) expect(transformSource(`import {x} from "${renderer}"; export const y=<button/>;`, "/repo/src/A.tsx", "/repo", "serve", { enabled: true, renderer: "react-dom" })).toBeNull();
   });
   test("production strips only reserved static attributes, retains output, and never emits metadata", () => {

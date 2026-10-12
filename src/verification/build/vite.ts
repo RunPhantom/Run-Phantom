@@ -1,4 +1,6 @@
 import ts from "typescript";
+import { createHash } from "node:crypto";
+import path from "node:path";
 import { SOURCE_ATTRIBUTE, sourceFile } from "./source";
 
 export interface SourceProvenanceOptions { enabled?: boolean; renderer?: "react-dom"; include?: string[] }
@@ -26,9 +28,10 @@ export function transformSource(code: string, id: string, root: string, command:
   const transformer: ts.TransformerFactory<ts.SourceFile> = context => source => {
     const visit: ts.Visitor = node => {
       if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
-        const attributes = node.attributes.properties.filter(attribute => !(ts.isJsxAttribute(attribute) && ts.isIdentifier(attribute.name) && attribute.name.text === SOURCE_ATTRIBUTE));
+        const stamp = command === "serve" && ts.isIdentifier(node.tagName) && domTags.has(node.tagName.text);
+        const attributes = node.attributes.properties.filter(attribute => !(command === "build" || stamp) || !(ts.isJsxAttribute(attribute) && ts.isIdentifier(attribute.name) && attribute.name.text === SOURCE_ATTRIBUTE));
         changed ||= attributes.length !== node.attributes.properties.length;
-        if (command === "serve" && ts.isIdentifier(node.tagName) && domTags.has(node.tagName.text)) {
+        if (stamp) {
           const position = source.getLineAndCharacterOfPosition(node.getStart(source));
           const attribute = ts.factory.createJsxAttribute(ts.factory.createIdentifier(SOURCE_ATTRIBUTE), ts.factory.createStringLiteral(`${file}:${position.line + 1}:${position.character + 1}`));
           attributes.push(attribute); changed = true;
@@ -54,7 +57,24 @@ export function transformSource(code: string, id: string, root: string, command:
 
 export function runPhantomSourceProvenance(options: SourceProvenanceOptions = {}) {
   let root = ""; let command: "serve" | "build" = "serve";
+  type MapOutput = { sourcemapExcludeSources?: boolean; sourcemapPathTransform?: (source: string, mapPath: string) => string };
+  const privateMap = (output: MapOutput): MapOutput => {
+    const previous = output.sourcemapPathTransform;
+    return { ...output, sourcemapExcludeSources: true,
+      sourcemapPathTransform(source: string, mapPath: string) {
+        const mapped = previous ? previous(source, mapPath) : source;
+        const absolute = typeof mapped === "string" && !mapped.includes("\0") ? path.resolve(path.dirname(mapPath), mapped) : "";
+        const relative = absolute ? sourceFile(absolute, root) : null;
+        return relative ?? `anonymous-${createHash("sha256").update(absolute || (typeof mapped === "string" ? mapped : source)).digest("hex").slice(0, 16)}`;
+      },
+    };
+  };
   return { name: "runphantom-source-provenance", enforce: "pre" as const,
+    config(config: { build?: { rollupOptions?: { output?: MapOutput | MapOutput[] } } }, environment: { command: "serve" | "build" }) {
+      if (environment.command !== "build") return;
+      const build = config.build ??= {}; const rollup = build.rollupOptions ??= {};
+      rollup.output = Array.isArray(rollup.output) ? rollup.output.map(privateMap) : privateMap(rollup.output ?? {});
+    },
     configResolved(config: { root: string; command: "serve" | "build" }) { root = config.root; command = config.command; },
     transform(code: string, id: string) { return transformSource(code, id, root, command, options); },
   };
