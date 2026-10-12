@@ -1,6 +1,7 @@
 /** Explicit application-owned projections; no store discovery or business verdicts. */
 import { captureBaselineReading, type SnapshotValue } from "../baseline.js";
 import { sanitizeWithReport } from "../serialization.js";
+import { isSensitiveKey } from "../redaction.js";
 
 export interface StoreAdapter { readonly kind: "query" | "pinia" | "shape" }
 export interface AdapterSnapshot {
@@ -87,7 +88,7 @@ function selections(raw: unknown): Array<readonly [string, string]> {
     const path = entries[name];
     if (!/^[A-Za-z0-9_:-]{1,128}$/.test(name) || typeof path !== "string" || path.length > 1024) invalid();
     const parts = path === "" ? [] : path.split(".");
-    if (parts.length > 32 || parts.some(part => !part || forbidden.has(part))) invalid();
+    if (isSensitiveKey(name) || parts.length > 32 || parts.some(part => !part || forbidden.has(part) || isSensitiveKey(part))) invalid();
     return Object.freeze([name, path] as const);
   });
 }

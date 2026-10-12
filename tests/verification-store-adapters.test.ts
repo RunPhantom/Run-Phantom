@@ -180,3 +180,13 @@ describe("closed adapter inputs and aggregate limits", () => {
     expect(options).toEqual({ detached: true, flush: "sync" }); expect(unsubscribed).toBe(1);
   });
 });
+
+test("selected credential paths and renamed credential labels cannot bypass the mandatory redaction floor", () => {
+  let reads = 0;
+  const source = { getState: () => { reads++; return { password: "arbitrary private value" }; }, subscribe: () => () => {} };
+  expect(() => shapeStore(source, { select: { count: "password" } })).toThrow();
+  expect(() => shapeStore(source, { select: { count: "account.sessionId" } })).toThrow();
+  expect(() => shapeStore(source, { select: { password: "count" } })).toThrow();
+  expect(() => queryStore(new QueryClient(), { keys: [{ queryKey: ["account"], select: { ordinary: "password" } }] })).toThrow();
+  expect(reads).toBe(0);
+});
