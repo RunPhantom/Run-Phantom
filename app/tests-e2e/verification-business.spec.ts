@@ -30,6 +30,10 @@ async function fixture() {
   const original = JSON.stringify({ operationId: "order-21", result: "rejected", errors: [{ message: "stock unavailable" }], password: "synthetic-private-21" });
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
+    if (url.pathname === "/business/incomplete-sse") {
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.end('data: {"operationId":"order-21","result":"paid"}'); return;
+    }
     if (url.pathname === "/business/secret-stream") {
       response.writeHead(200, { "Content-Type": "application/json" });
       response.write('{"operationId":"order-21","result":"paid","api\\u004bey":"synthetic-split-key","note":"sk_li');
@@ -311,4 +315,48 @@ test("user opts in, diagnoses the actual failed response, replays a healthy cont
     }
     writeFileSync(path.join(directory, "responsive-inspections.json"), JSON.stringify(inspections, null, 2));
   } finally { await target.close(); await app.close(); }
+});
+
+test("EOF cannot authenticate an unterminated SSE data record as complete business evidence", async ({ page, request, runPhantom }) => {
+  const app = await fixture();
+  try {
+    const session = await pair(page, request, runPhantom, app.origin, true);
+    expect(await page.evaluate(async () => (await fetch("/business/incomplete-sse")).text())).toBe('data: {"operationId":"order-21","result":"paid"}');
+    await expect.poll(async () => (await events(request, runPhantom, session.id)).some(e => e.type === "network.body" && e.data.state !== "pending")).toBe(true);
+    const captured = (await events(request, runPhantom, session.id)).filter(e => e.type === "network.body");
+    expect(captured.some(e => e.data.state === "complete")).toBe(false);
+    expect(captured.at(-1)?.data.state).toBe("unavailable");
+    expect(captured.every(e => !Object.hasOwn(e.data, "body"))).toBe(true);
+    const report = await check(request, runPhantom, session.id, { ...declared, urlContains: "/business/incomplete-sse", operationPath: "0.operationId", path: "0.result" }, session.cursor);
+    expect(report.status).toBe("inconclusive");
+  } finally { await app.close(); }
+});
+
+test("actual opaque fetch and XHR preserve unavailable boundaries and default-disabled processing", async ({ page, request, runPhantom }) => {
+  const app = await fixture();
+  const other = await fixture();
+  try {
+    for (const enabled of [false, true]) {
+      const session = await pair(page, request, runPhantom, app.origin, enabled);
+      expect(await page.evaluate(async origin => (await fetch(`${origin}/business/json`, { mode: "no-cors" })).type, other.origin)).toBe("opaque");
+      const output = await page.evaluate(() => new Promise<string>((resolve, reject) => {
+        const xhr = new XMLHttpRequest(); xhr.open("GET", "/business/json");
+        xhr.onload = () => resolve(xhr.responseText); xhr.onerror = () => reject(new Error("fixture XHR failed")); xhr.send();
+      }));
+      expect(output).toBe(app.original);
+      await expect.poll(async () => (await events(request, runPhantom, session.id)).filter(e => e.type === "network").length).toBe(2);
+      if (enabled) {
+        await expect.poll(async () => (await events(request, runPhantom, session.id)).some(e => e.type === "network.body" && e.data.state === "complete")).toBe(true);
+        const captured = await events(request, runPhantom, session.id);
+        const opaque = captured.find(e => e.type === "network.body" && e.data.state === "opaque");
+        expect(opaque).toBeTruthy(); expect(Object.hasOwn(opaque.data, "body")).toBe(false);
+        const xhr = captured.find(e => e.type === "network.body" && e.data.state === "complete");
+        expect(xhr.data.body.password).toBe("[REDACTED]");
+        expect(JSON.stringify(captured)).not.toContain("synthetic-private-21");
+        const report = await check(request, runPhantom, session.id, { ...declared, urlContains: other.origin }, session.cursor);
+        expect(report.status).toBe("inconclusive");
+      } else expect((await events(request, runPhantom, session.id)).some(e => e.type === "network.body")).toBe(false);
+      expect(await page.evaluate(() => (window as any).cloneCalls)).toBe(0);
+    }
+  } finally { await other.close(); await app.close(); }
 });

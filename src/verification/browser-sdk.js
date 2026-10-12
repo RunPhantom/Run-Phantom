@@ -685,10 +685,15 @@ function decodeBody(raw, format) {
   if (format === "ndjson")
     return raw.split(/\r?\n/).filter((line) => line.trim()).map((line) => JSON.parse(line));
   const records = [];
-  for (const block of raw.replace(/\r\n/g, `
+  const blocks = raw.replace(/\r\n|\r/g, `
 `).split(`
 
-`)) {
+`);
+  const tail = blocks.pop() ?? "";
+  if (tail.split(`
+`).some((line) => line === "data" || line.startsWith("data:")))
+    throw new Error("Incomplete SSE record");
+  for (const block of blocks) {
     const data = block.split(`
 `).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).replace(/^ /, "")).join(`
 `);

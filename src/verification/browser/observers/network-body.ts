@@ -15,7 +15,11 @@ function decodeBody(raw: string, format: BodyFormat): unknown {
   if (format === "ndjson") return raw.split(/\r?\n/).filter(line => line.trim()).map(line => JSON.parse(line));
   const records: unknown[] = [];
   // SSE comments, event names and ids are metadata; only complete JSON data records are retained.
-  for (const block of raw.replace(/\r\n/g, "\n").split("\n\n")) {
+  const blocks = raw.replace(/\r\n|\r/g, "\n").split("\n\n");
+  const tail = blocks.pop() ?? "";
+  // EOF does not dispatch an SSE record. Withhold partial data instead of claiming completion.
+  if (tail.split("\n").some(line => line === "data" || line.startsWith("data:"))) throw new Error("Incomplete SSE record");
+  for (const block of blocks) {
     const data = block.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).replace(/^ /, "")).join("\n");
     if (data) records.push(JSON.parse(data));
   }
