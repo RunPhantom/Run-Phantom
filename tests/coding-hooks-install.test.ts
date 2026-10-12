@@ -3,7 +3,7 @@ import { mkdtemp, readFile, writeFile, rm, mkdir, symlink, stat } from "node:fs/
 import os from "node:os";
 import path from "node:path";
 import { CLAUDE_HOOK_EVENTS } from "../src/coding-hooks/shared";
-import { mergeClaudeSettings, updateClaudeSettings, SETTINGS_LIMITS } from "../src/coding-hooks/install";
+import { inspectClaudeHookSettings, mergeClaudeSettings, updateClaudeSettings, SETTINGS_LIMITS } from "../src/coding-hooks/install";
 
 const authority = { executable: '/private/Run Phantom $fixture` /runphantom "copy"', installationId: "a".repeat(32) };
 const original = { permissions: { allow: ["Read"], custom: { enabled: true } }, future: ["preserved", { value: 2 }], hooks: {
@@ -145,6 +145,29 @@ describe("bounded settings admission", () => {
 });
 
 describe("actual settings filesystem behavior", () => {
+  test("doctor separates exact installed configuration from inactive consent and transport", async () => fixture(async (directory, file) => {
+    const binary = path.join(directory, "run phantom"); await writeFile(binary, "#!/bin/sh\nexit 99\n", { mode: 0o700 });
+    const owned = { ...authority, executable: binary };
+    expect((await updateClaudeSettings(file, "install", owned)).status).toBe("accepted");
+    const before = await readFile(file, "utf8"), result = await inspectClaudeHookSettings(file, owned);
+    expect(result).toEqual({ configuration: "installed", ownedHandlers: 10, executable: "available", installedVendorVersion: null, capturePolicy: "inactive", transport: "unavailable", captureVerified: false });
+    expect(await readFile(file, "utf8")).toBe(before);
+    const settings = JSON.parse(before); delete settings.hooks.Stop; await writeFile(file, JSON.stringify(settings));
+    expect((await inspectClaudeHookSettings(file, owned)).configuration).toBe("partial");
+    settings.hooks.SessionStart[0].hooks[0].timeout = 4; const edited = JSON.stringify(settings); await writeFile(file, edited);
+    expect((await inspectClaudeHookSettings(file, owned)).reason).toBe("ownership_uncertain"); expect(await readFile(file, "utf8")).toBe(edited);
+  }));
+
+  test("doctor missing, malformed and symlink settings do not create or repair configuration", async () => fixture(async (_directory, file) => {
+    const missing = await inspectClaudeHookSettings(file, authority);
+    expect(missing.configuration).toBe("missing"); expect(missing.executable).toBe("unavailable");
+    expect(await Bun.file(path.dirname(file)).exists()).toBe(false);
+    await mkdir(path.dirname(file)); const malformed = '{"hooks":{},"hooks":{}}'; await writeFile(file, malformed);
+    expect((await inspectClaudeHookSettings(file, authority)).reason).toBe("duplicate_keys"); expect(await readFile(file, "utf8")).toBe(malformed);
+    const target = file + ".original"; await writeFile(target, "{}"); await rm(file); await symlink(target, file);
+    expect((await inspectClaudeHookSettings(file, authority)).reason).toBe("path_not_authorized"); expect(await readFile(target, "utf8")).toBe("{}");
+  }));
+
   async function fixture(run: (directory: string, file: string) => Promise<void>) {
     const directory = await mkdtemp(path.join(os.tmpdir(), "runphantom-hook-settings-"));
     try { await run(directory, path.join(directory, ".claude", "settings.local.json")); }

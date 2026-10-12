@@ -239,6 +239,14 @@ describe("bounded Claude producer observations", () => {
     expect(JSON.stringify(result)).not.toContain("different output");
   });
 
+  test("large selected transcript strings are refused whole before secret scanning or truncation can expose a credential prefix", () => {
+    const marker = "PRIVATE_LONG_CREDENTIAL", content = marker + "x".repeat(NORMALIZATION_LIMITS.selectedStringUnits);
+    const record = transcriptRecord({ message: { id: "msg_large", content: [{ type: "text", text: content }], stop_reason: "end_turn" } });
+    const result = normalizeClaudeHook(hookFixture("Stop"), full, transcriptSnapshot([record]));
+    expect(JSON.stringify(result)).not.toContain(marker); expect(entity(result, "assistant").coverageReasons).toContain("body_partial");
+    expect(entity(result, "assistant").body?.output).toEqual([{ type: "text", text: "[TRUNCATED]" }]);
+  });
+
   test("line and entity limits stop before skipped source bytes and disclose cumulative body loss", () => {
     const long = transcriptSnapshot([JSON.stringify({ type: "user", body: "x".repeat(NORMALIZATION_LIMITS.lineBytes) })]);
     const line = normalizeClaudeHook(hookFixture("Stop"), full, long);

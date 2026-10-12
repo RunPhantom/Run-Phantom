@@ -49,7 +49,27 @@ describe("team runtime authority boundary", () => {
     const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
     expect(tree.statements.filter(ts.isImportDeclaration)).toHaveLength(0);
     expect(source).toContain('process.argv[2] === "team"');
-    expect(runtimeImports(file).sort()).toEqual(["./local-cli", "./team/cli"]);
+    expect(runtimeImports(file).sort()).toEqual(["./coding-hooks/callback", "./local-cli", "./team/cli"]);
+  });
+
+  test("silent callback imports exclude daemon, installation and provider authority", () => {
+    const visited = new Set<string>(), pending = [path.join(root, "src/coding-hooks/callback.ts")];
+    const forbidden = /^(?:src\/(?:local-cli|server|db|init|uninstall|replay|replay-map|agents-config|active-workspace|secrets|secret-store|claude-cli-chat|codex-cli-chat|runphantom-startup)\.ts|src\/(?:team|install|mcp)\/.+|src\/coding-hooks\/(?:install|service|router)\.ts|src\/evaluations\/(?:service|judge|store|router)\.ts|src\/verification\/(?:service|router)\.ts)$/;
+    const violations: string[] = [];
+    while (pending.length) {
+      const file = pending.pop()!;
+      if (visited.has(file)) continue;
+      visited.add(file);
+      const relative = path.relative(root, file).split(path.sep).join("/");
+      if (forbidden.test(relative)) violations.push(relative);
+      for (const source of runtimeImports(file)) {
+        if (/^(?:node:)?(?:child_process|http|https|net|fs(?:\/promises)?)$/.test(source)) violations.push(`${relative} imports ${source}`);
+        const dependency = resolveImport(source, file);
+        if (dependency) pending.push(dependency);
+      }
+    }
+    expect(violations).toEqual([]);
+    expect(visited.has(path.join(root, "src/coding-hooks/shared.ts"))).toBe(true);
   });
 
   test("transitive team imports exclude local machine and provider services", () => {

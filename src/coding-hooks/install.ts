@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
-import { lstat, mkdir, open, rename, unlink, type FileHandle } from "node:fs/promises";
+import { access, lstat, mkdir, open, rename, stat, unlink, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { parseJsonEvidence } from "../evaluations/json-evidence";
 import { hasDuplicateJsonKeys } from "../json-keys";
@@ -157,6 +157,53 @@ async function readSnapshot(file: string): Promise<FileSnapshot | null> {
 async function removeOwned(file: string, owner: BigIntStats): Promise<void> {
   try { const current = await lstat(file, { bigint: true }); if (sameFile(current, owner)) await unlink(file); }
   catch (error) { if (!isMissing(error)) throw error; }
+}
+
+export interface ClaudeHookDoctor {
+  configuration: "installed" | "partial" | "missing" | "unavailable";
+  ownedHandlers: number;
+  executable: "available" | "unavailable";
+  installedVendorVersion: null;
+  capturePolicy: "inactive";
+  transport: "unavailable";
+  captureVerified: false;
+  reason?: SettingsFailure;
+}
+
+/** Configuration and executable availability do not prove consent, transport or observed capture. */
+export async function inspectClaudeHookSettings(file: string, authority: HookInstallAuthority): Promise<ClaudeHookDoctor> {
+  const result: ClaudeHookDoctor = { configuration: "unavailable", ownedHandlers: 0, executable: "unavailable", installedVendorVersion: null, capturePolicy: "inactive", transport: "unavailable", captureVerified: false };
+  try {
+    authority = validateAuthority(authority);
+    if (!path.isAbsolute(file) || file.includes("\0") || Buffer.byteLength(file, "utf8") > 4096) fail("path_not_authorized");
+    const snapshot = await readSnapshot(file);
+    if (!snapshot) result.configuration = "missing";
+    else {
+      const settings = decodeSettings(snapshot.text), hooks = hooksObject(settings);
+      for (const event of CLAUDE_HOOK_EVENTS) {
+        let owned = 0;
+        for (const group of (hooks?.[event] as JsonObject[] | undefined) ?? []) {
+          for (const value of group.hooks as JsonObject[]) {
+            if (!candidate(value, authority)) continue;
+            if (!exactHandler(value, authority) || group.matcher !== "*" || Object.keys(group).length !== 2) fail("ownership_uncertain");
+            owned++;
+          }
+        }
+        if (owned > 1) fail("ownership_uncertain");
+        result.ownedHandlers += owned;
+      }
+      result.configuration = result.ownedHandlers === CLAUDE_HOOK_EVENTS.length ? "installed" : result.ownedHandlers ? "partial" : "missing";
+    }
+    try {
+      if ((await stat(authority.executable)).isFile()) {
+        await access(authority.executable, constants.R_OK | constants.X_OK); result.executable = "available";
+      }
+    } catch { /* A missing or unreadable binary is an unavailable fact, never a launch attempt. */ }
+  } catch (error) {
+    result.configuration = "unavailable"; result.ownedHandlers = 0;
+    result.reason = error instanceof SettingsRefusal ? error.reason : "settings_unavailable";
+  }
+  return result;
 }
 
 /** A cooperative lock and observed-change check, not CAS against a noncooperating writer's rename. */

@@ -2,6 +2,7 @@ import { beforeEach, afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, symlinkSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { acquireClaudeTranscript, TRANSCRIPT_LIMITS } from "../src/coding-hooks/claude";
 import { parseClaudeHookInput, type ClaudeHookInput } from "../src/coding-hooks/shared";
 let directory: string, root: string, file: string;
@@ -92,4 +93,11 @@ test("UTF8 byte offsets and business Unicode survive the exact observed snapshot
 });
 test("cancellation during real async acquisition cannot return a publishable snapshot",async()=>{
   const controller=new AbortController();queueMicrotask(()=>controller.abort());const r=await acquireClaudeTranscript(hook(),authority(),controller.signal);expect(r.reason).toBe("aborted");expect(readFileSync(file,"utf8")).toBe(body);
+});
+
+test("an actual FIFO is refused without opening or waiting for a producer",async()=>{
+  if(process.platform==="win32")return;
+  rmSync(file);const made=spawnSync("mkfifo",[file],{stdio:"pipe"});expect(made.status).toBe(0);
+  const started=performance.now();expect((await acquireClaudeTranscript(hook(),authority())).reason).toBe("not_regular_file");
+  expect(performance.now()-started).toBeLessThan(TRANSCRIPT_LIMITS.acquisitionMs);
 });

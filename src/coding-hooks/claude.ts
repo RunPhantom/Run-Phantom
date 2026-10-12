@@ -101,7 +101,7 @@ export async function acquireClaudeTranscript(hook: ClaudeHookInput, authority: 
     const resolved = await guarded(realpath(candidate), signal);
     within(root, resolved);
     // Windows lacks O_NOFOLLOW; descriptor/path identity checks remain mandatory there.
-    handle = await guarded(open(candidate, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)), signal, late => { void late.close().catch(() => undefined); });
+    handle = await guarded(open(candidate, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)), signal, late => { void late.close().catch(() => undefined); });
     const initial = await guarded(handle.stat({ bigint: true }), signal);
     if (!initial.isFile()) fail("not_regular_file");
     if (!sameFile(before, initial)) fail("source_changed");
@@ -142,7 +142,7 @@ export async function acquireClaudeTranscript(hook: ClaudeHookInput, authority: 
   }
 }
 
-export const NORMALIZATION_LIMITS = Object.freeze({ lineBytes: 262144, records: 5000, entities: 128, entityBytes: 16384, transportBytes: 262144, bodyNodes: 500, parseMs: 250 });
+export const NORMALIZATION_LIMITS = Object.freeze({ lineBytes: 262144, records: 5000, entities: 128, entityBytes: 16384, transportBytes: 262144, bodyNodes: 500, selectedStringUnits: 4096, bodyBytes: 262144, parseMs: 250 });
 /** This is resolved installation authority, never a field admitted from hook stdin. */
 export interface NormalizationAuthority { sourceKey: string; captureMode: "metadata" | "full"; }
 type EntityKind = "session" | "prompt" | "tool" | "assistant" | "subagent";
@@ -202,9 +202,15 @@ function floorText(text: string): string {
 }
 
 /** One cumulative structural floor budget applies to the whole body bundle, before generic sanitization. */
-function bodyFloor(value: HookJson, state: { nodes: number; partial: boolean; redacted: boolean }, depth = 0): HookJson {
+function bodyFloor(value: HookJson, state: { nodes: number; bytes: number; partial: boolean; redacted: boolean }, depth = 0): HookJson {
   if (++state.nodes > NORMALIZATION_LIMITS.bodyNodes || depth > 8) { state.partial = true; return "[TRUNCATED]"; }
-  if (typeof value === "string") { const safe = floorText(value); if (safe !== value) state.redacted = true; return safe; }
+  if (typeof value === "string") {
+    if (value.length > NORMALIZATION_LIMITS.selectedStringUnits) { state.partial = true; return "[TRUNCATED]"; }
+    const bytes = Buffer.byteLength(value, "utf8");
+    if (bytes > NORMALIZATION_LIMITS.bodyBytes - state.bytes) { state.partial = true; return "[TRUNCATED]"; }
+    state.bytes += bytes;
+    const safe = floorText(value); if (safe !== value) state.redacted = true; return safe;
+  }
   if (!value || typeof value !== "object") return value;
   if (Array.isArray(value)) {
     const output: HookJson[] = [];
@@ -219,6 +225,9 @@ function bodyFloor(value: HookJson, state: { nodes: number; partial: boolean; re
   const keys = Object.keys(value);
   for (const key of keys.slice(0, 100)) {
     if (state.nodes >= NORMALIZATION_LIMITS.bodyNodes) { state.partial = true; break; }
+    const keyBytes = Buffer.byteLength(key, "utf8");
+    if (key.length > 256 || keyBytes > NORMALIZATION_LIMITS.bodyBytes - state.bytes) { state.partial = true; continue; }
+    state.bytes += keyBytes;
     const safeKey = floorText(key);
     if (defaultIsSensitiveKey(key)) { output[safeKey] = REDACTED_VALUE; state.redacted = true; state.nodes++; }
     else output[safeKey] = bodyFloor(value[key], state, depth + 1);
@@ -308,13 +317,14 @@ export function normalizeClaudeHook(raw: unknown, authority: NormalizationAuthor
           const content: HookJson[] = [];
           for (const block of message.content) {
             if (objectRecord(block) && block.type === "text" && typeof block.text === "string") content.push({ type: "text", text: block.text });
-            else if (objectRecord(block) && block.type === "tool_use" && sourceId(block.id) && typeof block.name === "string") {
+            else if (objectRecord(block) && block.type === "tool_use" && sourceId(block.id) && typeof block.name === "string" && block.name.length <= NORMALIZATION_LIMITS.selectedStringUnits) {
               content.push({ type: "tool_use", toolIdentity: identity("tool", block.id), name: floorText(block.name).slice(0, 256), input: block.input ?? null });
               if (Object.keys(block).some(key => !["type", "id", "name", "input"].includes(key))) currentReasons.push("unsupported_content");
             } else currentReasons.push("unsupported_content");
           }
           const assistant = make("assistant", message.id, typeof message.stop_reason === "string" && message.stop_reason.length > 0 ? "complete" : "pending", "Assistant", { input: null, output: content, error: null });
-          assistant.model = typeof message.model === "string" ? floorText(message.model).slice(0, 256) : null;
+          assistant.model = typeof message.model === "string" && message.model.length <= NORMALIZATION_LIMITS.selectedStringUnits ? floorText(message.model).slice(0, 256) : null;
+          if (typeof message.model === "string" && message.model.length > NORMALIZATION_LIMITS.selectedStringUnits) currentReasons.push("model_limit");
           const contentDigest = digest(JSON.stringify(content)), priorAssistant = entities.get(assistant.entityKey);
           if (assistantBodies.has(assistant.entityKey) && assistantBodies.get(assistant.entityKey) !== contentDigest) currentReasons.push("assistant_fragments_unmerged");
           assistantBodies.set(assistant.entityKey, contentDigest);
@@ -358,7 +368,7 @@ export function normalizeClaudeHook(raw: unknown, authority: NormalizationAuthor
   const list = [...entities.values()];
   let unlinkedAssertions: NormalizedClaudeBatch["unlinkedAssertions"] = full ? { prompt: hook.event === "UserPromptSubmit" ? hook.prompt : null, assistant: hook.event === "Stop" ? hook.lastAssistantMessage : null, error: hook.event === "StopFailure" ? hook.error : null } : null;
   if (full) {
-    const state = { nodes: 0, partial: false, redacted: false };
+    const state = { nodes: 0, bytes: 0, partial: false, redacted: false };
     const safe = sanitizeWithReport(bodyFloor({ unlinkedAssertions, bodies: list.map(value => value.body) } as unknown as HookJson, state));
     if (state.partial || safe.truncation) reasons.add("body_partial");
     if (state.redacted || safe.redacted) reasons.add("body_redacted");
