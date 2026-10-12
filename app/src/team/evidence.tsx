@@ -13,7 +13,7 @@ import "../components/evaluations/evidence-workspace.css";
 type Capabilities = EvidenceCapabilities & { access: EvidenceCapability[] };
 type History = { items: { id: string; revision: number; createdAt: number }[]; truncated: boolean };
 type Receipt = { job: EvidenceJob; reused?: boolean };
-const formats: Record<EvidenceDialect, string> = { "junit-xml/v1": "JUnit XML", "in-toto-statement/v1": "Test-result statement", "dsse-envelope/v1": "DSSE envelope", "dsse-envelope-jsonl/v1": "DSSE JSONL" };
+const formats: Record<EvidenceDialect, string> = { "runphantom-findings-json/v1": "Run Phantom findings JSON", "junit-xml/v1": "JUnit XML", "in-toto-statement/v1": "Test-result statement", "dsse-envelope/v1": "DSSE envelope", "dsse-envelope-jsonl/v1": "DSSE JSONL" };
 const activeJob = (job?: EvidenceJob) => job?.status === "queued" || job?.status === "running";
 const selectionKey = (id: string, revision: number) => `${id}:${revision}`;
 
