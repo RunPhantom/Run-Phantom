@@ -421,7 +421,9 @@ export class VerificationBridge {
         incomplete ||= clean.incomplete;
       }
     }
-    return { ...raw, data, ...(incomplete ? { truncated: true } : {}) };
+    const event = { ...raw, data, ...(incomplete ? { truncated: true } : {}) };
+    if (event.actionId === undefined) delete event.actionId;
+    return event;
   }
 
   private sanitizeReadResult(session: VerificationSession, command: AppCommand, raw: unknown): { value: unknown; incomplete: boolean } {
