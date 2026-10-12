@@ -84,6 +84,38 @@ function network(ws: WebSocket, type: "network.start" | "network", requestId: st
     ...(type === "network" ? { status: 200, ok: true, durationMs: 3 } : {}) }, actionId);
 }
 
+test("unattributed complete reads stay complete through assertion and persisted report evidence", async () => {
+  const f = await fixture();
+  try {
+    const { ws, created } = await f.pair();
+    respond(ws, command => command.type === "state" ? { store: command.store, value: { count: 1 } } : { selector: "#cart", count: 1 });
+    const predicate = { kind: "allOf", predicates: [
+      { kind: "state", store: "cart", path: "count", equals: 1 },
+      { kind: "element", selector: "#cart", state: "present" },
+    ] };
+    const check = await f.api(`/sessions/${created.id}/assert`, { predicate });
+    expect(check.status).toBe(200);
+    expect(check.body.status).toBe("pass");
+    expect(check.body.evidence.map((entry: any) => entry.type).sort()).toEqual(["dom", "state"]);
+    for (const entry of check.body.evidence) {
+      expect(Object.hasOwn(entry, "actionId")).toBe(false);
+      expect(entry.truncated === true).toBe(false);
+    }
+    const stored = await f.api("/reports");
+    expect(stored.body.find((entry: any) => entry.id === check.body.id)).toEqual(check.body);
+    const action = await f.api(`/sessions/${created.id}/command`, { type: "click", selector: "#cart" });
+    expect(action.status).toBe(200);
+    const actionId = f.service.bridge.get(created.id).currentActionId;
+    expect(typeof actionId).toBe("string");
+    const attributed = await f.api(`/sessions/${created.id}/assert`, { predicate, since: action.body.cursor });
+    expect(attributed.body.status).toBe("pass");
+    for (const entry of attributed.body.evidence) {
+      expect(entry.actionId).toBe(actionId);
+      expect(entry.truncated === true).toBe(false);
+    }
+  } finally { await f.close(); }
+});
+
 describe("application verification daemon", () => {
   test("fresh state and selector checks settle and persist reports linked to an existing run", async () => {
     const f = await fixture();
