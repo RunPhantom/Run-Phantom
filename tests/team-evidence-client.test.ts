@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { TeamApiError, TeamClient, type SessionResponse } from "../app/src/api/team";
+import { parseEvidenceExpectedSources } from "../src/evaluations/evidence-validation";
+import { startTeamFixture } from "./helpers/team-server";
 
 const session = (id = "principal-a"): SessionResponse => ({ authenticated: true, setupRequired: false,
   user: { id: "user", email: "member@example.test", isOwner: false, createdAt: 1 },
@@ -43,6 +45,50 @@ describe("Team client protected existing semantics", () => {
 });
 
 describe("bounded authenticated Team evidence bodies", () => {
+  test("dedicated JSON controls admit exact64KiB UTF8 and refuse the next byte before fetch", async () => {
+    let fetched = 0; const client = new TeamClient(() => {}), route = "/projects/project-a/evidence/inventories";
+    const empty = new TextEncoder().encode(JSON.stringify({ padding: "" })).byteLength, remaining = 64 * 1024 - empty;
+    const body = { padding: "☃".repeat(Math.floor(remaining / 3)) + "x".repeat(remaining % 3) };
+    expect(new TextEncoder().encode(JSON.stringify(body)).byteLength).toBe(64 * 1024);
+    responses((_input, init) => { fetched++; expect(new TextEncoder().encode(String(init?.body)).byteLength).toBe(64 * 1024); return new Response(null, { status: 204 }); });
+    expect(await client.evidence(route, { method: "PUT", body })).toBeUndefined(); body.padding += "x";
+    expect(await rejected(client.evidence(route, { method: "PUT", body }))).toMatchObject({ code: "too_large" }); expect(fetched).toBe(1);
+  });
+  test("a genuine maximal32-source inventory is not reduced to the generic16KiB control budget", async () => {
+    const client = new TeamClient(() => {});
+    const expected = Array.from({ length: 32 }, (_, index) => ({ shardId: "s".repeat(124) + String(index).padStart(4, "0"), kind: "junit", constraints: { runnerId: "r".repeat(128), commit: "c".repeat(256), sourceSha256: "a".repeat(64) } }));
+    expect(parseEvidenceExpectedSources(expected)).toEqual(expected);
+    const body = { anchor: { kind: "run", id: "1".repeat(32) }, expectedRevision: 0, expected }, bytes = new TextEncoder().encode(JSON.stringify(body)).byteLength;
+    expect(bytes).toBeGreaterThan(16 * 1024); expect(bytes).toBeLessThan(64 * 1024);
+    responses((_input, init) => { expect(JSON.parse(String(init?.body))).toEqual(body); return Response.json({ revision: 1 }); });
+    expect(await client.evidence("/projects/project-a/evidence/inventories", { method: "PUT", body })).toEqual({ revision: 1 });
+  });
+  test("the actual generic Team HTTP control boundary still refuses16KiB+1", async () => {
+    const team = await startTeamFixture("f06-generic-control"), actualFetch = globalThis.fetch;
+    try {
+      const response = await actualFetch(`${team.url}/api/team/setup`, { method: "POST", headers: { Origin: team.url, "Content-Type": "application/json" }, body: JSON.stringify({ setupCode: team.setupCode, email: "owner@example.test", password: "F06 actual control passphrase" }) });
+      expect(response.ok).toBe(true); const principal = await response.json() as SessionResponse, cookie = response.headers.get("set-cookie")?.split(";")[0]; expect(cookie).toBeTruthy();
+      const client = new TeamClient(() => {}); client.setSession(principal);
+      responses((input, init) => { const headers = new Headers(init?.headers); headers.set("Cookie", cookie!); headers.set("Origin", team.url); return actualFetch(`${team.url}${input}`, { ...init, headers }); });
+      const remaining = 16 * 1024 + 1 - new TextEncoder().encode(JSON.stringify({ name: "" })).byteLength;
+      const body = { name: "x".repeat(remaining) }; expect(new TextEncoder().encode(JSON.stringify(body)).byteLength).toBe(16 * 1024 + 1);
+      expect(await rejected(client.request("/projects", { method: "POST", body }))).toMatchObject({ status: 413, code: "too_large" });
+      expect(await client.request<{ items: unknown[] }>("/projects")).toMatchObject({ items: [] });
+    } finally { await team.close(); }
+  });
+  test("URL normalization cannot move evidence requests outside their admitted path", async () => {
+    let fetched = 0; const client = new TeamClient(() => {}); responses(() => { fetched++; return Response.json({}); });
+    for (const tail of ["../runs", "%2e%2e/runs", ".%2e/runs", "sets\\..\\runs", "sets#private"]) {
+      expect(await rejected(client.evidence(`/projects/project-a/evidence/${tail}`))).toMatchObject({ code: "invalid_request" });
+    }
+    expect(fetched).toBe(0);
+  });
+  test("properly encoded projects and opaque JSON query values remain exact", async () => {
+    const client = new TeamClient(() => {}); const query = new URLSearchParams({ anchor: JSON.stringify({ kind: "run", id: "literal/#%.. Unicode ☃" }) });
+    const route = `/projects/project%20a/evidence/inventories?${query}`;
+    responses(input => { expect(input).toBe(`/api/team${route}`); return Response.json({ safe: true }); });
+    expect(await client.evidence(route)).toEqual({ safe: true });
+  });
   test.each(["session", "abort", "404"])("held JSON body is refused after %s", async reason => {
     const client = new TeamClient(() => {}); client.setSession(session()); const body = held(); const signal = new AbortController();
     responses(input => input.endsWith("/missing") ? refusal(404) : body.response);
@@ -86,7 +132,7 @@ describe("bounded authenticated Team evidence bodies", () => {
   test("evidence extension refuses local paths and oversized control/upload before fetch", async () => {
     let fetched = 0; const client = new TeamClient(() => {}); responses(() => { fetched++; return Response.json({}); });
     expect(await rejected(client.evidence("/evaluations/evidence/sets"))).toMatchObject({ code: "invalid_request" });
-    expect(await rejected(client.evidence(path, { method: "PUT", body: { tooBig: "x".repeat(16 * 1024) } }))).toMatchObject({ code: "too_large" });
+    expect(await rejected(client.evidence("/projects/project-a/evidence/inventories", { method: "PUT", body: { tooBig: "x".repeat(64 * 1024) } }))).toMatchObject({ code: "too_large" });
     expect(await rejected(client.evidence("/projects/project-a/evidence/imports", { method: "POST", body: new Blob([new Uint8Array(8 * 1024 * 1024 + 64 * 1024 + 5)], { type: "application/vnd.runphantom.evidence-import.v1+octet-stream" }) }))).toMatchObject({ code: "too_large" }); expect(fetched).toBe(0);
   });
 });

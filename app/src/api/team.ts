@@ -66,7 +66,8 @@ export class TeamClient {
 
   private async evidenceBody(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal }, blob: boolean): Promise<{ bytes: Uint8Array<ArrayBuffer>; contentType: string }> {
     const project = path.match(/^\/projects\/([^/?]+)\/evidence(?:\/|\?|$)/)?.[1];
-    if (!project || path.includes("#")) throw new TeamApiError(400, "invalid_request", "Choose a project evidence endpoint.");
+    const canonical = new URL(`/api/team${path}`, "http://team.invalid");
+    if (!project || path.includes("#") || path.includes("\\") || canonical.pathname !== `/api/team${path.split("?")[0]}`) throw new TeamApiError(400, "invalid_request", "Choose a project evidence endpoint.");
     const generation = this.generation, projectGeneration = this.projectGenerations.get(project) ?? 0;
     const current = () => {
       if (generation !== this.generation || options.signal?.aborted || projectGeneration !== (this.projectGenerations.get(project) ?? 0)) throw new DOMException("Request superseded", "AbortError");
@@ -79,8 +80,11 @@ export class TeamClient {
       if (options.body.size > 8 * 1024 * 1024 + 64 * 1024 + 4) throw new TeamApiError(413, "too_large", "The evidence upload exceeds its byte limit.");
       headers["Content-Type"] = options.body.type; body = options.body;
     } else if (options.body !== undefined) {
+      const control = method === "PUT" && path === `/projects/${project}/evidence/inventories`
+        || method === "POST" && (/^\/projects\/[^/?]+\/evidence\/sets\/[^/?]+\/reparse$/.test(path) || /^\/projects\/[^/?]+\/evidence\/imports\/[^/?]+\/cancel$/.test(path));
+      if (!control) throw new TeamApiError(400, "invalid_request", "Choose a supported evidence control.");
       const json = JSON.stringify(options.body);
-      if (new TextEncoder().encode(json).byteLength > 16 * 1024) throw new TeamApiError(413, "too_large", "The evidence control exceeds 16 KiB.");
+      if (new TextEncoder().encode(json).byteLength > 64 * 1024) throw new TeamApiError(413, "too_large", "The evidence control exceeds 64 KiB.");
       headers["Content-Type"] = "application/json"; body = json;
     }
     if (method !== "GET" && this.csrf) headers["X-RunPhantom-CSRF"] = this.csrf;
