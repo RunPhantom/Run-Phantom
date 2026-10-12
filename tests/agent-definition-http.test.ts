@@ -78,6 +78,35 @@ test("actual HTTP definition projection withholds private flat/typed capture wit
   expect(copy.agentDefinitions.candidate.records[0].reasons).toContain("capture_redacted");
 });
 
+test.each(["detail", "span", "export", "search"])("actual nested typed definition is private through public %s while original business values stay exact", async route => {
+  const capture = definitionTrace(91), marker = "F17 private nested definition synthetic prompt 7c4d";
+  const business = JSON.stringify({ [definitionKey]: "Ordinary typed string remains exact" });
+  const source = capture.body.resourceSpans[0].scopeSpans[0].spans[0];
+  source.attributes.push({ key: "ordinary.envelope", value: { arrayValue: { values: [
+    { stringValue: business }, { kvlistValue: { values: [
+      { key: "ordinary.message", value: { stringValue: "Business metadata unchanged" } },
+      { key: definitionKey, value: { stringValue: JSON.stringify(agentDefinition(marker)) } },
+    ] } },
+  ] } } } as any);
+  await ingest(capture);
+  const exported = await json(`/api/runs/${capture.id}/export`), typed = JSON.parse(exported.spans[0].otlp_evidence);
+  const flat = JSON.parse(exported.spans[0].attributes), envelope = typed.attributes.find((a: any) => a.key === "ordinary.envelope").value.arrayValue.values;
+  const value = route === "detail" ? await json(`/api/runs/detail/${capture.id}`)
+    : route === "span" ? await json(`/api/spans/${capture.spanId}?run_id=${capture.id}`)
+      : route === "export" ? exported : await json(`/api/runs/${capture.id}/search?scope=span_attributes&pattern=${encodeURIComponent(marker)}`);
+  const observed = { source: "actual OTLP JSON ingress and public HTTP", route, containsPrivate: JSON.stringify(value).includes(marker), typedNestedWithheld: envelope[1].kvlistValue.values[1].value.stringValue === "[REDACTED]", inputOutputEqual: exported.spans[0].input_payload === definitionInput && exported.spans[0].output_payload === definitionOutput };
+  proof(`http-nested-${route}.json`, observed);
+  expect(observed.typedNestedWithheld).toBe(true); expect(observed.inputOutputEqual).toBe(true);
+  expect(observed.containsPrivate).toBe(false);
+  expect(JSON.parse(flat["ordinary.envelope"])).toEqual([business, { "ordinary.message": "Business metadata unchanged", [definitionKey]: "[REDACTED]" }]);
+  expect(envelope[0]).toEqual({ stringValue: business });
+  const privateRead = await request("/api/traces/query", { sql: `SELECT attributes,otlp_evidence FROM spans WHERE run_id='${capture.id}'` });
+  expect(privateRead.status).toBe(200); expect(JSON.stringify(await privateRead.json())).toContain(marker);
+  const comparison = await json(`/api/runs/compare?baseline=${capture.id}&candidate=${capture.id}`);
+  expect(comparison.counts).toMatchObject({ unchanged: 1, changed: 0 });
+  expect(comparison.agentDefinitions.baseline.records[0].complete).toBe(true);
+});
+
 test("actual corrected root and process reopen update live definition but cannot rewrite frozen JSON/JUnit identity", async () => {
   const baseline = definitionTrace(18), candidate = definitionTrace(19, agentDefinition("Changed captured instructions", .123456790)); await ingest(baseline); await ingest(candidate);
   const comparison = await json(`/api/runs/compare?baseline=${baseline.id}&candidate=${candidate.id}`);
