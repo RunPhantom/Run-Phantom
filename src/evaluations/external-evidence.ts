@@ -6,8 +6,10 @@ import { redactText } from "../verification/serialization";
 import { decodeEvidence, ReaderRefusal, readerLimits, type ReaderLimits } from "./evidence-reader/limits";
 import { strictEvidenceJson } from "./evidence-reader/json";
 import { localName, strictEvidenceXml, xmlChildren, type EvidenceXmlElement } from "./evidence-reader/xml";
+import { FINDING_DIALECT } from "./finding-protocol";
+import { parseFindingBatch } from "./finding-validation";
 
-export const EXTERNAL_EVIDENCE_PARSER_VERSION = "runphantom-report-reader/1";
+export const EXTERNAL_EVIDENCE_PARSER_VERSION = "runphantom-report-reader/2";
 const countKeys = ["tests", "executed", "passed", "failures", "errors", "skipped", "disabled", "unknown"] as const;
 const noCounts = () => ({ executed: null, passed: null, failed: null, errored: null, skipped: null, disabled: null, unknown: null });
 function empty(sourceId: string): NormalizedEvidenceSource {
@@ -154,10 +156,12 @@ function attestation(text: string, dialect: string, sourceId: string, limits: Re
 /** Pure report interpretation: no file paths, external lookups, commands or execution authority. */
 export function parseExternalEvidence(bytes: Uint8Array, dialect: string, sourceId: string, overrides: Partial<ReaderLimits> = {}): NormalizedEvidenceSource {
   evidenceText(sourceId, "source ID");
-  const limits = readerLimits(overrides), kind = dialect === "junit-xml/v1" ? "junit" : "attestation";
+  const limits = readerLimits(overrides), kind = dialect === "junit-xml/v1" ? "junit" : dialect === FINDING_DIALECT ? "finding" : "attestation";
   try {
     const text = decodeEvidence(bytes, limits);
-    const result = dialect === "junit-xml/v1" ? junit(text, sourceId, limits) : ["in-toto-statement/v1", "dsse-envelope/v1", "dsse-envelope-jsonl/v1"].includes(dialect) ? attestation(text, dialect, sourceId, limits) : (() => { throw new ReaderRefusal("unsupported_schema", false); })();
+    const result = dialect === FINDING_DIALECT ? { ...empty(sourceId), parseState: "parsed" as const, interpretationComplete: true, reasonCodes: ["identity_unverified" as const], findingBatch: parseFindingBatch(strictEvidenceJson(text, limits), true) } :
+      dialect === "junit-xml/v1" ? junit(text, sourceId, limits) : ["in-toto-statement/v1", "dsse-envelope/v1", "dsse-envelope-jsonl/v1"].includes(dialect) ? attestation(text, dialect, sourceId, limits) : (() => { throw new ReaderRefusal("unsupported_schema", false); })();
+    if (result.findingBatch && result.findingBatch.findings.length > limits.maxLeaves) throw new ReaderRefusal("source_limit");
     if (Buffer.byteLength(JSON.stringify(result)) > limits.maxNormalizedBytes) throw new ReaderRefusal("normalization_limit");
     return parseNormalizedEvidence(result, kind);
   } catch (error) {

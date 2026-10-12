@@ -14,7 +14,7 @@ export const EVIDENCE_IMPORT_CONTENT_TYPE = "application/vnd.runphantom.evidence
 export const EVIDENCE_HEADER_BYTES = 64 * 1024;
 export const EVIDENCE_FRAME_BYTES = 4 + EVIDENCE_HEADER_BYTES + L.MAX_IMPORT_BYTES;
 export const EVIDENCE_READER_IDENTITY = Object.freeze({ parserVersion: EXTERNAL_EVIDENCE_PARSER_VERSION, policyVersion: "redaction/v1",
-  configurationSha256: evidenceDigest(canonicalEvidenceJson({ limits: readerLimits(), statement: "in-toto-statement/v1", envelope: "dsse-envelope/v1", junit: "junit-xml/v1", policy: "redaction/v1" })) });
+  configurationSha256: evidenceDigest(canonicalEvidenceJson({ limits: readerLimits(), statement: "in-toto-statement/v1", envelope: "dsse-envelope/v1", junit: "junit-xml/v1", findings: "runphantom-findings-json/v1", policy: "redaction/v1" })) });
 export class EvidenceUploadError extends EvidenceError {
   constructor(public readonly code: "upload_aborted" | "upload_timeout" | "source_integrity", status: 400 | 409 | 413 = 400) {
     super(code === "upload_timeout" ? "Evidence upload deadline exceeded" : code === "upload_aborted" ? "Evidence upload was interrupted" : "Evidence frame does not match its declared source bytes", status);

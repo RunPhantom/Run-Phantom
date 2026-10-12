@@ -12,7 +12,7 @@ import { EvidenceInventoryEditor } from "./evaluations/EvidenceInventoryEditor";
 import { EvidenceReport } from "./evaluations/EvidenceReport";
 import "./evaluations/evidence-workspace.css";
 
-const formats = { "junit-xml/v1": "JUnit XML", "in-toto-statement/v1": "in-toto test-result statement", "dsse-envelope/v1": "DSSE test-result envelope", "dsse-envelope-jsonl/v1": "One DSSE envelope in JSONL" };
+const formats = { "junit-xml/v1": "JUnit XML", "in-toto-statement/v1": "in-toto test-result statement", "dsse-envelope/v1": "DSSE test-result envelope", "dsse-envelope-jsonl/v1": "One DSSE envelope in JSONL", "runphantom-findings-json/v1": "Finding JSON (not test execution)" };
 const terminal = (status?: string) => !!status && !["queued", "running"].includes(status);
 function download(blob: Blob, name: string) { const url = URL.createObjectURL(blob), link = document.createElement("a"); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1_000); }
 

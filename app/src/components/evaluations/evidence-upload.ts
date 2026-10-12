@@ -7,7 +7,7 @@ export interface EvidenceCapabilities {
   limits: { MAX_REPORTS: number; MAX_SOURCE_BYTES: number; MAX_IMPORT_BYTES: number };
 }
 export interface EvidenceFileDraft { file: File; sourceId: string; dialect: EvidenceDialect; shardId: string }
-const kinds: Record<EvidenceDialect, EvidenceKind> = { "junit-xml/v1": "junit", "in-toto-statement/v1": "attestation", "dsse-envelope/v1": "attestation", "dsse-envelope-jsonl/v1": "jsonl" };
+const kinds: Record<EvidenceDialect, EvidenceKind> = { "junit-xml/v1": "junit", "in-toto-statement/v1": "attestation", "dsse-envelope/v1": "attestation", "dsse-envelope-jsonl/v1": "jsonl", "runphantom-findings-json/v1": "finding" };
 
 export function checkEvidenceFiles(files: readonly File[], capabilities: EvidenceCapabilities): void {
   if (!files.length || files.length > Math.min(32, capabilities.limits.MAX_REPORTS)) throw new Error("Choose between 1 and 32 report files.");

@@ -41,7 +41,7 @@ export function createEvidenceRouter(service: EvidenceImportService, owner: Evid
   router.get("/capabilities", route((_req, res) => {
     owner.database.transaction(() => owner.authorize("normalized_read", null)).immediate();
     res.json({ transport: { version: 1, contentType: EVIDENCE_IMPORT_CONTENT_TYPE, maxHeaderBytes: EVIDENCE_HEADER_BYTES, maxFrameBytes: EVIDENCE_FRAME_BYTES },
-      reader: EVIDENCE_READER_IDENTITY, dialects: ["junit-xml/v1", "in-toto-statement/v1", "dsse-envelope/v1", "dsse-envelope-jsonl/v1"], limits: EVIDENCE_LIMITS });
+      reader: EVIDENCE_READER_IDENTITY, dialects: ["junit-xml/v1", "in-toto-statement/v1", "dsse-envelope/v1", "dsse-envelope-jsonl/v1", "runphantom-findings-json/v1"], limits: EVIDENCE_LIMITS });
   }));
   router.post("/inventories", route((req, res) => res.status(201).json(inventories.save(req.body))));
   router.put("/inventories", route((req, res) => res.status(201).json(inventories.save(req.body))));
