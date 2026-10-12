@@ -74,25 +74,62 @@ export function readCaptureReceipt(value: unknown): OtlpEvidence | undefined {
 }
 const filterKeys = new Set(["db.filter"]);
 const textKeys = new Set(["db.collection.name", "db.query.summary", "db.query.text", "gen_ai.retrieval.query", "gen_ai.retrieval.query.text", "gen_ai.retrieval.source"]);
+const publicKeys = [...filterKeys, ...textKeys];
+const keyWindow = Math.max(...publicKeys.map(key => key.length));
+/** Bounded candidate detection only; decoded text never authorizes body projection. */
+function ownedCarrierCandidate(raw: string, maximum: number): boolean {
+  // An oversized metadata carrier cannot be searched or admitted safely.
+  if (raw.length > maximum || Buffer.byteLength(raw) > maximum) return true;
+  if (publicKeys.some(key => raw.includes(key))) return true;
+  if (!raw.includes("\\u")) return false;
+  let window = "", escaped = "";
+  const candidate = (character: string): boolean => {
+    if (escaped) {
+      escaped += character;
+      if ((escaped.length === 2 && character !== "u") || (escaped.length > 2 && !/^[\da-f]$/i.test(character))) {
+        escaped = character === "\\" ? "\\" : ""; window = ""; return false;
+      }
+      if (escaped.length < 6) return false;
+      character = String.fromCharCode(parseInt(escaped.slice(2), 16)); escaped = "";
+    } else if (character === "\\") { escaped = character; return false; }
+    window = (window + character).slice(-keyWindow);
+    return publicKeys.some(key => window.endsWith(key));
+  };
+  for (let at = 0; at < raw.length;) {
+    let character = raw[at++];
+    if (character === "\\") {
+      // Cache carriers can have an additional escaped JSON string layer.
+      while (raw[at] === "\\") at++;
+      const hex = raw.slice(at + 1, at + 5);
+      if (raw[at] !== "u" || !/^[\da-f]{4}$/i.test(hex)) { window = ""; escaped = ""; continue; }
+      character = String.fromCharCode(parseInt(hex, 16)); at += 5;
+    }
+    if (candidate(character)) return true;
+  }
+  return false;
+}
 /** Only owned metadata carriers are interpreted. Ordinary message/body strings stay literal. */
 export function publicCaptureMetadata<T extends { attributes?: unknown; otlp_evidence?: unknown }>(row: T): T {
   let changed = false;
   const sanitize = (key: string, value: unknown): unknown => filterKeys.has(key) ? sanitizeCaptureFilter(value) : textKeys.has(key) ? safeText(value) : value;
   let attributes = row.attributes, receipt = row.otlp_evidence;
   if (typeof attributes === "string") {
+    const relevant = ownedCarrierCandidate(attributes, 10 * 1024 * 1024);
     try {
+      if (relevant && (attributes.length > 10 * 1024 * 1024 || Buffer.byteLength(attributes) > 10 * 1024 * 1024)) throw new Error("oversized metadata");
       const parsed: unknown = JSON.parse(attributes);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        for (const key of [...filterKeys, ...textKeys]) {
+        if (relevant && hasDuplicateJsonKeys(attributes)) throw new Error("ambiguous metadata");
+        for (const key of publicKeys) {
           const old = own(parsed, key); if (old === undefined) continue;
           const safe = sanitize(key, old); if (safe !== old) { (parsed as Record<string, unknown>)[key] = safe; changed = true; }
         }
         if (changed) attributes = JSON.stringify(parsed);
-      }
-    } catch { /* No ownership inferred from an unparseable carrier. */ }
+      } else if (relevant) throw new Error("invalid metadata");
+    } catch { if (relevant) { attributes = null; changed = true; } }
   }
   const evidence = readCaptureReceipt(receipt);
-  if (!evidence && typeof receipt === "string" && [...filterKeys, ...textKeys].some(key => (receipt as string).includes(key))) {
+  if (!evidence && typeof receipt === "string" && ownedCarrierCandidate(receipt, OTLP_EVIDENCE_LIMITS.bytes)) {
     // An invalid owned receipt cannot publish unsanitized companion metadata.
     receipt = null; changed = true;
   }

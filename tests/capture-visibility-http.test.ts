@@ -3,6 +3,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
+import { Database } from "bun:sqlite";
+import { parseOtlpRequest } from "../src/parse";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { captureTrace, captureInput, captureOutput, filterSecret } from "./fixtures/capture-visibility";
@@ -46,6 +48,35 @@ afterAll(async () => {
 });
 async function json(route: string) { const response = await fetch(base + route); expect(response.status).toBe(200); return response.json(); }
 async function post(route: string, data: unknown) { return fetch(base + route, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }); }
+for (const variant of ["valid", "escaped-invalid-receipt", "malformed-attributes"] as const) {
+  test(`actual saved-cache ${variant} never publishes owned filter credentials`, async () => {
+    const fixture = captureTrace(1710), parsed = parseOtlpRequest(fixture.body)[0];
+    expect((await post("/v1/traces", fixture.body)).status).toBe(200);
+    const original = await json(`/api/runs/detail/${fixture.id}`);
+    const id = (1711 + ["valid", "escaped-invalid-receipt", "malformed-attributes"].indexOf(variant)).toString(16).padStart(32, "0");
+    const row = { ...original.spans[0], id: parsed.spanId, run_id: id, name: parsed.name, span_type: parsed.spanType,
+      input_payload: '{"db.filter":"ordinary authoritative business body"}', output_payload: "Ordinary output remains literal",
+      attributes: JSON.stringify(parsed.attributes), otlp_evidence: JSON.stringify(parsed.otlpEvidence), normalized: parsed.normalized, captureVisibility: parsed.captureVisibility };
+    if (variant === "escaped-invalid-receipt") {
+      row.attributes = "{}";
+      row.otlp_evidence = JSON.stringify({ ...parsed.otlpEvidence, schemaVersion: 2, attributes: parsed.otlpEvidence!.attributes.filter(item => item.key === "db.filter") }).replaceAll("db.filter", "db.\\u0066ilter");
+    } else if (variant === "malformed-attributes") { row.otlp_evidence = null as any; row.attributes = row.attributes.slice(0, -1); }
+    const data = { run: { ...original.run, id }, spans: [row], liveEvents: [] };
+    expect((await fetch(`${base}/api/saved-runs/cache/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })).status).toBe(200);
+    const database = new Database(path.join(directory, "capture.db"), { readonly: true });
+    const stored = database.query("SELECT data FROM saved_run_cache WHERE id=?").get(id) as { data: string }; database.close();
+    expect(stored.data).toBe(JSON.stringify(data)); expect(stored.data).toContain(filterSecret);
+    const responses = [];
+    for (const route of [`/api/runs/detail/${id}`, `/api/saved-runs/cache/${id}`, `/api/runs/${id}/export`]) {
+      const response = await fetch(base + route), text = await response.text();
+      expect(response.status).toBe(200);
+      expect(text).not.toContain(filterSecret);
+      if (response.status === 200) { const projected = JSON.parse(text); expect(projected.spans[0].input_payload).toBe(row.input_payload); expect(projected.spans[0].output_payload).toBe(row.output_payload); }
+      responses.push({ route, status: response.status, credentialWithheld: !text.includes(filterSecret) });
+    }
+    proof(`http-cache-privacy-${variant}.json`, { variant, ownedPid: daemon.pid, privateBytesUnchanged: stored.data === JSON.stringify(data), responses });
+  });
+}
 async function verify(id: string) {
   const detail = await json(`/api/runs/detail/${id}`);
   expect(detail.spans).toHaveLength(4);

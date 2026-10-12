@@ -46,6 +46,23 @@ test("metadata-only and missing-roster streams never become complete from ended 
 });
 
 import { publicCaptureMetadata, CAPTURE_LIMITS, sanitizeCaptureFilter } from "../src/spans/adapters/capture-visibility";
+
+test("malformed and ambiguous decoded owned carriers are withheld without reinterpreting ordinary bodies", () => {
+  const business = '{"db.filter":"literal authoritative body"}';
+  for (const attributes of [
+    '{"db.\\u0066ilter":"credential"',
+    '{"db.filter":"credential","db.\\u0066ilter":"safe"}',
+    '{"db.\\u005cu0066ilter":"credential"',
+  ]) {
+    const projected = publicCaptureMetadata({ attributes, input_payload: business, output_payload: business });
+    expect(projected.attributes).toBeNull(); expect(projected.input_payload).toBe(business); expect(projected.output_payload).toBe(business);
+  }
+  const ordinary = { attributes: '{"business":"literal unclosed text', input_payload: business };
+  expect(publicCaptureMetadata(ordinary)).toBe(ordinary);
+  const ambiguousReceipt = '{"schemaVersion":2,"attributes":[{"key":"db.\\u005cu0066ilter","value":{"stringValue":"credential"}}]}';
+  expect(publicCaptureMetadata({ attributes: "{}", otlp_evidence: ambiguousReceipt }).otlp_evidence).toBeNull();
+  expect(publicCaptureMetadata({ attributes: "{}", otlp_evidence: " ".repeat(256 * 1024) + "credential" }).otlp_evidence).toBeNull();
+});
 import { encodeFidelityRequest } from "./fixtures/otlp-evidence";
 import { decodeOtlpProtobuf } from "../src/otlp-protobuf";
 import { filterSecret } from "./fixtures/capture-visibility";

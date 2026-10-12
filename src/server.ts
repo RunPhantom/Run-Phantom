@@ -2278,7 +2278,9 @@ export async function createServer(port: number) {
     const id = (req.params as unknown as string[])[0];
     const data = getCachedRun(id);
     if (!data) { res.status(404).json({ error: "Not cached" }); return; }
-    res.json(JSON.parse(data));
+    const cached = JSON.parse(data);
+    res.json({ ...cached, spans: Array.isArray(cached.spans)
+      ? cached.spans.map((span: any) => publicCaptureMetadata(withholdAgentDefinitionCapture(span))) : cached.spans });
   });
   app.delete(/^\/api\/saved-runs\/cache\/(.+)$/, (req, res) => {
     const id = (req.params as unknown as string[])[0];
