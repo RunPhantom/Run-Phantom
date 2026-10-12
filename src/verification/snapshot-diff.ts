@@ -31,6 +31,11 @@ export function diffSnapshots(beforeValue: unknown, afterValue: unknown, beforeI
   let work = 0;
   const charge = (units = 1): void => { if (work + units > DIFF_LIMITS.work) throw new WorkCap(); work += units; };
   const result: SnapshotDiffResult = { algorithmVersion: 1, beforeId, afterId, availability: "unavailable", change: "unavailable", counts: { additions: null, removals: null, matched: null, incomparableBefore: null, incomparableAfter: null, exact: false }, orderChanged: null, rows: [], limits: { workUnits: 0, workCapped: false, outputCapped: false, omittedRows: null }, reasons: [] };
+  const finish = (): SnapshotDiffResult => {
+    result.limits.workUnits = work;
+    if (jsonBytes(result) > DIFF_LIMITS.bytes) throw new Error("Snapshot diff metadata exceeds its output budget");
+    return result;
+  };
   const keys = (tree: SemanticTreeResult): Array<{ key: string; index: number }> => {
     const ids = tree.nodes.map(node => { charge(10 + [node.tag, node.role, node.name, node.label, node.testId].reduce((sum, text) => sum + text.length, 0)); return nodeContentId(node); });
     const ancestor = (index: number): string[] | null => {
@@ -77,6 +82,12 @@ export function diffSnapshots(beforeValue: unknown, afterValue: unknown, beforeI
     result.counts = { additions: b.length - matched, removals: a.length - matched, matched, incomparableBefore: before.nodes.length - a.length, incomparableAfter: after.nodes.length - b.length, exact: !partial };
     result.availability = partial ? "partial" : "complete";
     if (partial) result.reasons.push("Captured scope or ancestry is partial; counts describe comparable represented content only");
+    if (partial && !a.length && !b.length) {
+      result.availability = "unavailable";
+      result.counts.additions = null; result.counts.removals = null; result.counts.matched = null;
+      result.reasons.push("No comparable observations were retained; absence or unchanged content cannot be established");
+      return finish();
+    }
     result.orderChanged = a.length !== b.length || a.some((item, index) => { charge(); return item.key !== b[index]?.key; });
     result.change = result.counts.additions || result.counts.removals || result.orderChanged ? "observed-changes" : "no-observed-changes";
     if (a.length * b.length > DIFF_LIMITS.cells) throw new WorkCap();
@@ -103,7 +114,5 @@ export function diffSnapshots(beforeValue: unknown, afterValue: unknown, beforeI
     if (!(error instanceof WorkCap)) throw error;
     result.availability = "unavailable"; result.change = "unavailable"; result.counts.exact = false; result.orderChanged = null; result.rows = []; result.limits.workCapped = true; result.reasons.push("Comparison work budget exhausted");
   }
-  result.limits.workUnits = work;
-  if (jsonBytes(result) > DIFF_LIMITS.bytes) throw new Error("Snapshot diff metadata exceeds its output budget");
-  return result;
+  return finish();
 }

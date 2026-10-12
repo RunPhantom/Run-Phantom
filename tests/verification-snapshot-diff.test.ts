@@ -38,5 +38,12 @@ test("maximum bounded graphs and large UTF-8 rows measure final markers and neve
   const result = diffSnapshots(a, b); expect(result.counts).toMatchObject({ additions: 70, removals: 70, matched: 0 });
   expect(result.change).toBe("observed-changes"); expect(result.limits.workUnits).toBeLessThanOrEqual(50_000); expect(new TextEncoder().encode(JSON.stringify(result)).length).toBeLessThanOrEqual(32 * 1024);
   const unknown = tree(["A"]); unknown.nodes[0].parent = { kind: "unavailable", reason: "ancestor-not-retained" }; unknown.availability = "partial"; unknown.coverage.complete = false;
-  expect(diffSnapshots(unknown, unknown).counts).toMatchObject({ matched: 0, incomparableBefore: 1, incomparableAfter: 1, exact: false });
+  expect(diffSnapshots(unknown, unknown).counts).toMatchObject({ incomparableBefore: 1, incomparableAfter: 1, exact: false });
+});
+
+test("partial captures with no comparable retained observations cannot establish unchanged content or zero changes", () => {
+  const unseen = tree(); unseen.availability = "partial"; unseen.coverage.complete = false; unseen.coverage.truncated = true; unseen.coverage.reasons = ["transport-budget-limit"];
+  const result = diffSnapshots(unseen, unseen);
+  expect(result.availability).toBe("unavailable"); expect(result.change).toBe("unavailable"); expect(result.counts).toMatchObject({ additions: null, removals: null, matched: null, exact: false });
+  expect(diffSnapshots(tree(), tree()).change).toBe("no-observed-changes");
 });
