@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { parseClaudeHookInput, HOOK_LIMITS } from "../src/coding-hooks/shared";
+import { normalizeClaudeHook, NORMALIZATION_LIMITS } from "../src/coding-hooks/claude";
+import { buildRedactionPolicy, resetActiveRedactionPolicy, setActiveRedactionPolicy } from "../src/verification/redaction";
+import { hookFixture, hookSourceKey, transcriptRecord, transcriptSnapshot } from "./fixtures/coding-hooks-claude";
 
 const session = "11111111-1111-4111-8111-111111111111";
 const base = { session_id: session, hook_event_name: "SessionStart", source: "startup", transcript_path: `/private/fixture/projects/project/${session}.jsonl`, cwd: "/private/fixture/project" };
@@ -82,6 +85,178 @@ describe("Claude hook lexical and typed admission", () => {
     const result = parse({ ...without, future_option: "claimed" });
     expect(result.status).toBe("accepted");
     if (result.status === "accepted") expect(result.value.coverageReasons).toEqual(["producer_unverified", "unknown_fields", "transcript_absent"]);
+  });
+});
+
+describe("bounded Claude producer observations", () => {
+  const full = { sourceKey: hookSourceKey, captureMode: "full" as const };
+  const metadata = { ...full, captureMode: "metadata" as const };
+  const entity = (result: ReturnType<typeof normalizeClaudeHook>, kind: string) => {
+    if (result.status !== "accepted") throw new Error("fixture not admitted");
+    return result.value.entities.find(value => value.kind === kind)!;
+  };
+
+  test("tool output and reported duration are preserved without fabricated runtime proof", () => {
+    const result = normalizeClaudeHook(hookFixture("PostToolUse", { tool_name: "Bash", tool_use_id: "tool_exact", tool_input: { command: "printf safe" }, tool_response: { stdout: "safe exact output" }, duration_ms: 12.5 }), full, null);
+    const tool = entity(result, "tool");
+    expect(tool.phase).toBe("success"); expect(tool.body).toEqual({ input: { command: "printf safe" }, output: { stdout: "safe exact output" }, error: null });
+    expect(tool.reportedDurationMs).toBe(12.5); expect(tool.runtimeDurationMs).toBeNull();
+    expect(tool.runtimeVerified).toBe(false); expect(tool.producerVerified).toBe(false);
+    expect(tool.incarnationKey).toBeNull(); expect(tool.sourceOffset).toBeNull();
+    expect(JSON.stringify(result)).not.toContain("tool_exact");
+  });
+
+  test("metadata capture omits immediate and transcript business bodies", () => {
+    const marker = "PRIVATE_BODY_FIXTURE";
+    const snapshot = transcriptSnapshot([transcriptRecord({ message: { id: "msg_1", content: [{ type: "text", text: marker }], stop_reason: "end_turn" } })]);
+    const result = normalizeClaudeHook(hookFixture("UserPromptSubmit", { prompt: marker, last_assistant_message: marker, tool_input: { ordinary: marker }, tool_response: marker }), metadata, snapshot);
+    expect(result.status).toBe("accepted"); expect(JSON.stringify(result)).not.toContain(marker);
+    if (result.status === "accepted") {
+      expect(result.value.unlinkedAssertions).toBeNull();
+      expect(result.value.entities.every(value => value.body === null)).toBe(true);
+      expect(result.value.coverageReasons).toContain("producer_unverified");
+    }
+  });
+
+  test("unidentified prompt and Stop output stay unlinked rather than becoming invented turns", () => {
+    const prompt = normalizeClaudeHook(hookFixture("UserPromptSubmit", { prompt: "ordinary prompt" }), full, null);
+    const stop = normalizeClaudeHook(hookFixture("Stop", { last_assistant_message: "ordinary output" }), full, null);
+    for (const result of [prompt, stop]) {
+      expect(result.status).toBe("accepted");
+      if (result.status === "accepted") { expect(result.value.entities).toHaveLength(1); expect(result.value.sessionClosureClaim).toBe(false); }
+    }
+    if (prompt.status === "accepted") { expect(prompt.value.unlinkedAssertions?.prompt).toBe("ordinary prompt"); expect(prompt.value.coverageReasons).toContain("unresolved_prompt_identity"); }
+    if (stop.status === "accepted") expect(stop.value.unlinkedAssertions?.assistant).toBe("ordinary output");
+    const end = normalizeClaudeHook(hookFixture("SessionEnd", { reason: "prompt_input_exit" }), full, null);
+    if (end.status === "accepted") { expect(end.value.sessionClosureClaim).toBe(true); expect(Object.hasOwn(end.value, "verdict")).toBe(false); }
+  });
+
+  test("exact API message ID coalesces last observed standalone usage without concatenating fragments", () => {
+    const first = transcriptRecord({ message: { id: "msg_1", model: "fixture-model", content: [{ type: "text", text: "earlier" }], stop_reason: null, usage: { input_tokens: 1, output_tokens: 1 } } });
+    const last = transcriptRecord({ uuid: "record_2" });
+    const snapshot = transcriptSnapshot([first, last]);
+    const result = normalizeClaudeHook(hookFixture("Stop"), full, snapshot);
+    const assistant = entity(result, "assistant");
+    expect(assistant.body?.output).toEqual([{ type: "text", text: "safe exact business result" }]);
+    expect(assistant.usage).toEqual({ freshInputTokens: 10, outputTokens: 4, cacheCreatedInputTokens: 0, cacheReadInputTokens: 2 });
+    expect(assistant.coverageReasons).toContain("assistant_fragments_unmerged");
+    expect(assistant.sourceOffset).toBe(snapshot.endOffset); expect(assistant.incarnationKey).toBe(snapshot.incarnationKey);
+    if (result.status === "accepted") { expect(result.value.entities.filter(value => value.kind === "assistant")).toHaveLength(1); expect(entity(result, "session").usage).toBeNull(); }
+  });
+
+  test("shared request ID cannot merge distinct API message IDs", () => {
+    const second = transcriptRecord({ uuid: "record_2", message: { id: "msg_2", content: [{ type: "text", text: "separate" }], stop_reason: "end_turn", usage: { input_tokens: 20 } } });
+    const result = normalizeClaudeHook(hookFixture("Stop"), full, transcriptSnapshot([transcriptRecord(), second]));
+    if (result.status !== "accepted") throw new Error("fixture not admitted");
+    const assistants = result.value.entities.filter(value => value.kind === "assistant");
+    expect(assistants).toHaveLength(2); expect(assistants[0].entityKey).not.toBe(assistants[1].entityKey);
+    expect(assistants[1].usage?.outputTokens).toBeNull();
+  });
+
+  test("missing and invalid usage remains null and cannot produce a session rollup", () => {
+    const noUsage = transcriptRecord({ message: { id: "msg_1", content: [], stop_reason: "end_turn" } });
+    const missing = normalizeClaudeHook(hookFixture("Stop"), full, transcriptSnapshot([noUsage]));
+    expect(entity(missing, "assistant").usage).toEqual({ freshInputTokens: null, outputTokens: null, cacheCreatedInputTokens: null, cacheReadInputTokens: null });
+    const invalid = transcriptRecord({ message: { id: "msg_1", content: [], stop_reason: "end_turn", usage: { input_tokens: -1, output_tokens: 2.5, cache_creation_input_tokens: "20" } } });
+    const result = normalizeClaudeHook(hookFixture("Stop"), full, transcriptSnapshot([invalid]));
+    expect(entity(result, "assistant").usage?.freshInputTokens).toBeNull(); expect(entity(result, "assistant").coverageReasons).toContain("invalid_usage");
+    expect(entity(result, "session").usage).toBeNull();
+  });
+
+  test("contradictory terminal claims become conflict and a later pending fragment cannot erase completion", () => {
+    const record = transcriptRecord({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool_exact", is_error: true, content: "reported failure" }] } });
+    const conflict = normalizeClaudeHook(hookFixture("PostToolUse", { tool_use_id: "tool_exact", tool_name: "Bash", tool_response: "reported success" }), full, transcriptSnapshot([record]));
+    expect(entity(conflict, "tool").phase).toBe("conflict"); expect(entity(conflict, "tool").coverageReasons).toContain("contradictory_terminal_claims");
+    const pending = transcriptRecord({ uuid: "record_2", message: { id: "msg_1", content: [{ type: "text", text: "later pending" }], stop_reason: null } });
+    const result = normalizeClaudeHook(hookFixture("Stop"), full, transcriptSnapshot([transcriptRecord(), pending]));
+    expect(entity(result, "assistant").phase).toBe("complete"); expect(entity(result, "assistant").body?.output).toEqual([{ type: "text", text: "safe exact business result" }]);
+    expect(entity(result, "assistant").coverageReasons).toContain("terminal_regression");
+  });
+
+  test("stable transcript UUID observations distinguish identical prompt bodies", () => {
+    const prompt = (uuid: string) => transcriptRecord({ type: "user", uuid, message: { role: "user", content: "same prompt" } });
+    const result = normalizeClaudeHook(hookFixture("Stop"), full, transcriptSnapshot([prompt("user_1"), prompt("user_2")]));
+    if (result.status !== "accepted") throw new Error("fixture not admitted");
+    const prompts = result.value.entities.filter(value => value.kind === "prompt");
+    expect(prompts).toHaveLength(2); expect(prompts[0].entityKey).not.toBe(prompts[1].entityKey);
+    expect(prompts.map(value => value.body?.input)).toEqual(["same prompt", "same prompt"]);
+  });
+
+  test("malformed and unsupported records are disclosed, and incomplete tail does not advance cursor", () => {
+    const valid = transcriptRecord();
+    const complete = transcriptSnapshot([valid, '{"type":"assistant","type":"user"}', transcriptRecord({ version: "future" })]);
+    const snapshot = { ...complete, text: complete.text + '{"type":"assistant"', endOffset: complete.endOffset + 19, fileBytes: complete.fileBytes + 19 };
+    const result = normalizeClaudeHook(hookFixture("Stop"), full, snapshot);
+    expect(result.status).toBe("accepted");
+    if (result.status === "accepted") {
+      expect(result.value.transcriptCursor).toBe(complete.endOffset);
+      expect(result.value.coverageReasons).toEqual(expect.arrayContaining(["duplicate_keys", "unsupported_version", "incomplete_tail", "producer_unverified"]));
+      expect(result.value.entities.filter(value => value.kind === "assistant")).toHaveLength(1);
+    }
+  });
+
+  test("source timestamps are never guessed from callback wall clock", () => {
+    const result = normalizeClaudeHook(hookFixture("Stop"), full, transcriptSnapshot([transcriptRecord({ timestamp: "not a timestamp" })]));
+    expect(entity(result, "assistant").reportedAt).toBeNull(); expect(entity(result, "assistant").coverageReasons).toContain("invalid_timestamp");
+  });
+
+  test("mandatory source-structure and value floor survives ambient allow exemptions", () => {
+    const secret = "sk-ant-fixture-" + "x".repeat(30), marker = "PRIVATE_NESTED_VALUE";
+    setActiveRedactionPolicy(buildRedactionPolicy({ allow: ["password", "apiKey", "token"] }));
+    try {
+      const result = normalizeClaudeHook(hookFixture("PostToolUse", { tool_use_id: "tool_privacy", tool_name: "Bash", tool_input: { password: marker, nested: { apiKey: marker, token: marker }, ordinary: "safe exact business", note: secret, url: "https://fixture.invalid/?token=" + marker }, tool_response: { ordinary: "safe output" } }), full, null);
+      const text = JSON.stringify(result);
+      expect(text).not.toContain(marker); expect(text).not.toContain(secret); expect(text).not.toContain("/private/fixture");
+      expect(entity(result, "tool").body?.input).toEqual({ password: "[REDACTED]", nested: { apiKey: "[REDACTED]", token: "[REDACTED]" }, ordinary: "safe exact business", note: "[REDACTED]", url: "https://fixture.invalid/?token=%5BREDACTED%5D" });
+      expect(entity(result, "tool").body?.output).toEqual({ ordinary: "safe output" });
+    } finally { resetActiveRedactionPolicy(); }
+  });
+
+  test("quoted credential assignments inside selected prose remain private without parsing arbitrary business strings", () => {
+    const marker = "PRIVATE_QUOTED_VALUE";
+    setActiveRedactionPolicy(buildRedactionPolicy({ allow: ["password", "apiKey", "token"] }));
+    try {
+      const result = normalizeClaudeHook(hookFixture("PostToolUse", { tool_use_id: "tool_quoted", tool_name: "Bash", tool_response: '{"password":"' + marker + '","ordinary":"safe exact business"}' }), full, null);
+      expect(JSON.stringify(result)).not.toContain(marker);
+      expect(entity(result, "tool").body?.output).toContain('"ordinary":"safe exact business"');
+    } finally { resetActiveRedactionPolicy(); }
+  });
+
+  test("assistant tool identities remain hashed and unsupported block fields are not copied", () => {
+    const record = transcriptRecord({ message: { id: "msg_1", content: [{ type: "tool_use", id: "tool_PRIVATE_ID", name: "Bash", input: { command: "printf safe" }, unreviewedPrivate: "PRIVATE_FIELD" }, { type: "future_block", privateBody: "PRIVATE_UNSUPPORTED" }], stop_reason: "tool_use" } });
+    const result = normalizeClaudeHook(hookFixture("Stop"), full, transcriptSnapshot([record]));
+    expect(JSON.stringify(result)).not.toContain("tool_PRIVATE_ID"); expect(JSON.stringify(result)).not.toContain("PRIVATE_FIELD"); expect(JSON.stringify(result)).not.toContain("PRIVATE_UNSUPPORTED");
+    const body = entity(result, "assistant").body?.output;
+    expect(body).toEqual([{ type: "tool_use", toolIdentity: expect.stringMatching(/^[a-f0-9]{64}$/), name: "Bash", input: { command: "printf safe" } }]);
+    expect(entity(result, "assistant").coverageReasons).toContain("unsupported_content");
+  });
+
+  test("metadata observes fragment ambiguity and model contradictions without retaining bodies", () => {
+    const first = transcriptRecord(), second = transcriptRecord({ uuid: "record_2", message: { id: "msg_1", model: "other-model", content: [{ type: "text", text: "different output" }], stop_reason: "end_turn" } });
+    const result = normalizeClaudeHook(hookFixture("Stop"), metadata, transcriptSnapshot([first, second]));
+    expect(entity(result, "assistant").body).toBeNull(); expect(entity(result, "assistant").coverageReasons).toContain("assistant_fragments_unmerged");
+    expect(entity(result, "assistant").coverageReasons).toContain("inconsistent_model_identity"); expect(entity(result, "assistant").phase).toBe("conflict");
+    expect(JSON.stringify(result)).not.toContain("different output");
+  });
+
+  test("line and entity limits stop before skipped source bytes and disclose cumulative body loss", () => {
+    const long = transcriptSnapshot([JSON.stringify({ type: "user", body: "x".repeat(NORMALIZATION_LIMITS.lineBytes) })]);
+    const line = normalizeClaudeHook(hookFixture("Stop"), full, long);
+    if (line.status !== "accepted") throw new Error("fixture not admitted");
+    expect(line.value.transcriptCursor).toBe(0); expect(line.value.coverageReasons).toContain("line_limit");
+    const many = Array.from({ length: NORMALIZATION_LIMITS.entities }, (_, index) => transcriptRecord({ uuid: `record_${index}`, message: { id: `msg_${index}`, content: [{ type: "text", text: "ordinary" }], stop_reason: "end_turn" } }));
+    const limited = normalizeClaudeHook(hookFixture("Stop"), full, transcriptSnapshot(many));
+    if (limited.status !== "accepted") throw new Error("fixture not admitted");
+    expect(limited.value.entities).toHaveLength(NORMALIZATION_LIMITS.entities); expect(limited.value.coverageReasons).toContain("entity_limit");
+    expect(limited.value.transcriptCursor).toBeLessThan(transcriptSnapshot(many).endOffset);
+    expect(Buffer.byteLength(JSON.stringify(limited.value))).toBeLessThanOrEqual(NORMALIZATION_LIMITS.transportBytes);
+    expect(limited.value.coverageReasons).toContain("body_partial");
+  });
+
+  test("malformed trusted snapshot and invalid source identity do not manufacture provenance", () => {
+    const snapshot = transcriptSnapshot([transcriptRecord()]);
+    expect(normalizeClaudeHook(hookFixture("Stop"), full, { ...snapshot, endOffset: snapshot.endOffset + 1 }).status).toBe("unavailable");
+    expect(normalizeClaudeHook(hookFixture("Stop"), { ...full, sourceKey: "untrusted" }, snapshot).status).toBe("unavailable");
   });
 });
 
