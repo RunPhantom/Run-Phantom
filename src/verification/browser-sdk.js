@@ -1664,6 +1664,13 @@ function queryStore(source, options) {
             if (typeof status !== "string" || typeof fetchStatus !== "string" || typeof isStale !== "boolean" || !["pending", "error", "success"].includes(status) || !["idle", "fetching", "paused"].includes(fetchStatus) || typeof dataUpdatedAt !== "number" || !Number.isSafeInteger(dataUpdatedAt) || dataUpdatedAt < 0)
               invalid2();
             const error = data(state, "error");
+            let errorMessage;
+            if (opts.includeErrorMessage === true && error !== null && error !== undefined) {
+              const message = data(error, "message");
+              if (typeof message !== "string" || message.length > 1000)
+                invalid2();
+              errorMessage = message;
+            }
             return {
               keyId: identity.keyId,
               key: identity.key,
@@ -1673,7 +1680,7 @@ function queryStore(source, options) {
               dataUpdatedAt,
               isStale,
               hasError: error !== null && error !== undefined,
-              ...opts.includeErrorMessage === true && error !== null && error !== undefined ? { errorMessage: data(error, "message") } : {},
+              ...errorMessage !== undefined ? { errorMessage } : {},
               ...selected.length ? { values: project(data(state, "data"), selected) } : {}
             };
           } catch {

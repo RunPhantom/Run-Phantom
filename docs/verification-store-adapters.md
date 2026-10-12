@@ -56,8 +56,11 @@ const release = runtime.registerStore("queries", sdk.queryStore(queryClient, {
 }));
 ```
 
-`includeErrorMessage` separately opts into the error's own message field. Error
-presence/status can be inspected without that text. A source/body that was not
+`includeErrorMessage` separately opts into the error's own data message string,
+with at most 1000 UTF-16 units and the same whole-result UTF-8/work limits. Empty
+strings are valid. An object, accessor or oversized selected message makes that
+query unavailable; it does not expose extra error-body fields or coerce values.
+Error presence/status can be inspected without that text. A source/body that was not
 selected does not enter the snapshot. Library methods are trusted operations
 explicitly supplied by the application; the SDK does not sandbox their execution
 time or prevent Proxy traps. Query lookup uses the client's own defaulted hash

@@ -30,7 +30,9 @@ const client = new QueryClient(); const key = ['counter', { unit: 'widgets', pag
 client.setQueryData(key, { count: 1, body: 'unselected query body' });
 const cache = client.getQueryCache(), originalSubscribe = cache.subscribe.bind(cache);
 cache.subscribe = listener => { stats.querySubscribed++; const stop = originalSubscribe(listener); return () => { stats.queryReleased++; stop(); }; };
-let sdk, runtime, queryRelease, shapeRelease, piniaRelease, component;
+let sdk, runtime, queryRelease, shapeRelease, piniaRelease, component, errorRelease;
+const errorClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+const errorKey = ['message-only'];
 const pinia = ${privateRoot ? `(() => { setActivePinia(createPinia()); const useCounter = defineStore('f23', { state: () => ({ count: 1, nested: { total: 2 }, body: 'unselected pinia body' }) }); const value = useCounter(); const original = value.$subscribe.bind(value); value.$subscribe = (listener, options) => { stats.piniaSubscribed++; const stop = original(listener, options); return () => { stats.piniaReleased++; stop(); }; }; return value; })()` : "{ $state: { count: 1, nested: { total: 2 } }, $subscribe(listener) { stats.piniaSubscribed++; piniaListeners.add(listener); return () => { stats.piniaReleased++; piniaListeners.delete(listener); }; } }"};
 const piniaListeners = new Set();
 const render = () => { document.querySelector('#count').textContent = String(state.count); document.querySelector('#query-count').textContent = String(client.getQueryData(key).count); document.querySelector('#pinia-count').textContent = String(${privateRoot ? "pinia.count" : "pinia.$state.count"}); };
@@ -43,6 +45,15 @@ document.querySelector('#pinia-increment').onclick = () => { ${privateRoot ? "pi
 document.querySelector('#unmount').onclick = () => { component?.unmount(); document.querySelector('#component-status').textContent = 'Component unmounted'; };
 document.querySelector('#spa').onclick = () => { history.pushState({}, '', '/next'); document.querySelector('#route-status').textContent = 'Local route changed'; };
 document.querySelector('#data-optin').onclick = () => { queryRelease(); queryRelease = runtime.registerStore('queries', sdk.queryStore(client, { keys: [{ queryKey: key, select: { count: 'count' } }] })); document.querySelector('#data-status').textContent = 'Selected query count exposed'; };
+document.querySelector('#error-load').onclick = async () => {
+  await errorClient.fetchQuery({ queryKey: errorKey, queryFn: () => Promise.reject({ message: { detail: 'private nested error message' }, body: 'private extra error body' }) }).catch(() => {});
+  errorRelease = runtime.registerStore('error-query', sdk.queryStore(errorClient, { keys: [{ queryKey: errorKey }] }));
+  document.querySelector('#error-status').textContent = 'Query failure metadata available';
+};
+document.querySelector('#error-optin').onclick = () => {
+  errorRelease(); errorRelease = runtime.registerStore('error-query', sdk.queryStore(errorClient, { keys: [{ queryKey: errorKey }], includeErrorMessage: true }));
+  document.querySelector('#error-status').textContent = 'Error message capture explicitly requested';
+};
 document.querySelector('#private-key').onclick = () => {
   const privateClient = new QueryClient();
   const privateKey = ['profile', { nested: { password: 'f23-private-password', apiKey: 'f23-private-api-key', token: 'f23-private-token' }, ordinary: 'sk-proj-' + 'test'.repeat(12) }];
@@ -86,6 +97,7 @@ window.storeFixture = {
 <button id="query-update">Update query count</button><button id="invalidate">Invalidate query</button><output id="query-count">1</output>
 <button id="data-optin">Expose selected query count</button><p id="data-status">Query metadata only</p>
 <button id="private-key">Inspect private query metadata</button><p id="private-status">Private key not registered</p>
+<button id="error-load">Load query failure</button><button id="error-optin">Opt into error message</button><p id="error-status">No query failure loaded</p>
 <button id="pinia-increment">Increment Pinia state</button><output id="pinia-count">1</output>
 <button id="unmount">Unmount component</button><p id="component-status">Component mounted</p><div id="component"></div>
 <button id="spa">Change local route</button><p id="route-status">Original route</p><label>Live text<input id="text"></label>

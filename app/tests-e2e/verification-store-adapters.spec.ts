@@ -88,6 +88,35 @@ test.describe("explicit query and state adapters through the actual app and SDK"
     } finally { await ui.close(); }
   });
 
+  test("message-only opt-in refuses malformed error bodies after preserving ordinary error metadata", async ({ page, request, runPhantom, storeApp }) => {
+    const session = await pairStoreApp(page, request, runPhantom, storeApp.origin);
+    await act(request, runPhantom, session.id, { type: "click", selector: "#error-load" });
+    await expect(page.getByText("Query failure metadata available", { exact: true })).toBeVisible();
+    const cursor = (await observe(request, runPhantom, session.id)).cursor;
+    const ordinary = await assertRuntime(request, runPhantom, session.id, { kind: "state", store: "error-query", path: "queries.0.hasError", equals: true }, cursor, "Query reports an error");
+    expect(ordinary.status).toBe("pass");
+    expect(ordinary.evidence.some(event => event.type === "state" && !event.truncated)).toBe(true);
+    await page.getByRole("button", { name: "Opt into error message", exact: true }).click();
+    await expect(page.getByText("Error message capture explicitly requested", { exact: true })).toBeVisible();
+    const response = await request.post(`${runPhantom.url}/api/verification/sessions/${session.id}/command`, { data: { type: "state", store: "error-query" } });
+    const reading = await response.json() as { ok: boolean; truncated: boolean; result: { value: unknown; availability: string } };
+    expect(response.ok()).toBe(true); expect(reading.ok).toBe(true); expect(reading.truncated).toBe(true);
+    expect(reading.result.availability).toBe("partial");
+    expect(reading.result.value).toMatchObject({ queries: [{ availability: "unavailable", reason: "query-unavailable" }] });
+    const after = (await observe(request, runPhantom, session.id)).cursor;
+    const report = await assertRuntime(request, runPhantom, session.id, { kind: "state", store: "error-query", path: "queries.0.errorMessage", equals: null }, after, "Malformed message remains unavailable");
+    expect(report.status).toBe("inconclusive");
+    const output = JSON.stringify([ordinary, reading, report, await observe(request, runPhantom, session.id), readStoredReport(runPhantom.dbPath, ordinary.id), readStoredReport(runPhantom.dbPath, report.id)]);
+    for (const value of ["private nested error message", "private extra error body"]) expect(output).not.toContain(value);
+    const ui = await page.context().newPage();
+    try {
+      await ui.goto(`${runPhantom.url}/verification`);
+      const card = ui.getByRole("article", { name: "Malformed message remains unavailable: inconclusive", exact: true });
+      await expect(card).toBeVisible(); await card.getByText(/^Evidence \(/).click(); await expect(card).toContainText("partial capture");
+      for (const value of ["private nested error message", "private extra error body"]) expect(await card.innerText()).not.toContain(value);
+    } finally { await ui.close(); }
+  });
+
   test("Pinia public selected state keeps its subscription after component unmount and a local route change", async ({ page, request, runPhantom, storeApp }) => {
     const session = await pairStoreApp(page, request, runPhantom, storeApp.origin);
     const kind = await page.evaluate(() => (window as unknown as { storeFixture: { sourceKind: string } }).storeFixture.sourceKind);

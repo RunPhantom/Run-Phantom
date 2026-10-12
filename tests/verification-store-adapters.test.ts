@@ -235,3 +235,37 @@ test("known credential values in actual query keys are scrubbed before public id
   expect(reading.value).toMatchObject({ queries: [{ values: { count: 1 }, key: ["profile", { ordinary: "[REDACTED]" }] }] });
   client.clear();
 });
+
+
+test("actual QueryClient message opt-in refuses objects, getters and oversize text without disclosing error bodies", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  let getters = 0;
+  const errors = [{ message: { ordinary: "private nested message body" }, body: "unselected error body" },
+    { message: "x".repeat(1001), body: "unselected error body" },
+    Object.defineProperty({}, "message", { get() { getters++; return "private accessor message"; } })];
+  try {
+    for (let n = 0; n < errors.length; n++) {
+      const key = ["invalid-message", n];
+      // Negative fixture: the cache must retain an application's malformed non-Error rejection.
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+      await client.fetchQuery({ queryKey: key, queryFn: () => Promise.reject(errors[n]) }).catch(() => {});
+      const defaultReading = readStoreAdapter(queryStore(client, { keys: [{ queryKey: key }] }));
+      expect(defaultReading.availability).toBe("complete"); expect(defaultReading.value).toMatchObject({ queries: [{ status: "error", hasError: true }] });
+      const explicit = readStoreAdapter(queryStore(client, { keys: [{ queryKey: key }], includeErrorMessage: true }));
+      expect(JSON.stringify(explicit)).not.toContain("private nested message body");
+      expect(explicit.availability).toBe("partial");
+      expect(explicit.value).toMatchObject({ queries: [{ availability: "unavailable", reason: "query-unavailable" }] });
+      expect(JSON.stringify(explicit)).not.toContain("private"); expect(JSON.stringify(explicit)).not.toContain("unselected error body");
+    }
+    expect(getters).toBe(0);
+    for (const message of ["", "x".repeat(1000)]) {
+      const key = ["bounded-message", message.length];
+      // The accepted string field is checked independently of the application's error class.
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+      await client.fetchQuery({ queryKey: key, queryFn: () => Promise.reject({ message, body: "unselected error body" }) }).catch(() => {});
+      const reading = readStoreAdapter(queryStore(client, { keys: [{ queryKey: key }], includeErrorMessage: true }));
+      expect(reading.availability).toBe("complete"); expect(reading.value).toMatchObject({ queries: [{ status: "error", errorMessage: message }] });
+      expect(JSON.stringify(reading)).not.toContain("unselected error body");
+    }
+  } finally { client.clear(); }
+});
