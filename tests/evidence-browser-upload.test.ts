@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { checkEvidenceFiles, prepareEvidenceUpload, type EvidenceCapabilities } from "../app/src/components/evaluations/evidence-upload";
-import { EVIDENCE_LIMITS } from "../src/evaluations/evidence-protocol";
+import { EVIDENCE_LIMITS, type EvidenceInventoryRevision } from "../src/evaluations/evidence-protocol";
 import { EVIDENCE_READER_IDENTITY, EVIDENCE_IMPORT_CONTENT_TYPE, EVIDENCE_FRAME_BYTES } from "../src/evaluations/evidence-import";
 import { evidenceDigest, parseEvidenceImportRequest } from "../src/evaluations/evidence-validation";
 const capabilities: EvidenceCapabilities = { reader: EVIDENCE_READER_IDENTITY, transport: { version: 1, contentType: EVIDENCE_IMPORT_CONTENT_TYPE, maxHeaderBytes: 65536, maxFrameBytes: EVIDENCE_FRAME_BYTES }, dialects: ["junit-xml/v1", "dsse-envelope-jsonl/v1"], limits: EVIDENCE_LIMITS };
@@ -19,6 +19,27 @@ test("browser frame preserves exact ordered bytes and hashes without transmittin
   expect(bytes.subarray(4 + length)).toEqual(new Uint8Array(await new Blob([a, b]).arrayBuffer()));
   expect(result.request.sources[0].artifactSha256).toBe(evidenceDigest(new Uint8Array(await a.arrayBuffer())));
   expect(result.request.sources[1].shardId).toBeNull(); expect(result.request.retention).toBe("normalized_only");
+});
+
+test("a current32-source inventory reaches the closed import parser as a minimal reference", async () => {
+  const expected = Array.from({ length: 32 }, (_, index) => ({ shardId: `shard-${index}`, kind: "junit" as const,
+    constraints: { runnerId: null, commit: null, sourceSha256: null } }));
+  const inventory: EvidenceInventoryRevision = { id: "authorized-inventory", revision: 7, declaration: "retrospective",
+    expected, actorId: "private-operator", createdAt: 1, digest: "a".repeat(64) };
+  const original = JSON.stringify(inventory);
+  const drafts = expected.map((source, index) => ({ file: new File([`<testsuite><testcase name="case-${index}"/></testsuite>`], `report-${index}.xml`),
+    sourceId: `source-${index}`, shardId: source.shardId, dialect: "junit-xml/v1" as const }));
+  const result = await prepareEvidenceUpload(drafts, capabilities, { ...options, inventory });
+  const bytes = new Uint8Array(await result.body.arrayBuffer()), length = new DataView(bytes.buffer).getUint32(0, false);
+  const header = JSON.parse(new TextDecoder().decode(bytes.subarray(4, 4 + length)));
+  expect(parseEvidenceImportRequest(header.request)).toEqual(result.request);
+  expect(header.request.inventory).toEqual({ id: inventory.id, revision: inventory.revision });
+  expect(result.request.inventory).not.toBe(inventory);
+  expect(header.request.sources.map((source: { shardId: string }) => source.shardId)).toEqual(expected.map(source => source.shardId));
+  expect(bytes.subarray(4 + length)).toEqual(new Uint8Array(await new Blob(drafts.map(draft => draft.file)).arrayBuffer()));
+  expect(JSON.stringify(header)).not.toContain("private-operator");
+  expect(JSON.stringify(inventory)).toBe(original);
+  expect(() => parseEvidenceImportRequest({ ...result.request, inventory })).toThrow("inventory reference has an unsupported field");
 });
 
 test("all selection limits and format/identity refusals happen before any file read", async () => {
