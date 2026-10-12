@@ -106,6 +106,11 @@ import verificationSdk from "./verification/browser-sdk.js" with { type: "text" 
 import { VERIFICATION_LIMITS } from "./verification/protocol";
 import { createEvaluationService } from "./evaluations/service";
 import { createEvaluationRouter } from "./evaluations/router";
+import { EvidenceImportService } from "./evaluations/evidence-import";
+import { EvidenceSupervisor } from "./evaluations/evidence-supervisor";
+import { createLocalEvidenceOwner } from "./evaluations/evidence-inventory";
+import { EvidenceError } from "./evaluations/evidence-protocol";
+import { evidenceBinaryHandler, evidenceJsonBody } from "./evaluations/evidence-router";
 import { EVALUATION_LIMITS } from "./evaluations/protocol";
 import { parseJsonEvidence, LossyJsonNumberError } from "./evaluations/json-evidence";
 import {
@@ -752,6 +757,11 @@ export async function createServer(port: number) {
 
   const verification = createVerificationService({ broadcast, allowedSourceIps, allowedHosts });
   const evaluations = createEvaluationService();
+  const evidenceDatabase = getDrizzleDb().$client;
+  evidenceDatabase.query("INSERT OR IGNORE INTO evaluation_evidence_scopes(scope_key,generation,active) VALUES('local:local',1,1)").run();
+  const evidenceOwner = createLocalEvidenceOwner(evidenceDatabase);
+  const evidenceImports = new EvidenceImportService(new EvidenceSupervisor());
+  evidenceImports.initialize(evidenceOwner);
   server.on("upgrade", (req, socket, head) => {
     let pathname: string;
     try { pathname = new URL(req.url ?? "", "http://localhost").pathname; } catch { socket.destroy(); return; }
@@ -982,6 +992,9 @@ export async function createServer(port: number) {
     next();
   });
 
+  // This one identity binary transport remains behind every local-access guard.
+  app.post("/api/evaluations/evidence/imports", evidenceBinaryHandler(evidenceImports, evidenceOwner));
+
   app.use(["/api/verification", "/api/evaluations"], (req, res, next) => {
     const hasBody = req.headers["transfer-encoding"] !== undefined || Number(req.headers["content-length"] ?? 0) > 0;
     if (hasBody && !req.is("application/json")) {
@@ -990,6 +1003,7 @@ export async function createServer(port: number) {
     }
     next();
   });
+  app.use(["/api/evaluations/evidence", "/api/evaluations/findings"], evidenceJsonBody());
   app.use("/api/verification", express.json({ limit: VERIFICATION_LIMITS.MAX_FRAME_BYTES }));
   app.use("/api/evaluations", express.json({
     limit: EVALUATION_LIMITS.MAX_REQUEST,
@@ -1022,14 +1036,35 @@ export async function createServer(port: number) {
     res.status(status >= 400 && status < 600 ? status : 500).json({ error: "request failed" });
   });
 
-  server.on("close", () => {
+  let closedServices = false;
+  const closeServices = () => {
+    if (closedServices) return;
+    closedServices = true;
     askUserQuestions.closeAll();
     verification.close();
     evaluations.close();
-  });
+    for (const client of clients) client.terminate();
+    wss.close();
+  };
+  server.on("close", closeServices);
+  const nativeClose = server.close.bind(server);
+  let closePromise: Promise<void> | undefined;
+  server.close = ((callback?: (error?: Error) => void) => {
+    closePromise ??= evidenceImports.shutdown().then(() => {
+      closeServices();
+      return new Promise<void>((resolve, reject) => {
+        nativeClose(error => { if (error) reject(error); else resolve(); });
+        // Register close completion before terminating sockets; Bun's force-close also stops its listener.
+        server.closeAllConnections();
+      });
+    });
+    if (callback) void closePromise.then(() => callback(), error => callback(error));
+    else void closePromise.catch(() => {});
+    return server;
+  }) as typeof server.close;
 
   app.use("/api/verification", createVerificationRouter(verification));
-  app.use("/api/evaluations", createEvaluationRouter(evaluations));
+  app.use("/api/evaluations", createEvaluationRouter(evaluations, { service: evidenceImports, owner: evidenceOwner }));
 
   // Health check endpoint — used by SDKs to auto-detect a running debugger
   app.get("/health", (_req, res) => {
@@ -1057,6 +1092,7 @@ export async function createServer(port: number) {
       const result = replayDefaultDemoTraces({ broadcast });
       res.json({ ok: true, ...result });
     } catch (err) {
+      if (err instanceof EvidenceError) { res.status(err.status).json({ error: err.message }); return; }
       console.error("[runphantom] demo trace replay failed:", err);
       res.status(500).json({ error: (err as Error).message || "Failed to replay demo traces." });
     }
@@ -1631,9 +1667,11 @@ export async function createServer(port: number) {
     res.json(tailLiveEvents(req.params.id, opts));
   });
   app.post("/api/clear", (_req, res) => {
-    evaluations.reset();
-    for (const id of verification.bridge.sessions.keys()) verification.bridge.remove(id);
-    clearAll(); broadcast("clear", {}); res.json({ ok: true });
+    void evidenceImports.clear(evidenceOwner).then(() => {
+      evaluations.reset();
+      for (const id of verification.bridge.sessions.keys()) verification.bridge.remove(id);
+      clearAll(); broadcast("clear", {}); res.json({ ok: true });
+    }).catch(() => res.status(500).json({ error: "Workspace clear failed" }));
   });
 
   app.get("/api/workspace/active", (_req, res) => {
@@ -2236,13 +2274,12 @@ export async function createServer(port: number) {
   });
 
   app.delete("/api/runs/:id", (req, res) => {
-    try {
+    const checks = evidenceDatabase.query("SELECT id FROM verification_reports WHERE run_id=?").all(req.params.id) as { id: string }[];
+    void evidenceImports.invalidateAttachments(evidenceOwner, [{ kind: "run", id: req.params.id }, { kind: "inspection", id: req.params.id }, ...checks.map(check => ({ kind: "check" as const, id: check.id }))]).then(() => {
       deleteRun(req.params.id);
       broadcast("spans", { runIds: [req.params.id] });
       res.json({ ok: true });
-    } catch (err) {
-      res.status(500).json({ error: String(err) });
-    }
+    }).catch(() => res.status(500).json({ error: "Run deletion failed" }));
   });
 
   app.patch("/api/runs/:id", (req, res) => {
