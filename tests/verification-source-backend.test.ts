@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import http from "node:http";
+import { createHash } from "node:crypto";
+import { VERIFICATION_LIMITS as L } from "../src/verification/protocol";
 import { once } from "node:events";
 import express from "express";
 import { WebSocket } from "ws";
@@ -69,6 +71,51 @@ describe("authenticated source context is correlated without verification author
       expect(f.service.bridge.get(f.created.id).lastControlSource).toBeUndefined();
     } finally { await f.close(); }
   });
+  test("actual twenty-step source flow shares the stored UTF-8 budget and retains exact outcomes after file reopen", async () => {
+    // Controlled local SDK executor: real authenticated socket/events, no provider or manufactured report.
+    const f = await fixture(["control-source", "causal-readings"]);
+    const target = { kind: "state", store: "payload", path: "value" };
+    const predicate = { kind: "relative", target, relation: "changed" };
+    const actions: Array<{ id: string; before: string; after: string }> = [];
+    try {
+      f.ws.on("message", raw => {
+        const msg = JSON.parse(raw.toString()); if (msg.type !== "command") return;
+        if (msg.command.type === "causal-click") {
+          const before = String(actions.length % 2).repeat(1900); const after = String((actions.length + 1) % 2).repeat(1900);
+          actions.push({ id: msg.id, before, after }); f.emit("action.source", { observation }, msg.id);
+          f.emit("action.reading", { phase: "before", target, available: true, value: before }, msg.id);
+          f.emit("action.boundary", {}, msg.id);
+          f.emit("action.reading", { phase: "after", target, available: true, value: after }, msg.id);
+        }
+        f.ws.send(JSON.stringify({ type: "result", id: msg.id, ok: true }));
+      });
+      const generation = f.service.bridge.get(f.created.id).generation;
+      const flow = await f.api("/flows", { name: "Bounded source flow", origin: f.created.origin, steps: Array.from({ length: 20 }, () => ({ command: { type: "click", selector: "#pay" }, predicate })) });
+      expect(flow.status).toBe(201);
+      const executed = await f.api(`/flows/${flow.body.id}/run`, { sessionId: f.created.id }); expect(executed.status).toBe(200);
+      const report = executed.body; expect(actions).toHaveLength(20); expect(report.status).toBe("pass"); expect(report.context.checks).toHaveLength(20);
+      expect(Buffer.byteLength(JSON.stringify(report.context))).toBeLessThanOrEqual(L.MAX_CONTEXT_BYTES); expect(report.context.truncated).toBe(true);
+      expect(report.context.checks.every((check: any) => check.controlSource === undefined && check.controlSourceOmitted === "context-limit")).toBe(true);
+      for (let index = 0; index < 20; index++) {
+        const check = report.context.checks[index]; expect(check).toMatchObject({ step: index + 1, predicate, status: "pass", generation, coverage, complete: true, dropped: 0, settled: true });
+        expect(check.since).toBeLessThan(check.through); expect(check.causal.actionId).toBe(actions[index].id);
+        const pair = check.causal.readings[0]; expect(pair.target).toEqual(target);
+        for (const phase of ["before", "after"] as const) {
+          const reading = pair[phase];
+          if (reading.availability === "complete") expect(reading.value).toBe(actions[index][phase]);
+          else { expect(reading.availability).toBe("partial"); expect(reading.value).toBe("[TRUNCATED]"); expect(check.causal.attribution).toBe("unavailable"); }
+        }
+      }
+      const raw = (getDrizzleDb().$client.query("SELECT context FROM verification_reports WHERE id = ?").get(report.id) as { context: string }).context;
+      expect(JSON.parse(raw)).toEqual(report.context); expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(L.MAX_CONTEXT_BYTES);
+      const digest = createHash("sha256").update(raw).digest("hex");
+      closeDb(); getDrizzleDb(); expect(getReport(report.id)).toEqual(report);
+      expect((await f.api("/reports")).body.find((item: any) => item.id === report.id)).toEqual(report);
+      const reopened = (getDrizzleDb().$client.query("SELECT context FROM verification_reports WHERE id = ?").get(report.id) as { context: string }).context;
+      expect(reopened).toBe(raw); expect(createHash("sha256").update(reopened).digest("hex")).toBe(digest);
+      console.info(JSON.stringify({ actualSdkExecutor: "controlled-local", executedSteps: actions.length, contextBytes: Buffer.byteLength(raw), omittedSources: 20, contextSha256: digest, fileReopenEqual: true }));
+    } finally { await f.close(); }
+  }, 30_000);
   test("session token and current fill secret cannot be retained as filenames", async () => {
     const f = await fixture();
     try {

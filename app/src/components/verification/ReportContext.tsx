@@ -48,14 +48,14 @@ export function ReportContext({ context }: { context?: VerificationReportContext
       <p className="break-words leading-relaxed">{expectedOutcome(check.predicate)}</p>
       <p className="break-words text-[11px] leading-relaxed text-[color:var(--rp-ink-soft)]">{check.reason}</p>
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-[color:var(--rp-ink-soft)]"><span>{check.complete ? "Complete capture" : "Incomplete capture"}</span><span>{check.dropped} events dropped</span><span>{check.settled ? `Settled: ${context.quietMs} ms quiet` : "Did not settle"}</span></div>
-      {check.controlSource && <div className="space-y-2 rounded-md border border-[color:var(--rp-border)] p-3 text-[11px]" aria-label="Control source context">
-        <p className="font-medium">SDK-reported React source · Before dispatch</p>
-        {check.controlSource.observation.status === "captured" ? <>
+      {(check.controlSource || check.controlSourceOmitted) && <div className="space-y-2 rounded-md border border-[color:var(--rp-border)] p-3 text-[11px]" aria-label="Control source context">
+        <p className="font-medium">SDK-reported React source{check.controlSource && " · Before dispatch"}</p>
+        {check.controlSourceOmitted ? <p className="text-[color:var(--rp-ink-soft)]">Source unavailable. Location omitted to keep the saved report within its size limit.</p> : check.controlSource?.observation.status === "captured" ? <>
           <p className="break-words">{check.controlSource.observation.component && <span>{check.controlSource.observation.component} · </span>}<code className="break-all">{check.controlSource.observation.file}:{check.controlSource.observation.line}{check.controlSource.observation.column ? `:${check.controlSource.observation.column}` : ""}</code></p>
           <p className="text-[color:var(--rp-ink-soft)]">{check.controlSource.observation.mechanism === "dev-stamp" ? "Development stamp" : "React development metadata"} · {check.controlSource.observation.scope === "control" ? "Acted control" : "Component ancestor"} · Action generation {check.controlSource.generation}</p>
-        </> : <p className="text-[color:var(--rp-ink-soft)]">Source unavailable. {sourceReasons[check.controlSource.observation.reason]}</p>}
+        </> : <p className="text-[color:var(--rp-ink-soft)]">Source unavailable. {check.controlSource?.observation.status === "unavailable" && sourceReasons[check.controlSource.observation.reason]}</p>}
         <p className="leading-relaxed text-[color:var(--rp-ink-soft)]">Source context helps locate code. The observed outcome determines this check’s verdict.</p>
-        {!check.complete && <p className="leading-relaxed text-[color:var(--rp-warning)]">Capture is incomplete. This source was retained before the action; it cannot establish the outcome.</p>}
+        {check.controlSource && !check.complete && <p className="leading-relaxed text-[color:var(--rp-warning)]">Capture is incomplete. This source was retained before the action; it cannot establish the outcome.</p>}
       </div>}
       {check.causal && <div className="space-y-2 rounded-md border border-[color:var(--rp-border)] p-3 text-[11px]" aria-label="Action transition readings">
         <p className="font-medium">SDK-reported action result · {check.causal.attribution === "captured" ? "Matched captured readings" : "Attribution unavailable"}</p>

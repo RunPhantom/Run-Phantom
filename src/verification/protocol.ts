@@ -162,6 +162,7 @@ export interface VerificationCheckContext {
   settled: boolean;
   causal?: RetainedCausalContext;
   controlSource?: RetainedControlSource;
+  controlSourceOmitted?: "context-limit";
 }
 export interface RetainedReading { cursor: number; availability: "complete" | "partial" | "unavailable"; value: unknown }
 export interface RetainedCausalContext {

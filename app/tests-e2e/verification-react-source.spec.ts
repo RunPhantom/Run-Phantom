@@ -6,7 +6,7 @@ import path from "node:path";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { test as base, expect, REPO_ROOT_PATH, type RunPhantomHandle } from "./fixtures";
 import { observe, assertRuntime } from "./verification-fixture";
-import type { AppCommand, RetainedControlSource, SemanticResult, SessionSummary, VerificationReport } from "../../src/verification/protocol";
+import { VERIFICATION_LIMITS as L, type AppCommand, type RetainedControlSource, type SemanticResult, type SessionSummary, type VerificationReport } from "../../src/verification/protocol";
 
 const appRequire = createRequire(path.join(REPO_ROOT_PATH, "app/package.json"));
 const vite = path.join(path.dirname(appRequire.resolve("vite/package.json")), "dist/node/index.js");
@@ -134,6 +134,38 @@ test("real React 19 stamps survive rerender, semantic fill, unmount and SPA rout
     await expect(sourceContext.getByText("src/Checkout.tsx:12:5", { exact: true })).toBeVisible(); await expect(article.getByText("Fail", { exact: true })).toBeVisible();
     expect(await ui.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await ui.screenshot({ path: testInfo.outputPath("react-source-mobile.png"), mask: [ui.locator("pre")] });
+  } finally { await ui.close(); }
+});
+
+
+test("actual twenty-click React flow reports unavailable source when the whole context budget is spent", async ({ page, context, request, runPhantom, reactApp }, testInfo) => {
+  const session = await pair(page, request, runPhantom, reactApp);
+  const firstAction = await command(request, runPhantom, session.id, { type: "click", selector: "#pay" }); expect(firstAction.ok).toBe(true);
+  const generation = firstAction.controlSource!.generation; await expect(page.locator("#output")).toHaveText("1");
+  // A registered application store and native click listener produce actual synchronous transitions.
+  await page.evaluate(() => {
+    const payload = { value: "0".repeat(1900) }; window.runtime.registerStore("payload", () => payload);
+    let count = 0; document.querySelector("#pay")!.addEventListener("click", () => { count++; payload.value = String(count % 2).repeat(1900); });
+  });
+  const predicate = { kind: "relative", target: { kind: "state", store: "payload", path: "value" }, relation: "changed" };
+  const saved = await request.post(`${runPhantom.url}/api/verification/flows`, { data: { name: "Source omitted within report budget", origin: reactApp.origin, steps: Array.from({ length: 20 }, () => ({ command: { type: "click", selector: "#pay" }, predicate })) } }); expect(saved.ok()).toBe(true);
+  const flow = await saved.json(); const ran = await request.post(`${runPhantom.url}/api/verification/flows/${flow.id}/run`, { data: { sessionId: session.id } }); expect(ran.ok()).toBe(true);
+  const report = await ran.json() as VerificationReport; expect(report.status).toBe("pass"); await expect(page.locator("#output")).toHaveText("21");
+  expect(report.context?.checks).toHaveLength(20); expect(report.context?.truncated).toBe(true);
+  expect(Buffer.byteLength(JSON.stringify(report.context))).toBeLessThanOrEqual(L.MAX_CONTEXT_BYTES);
+  expect(report.context?.checks.every(check => check.status === "pass" && check.generation === generation && check.complete && check.settled && check.controlSource === undefined && check.controlSourceOmitted === "context-limit")).toBe(true);
+  const persisted = await request.get(`${runPhantom.url}/api/verification/reports`); expect((await persisted.json()).find((item: VerificationReport) => item.id === report.id)).toEqual(report); safe(report, reactApp.root, session.token);
+  writeFileSync(testInfo.outputPath("source-context-budget-report.json"), JSON.stringify(report, null, 2) + "\n");
+  const ui = await context.newPage(); try {
+    await ui.goto(`${runPhantom.url}/verification`); const article = ui.getByRole("article", { name: `${report.name}: pass`, exact: true });
+    await article.scrollIntoViewIfNeeded(); const firstCheck = article.getByRole("list", { name: "Saved expected outcomes" }).locator(":scope > li").first();
+    const unavailable = firstCheck.getByLabel("Control source context"); await unavailable.scrollIntoViewIfNeeded();
+    await expect(unavailable.getByText("Source unavailable. Location omitted to keep the saved report within its size limit.", { exact: true })).toBeVisible();
+    await expect(firstCheck.getByText("Passed", { exact: true })).toBeVisible();
+    await ui.screenshot({ path: testInfo.outputPath("react-source-budget-desktop.png"), mask: [ui.locator("pre")] });
+    await ui.setViewportSize({ width: 390, height: 844 }); await unavailable.scrollIntoViewIfNeeded();
+    await expect(unavailable).toBeVisible(); expect(await ui.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await ui.screenshot({ path: testInfo.outputPath("react-source-budget-mobile.png"), mask: [ui.locator("pre")] });
   } finally { await ui.close(); }
 });
 

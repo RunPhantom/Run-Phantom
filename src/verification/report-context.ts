@@ -51,12 +51,13 @@ export function boundReportContext(input: VerificationReportContext, scrub: Scru
     const reason = String(clean(check.reason));
     if (reason.length > L.MAX_REASON_LENGTH) context.truncated = true;
     const controlSource = check.controlSource ? boundControlSource(check.controlSource, value => String(clean(value))) : undefined;
-    if (check.controlSource && !controlSource) context.truncated = true;
+    if (check.controlSource && !controlSource || check.controlSourceOmitted === "context-limit") context.truncated = true;
     if (controlSource?.observation.status === "unavailable" && controlSource.observation.reason === "redacted") context.redacted = true;
     const retained = { step: check.step, predicate: predicate(check.predicate), status: check.status,
       reason: reason.slice(0, L.MAX_REASON_LENGTH), since: check.since, through: check.through,
       generation: check.generation, coverage: { ...check.coverage }, complete: check.complete,
-      dropped: check.dropped, settled: check.settled, ...(controlSource ? { controlSource } : {}) };
+      dropped: check.dropped, settled: check.settled, ...(controlSource ? { controlSource } : {}),
+      ...(!controlSource && check.controlSourceOmitted === "context-limit" ? { controlSourceOmitted: "context-limit" as const } : {}) };
     if (check.causal) {
       let unavailable = check.causal.attribution !== "captured";
       const readings: NonNullable<typeof check.causal>["readings"] = [];
@@ -87,6 +88,16 @@ export function boundReportContext(input: VerificationReportContext, scrub: Scru
   }
   // Preserve every executed check's outcome/window even when large expected values do not fit.
   while (Buffer.byteLength(JSON.stringify(context)) > L.MAX_CONTEXT_BYTES) {
+    // Optional location context must yield before existing expectations or captured readings.
+    // The next loop measures the omission marker and truncated flag as part of the same budget.
+    const sources = context.checks.filter(check => check.controlSource).sort((a, b) =>
+      Buffer.byteLength(JSON.stringify(b.controlSource)) - Buffer.byteLength(JSON.stringify(a.controlSource)));
+    if (sources.length) {
+      delete sources[0].controlSource;
+      sources[0].controlSourceOmitted = "context-limit";
+      context.truncated = true;
+      continue;
+    }
     const values = context.checks.flatMap(check => (check.causal?.readings ?? []).flatMap(pair => [pair.before, pair.after]
       .flatMap(reading => reading ? [{ check, reading, bytes: Buffer.byteLength(JSON.stringify(reading.value)) }] : [])))
       .sort((a, b) => b.bytes - a.bytes);

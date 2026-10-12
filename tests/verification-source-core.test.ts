@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { parseControlSourceObservation, sourceFile, sanitizeControlSource } from "../src/verification/build/source";
+import { boundReportContext } from "../src/verification/report-context";
+import { VERIFICATION_LIMITS as L, type VerificationReportContext } from "../src/verification/protocol";
 import { identifyReactControl } from "../src/verification/browser/framework/react";
 
 const captured = { source: "sdk-reported", framework: "react", status: "captured", mechanism: "dev-stamp", scope: "control", file: "src/Checkout.tsx", line: 12, column: 5 } as const;
@@ -82,5 +84,39 @@ describe("React source probing is descriptor-only and fails soft", () => {
     expect(identifyReactControl(control(undefined, chain))).toMatchObject({ status: "unavailable", reason: "probe-limit" });
     const many = control(); for (let i = 0; i < 260; i++) Object.defineProperty(many, `field${i}`, { value: i });
     expect(identifyReactControl(many)).toMatchObject({ status: "unavailable", reason: "probe-limit" });
+  });
+});
+
+
+describe("optional source shares the whole retained-context budget", () => {
+  test("twenty valid 936-byte observations cannot grow a permitted context past 64 KiB or replace executed checks", () => {
+    const observation = parseControlSourceObservation({ ...captured, file: "src/" + '"'.repeat(260) + ".tsx", line: 1, column: 1, component: '"'.repeat(128) });
+    expect(Buffer.byteLength(JSON.stringify(observation))).toBe(936);
+    const checks: VerificationReportContext["checks"] = Array.from({ length: 20 }, (_, index) => ({ step: index + 1,
+      predicate: { kind: "console", level: "error", absent: true }, status: index % 3 === 0 ? "fail" : index % 3 === 1 ? "pass" : "inconclusive", reason: "é".repeat(1000),
+      since: index + 1, through: index + 5, generation: index + 1,
+      coverage: { network: true, console: true, dom: index % 2 === 0, state: true, signal: true, route: true }, complete: index % 2 === 0, dropped: index, settled: index % 2 === 0,
+    }));
+    const input = { origin: "http://localhost:4812", quietMs: 300, redacted: false, truncated: false, checks };
+    const without = boundReportContext(input);
+    expect(Buffer.byteLength(JSON.stringify(without))).toBeLessThan(L.MAX_CONTEXT_BYTES);
+    const withSource = { ...input, checks: checks.map(check => ({ ...check, controlSource: {
+      actionId: "00000000-0000-4000-8000-000000000001", commandCursor: 1, cursor: 2, generation: check.generation, capture: "before-dispatch" as const, observation,
+    } })) };
+    const before = JSON.stringify(withSource);
+    const result = boundReportContext(withSource);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(L.MAX_CONTEXT_BYTES);
+    expect(result.truncated).toBe(true); expect(result.checks).toHaveLength(20);
+    expect(result.checks.filter(check => check.controlSource).length).toBeGreaterThan(0);
+    expect(result.checks.filter(check => check.controlSourceOmitted === "context-limit").length).toBeGreaterThan(0);
+    for (let i = 0; i < checks.length; i++) {
+      const { controlSource, controlSourceOmitted, ...check } = result.checks[i];
+      expect(check).toEqual(without.checks[i]);
+      if (controlSourceOmitted) { expect(controlSourceOmitted).toBe("context-limit"); expect(controlSource).toBeUndefined(); }
+      else expect(controlSource).toEqual(withSource.checks[i].controlSource);
+    }
+    expect(JSON.stringify(withSource)).toBe(before);
+    expect(boundReportContext(JSON.parse(JSON.stringify(result)))).toEqual(result);
+    console.info(JSON.stringify({ sourceObservationBytes: 936, withoutSourceBytes: Buffer.byteLength(JSON.stringify(without)), boundedBytes: Buffer.byteLength(JSON.stringify(result)), retainedSources: result.checks.filter(check => check.controlSource).length, omittedSources: result.checks.filter(check => check.controlSourceOmitted).length, checkCount: result.checks.length }));
   });
 });
