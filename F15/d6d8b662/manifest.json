@@ -1,0 +1,122 @@
+{
+  "project": "Run Phantom",
+  "owner": "Divyam Talwar",
+  "head": "d6d8b6626e488ebad36cf8dca90b9324340ed33c",
+  "platform": "darwin-arm64",
+  "version": "0.1.0-f15-d6d8b66-local",
+  "binarySha256": "c50b5b4fc8f0668f7136b9994c351210db32c8c92bfaa63f78195e494f9360e1",
+  "trackedSourcesMatched": 430,
+  "fullBackend": {
+    "pass": 895,
+    "skip": 1,
+    "fail": 0,
+    "assertions": 4403,
+    "skipReason": "Native Windows junction defense cannot execute on macOS"
+  },
+  "fullSourceChromium": {
+    "startTime": "2026-10-12T00:00:50.178Z",
+    "duration": 246901.37699999998,
+    "expected": 132,
+    "skipped": 10,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "copiedNativeChromium": {
+    "pass": 21,
+    "fail": 0,
+    "skip": 0,
+    "retries": 0,
+    "workers": 1
+  },
+  "rates": "synthetic frozen rates / controlled catalogue",
+  "providerSpendUsd": 0,
+  "revokedViewer": {
+    "probeCaughtOnActualViewer": true,
+    "ownerLocalRequests": [],
+    "viewerLocalRequests": [],
+    "revokedAnalyticsStatus": 404,
+    "revokedCapturedContentRemoved": true
+  },
+  "unknownAncestry": {
+    "population": {
+      "selectedGenerations": 3,
+      "nestedExcluded": 0,
+      "ancestryUnavailable": 1,
+      "untimedGenerations": 0,
+      "outsideWindow": 0,
+      "acquiredSpans": 3
+    },
+    "reportedUsd": {
+      "eligibleCount": 3,
+      "knownCount": 1,
+      "unavailableCount": 2,
+      "zeroCount": 1,
+      "knownSum": 0,
+      "completeTotal": null,
+      "sumState": "known",
+      "unavailableReasons": {
+        "ancestry_unavailable": 1,
+        "reported_cost_missing": 1
+      }
+    },
+    "originalCapturePreserved": true,
+    "providerSpendUsd": 0
+  },
+  "ownedRuntimeCleanup": {
+    "mainAndPrivateTeamReaped": true,
+    "listenersClosed": true,
+    "profilesGone": true
+  },
+  "limitations": [
+    "Native Windows verification is pending.",
+    "Live provider quality and expenditure were not exercised.",
+    "The global V1 theme still requires root composition verification.",
+    "Prior reviewer empty-launcher and first native provenance-harness infrastructure failures remain retained in the private historical evidence."
+  ],
+  "feature": "F15 cost and usage analytics",
+  "independentReview": {
+    "decision": "APPROVED",
+    "reportSha256": "6cf77172d7a59516daff644a4a0734bd4d83dfdc8384ae1987a353d0d4e88a86"
+  },
+  "rootVerification": {
+    "sourceFiles": 19,
+    "trackedSourceHashes": 430,
+    "artifactAndSourceRecords": 174,
+    "pngsCrcVerified": 98,
+    "publicScreenshotsVisuallyInspected": 4
+  },
+  "screenshots": [
+    {
+      "path": "cost-team-frozen-rates.png",
+      "sha256": "a0e9b65f92840cf84a981dfcc913b01cf9d98497c4a33b52879553e221b90525",
+      "dimensions": [
+        1280,
+        1550
+      ]
+    },
+    {
+      "path": "cost-viewer-revoked.png",
+      "sha256": "fd8dccc9dd8d9d292a8a533f08f8a166eba0edae6f8a494147c07d6ed603cbe5",
+      "dimensions": [
+        1280,
+        720
+      ]
+    },
+    {
+      "path": "cost-unknown-ancestry-desktop.png",
+      "sha256": "b9daadcf34cd1c1b05de431d68dc40fd39b2ebe66cad2a7adcef68ca9cb0d3dd",
+      "dimensions": [
+        1440,
+        900
+      ]
+    },
+    {
+      "path": "cost-unknown-ancestry-mobile.png",
+      "sha256": "a59957a2bc6ced76099b28be09c2a5b62cc3848379410749e74e00916524cf95",
+      "dimensions": [
+        390,
+        844
+      ]
+    }
+  ]
+}
