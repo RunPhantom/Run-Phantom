@@ -29,9 +29,8 @@ async function runVite(mode: "dev" | "multi" | "single-disabled"): Promise<any> 
   writeFileSync(path.join(root, "index.html"), '<!doctype html><div id="root"></div><script type="module" src="/src/main.tsx"></script>');
   writeFileSync(path.join(root, "src/main.tsx"), code);
   try {
-    const compiled = await Bun.build({ entrypoints: [path.join(repo, "src/verification/build/vite.ts")], target: "node", format: "esm", external: ["typescript"] });
-    expect(compiled.success).toBe(true);
-    const adapter = path.join(helperDir, "adapter.mjs"); writeFileSync(adapter, await compiled.outputs[0].text());
+    const adapter = path.join(helperDir, "adapter.mjs");
+    await new Promise<void>((resolve, reject) => execFile("bun", ["build", path.join(repo, "src/verification/build/vite.ts"), "--target=node", "--format=esm", "--external=typescript", `--outfile=${adapter}`], { cwd: repo, timeout: 25_000 }, (error, _stdout, stderr) => error ? reject(new Error(`${error.message}\n${stderr}`)) : resolve()));
     const script = `import path from "node:path";
 import * as vite from ${JSON.stringify(viteEntry)};
 import react from ${JSON.stringify(reactEntry)};
