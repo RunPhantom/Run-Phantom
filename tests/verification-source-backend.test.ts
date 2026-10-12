@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import http from "node:http";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { VERIFICATION_LIMITS as L } from "../src/verification/protocol";
 import { once } from "node:events";
 import express from "express";
@@ -12,7 +12,10 @@ import { closeDb, getDrizzleDb } from "../src/db";
 import { createVerificationService } from "../src/verification/service";
 import { createVerificationRouter } from "../src/verification/router";
 import { parseBrowserMessage } from "../src/verification/validation";
-import { listReports } from "../src/verification/store";
+import { evaluatePredicate } from "../src/verification/predicates";
+import { parseControlSourceObservation } from "../src/verification/build/source";
+import type { VerificationReport } from "../src/verification/protocol";
+import { listReports, saveReport } from "../src/verification/store";
 const getReport = (id: string) => listReports().find(report => report.id === id);
 
 const coverage = { network: true, console: true, dom: true, state: true, signal: true, route: true };
@@ -116,6 +119,30 @@ describe("authenticated source context is correlated without verification author
       console.info(JSON.stringify({ actualSdkExecutor: "controlled-local", executedSteps: actions.length, contextBytes: Buffer.byteLength(raw), omittedSources: 20, contextSha256: digest, fileReopenEqual: true }));
     } finally { await f.close(); }
   }, 30_000);
+  test("the real save/reopen boundary budgets synthetic CJK display context without changing an evaluated verdict", () => {
+    // Valid synthetic large context qualifies the actual store; it is not a browser-produced report.
+    const source = { actionId: randomUUID(), commandCursor: 1, cursor: 2, generation: 1, capture: "before-dispatch" as const,
+      observation: parseControlSourceObservation({ ...observation, file: "src/" + '"'.repeat(260) + ".tsx", line: 1, column: 1, component: '"'.repeat(128) }) };
+    const predicate = { kind: "console", level: "error", absent: true } as const;
+    const verdict = evaluatePredicate(predicate, { events: [], coverage, complete: true, settled: true }); expect(verdict.status).toBe("pass");
+    const input: VerificationReport = { ...verdict, id: randomUUID(), sessionId: randomUUID(), runId: null, flowId: null, name: "Synthetic CJK context storage boundary", createdAt: Date.now(),
+      context: { origin: "http://localhost:4812", quietMs: 300, redacted: false, truncated: false,
+        checks: Array.from({ length: 20 }, (_, index) => ({ step: index + 1, predicate, status: "pass", reason: "汉".repeat(1000), since: 1, through: 5, generation: 1, coverage, complete: true, dropped: 0, settled: true, controlSource: source })) } };
+    const before = JSON.stringify(input); const stored = saveReport(input);
+    expect(stored.status).toBe(verdict.status); expect(stored.reason).toBe(verdict.reason); expect(stored.evidence).toEqual(verdict.evidence);
+    expect(stored.context!.checks).toHaveLength(20); expect(stored.context!.truncated).toBe(true);
+    expect(stored.context!.checks.every(check => check.status === "pass" && check.since === 1 && check.through === 5 && check.generation === 1 && check.complete && check.settled && check.dropped === 0 && check.controlSourceOmitted === "context-limit")).toBe(true);
+    expect(stored.context!.checks.filter(check => check.reason === "[TRUNCATED]")).toHaveLength(1);
+    const raw = (getDrizzleDb().$client.query("SELECT context FROM verification_reports WHERE id = ?").get(input.id) as { context: string }).context;
+    expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(L.MAX_CONTEXT_BYTES); expect(JSON.parse(raw)).toEqual(stored.context); expect(JSON.stringify(input)).toBe(before);
+    const digest = createHash("sha256").update(raw).digest("hex"); closeDb(); getDrizzleDb(); expect(getReport(stored.id)).toEqual(stored);
+    const reopened = (getDrizzleDb().$client.query("SELECT context FROM verification_reports WHERE id = ?").get(input.id) as { context: string }).context;
+    expect(reopened).toBe(raw); expect(createHash("sha256").update(reopened).digest("hex")).toBe(digest);
+    const count = (getDrizzleDb().$client.query("SELECT COUNT(*) as n FROM verification_reports").get() as { n: number }).n;
+    expect(() => saveReport({ ...input, id: randomUUID(), context: { ...input.context!, origin: "x".repeat(L.MAX_CONTEXT_BYTES) } })).toThrow("Saved verification context exceeds its required outcome budget");
+    expect((getDrizzleDb().$client.query("SELECT COUNT(*) as n FROM verification_reports").get() as { n: number }).n).toBe(count);
+    console.info(JSON.stringify({ fixture: "synthetic-valid-context-at-actual-store", executedVerdictPreserved: true, storedContextBytes: Buffer.byteLength(raw), contextSha256: digest, fileReopenEqual: true, impossibleFloorAtomicRefusal: true }));
+  });
   test("session token and current fill secret cannot be retained as filenames", async () => {
     const f = await fixture();
     try {

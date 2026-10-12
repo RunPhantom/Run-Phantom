@@ -119,4 +119,39 @@ describe("optional source shares the whole retained-context budget", () => {
     expect(boundReportContext(JSON.parse(JSON.stringify(result)))).toEqual(result);
     console.info(JSON.stringify({ sourceObservationBytes: 936, withoutSourceBytes: Buffer.byteLength(JSON.stringify(without)), boundedBytes: Buffer.byteLength(JSON.stringify(result)), retainedSources: result.checks.filter(check => check.controlSource).length, omittedSources: result.checks.filter(check => check.controlSourceOmitted).length, checkCount: result.checks.length }));
   });
+  for (const varied of [false, true]) test(`CJK saved reasons yield to the exact UTF-8 budget without losing mandatory checks (varied ${varied})`, () => {
+    const observation = parseControlSourceObservation({ ...captured, file: "src/" + '"'.repeat(260) + ".tsx", line: 1, column: 1, component: '"'.repeat(128) });
+    expect(Buffer.byteLength(JSON.stringify(observation))).toBe(936);
+    const source = { actionId: "00000000-0000-4000-8000-000000000001", commandCursor: 1, cursor: 2, generation: 1, capture: "before-dispatch" as const, observation };
+    const checks: VerificationReportContext["checks"] = Array.from({ length: 20 }, (_, index) => ({ step: index + 1,
+      predicate: { kind: "console", level: "error", absent: true }, status: "pass", reason: varied && index !== 7 ? "汉".repeat(999) + "x" : "汉".repeat(1000),
+      since: 1, through: 5, generation: 1, coverage: { network: true, console: true, dom: true, state: true, signal: true, route: true }, complete: true, dropped: 0, settled: true,
+    }));
+    expect(checks.every(check => check.reason.length === 1000)).toBe(true);
+    const input = { origin: "http://localhost:4812", quietMs: 300, redacted: false, truncated: false, checks };
+    const control = boundReportContext(input); expect(Buffer.byteLength(JSON.stringify(control))).toBeLessThanOrEqual(L.MAX_CONTEXT_BYTES);
+    if (!varied) expect(Buffer.byteLength(JSON.stringify(control))).toBe(65_514);
+    expect(control.checks.every((check, index) => check.reason === checks[index].reason)).toBe(true);
+    const withSource = { ...input, checks: checks.map(check => ({ ...check, controlSource: source })) }; const before = JSON.stringify(withSource);
+    const result = boundReportContext(withSource);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(L.MAX_CONTEXT_BYTES);
+    expect(result.truncated).toBe(true); expect(result.checks).toHaveLength(20);
+    expect(result.checks.filter(check => check.reason === "[TRUNCATED]")).toHaveLength(1);
+    if (varied) expect(result.checks[7].reason).toBe("[TRUNCATED]");
+    for (let index = 0; index < 20; index++) {
+      const { predicate, reason, controlSource, controlSourceOmitted, ...mandatory } = result.checks[index];
+      const { predicate: _predicate, reason: _reason, ...original } = checks[index];
+      expect(mandatory).toEqual(original); expect(controlSource).toBeUndefined(); expect(controlSourceOmitted).toBe("context-limit");
+      expect(predicate).toBe("[TRUNCATED]"); expect(reason === "[TRUNCATED]" || reason === checks[index].reason).toBe(true);
+    }
+    expect(JSON.stringify(withSource)).toBe(before);
+    expect(boundReportContext(JSON.parse(JSON.stringify(result)))).toEqual(result);
+    console.info(JSON.stringify({ variedCjk: varied, controlBytes: Buffer.byteLength(JSON.stringify(control)), finalBytes: Buffer.byteLength(JSON.stringify(result)), omissionMarkers: result.checks.filter(check => check.controlSourceOmitted).length, truncatedReasons: result.checks.filter(check => check.reason === "[TRUNCATED]").length, reboundEqual: true }));
+  });
+  test("an impossible required-context floor refuses rather than returning oversized or fabricated context", () => {
+    // Invalid direct-caller origin, intentionally never presented as an accepted HTTP API origin.
+    const malformed = { origin: "x".repeat(L.MAX_CONTEXT_BYTES), quietMs: 300, redacted: false, truncated: false, checks: [] };
+    expect(() => { boundReportContext(malformed); return "unexpected oversized return"; }).toThrow("Saved verification context exceeds its required outcome budget");
+  });
+
 });

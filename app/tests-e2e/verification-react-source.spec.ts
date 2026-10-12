@@ -169,6 +169,48 @@ test("actual twenty-click React flow reports unavailable source when the whole c
   } finally { await ui.close(); }
 });
 
+
+test("synthetic CJK display context saved through the real store remains readable without changing the report verdict", async ({ context, request, runPhantom }, testInfo) => {
+  // This storage/display fixture is synthetic; real authenticated React execution is qualified separately.
+  const helper = mkdtempSync(path.join(REPO_ROOT_PATH, ".omx/react-source-context-")); const script = path.join(helper, "seed.ts");
+  try {
+    writeFileSync(script, `import {randomUUID,createHash} from "node:crypto";
+import {closeDb,getDrizzleDb} from ${q(path.join(REPO_ROOT_PATH, "src/db.ts"))};
+import {saveReport} from ${q(path.join(REPO_ROOT_PATH, "src/verification/store.ts"))};
+import {evaluatePredicate} from ${q(path.join(REPO_ROOT_PATH, "src/verification/predicates.ts"))};
+import {parseControlSourceObservation} from ${q(path.join(REPO_ROOT_PATH, "src/verification/build/source.ts"))};
+const coverage={network:true,console:true,dom:true,state:true,signal:true,route:true};const predicate={kind:"console",level:"error",absent:true};
+const verdict=evaluatePredicate(predicate,{events:[],coverage,complete:true,settled:true});
+const observation=parseControlSourceObservation({source:"sdk-reported",framework:"react",status:"captured",mechanism:"dev-stamp",scope:"control",file:"src/"+String.fromCharCode(34).repeat(260)+".tsx",line:1,column:1,component:String.fromCharCode(34).repeat(128)});
+const source={actionId:randomUUID(),commandCursor:1,cursor:2,generation:1,capture:"before-dispatch",observation};
+const report=saveReport({...verdict,id:randomUUID(),sessionId:randomUUID(),runId:null,flowId:null,name:"Synthetic CJK saved-context fixture",createdAt:Date.now(),context:{origin:"http://localhost:4812",quietMs:300,redacted:false,truncated:false,checks:Array.from({length:20},(_,i)=>({step:i+1,predicate,status:verdict.status,reason:"汉".repeat(1000),since:1,through:5,generation:1,coverage,complete:true,dropped:0,settled:true,controlSource:source}))}});
+const read=()=>getDrizzleDb().$client.query("SELECT context FROM verification_reports WHERE id = ?").get(report.id).context;
+const before=read();closeDb();getDrizzleDb();const after=read();if(before!==after)throw new Error("Stored bytes changed after reopen");closeDb();
+process.stdout.write(JSON.stringify({report,liveVerdict:verdict,contextBytes:Buffer.byteLength(after),contextSha256:createHash("sha256").update(after).digest("hex"),fileReopenEqual:true}));`);
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.includes("API_KEY") && !key.startsWith("RUNPHANTOM_")));
+    const result = spawnSync("bun", [script], { cwd: REPO_ROOT_PATH, env: { ...env, RUNPHANTOM_DB_PATH: runPhantom.dbPath }, encoding: "utf8", timeout: 15_000, maxBuffer: 2 * 1024 * 1024 });
+    expect(result.status, result.stderr).toBe(0); const proof = JSON.parse(result.stdout) as { report: VerificationReport; liveVerdict: { status: string; reason: string }; contextBytes: number; contextSha256: string; fileReopenEqual: boolean };
+    const report = proof.report; expect(proof.fileReopenEqual).toBe(true); expect(proof.contextBytes).toBeLessThanOrEqual(L.MAX_CONTEXT_BYTES);
+    expect(report.status).toBe(proof.liveVerdict.status); expect(report.reason).toBe(proof.liveVerdict.reason); expect(report.context!.checks).toHaveLength(20);
+    expect(report.context!.checks.filter(check => check.reason === "[TRUNCATED]")).toHaveLength(1);
+    const response = await request.get(`${runPhantom.url}/api/verification/reports`); expect(response.ok()).toBe(true);
+    expect((await response.json()).find((item: VerificationReport) => item.id === report.id)).toEqual(report);
+    writeFileSync(testInfo.outputPath("synthetic-cjk-storage-report.json"), JSON.stringify(proof, null, 2) + "\n");
+    const ui = await context.newPage(); try {
+      await ui.goto(`${runPhantom.url}/verification`); const article = ui.getByRole("article", { name: `${report.name}: pass`, exact: true });
+      const firstCheck = article.getByRole("list", { name: "Saved expected outcomes" }).locator(":scope > li").first();
+      await firstCheck.scrollIntoViewIfNeeded(); await expect(firstCheck.getByText("[TRUNCATED]", { exact: true })).toBeVisible();
+      await expect(firstCheck.getByText("Passed", { exact: true })).toBeVisible();
+      await expect(firstCheck.getByLabel("Control source context").getByText("Source unavailable. Location omitted to keep the saved report within its size limit.", { exact: true })).toBeVisible();
+      await expect(article.getByText(report.reason, { exact: true })).toBeVisible();
+      await ui.screenshot({ path: testInfo.outputPath("synthetic-cjk-context-desktop.png"), mask: [ui.locator("pre")] });
+      await ui.setViewportSize({ width: 390, height: 844 }); await firstCheck.scrollIntoViewIfNeeded();
+      await expect(firstCheck.getByText("[TRUNCATED]", { exact: true })).toBeVisible(); expect(await ui.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await ui.screenshot({ path: testInfo.outputPath("synthetic-cjk-context-mobile.png"), mask: [ui.locator("pre")] });
+    } finally { await ui.close(); }
+  } finally { rmSync(helper, { recursive: true, force: true }); }
+});
+
 test("real React 18 debug source and native attribute reads never invoke own accessors or private getters", async ({ page, request, runPhantom, reactApp }, testInfo) => {
   test.skip(!reactApp.legacy18, "React 18.3.1 is not installed; no dependency download is authorized");
   const session = await pair(page, request, runPhantom, reactApp, "/legacy.html");

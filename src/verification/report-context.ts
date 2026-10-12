@@ -113,11 +113,22 @@ export function boundReportContext(input: VerificationReportContext, scrub: Scru
     if (largest?.bytes > 32) { context.checks[largest.index].predicate = "[TRUNCATED]"; context.truncated = true; continue; }
     const groups = context.checks.filter(check => check.causal?.readings.length).sort((a, b) =>
       Buffer.byteLength(JSON.stringify(b.causal!.readings)) - Buffer.byteLength(JSON.stringify(a.causal!.readings)));
-    if (!groups.length) break;
-    groups[0].causal!.readings = [];
-    groups[0].causal!.omitted = true;
-    groups[0].causal!.attribution = "unavailable";
-    context.truncated = true;
+    if (groups.length) {
+      groups[0].causal!.readings = [];
+      groups[0].causal!.omitted = true;
+      groups[0].causal!.attribution = "unavailable";
+      context.truncated = true;
+      continue;
+    }
+    // Human display reasons are optional context; the report's evaluated reason is untouched.
+    const reasons = context.checks.map(check => ({ check, bytes: Buffer.byteLength(JSON.stringify(check.reason)) }))
+      .sort((a, b) => b.bytes - a.bytes);
+    if (reasons[0]?.bytes > Buffer.byteLength(JSON.stringify("[TRUNCATED]"))) {
+      reasons[0].check.reason = "[TRUNCATED]";
+      context.truncated = true;
+      continue;
+    }
+    throw new Error("Saved verification context exceeds its required outcome budget");
   }
   return context;
 }
