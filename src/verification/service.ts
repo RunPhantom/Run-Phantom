@@ -5,7 +5,7 @@ import { parseCommand, parsePredicate } from "./validation";
 import { saveReport, getFlow, boundedEvidence } from "./store";
 import { boundReportContext } from "./report-context";
 import { relativeTargets, relativeTargetKey, VERIFICATION_LIMITS as L, type Predicate,
-  type Verdict, type VerificationReport, type VerificationCheckContext } from "./protocol";
+  type Verdict, type VerificationReport, type VerificationCheckContext, type RetainedControlSource } from "./protocol";
 import { baselineScopeForTarget, type BaselineReading } from "./baseline";
 
 export interface VerificationServiceOptions extends VerificationBridgeOptions { checkTimeoutMs?: number }
@@ -49,6 +49,7 @@ export class VerificationService {
       for (let index = 0; index < flow.steps.length; index++) {
         const step = flow.steps[index];
         let since = this.bridge.tick(session);
+        let controlSource: RetainedControlSource | undefined;
         const started = Date.now();
         if (generation !== session.generation || !session.ws) {
           const verdict: Verdict = { status: "inconclusive", reason: "Application disconnected or changed document during the flow", evidence };
@@ -61,13 +62,14 @@ export class VerificationService {
             ? parseCommand({ type: "causal-click", selector: (step.command as { selector: string }).selector, targets }) : step.command;
           const result = await this.bridge.command(session, command);
           since = result.cursor;
+          controlSource = result.controlSource;
           if (!result.ok) {
             const verdict: Verdict = { status: "inconclusive", reason: `Step ${index + 1}: ${result.error ?? "Action was not acknowledged"}`, evidence };
-            checks.push(this.checkContext(session, step.predicate, verdict, since, generation, started, index + 1, false));
+            checks.push(this.checkContext(session, step.predicate, verdict, since, generation, started, index + 1, false, controlSource));
             return this.report(session, flow.name, flow.id, verdict, checks);
           }
         }
-        const result = await this.check(session, step.predicate, since, generation, index + 1);
+        const result = await this.check(session, step.predicate, since, generation, index + 1, controlSource);
         const { verdict } = result;
         checks.push(result.context);
         evidence.push(...verdict.evidence);
@@ -78,11 +80,13 @@ export class VerificationService {
     });
   }
 
-  private async check(session: VerificationSession, predicate: Predicate, since: number, generation: number, step = 1): Promise<{ verdict: Verdict; context: VerificationCheckContext }> {
+  private async check(session: VerificationSession, predicate: Predicate, since: number, generation: number, step = 1, controlSource?: RetainedControlSource): Promise<{ verdict: Verdict; context: VerificationCheckContext }> {
     const deadline = Date.now() + (this.options.checkTimeoutMs ?? L.CHECK_TIMEOUT_MS);
     const started = Date.now();
     let fresh = false;
-    const finish = (verdict: Verdict) => ({ verdict, context: this.checkContext(session, predicate, verdict, since, generation, started, step, fresh) });
+    const source = controlSource ?? (session.lastControlSource?.commandCursor === since && session.lastControlSource.generation === generation
+      && generation === session.generation && session.lastControlSource.actionId === session.currentActionId ? session.lastControlSource : undefined);
+    const finish = (verdict: Verdict) => ({ verdict, context: this.checkContext(session, predicate, verdict, since, generation, started, step, fresh, source) });
     const actionId = session.currentActionId;
     let latest: Verdict = { status: "inconclusive", reason: "No fresh observations available", evidence: [] };
     const reads = this.reads(predicate);
@@ -120,12 +124,13 @@ export class VerificationService {
   }
 
   private checkContext(session: VerificationSession, predicate: Predicate, verdict: Verdict, since: number,
-    generation: number, started: number, step: number, fresh: boolean): VerificationCheckContext {
+    generation: number, started: number, step: number, fresh: boolean, controlSource?: RetainedControlSource): VerificationCheckContext {
     const observed = this.bridge.observe(session, since);
     const current = !!session.ws && generation === session.generation;
     return { step, predicate, status: verdict.status, reason: verdict.reason, since, through: observed.cursor,
       generation, coverage: { ...session.coverage }, complete: fresh && current && observed.complete,
       dropped: observed.session.dropped,
+      ...(controlSource?.commandCursor === since && controlSource.generation === generation ? { controlSource } : {}),
       settled: fresh && current && session.coverage.network && !session.pending && session.requests.size === 0
         && Date.now() - Math.max(started, session.lastActivity) >= L.QUIET_MS,
       ...(relativeTargets(predicate).length ? { causal: this.retainedCausalContext(session, predicate, since, generation) } : {}) };
