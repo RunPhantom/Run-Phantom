@@ -4,6 +4,8 @@
 var CAUSAL_CAPABILITY = "causal-readings";
 var SEMANTIC_PROTOCOL_VERSION = 3;
 var SEMANTIC_CAPABILITY = "semantic-refs";
+var SOURCE_PROTOCOL_VERSION = 4;
+var SOURCE_CAPABILITY = "control-source";
 var SEMANTIC_REF_PATTERN = /^rpref_[0-9a-f]{32}$/;
 function normalizeSemanticText(text) {
   return text.normalize("NFC").replace(/\s+/gu, " ").trim();
@@ -401,6 +403,98 @@ function sanitizeWithReport(value, options = {}) {
 }
 function redactText(text) {
   return scrubKnownSecrets(text).replace(/\bauthorization["']?\s*[:=]\s*["']?(?:bearer|basic)\s+[^\s"'&,;}]+/gi, `authorization: ${REDACTED_VALUE}`).replace(/\b(Bearer|Basic)\s+(?=[A-Za-z0-9._~+/=-]{16,})(?=[A-Za-z0-9._~+/=-]*[\d._~+/=-])[A-Za-z0-9._~+/=-]+/gi, (_match, scheme) => `${scheme} ${REDACTED_VALUE}`).replace(/https?:\/\/[^\s<>"']+/gi, (url) => redactUrl(url)).replace(/(^|[\s?&#,;{"'])([A-Za-z][A-Za-z0-9_.-]{0,127})(\s*[=:]\s*["']?)([^&\s,;"'}]+)/g, (match, prefix, key, separator) => isSensitiveKey(key) ? `${prefix}${key}${separator}${REDACTED_VALUE}` : match);
+}
+
+// src/verification/build/source.ts
+var SOURCE_ATTRIBUTE = "data-runphantom-source";
+var unsafeText = (value) => Array.from(value).some((character) => {
+  const code = character.codePointAt(0);
+  return code < 32 || code === 127 || code >= 55296 && code <= 57343;
+});
+var encoder = new TextEncoder;
+function sourceComponent(value) {
+  return typeof value === "string" && value.trim() && encoder.encode(value).byteLength <= 128 && !unsafeText(value) ? value : undefined;
+}
+var unavailableReasons = ["not-react", "source-unavailable", "unsafe-source", "probe-limit", "probe-error", "redacted"];
+var sourceUnavailable = (reason) => ({ source: "sdk-reported", framework: "react", status: "unavailable", reason });
+function sourceFile(raw, root) {
+  if (typeof raw !== "string" || raw.length > 4096 || (unsafeText(raw) || /[%?#]/.test(raw)))
+    return null;
+  let file = raw.replace(/\\/g, "/");
+  if (file.startsWith("//"))
+    return null;
+  if (file.startsWith("/") || /^[A-Za-z]:\//.test(file)) {
+    if (typeof root !== "string" || !root || root.length > 4096 || (unsafeText(root) || /[%?#]/.test(root)))
+      return null;
+    const normalizedRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (!normalizedRoot || normalizedRoot.split("/").some((part) => part === "." || part === ".."))
+      return null;
+    const windows = /^[A-Za-z]:\//.test(file) && /^[A-Za-z]:\//.test(normalizedRoot);
+    const prefix = `${normalizedRoot}/`;
+    if (!(windows ? file.toLowerCase().startsWith(prefix.toLowerCase()) : file.startsWith(prefix)))
+      return null;
+    file = file.slice(prefix.length);
+  }
+  if (file.length > 384 || encoder.encode(file).byteLength > 512 || file.startsWith("/") || file.includes(":"))
+    return null;
+  if (file.split("/").some((part) => !part || part === "." || part === "..") || !/\.(?:[cm]?js|jsx|ts|tsx)$/.test(file))
+    return null;
+  return file;
+}
+function parseControlSourceObservation(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) || ![null, Object.prototype].includes(Object.getPrototypeOf(raw)))
+    throw new Error("Source context must be plain data");
+  const fields = Reflect.ownKeys(raw);
+  if (fields.length > 10)
+    throw new Error("Source context exceeds its field limit");
+  const value = Object.create(null);
+  for (const key of fields) {
+    const descriptor = Object.getOwnPropertyDescriptor(raw, key);
+    if (typeof key !== "string" || !descriptor || !("value" in descriptor))
+      throw new Error("Source context cannot contain accessors");
+    value[key] = descriptor.value;
+  }
+  const allowed = value.status === "captured" ? ["source", "framework", "status", "mechanism", "scope", "file", "line", "column", "component"] : ["source", "framework", "status", "reason"];
+  if (fields.some((key) => typeof key !== "string" || !allowed.includes(key)) || value.source !== "sdk-reported" || value.framework !== "react")
+    throw new Error("Unsupported source context");
+  if (value.status === "unavailable") {
+    if (!unavailableReasons.includes(value.reason))
+      throw new Error("Unsupported source availability reason");
+    return sourceUnavailable(value.reason);
+  }
+  const location2 = (value2) => typeof value2 === "number" && Number.isSafeInteger(value2) && value2 >= 1 && value2 <= 2147483647;
+  if (value.status !== "captured" || value.mechanism !== "dev-stamp" && value.mechanism !== "react-debug-source" || value.scope !== "control" && value.scope !== "ancestor" || typeof value.file !== "string" || sourceFile(value.file) !== value.file || !location2(value.line) || Object.hasOwn(value, "column") && !location2(value.column) || Object.hasOwn(value, "component") && (typeof value.component !== "string" || !value.component.trim() || unsafeText(value.component) || encoder.encode(value.component).byteLength > 128))
+    throw new Error("Unsafe or oversized source context");
+  const result = {
+    source: "sdk-reported",
+    framework: "react",
+    status: "captured",
+    mechanism: value.mechanism,
+    scope: value.scope,
+    file: value.file,
+    line: value.line,
+    ...Object.hasOwn(value, "column") ? { column: value.column } : {},
+    ...Object.hasOwn(value, "component") ? { component: value.component } : {}
+  };
+  if (encoder.encode(JSON.stringify(result)).byteLength > 1024)
+    throw new Error("Source context exceeds its byte limit");
+  return result;
+}
+function sanitizeControlSource(raw, scrub) {
+  try {
+    const source = parseControlSourceObservation(raw);
+    if (source.status === "unavailable")
+      return source;
+    const clean = (value) => sanitizeWithReport(value, { scrubString: scrub });
+    const file = clean(source.file);
+    if (file.redacted || file.truncation || file.value !== source.file)
+      return sourceUnavailable("redacted");
+    const component = source.component === undefined ? undefined : clean(source.component);
+    const { component: _component, ...rest } = source;
+    return parseControlSourceObservation({ ...rest, ...component && !component.redacted && !component.truncation && component.value === source.component ? { component: component.value } : {} });
+  } catch {
+    return sourceUnavailable("unsafe-source");
+  }
 }
 
 // src/verification/validation.ts
@@ -901,6 +995,14 @@ function valuePrototypeOf(el) {
     return;
   const proto = ctor.prototype;
   return typeof proto === "object" && proto !== null ? proto : undefined;
+}
+function nativeAttribute(el, name) {
+  const ctor = ctorIn(el, "Element");
+  if (typeof ctor !== "function")
+    return null;
+  const proto = Object.getOwnPropertyDescriptor(ctor, "prototype")?.value;
+  const method = proto && typeof proto === "object" ? Object.getOwnPropertyDescriptor(proto, "getAttribute")?.value : undefined;
+  return typeof method === "function" ? Reflect.apply(method, el, [name]) : null;
 }
 
 // src/verification/browser/actions/value-input.ts
@@ -1460,7 +1562,7 @@ function actionTarget(selector) {
 function runDomCommand(command, sanitize2 = (value) => {
   const safe = sanitizeWithReport(value);
   return { value: safe.value, truncated: Boolean(safe.truncation || safe.redacted) };
-}) {
+}, beforeMutation) {
   if (command.type === "snapshot") {
     const selector = command.selector ?? "button,input,textarea,select,a,[role]";
     const elements = matches(selector);
@@ -1489,6 +1591,7 @@ function runDomCommand(command, sanitize2 = (value) => {
   }
   const element = actionTarget(command.selector);
   if (command.type === "click") {
+    beforeMutation?.(element);
     element.click();
     return { result: { dispatched: true } };
   }
@@ -1499,6 +1602,7 @@ function runDomCommand(command, sanitize2 = (value) => {
     throw new Error("This input type does not support text filling");
   }
   assertEditable(element, "fill");
+  beforeMutation?.(element);
   element.focus();
   const prevented = setNativeValue(element, command.value);
   return { result: { dispatched: true, defaultPrevented: prevented } };
@@ -1531,7 +1635,7 @@ function runSemanticDomCommand(command, refs, sanitize2, beforeMutation) {
   if (command.type === "semantic-snapshot")
     return snapshotSemantic(refs, sanitize2);
   const element = semanticTarget(command.ref, refs, command.type === "ref-fill");
-  beforeMutation();
+  beforeMutation(element);
   if (command.type === "ref-click") {
     element.click();
     return { result: { dispatched: true, source: "sdk-reported" } };
@@ -1628,15 +1732,116 @@ function selectPath(root, path) {
   }
 }
 
+// src/verification/browser/framework/react.ts
+var object = (value) => value !== null && (typeof value === "object" || typeof value === "function");
+var LIMIT = new Error("source probe limit");
+function identifyReactControl(el, repoRoot) {
+  try {
+    let remaining = 512;
+    const read = (value, key2) => {
+      if (!object(value))
+        return;
+      if (--remaining < 0)
+        throw LIMIT;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key2);
+      return descriptor && "value" in descriptor ? descriptor.value : undefined;
+    };
+    const raw = nativeAttribute(el, SOURCE_ATTRIBUTE);
+    let stamped;
+    if (raw !== null) {
+      const match = raw.length <= 540 ? /^(.*):(\d+):(\d+)$/.exec(raw) : null;
+      if (!match)
+        return sourceUnavailable("unsafe-source");
+      try {
+        stamped = parseControlSourceObservation({ source: "sdk-reported", framework: "react", status: "captured", mechanism: "dev-stamp", scope: "control", file: match[1], line: Number(match[2]), column: Number(match[3]) });
+      } catch {
+        return sourceUnavailable("unsafe-source");
+      }
+    }
+    const keys2 = Object.getOwnPropertyNames(el);
+    if (keys2.length > 256)
+      return stamped ?? sourceUnavailable("probe-limit");
+    const key = keys2.find((key2) => key2.startsWith("__reactFiber$") || key2.startsWith("__reactInternalInstance$"));
+    let fiber = key ? read(el, key) : undefined;
+    if (!object(fiber))
+      return stamped ?? sourceUnavailable("not-react");
+    const rootOf = (start) => {
+      let top = start;
+      const seen2 = new Set;
+      for (let depth = 0;depth < 40; depth++) {
+        if (seen2.has(top))
+          throw LIMIT;
+        seen2.add(top);
+        const parent = read(top, "return");
+        if (parent === null)
+          return top;
+        if (!object(parent))
+          throw new Error("Unresolved React ownership");
+        top = parent;
+      }
+      throw LIMIT;
+    };
+    const root = rootOf(fiber);
+    const current = read(read(root, "stateNode"), "current");
+    if (current !== root) {
+      const alternate = read(fiber, "alternate");
+      if (!object(alternate) || rootOf(alternate) !== current)
+        return stamped ?? sourceUnavailable("source-unavailable");
+      fiber = alternate;
+    }
+    let component;
+    let observed = stamped;
+    const seen = new Set;
+    for (let depth = 0;object(fiber) && depth < 40; depth++) {
+      if (seen.has(fiber))
+        throw LIMIT;
+      seen.add(fiber);
+      const type = read(fiber, "elementType") ?? read(fiber, "type");
+      if (!component && object(type)) {
+        const name = read(type, "displayName") ?? read(type, "name");
+        component = sourceComponent(name);
+      }
+      if (!observed) {
+        const debug = read(fiber, "_debugSource");
+        if (object(debug)) {
+          const file = sourceFile(read(debug, "fileName"), repoRoot);
+          if (!file)
+            observed = sourceUnavailable("unsafe-source");
+          else {
+            const column = read(debug, "columnNumber");
+            try {
+              observed = parseControlSourceObservation({ source: "sdk-reported", framework: "react", status: "captured", mechanism: "react-debug-source", scope: depth === 0 ? "control" : "ancestor", file, line: read(debug, "lineNumber"), ...column === undefined || column === null ? {} : { column } });
+            } catch {
+              observed = sourceUnavailable("unsafe-source");
+            }
+          }
+        }
+      }
+      fiber = read(fiber, "return");
+      if (fiber === null)
+        break;
+    }
+    if (object(fiber))
+      throw LIMIT;
+    return observed?.status === "captured" && component ? { ...observed, component } : observed ?? sourceUnavailable("source-unavailable");
+  } catch (error) {
+    return sourceUnavailable(error === LIMIT ? "probe-limit" : "probe-error");
+  }
+}
+
 // src/verification/browser/index.ts
 var ACTIVE_RUNTIME = Symbol.for("runphantom.verification.active");
-var encoder = new TextEncoder;
+var encoder2 = new TextEncoder;
 function nameValid(value) {
   return typeof value === "string" && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
 }
 function connect(options) {
   validateOrigin(location.origin);
   const origin = validateOrigin(options.url);
+  const sourceEnabled = options.sourceProvenance?.enabled === true;
+  const sourceRoot = sourceEnabled ? options.sourceProvenance?.repoRoot : undefined;
+  if (sourceRoot !== undefined && (typeof sourceRoot !== "string" || sourceRoot.length > 4096))
+    throw new Error("Invalid browser-local source root");
   if (!nameValid(options.sessionId))
     throw new Error("Invalid verification session ID");
   if (typeof options.token !== "string" || !options.token || options.token.length > 512) {
@@ -1698,7 +1903,7 @@ function connect(options) {
     if (!active || socket.readyState !== WebSocket.OPEN)
       return false;
     const text2 = JSON.stringify(message);
-    if (encoder.encode(text2).byteLength > VERIFICATION_LIMITS.MAX_FRAME_BYTES)
+    if (encoder2.encode(text2).byteLength > VERIFICATION_LIMITS.MAX_FRAME_BYTES)
       return false;
     socket.send(text2);
     return true;
@@ -1731,7 +1936,7 @@ function connect(options) {
     try {
       const safe = prepareEvent(type, data);
       const event = { type, data: safe.value, ...actionId ? { actionId } : {}, ...safe.truncated || truncated ? { truncated: true } : {} };
-      const bytes = encoder.encode(JSON.stringify(event)).byteLength;
+      const bytes = encoder2.encode(JSON.stringify(event)).byteLength;
       if (bytes > VERIFICATION_LIMITS.MAX_EVENT_BYTES) {
         disconnect();
         return;
@@ -1789,10 +1994,10 @@ function connect(options) {
     install("route", () => installRoute(emit));
     observeSafely(() => send({
       type: "hello",
-      version: SEMANTIC_PROTOCOL_VERSION,
+      version: sourceEnabled ? SOURCE_PROTOCOL_VERSION : SEMANTIC_PROTOCOL_VERSION,
       token: options.token,
       coverage,
-      capabilities: [...options.causalReadings === false ? [] : [CAUSAL_CAPABILITY], ...options.semanticRefs === false ? [] : [SEMANTIC_CAPABILITY]]
+      capabilities: [...options.causalReadings === false ? [] : [CAUSAL_CAPABILITY], ...options.semanticRefs === false ? [] : [SEMANTIC_CAPABILITY], ...sourceEnabled ? [SOURCE_CAPABILITY] : []]
     }), disconnect);
   };
   const actionReading = (id, phase, target) => {
@@ -1823,6 +2028,17 @@ function connect(options) {
   };
   const act = (id, command) => {
     try {
+      const boundary = (element) => {
+        if (sourceEnabled) {
+          const observation = sanitizeControlSource(identifyReactControl(element, sourceRoot), (value) => String(prepare(value).value));
+          if (!send({ type: "event", event: { type: "action.source", data: { observation }, actionId: id } }))
+            disconnect();
+        }
+        currentActionId = id;
+        emit("action.boundary", {}, id);
+        if (!active || !ready)
+          throw new Error("Verification disconnected before action dispatch");
+      };
       if ((command.type === "fill" || command.type === "ref-fill") && command.value && !secrets.has(command.value)) {
         if (secretCharacters + command.value.length > 1024 * 1024 || secrets.size >= 1000) {
           throw new Error("Live fill redaction capacity reached; reconnect before another fill");
@@ -1837,7 +2053,7 @@ function connect(options) {
         for (const target of command.targets)
           actionReading(id, "before", target);
       }
-      if (command.type === "click" || command.type === "fill" || command.type === "causal-click") {
+      if (!sourceEnabled && (command.type === "click" || command.type === "fill" || command.type === "causal-click")) {
         currentActionId = id;
         emit("action.boundary", {}, id);
         if (!active || !ready)
@@ -1852,20 +2068,15 @@ function connect(options) {
         const store = sanitizeWithReport(command.store);
         output = { result: { store: store.value, value: safe2.value }, truncated: Boolean(safe2.truncated || store.truncation || store.redacted) };
       } else if (command.type === "causal-click") {
-        output = runDomCommand({ type: "click", selector: command.selector }, prepare);
+        output = runDomCommand({ type: "click", selector: command.selector }, prepare, sourceEnabled ? boundary : undefined);
         for (const target of command.targets)
           actionReading(id, "after", target);
       } else if (command.type === "find" || command.type === "semantic-snapshot" || command.type === "ref-click" || command.type === "ref-fill") {
         if (options.semanticRefs === false)
           throw new Error("Semantic references are not enabled for this runtime");
-        output = runSemanticDomCommand(command, refs, prepare, () => {
-          currentActionId = id;
-          emit("action.boundary", {}, id);
-          if (!active || !ready)
-            throw new Error("Verification disconnected before action dispatch");
-        });
+        output = runSemanticDomCommand(command, refs, prepare, boundary);
       } else
-        output = runDomCommand(command, prepare);
+        output = runDomCommand(command, prepare, sourceEnabled ? boundary : undefined);
       const safe = command.type === "state" ? { value: output.result } : sanitizeWithReport(output.result);
       if (!send({ type: "result", id, ok: true, result: safe.value, ...output.truncated || safe.truncation || safe.redacted ? { truncated: true } : {} }))
         disconnect();
@@ -1876,7 +2087,7 @@ function connect(options) {
   };
   const onMessage = (event) => {
     try {
-      if (typeof event.data !== "string" || encoder.encode(event.data).byteLength > VERIFICATION_LIMITS.MAX_FRAME_BYTES) {
+      if (typeof event.data !== "string" || encoder2.encode(event.data).byteLength > VERIFICATION_LIMITS.MAX_FRAME_BYTES) {
         disconnect();
         return;
       }

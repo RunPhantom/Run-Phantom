@@ -34,6 +34,7 @@ export function runDomCommand(
     const safe = sanitizeWithReport(value);
     return { value: safe.value, truncated: Boolean(safe.truncation || safe.redacted) };
   },
+  beforeMutation?: (element: Element) => void,
 ): { result: unknown; truncated?: boolean } {
   if (command.type === "snapshot") {
     const selector = command.selector ?? "button,input,textarea,select,a,[role]";
@@ -61,6 +62,7 @@ export function runDomCommand(
   }
   const element = actionTarget(command.selector);
   if (command.type === "click") {
+    beforeMutation?.(element);
     element.click();
     return { result: { dispatched: true } };
   }
@@ -70,6 +72,7 @@ export function runDomCommand(
     throw new Error("This input type does not support text filling");
   }
   assertEditable(element, "fill");
+  beforeMutation?.(element);
   element.focus();
   const prevented = setNativeValue(element, command.value);
   return { result: { dispatched: true, defaultPrevented: prevented } };
@@ -97,13 +100,13 @@ export function runSemanticDomCommand(
   command: SemanticCommand,
   refs: LiveElementRefs,
   sanitize: (value: unknown) => { value: unknown; truncated: boolean },
-  beforeMutation: () => void,
+  beforeMutation: (element: Element) => void,
 ): { result: unknown; truncated?: boolean } {
   if (command.type === "find") return findSemantic(command.query, refs, sanitize);
   if (command.type === "semantic-snapshot") return snapshotSemantic(refs, sanitize);
   const element = semanticTarget(command.ref, refs, command.type === "ref-fill");
   // Resolve and validate before recording an action or invoking any page focus handler.
-  beforeMutation();
+  beforeMutation(element);
   if (command.type === "ref-click") {
     element.click();
     return { result: { dispatched: true, source: "sdk-reported" } };

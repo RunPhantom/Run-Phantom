@@ -4,8 +4,23 @@ export const CAUSAL_PROTOCOL_VERSION = 2 as const;
 export const CAUSAL_CAPABILITY = "causal-readings" as const;
 export const SEMANTIC_PROTOCOL_VERSION = 3 as const;
 export const SEMANTIC_CAPABILITY = "semantic-refs" as const;
+export const SOURCE_PROTOCOL_VERSION = 4 as const;
+export const SOURCE_CAPABILITY = "control-source" as const;
 export const SEMANTIC_REF_PATTERN = /^rpref_[0-9a-f]{32}$/;
-export type VerificationCapability = typeof CAUSAL_CAPABILITY | typeof SEMANTIC_CAPABILITY;
+export type VerificationCapability = typeof CAUSAL_CAPABILITY | typeof SEMANTIC_CAPABILITY | typeof SOURCE_CAPABILITY;
+
+export type ControlSourceObservation = {
+  source: "sdk-reported"; framework: "react"; status: "captured";
+  mechanism: "dev-stamp" | "react-debug-source"; scope: "control" | "ancestor";
+  file: string; line: number; column?: number; component?: string;
+} | {
+  source: "sdk-reported"; framework: "react"; status: "unavailable";
+  reason: "not-react" | "source-unavailable" | "unsafe-source" | "probe-limit" | "probe-error" | "redacted";
+};
+export interface RetainedControlSource {
+  actionId: string; commandCursor: number; cursor: number; generation: number;
+  capture: "before-dispatch"; observation: ControlSourceObservation;
+}
 
 export type SemanticQuery =
   | { kind: "role"; role: string; name?: string; exact?: boolean }
@@ -146,6 +161,8 @@ export interface VerificationCheckContext {
   dropped: number;
   settled: boolean;
   causal?: RetainedCausalContext;
+  controlSource?: RetainedControlSource;
+  controlSourceOmitted?: "context-limit";
 }
 export interface RetainedReading { cursor: number; availability: "complete" | "partial" | "unavailable"; value: unknown }
 export interface RetainedCausalContext {
@@ -192,6 +209,7 @@ export type BrowserMessage =
   | { type: "hello"; version: typeof PROTOCOL_VERSION; token: string; coverage: Coverage }
   | { type: "hello"; version: typeof CAUSAL_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: Array<typeof CAUSAL_CAPABILITY> }
   | { type: "hello"; version: typeof SEMANTIC_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
+  | { type: "hello"; version: typeof SOURCE_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
   | { type: "event"; event: Omit<RuntimeEvent, "t"> }
   | { type: "result"; id: string; ok: boolean; result?: unknown; error?: string; truncated?: boolean };
 export type DaemonMessage =
