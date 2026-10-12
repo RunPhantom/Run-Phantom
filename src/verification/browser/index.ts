@@ -8,7 +8,7 @@
  * rather than failing the session, which is what lets an assertion return
  * inconclusive instead of a false pass when its evidence was never being collected.
  */
-import { SEMANTIC_PROTOCOL_VERSION, SEMANTIC_CAPABILITY, CAUSAL_CAPABILITY, VERIFICATION_LIMITS, type Coverage, type AppCommand, type RelativeTarget } from "../protocol.js";
+import { BUSINESS_PROTOCOL_VERSION, BUSINESS_CAPABILITY, SEMANTIC_PROTOCOL_VERSION, SEMANTIC_CAPABILITY, CAUSAL_CAPABILITY, VERIFICATION_LIMITS, type Coverage, type AppCommand, type RelativeTarget } from "../protocol.js";
 import { parseCommand, validateOrigin } from "../validation.js";
 import { sanitizeWithReport } from "../serialization.js";
 import { installConsole } from "./observers/console.js";
@@ -19,7 +19,7 @@ import { runDomCommand, runSemanticDomCommand } from "./actions/index.js";
 import { LiveElementRefs } from "./dom/refs.js";
 import { selectPath } from "../state-select.js";
 
-export interface ConnectionOptions { url: string; sessionId: string; token: string; causalReadings?: boolean; semanticRefs?: boolean }
+export interface ConnectionOptions { url: string; sessionId: string; token: string; causalReadings?: boolean; semanticRefs?: boolean; businessResponses?: boolean }
 export interface RuntimeConnection {
   disconnect(): void;
   signal(name: string, data?: unknown): void;
@@ -101,6 +101,7 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
     // Protocol discriminants and request/store/signal identities are generated metadata.
     // A fill equal to "error" or "GET" must not rewrite that metadata or its field names.
     const fields = type === "console" ? ["message", "stack"]
+      : type === "network.body" ? ["body"]
       : type === "network" || type === "network.start" ? ["url", "error"]
       : type === "route" ? ["url"]
       : type === "signal" ? ["data"]
@@ -167,10 +168,10 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
   const onOpen = (): void => {
     if (!active) return;
     install("console", () => installConsole(emit, prepare));
-    install("network", () => installNetwork(emit, () => currentActionId));
+    install("network", () => installNetwork(emit, () => currentActionId, options.businessResponses === true ? prepare : undefined));
     install("route", () => installRoute(emit));
-    observeSafely(() => send({ type: "hello", version: SEMANTIC_PROTOCOL_VERSION, token: options.token, coverage,
-      capabilities: [...(options.causalReadings === false ? [] : [CAUSAL_CAPABILITY]), ...(options.semanticRefs === false ? [] : [SEMANTIC_CAPABILITY])] }), disconnect);
+    observeSafely(() => send({ type: "hello", version: options.businessResponses === true ? BUSINESS_PROTOCOL_VERSION : SEMANTIC_PROTOCOL_VERSION, token: options.token, coverage,
+      capabilities: [...(options.causalReadings === false ? [] : [CAUSAL_CAPABILITY]), ...(options.semanticRefs === false ? [] : [SEMANTIC_CAPABILITY]), ...(options.businessResponses === true ? [BUSINESS_CAPABILITY] : [])] }), disconnect);
   };
   const actionReading = (id: string, phase: "before" | "after", target: RelativeTarget): void => {
     let available = false;

@@ -103,7 +103,7 @@ export class VerificationService {
       if (!session.ws || session.generation !== generation) return finish({ status: "inconclusive", reason: "Application connection changed while collecting evidence", evidence: [] });
       const observed = this.bridge.observe(session, since);
       const settled = session.coverage.network && !session.pending && session.requests.size === 0 && Date.now() - Math.max(started, session.lastActivity) >= L.QUIET_MS;
-      latest = evaluatePredicate(predicate, { events: observed.events, coverage: session.coverage, complete: observed.complete, settled, actionId,
+      latest = evaluatePredicate(predicate, { capabilities: session.capabilities, events: observed.events, coverage: session.coverage, complete: observed.complete, settled, actionId,
         relative: this.relativeContext(session, predicate, since, generation, observed.cursor, observed.complete, settled) });
       if (latest.status === "pass" && settled) return finish({ ...latest, reason: `${latest.reason} Verified during an observed interval with ${L.QUIET_MS}ms quiet and no tracked requests pending.` });
       // An atomic relative result is an immutable owned turn. Waiting cannot convert an
@@ -168,6 +168,7 @@ export class VerificationService {
   private reads(predicate: Predicate): Array<{ type: "snapshot"; selector: string } | { type: "state"; store: string }> {
     if (predicate.kind === "state") return [{ type: "state", store: predicate.store }];
     if (predicate.kind === "element") return [{ type: "snapshot", selector: predicate.selector }];
+    if (predicate.kind === "business-response" && predicate.witness?.kind === "state") return [{ type: "state", store: predicate.witness.store }];
     if (predicate.kind === "allOf" || predicate.kind === "anyOf") return predicate.predicates.flatMap((entry) => this.reads(entry));
     return [];
   }
