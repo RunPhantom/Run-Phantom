@@ -1,5 +1,5 @@
 import { normalizeOtelId } from "./ids";
-import { captureKind, type CaptureVisibilityV1 } from "./spans/adapters/capture-visibility";
+import { inferSpanType, type CaptureVisibilityV1 } from "./spans/adapters/capture-visibility";
 import { normalizeSpan } from "./spans/normalize";
 import type { NormalizedSpan } from "./spans/normalized";
 import { captureOtlpEvidence, type OtlpEvidence } from "./spans/otlp-evidence";
@@ -88,74 +88,6 @@ function collectAttrs(
 function first(attrs: any[], ...keys: string[]): string | number | boolean | undefined {
   for (const k of keys) { const v = getAttr(attrs, k); if (v !== undefined) return v; }
   return undefined;
-}
-
-function inferSpanType(
-  operationId?: string,
-  traceloopKind?: string,
-  hasToolName = false,
-  runPhantomSpanKind?: string,
-  attrs: Record<string, string | number | boolean> = {},
-): "LLM_GENERATION" | "TOOL_CALL" | "AGENT_ROOT" | "TRACE" | "INTERNAL" | "RETRIEVAL" | "EMBEDDING" {
-  // Prefer an explicit Run Phantom role over operation-name heuristics.
-  if (runPhantomSpanKind === "agent_root") return "AGENT_ROOT";
-  if (runPhantomSpanKind === "trace") return "TRACE";
-  if (runPhantomSpanKind === "llm_call") return "LLM_GENERATION";
-  if (runPhantomSpanKind === "tool_call") return "TOOL_CALL";
-
-  // Fall back to provider-neutral and factual third-party conventions.
-  if (hasToolName) return "TOOL_CALL";
-  if (traceloopKind === "tool") return "TOOL_CALL";
-  if (traceloopKind === "llm") return "LLM_GENERATION";
-  switch (attrs["openinference.span.kind"]) {
-    case "LLM": return "LLM_GENERATION";
-    case "TOOL": return "TOOL_CALL";
-    case "AGENT": return "AGENT_ROOT";
-    case "CHAIN": return "TRACE";
-    case "EMBEDDING": return "EMBEDDING";
-    case "RETRIEVER": return "RETRIEVAL";
-    case "RERANKER":
-    case "GUARDRAIL": case "EVALUATOR": case "PROMPT": return "INTERNAL";
-  }
-  if (attrs["gen_ai.operation.name"] === "execute_tool") return "TOOL_CALL";
-  if (attrs["gen_ai.operation.name"] === "invoke_agent") return "AGENT_ROOT";
-  if (attrs["gen_ai.operation.name"] === "invoke_workflow") return "TRACE";
-  const explicitCapture = captureKind(attrs);
-  if (explicitCapture) return explicitCapture;
-  if (isGenAiInferenceSpan(attrs)) return "LLM_GENERATION";
-  if (typeof attrs["lk.chat_ctx"] === "string") return "LLM_GENERATION";
-  if (typeof operationId === "string") {
-    if (operationId === "ai.toolCall") return "TOOL_CALL";
-    if (operationId === "chat" || operationId === "llm" || operationId === "generation" || operationId === "response") return "LLM_GENERATION";
-    if (operationId === "ConverseCommand" || operationId === "InvokeModelCommand") return "LLM_GENERATION";
-    if (operationId.includes("Stream") || operationId.includes("Generate") ||
-        operationId.includes("stream") || operationId.includes("generate")) return "LLM_GENERATION";
-  }
-  return "INTERNAL";
-}
-
-function isGenAiInferenceSpan(attrs: Record<string, string | number | boolean>): boolean {
-  const operationName = attrs["gen_ai.operation.name"];
-  if (
-    operationName === "chat" ||
-    operationName === "text_completion" ||
-    operationName === "generate_content"
-  ) {
-    return true;
-  }
-
-  // Legacy OpenLLMetry provider spans emitted this shape before the current
-  // OTel GenAI message attributes existed. Treat chat/completion calls as LLMs,
-  // but avoid broad `gen_ai.*` matching so embeddings/retrievals remain INTERNAL
-  // until Run Phantom supports them explicitly.
-  const requestType = attrs["llm.request.type"];
-  if (requestType === "chat" || requestType === "completion") return true;
-
-  return hasIndexedAttr(attrs, "gen_ai.prompt.") || hasIndexedAttr(attrs, "gen_ai.completion.");
-}
-
-function hasIndexedAttr(attrs: Record<string, string | number | boolean>, prefix: string): boolean {
-  return Object.keys(attrs).some((key) => key.startsWith(prefix));
 }
 
 function status(code: number | string | undefined): string {

@@ -2,6 +2,32 @@ import { expect, test } from "bun:test";
 import { parseOtlpRequest } from "../src/parse";
 import { normalizeStoredSpan } from "../src/spans/normalize";
 import { captureTrace, captureAttributes, chunk, terminal, captureInput, captureOutput } from "./fixtures/capture-visibility";
+import { classificationCases } from "./fixtures/capture-classification-cases";
+
+test("captured hierarchy retains the existing complete ingest classification policy", () => {
+  for (const [index, policy] of classificationCases.entries()) {
+    const fixture = captureTrace(2000 + index), rs = fixture.body.resourceSpans[0] as any;
+    rs.resource = { attributes: captureAttributes(policy.resource ?? {}) };
+    rs.scopeSpans[0].scope.attributes = captureAttributes(policy.scope ?? {});
+    fixture.retrieval.attributes.push(...captureAttributes(policy.span ?? {}));
+    expect(parseOtlpRequest(fixture.body)[0].spanType, policy.name).toBe(policy.kind);
+  }
+});
+
+test("lossy, ambiguous and malformed classification receipts cannot grant operation authority", () => {
+  const span = parseOtlpRequest(captureTrace().body)[0];
+  for (const mutation of ["receiver-loss", "exporter-loss", "duplicate", "malformed", "unsupported-role"]) {
+    const evidence = structuredClone(span.otlpEvidence);
+    if (mutation === "receiver-loss") evidence.capture.droppedAttributes++;
+    if (mutation === "exporter-loss") evidence.droppedAttributesCount = 1;
+    if (mutation === "duplicate") evidence.attributes.push(evidence.attributes[0]);
+    if (mutation === "unsupported-role") evidence.resource = { attributes: [{ key: "openinference.span.kind", value: { bytesValue: "TOOL" } }], droppedAttributesCount: 0 };
+    const receipt = JSON.stringify(evidence);
+    const row = { span_type: "RETRIEVAL", attributes: JSON.stringify(span.attributes), otlp_evidence: mutation === "malformed" ? receipt.slice(0, -1) : receipt,
+      normalized: { kind: "retrieval", fabricated: true }, captureVisibility: { retrieval: { fabricated: true } } };
+    const projected = publicCaptureMetadata(row); expect(projected.normalized).toBeUndefined(); expect(projected.captureVisibility?.retrieval).toBeUndefined();
+  }
+});
 
 test("captured retrieval metadata retains explicit zero separately from missing fields", () => {
   const span = parseOtlpRequest(captureTrace().body)[0];

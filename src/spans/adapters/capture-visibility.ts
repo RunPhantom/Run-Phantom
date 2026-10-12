@@ -68,6 +68,74 @@ export function captureKind(attrs: AdapterInput["attrs"]): "RETRIEVAL" | "EMBEDD
   if (attrs["gen_ai.operation.name"] === "embeddings") return "EMBEDDING";
   return attrs["db.system.name"] === "qdrant" && attrs["db.operation.name"] === "SEARCH" ? "RETRIEVAL" : null;
 }
+export function inferSpanType(
+  operationId?: string,
+  traceloopKind?: string,
+  hasToolName = false,
+  runPhantomSpanKind?: string,
+  attrs: Record<string, string | number | boolean> = {},
+): "LLM_GENERATION" | "TOOL_CALL" | "AGENT_ROOT" | "TRACE" | "INTERNAL" | "RETRIEVAL" | "EMBEDDING" {
+  // Prefer an explicit Run Phantom role over operation-name heuristics.
+  if (runPhantomSpanKind === "agent_root") return "AGENT_ROOT";
+  if (runPhantomSpanKind === "trace") return "TRACE";
+  if (runPhantomSpanKind === "llm_call") return "LLM_GENERATION";
+  if (runPhantomSpanKind === "tool_call") return "TOOL_CALL";
+
+  // Fall back to provider-neutral and factual third-party conventions.
+  if (hasToolName) return "TOOL_CALL";
+  if (traceloopKind === "tool") return "TOOL_CALL";
+  if (traceloopKind === "llm") return "LLM_GENERATION";
+  switch (attrs["openinference.span.kind"]) {
+    case "LLM": return "LLM_GENERATION";
+    case "TOOL": return "TOOL_CALL";
+    case "AGENT": return "AGENT_ROOT";
+    case "CHAIN": return "TRACE";
+    case "EMBEDDING": return "EMBEDDING";
+    case "RETRIEVER": return "RETRIEVAL";
+    case "RERANKER":
+    case "GUARDRAIL": case "EVALUATOR": case "PROMPT": return "INTERNAL";
+  }
+  if (attrs["gen_ai.operation.name"] === "execute_tool") return "TOOL_CALL";
+  if (attrs["gen_ai.operation.name"] === "invoke_agent") return "AGENT_ROOT";
+  if (attrs["gen_ai.operation.name"] === "invoke_workflow") return "TRACE";
+  const explicitCapture = captureKind(attrs);
+  if (explicitCapture) return explicitCapture;
+  if (isGenAiInferenceSpan(attrs)) return "LLM_GENERATION";
+  if (typeof attrs["lk.chat_ctx"] === "string") return "LLM_GENERATION";
+  if (typeof operationId === "string") {
+    if (operationId === "ai.toolCall") return "TOOL_CALL";
+    if (operationId === "chat" || operationId === "llm" || operationId === "generation" || operationId === "response") return "LLM_GENERATION";
+    if (operationId === "ConverseCommand" || operationId === "InvokeModelCommand") return "LLM_GENERATION";
+    if (operationId.includes("Stream") || operationId.includes("Generate") ||
+        operationId.includes("stream") || operationId.includes("generate")) return "LLM_GENERATION";
+  }
+  return "INTERNAL";
+}
+
+function isGenAiInferenceSpan(attrs: Record<string, string | number | boolean>): boolean {
+  const operationName = attrs["gen_ai.operation.name"];
+  if (
+    operationName === "chat" ||
+    operationName === "text_completion" ||
+    operationName === "generate_content"
+  ) {
+    return true;
+  }
+
+  // Legacy OpenLLMetry provider spans emitted this shape before the current
+  // OTel GenAI message attributes existed. Treat chat/completion calls as LLMs,
+  // but avoid broad `gen_ai.*` matching so embeddings/retrievals remain INTERNAL
+  // until Run Phantom supports them explicitly.
+  const requestType = attrs["llm.request.type"];
+  if (requestType === "chat" || requestType === "completion") return true;
+
+  return hasIndexedAttr(attrs, "gen_ai.prompt.") || hasIndexedAttr(attrs, "gen_ai.completion.");
+}
+
+function hasIndexedAttr(attrs: Record<string, string | number | boolean>, prefix: string): boolean {
+  return Object.keys(attrs).some((key) => key.startsWith(prefix));
+}
+
 export function readCaptureReceipt(value: unknown): OtlpEvidence | undefined {
   if (typeof value !== "string" || Buffer.byteLength(value) > OTLP_EVIDENCE_LIMITS.bytes) return undefined;
   try { const receipt: unknown = JSON.parse(value); if (hasDuplicateJsonKeys(value)) return undefined; validateOtlpEvidence(receipt); return receipt; } catch { return undefined; }
@@ -158,16 +226,19 @@ export function publicCaptureMetadata<T extends { attributes?: unknown; otlp_evi
   if (typeof spanType !== "string" || !["RETRIEVAL", "EMBEDDING", "LLM_GENERATION", "TOOL_CALL", "TRACE", "AGENT_ROOT", "INTERNAL"].includes(spanType)) return clean;
   let flat: AdapterInput["attrs"] = {};
   try { if (typeof attributes === "string") { const parsed: unknown = JSON.parse(attributes); if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) flat = parsed as AdapterInput["attrs"]; } } catch { /* Missing metadata stays unavailable. */ }
-  const source = readCaptureReceipt(receipt), sourceAttrs = source ? fields(source.attributes) : flat;
-  const oiKind = sourceAttrs["openinference.span.kind"];
-  const sourceKind = oiKind === "EMBEDDING" ? "EMBEDDING" : oiKind === "RETRIEVER" ? "RETRIEVAL" : captureKind(sourceAttrs as AdapterInput["attrs"]);
-  const priorRole = ["agent_root", "trace", "llm_call", "tool_call"].includes(sourceAttrs["runphantom.span.kind"] as string)
-    || ["tool", "llm"].includes(sourceAttrs["traceloop.span.kind"] as string)
-    || ["LLM", "TOOL", "AGENT", "CHAIN", "RERANKER", "GUARDRAIL", "EVALUATOR", "PROMPT"].includes(sourceAttrs["openinference.span.kind"] as string)
-    || ["execute_tool", "invoke_agent", "invoke_workflow"].includes(sourceAttrs["gen_ai.operation.name"] as string)
-    || ["ai.toolCall.name", "tool.name", "lk.function_tool.name"].some(key => typeof sourceAttrs[key] === "string" && sourceAttrs[key]);
+  const source = readCaptureReceipt(receipt), spanAttrs = source ? fields(source.attributes) : flat;
+  const sourceAttrs = source ? { ...fields(source.resource?.attributes ?? []), ...fields(source.scope?.attributes ?? []), ...spanAttrs } : flat;
+  const legacyToolName = ["ai.toolCall.name", "tool.name", "lk.function_tool.name"].map(key => spanAttrs[key]).find(value => value !== undefined);
+  const sourceKind = inferSpanType(spanAttrs["ai.operationId"] as string | undefined, spanAttrs["traceloop.span.kind"] as string | undefined,
+    typeof legacyToolName === "string" && !!legacyToolName,
+    spanAttrs["runphantom.span.kind"] as string | undefined, sourceAttrs as AdapterInput["attrs"]);
+  const unavailableRole = legacyToolName === null || spanAttrs["runphantom.span.kind"] === null || spanAttrs["traceloop.span.kind"] === null
+    || sourceAttrs["openinference.span.kind"] === null || sourceAttrs["gen_ai.operation.name"] === null;
+  const sources = source ? [source.resource, source.scope, source].filter(item => item !== null) : [];
+  const classificationLoss = (typeof row.otlp_evidence === "string" && !source) || (source && (source.capture.droppedAttributes > 0 || source.capture.invalidValues > 0 || source.capture.truncatedValues > 0
+    || sources.some(item => (item!.droppedAttributesCount ?? 0) > 0 || new Set(item!.attributes.map(entry => entry.key)).size !== item!.attributes.length)));
   const captureType = ["RETRIEVAL", "EMBEDDING"].includes(spanType)
-    && (priorRole || sourceKind !== spanType) ? "INTERNAL" : spanType;
+    && (unavailableRole || classificationLoss || sourceKind !== spanType) ? "INTERNAL" : spanType;
   const capture = captureVisibility({ spanName: "", spanType: captureType as AdapterInput["spanType"], attrs: flat,
     traceId: typeof own(row, "run_id") === "string" ? own(row, "run_id") as string : undefined,
     spanId: typeof own(row, "id") === "string" ? own(row, "id") as string : undefined, otlpEvidence: source });

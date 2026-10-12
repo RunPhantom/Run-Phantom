@@ -1,14 +1,15 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { Database } from "bun:sqlite";
 import { parseOtlpRequest } from "../src/parse";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { captureTrace, captureInput, captureOutput, filterSecret } from "./fixtures/capture-visibility";
+import { captureTrace, captureAttributes, captureInput, captureOutput, filterSecret } from "./fixtures/capture-visibility";
 import { encodeFidelityRequest } from "./fixtures/otlp-evidence";
+import { classificationCases } from "./fixtures/capture-classification-cases";
 
 const directory = mkdtempSync(path.join(realpathSync(tmpdir()), "rp-capture-http-"));
 const owned: ChildProcess[] = [], closed = new Map<ChildProcess, Promise<unknown>>();
@@ -48,6 +49,60 @@ afterAll(async () => {
 });
 async function json(route: string) { const response = await fetch(base + route); expect(response.status).toBe(200); return response.json(); }
 async function post(route: string, data: unknown) { return fetch(base + route, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }); }
+test("actual captured hierarchy classification and canonical payloads agree across every public cache route", async () => {
+  const cases = [];
+  for (const [index, policy] of classificationCases.entries()) {
+    const fixture = captureTrace(2100 + index), rs = fixture.body.resourceSpans[0] as any;
+    rs.resource = { attributes: captureAttributes(policy.resource ?? {}) }; rs.scopeSpans[0].scope.attributes = captureAttributes(policy.scope ?? {});
+    fixture.retrieval.attributes.push(...captureAttributes(policy.span ?? {}));
+    expect((await post("/v1/traces", fixture.body)).status).toBe(200);
+    const original = await json(`/api/runs/detail/${fixture.id}`); expect(original.spans[0].span_type, policy.name).toBe(policy.kind);
+    const parsed = parseOtlpRequest(fixture.body)[0];
+    for (const contradictory of [false, true]) {
+      const id = (2200 + index * 2 + Number(contradictory)).toString(16).padStart(32, "0");
+      const row = { ...original.spans[0], run_id: id, attributes: JSON.stringify(parsed.attributes), otlp_evidence: JSON.stringify(parsed.otlpEvidence),
+        ...(contradictory ? { span_type: "RETRIEVAL", normalized: { kind: "retrieval", invented: true } } : {}) };
+      const data = { run: { ...original.run, id }, spans: [row], liveEvents: [] }, bytes = JSON.stringify(data);
+      expect((await fetch(`${base}/api/saved-runs/cache/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: bytes })).status).toBe(200);
+      const database = new Database(path.join(directory, "capture.db"), { readonly: true });
+      expect((database.query("SELECT data FROM saved_run_cache WHERE id=?").get(id) as { data: string }).data).toBe(bytes); database.close();
+      for (const route of [`/api/runs/detail/${id}`, `/api/saved-runs/cache/${id}`, `/api/runs/${id}/export`]) {
+        const response = await fetch(base + route); expect(response.status).toBe(200); const current = (await response.json()).spans[0];
+        for (const key of ["id", "run_id", "span_type", "status", "input_payload", "output_payload"] as const) expect(current[key]).toEqual(row[key]);
+        if (!contradictory) expect(current.normalized).toEqual(original.spans[0].normalized);
+        else if (policy.kind === "RETRIEVAL") expect(current.normalized.kind).toBe("retrieval");
+        else { expect(current.normalized).toBeUndefined(); expect(current.captureVisibility?.retrieval).toBeUndefined(); }
+      }
+    }
+    cases.push({ policy: policy.name, expectedKind: policy.kind, actualKind: original.spans[0].span_type, canonicalFieldsPreserved: true, contradictoryRetrievalWithheld: policy.kind !== "RETRIEVAL", privateCacheBytesUnchanged: true });
+  }
+  proof("http-classification-policy.json", { ownedPid: daemon.pid, cases, publicRoutesPerCase: 6 });
+}, 30000);
+for (const [index, level] of ["resource", "scope"].entries()) {
+  test(`actual ${level} TOOL source prevents contradictory cached retrieval using unchanged protected request`, async () => {
+    const fixture = captureTrace(1910 + index), rs = fixture.body.resourceSpans[0] as any;
+    if (level === "resource") rs.resource = { attributes: captureAttributes({ "openinference.span.kind": "TOOL" }) };
+    else rs.scopeSpans[0].scope.attributes = captureAttributes({ "openinference.span.kind": "TOOL" });
+    expect((await post("/v1/traces", fixture.body)).status).toBe(200);
+    const original = await json(`/api/runs/detail/${fixture.id}`); expect(original.spans[0].span_type).toBe("TOOL_CALL");
+    const bytes = readFileSync(new URL(`./fixtures/capture-classification-${level}-cache.json`, import.meta.url), "utf8"), data = JSON.parse(bytes), id = data.run.id;
+    const parsed = parseOtlpRequest(fixture.body)[0]; expect(data.spans[0].attributes).toBe(JSON.stringify(parsed.attributes)); expect(data.spans[0].otlp_evidence).toBe(JSON.stringify(parsed.otlpEvidence));
+    expect((await fetch(`${base}/api/saved-runs/cache/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: bytes })).status).toBe(200);
+    const database = new Database(path.join(directory, "capture.db"), { readonly: true });
+    const cache = database.query("SELECT data FROM saved_run_cache WHERE id=?").get(id) as { data: string };
+    const source = database.query("SELECT span_type,attributes,otlp_evidence FROM spans WHERE run_id=? AND id=?").get(fixture.id, parsed.spanId) as { span_type: string; attributes: string; otlp_evidence: string }; database.close();
+    expect(cache.data).toBe(bytes); expect(source.span_type).toBe("TOOL_CALL"); expect(source.attributes).toBe(JSON.stringify(parsed.attributes)); expect(source.otlp_evidence).toBe(JSON.stringify(parsed.otlpEvidence));
+    const responses = [];
+    for (const route of [`/api/runs/detail/${id}`, `/api/saved-runs/cache/${id}`, `/api/runs/${id}/export`]) {
+      const response = await fetch(base + route); expect(response.status).toBe(200); const current = (await response.json()).spans[0];
+      expect(current.normalized).toBeUndefined(); expect(current.captureVisibility?.retrieval).toBeUndefined();
+      for (const key of ["id", "run_id", "span_type", "status", "input_payload", "output_payload"] as const) expect(current[key]).toEqual(data.spans[0][key]);
+      responses.push({ route, status: response.status, contradictoryCaptureWithheld: true, originalFieldsPreserved: true });
+    }
+    const canonical = await json(`/api/runs/detail/${fixture.id}`); expect(canonical.spans[0].normalized).toEqual(original.spans[0].normalized);
+    proof(`http-classification-${level}.json`, { ownedPid: daemon.pid, actualIngestKind: source.span_type, unchangedProtectedRequest: true, privateBytesUnchanged: true, canonicalToolPreserved: true, responses });
+  });
+}
 for (const spanType of [null, "INTERNAL"] as const) {
   test(`actual saved-cache ${spanType} strips untrusted capture and operation DTOs`, async () => {
     const fixture = captureTrace(1810); expect((await post("/v1/traces", fixture.body)).status).toBe(200);
