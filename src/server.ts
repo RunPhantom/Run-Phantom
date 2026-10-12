@@ -102,6 +102,9 @@ import { createVerificationRouter } from "./verification/router";
 import { parseAppOrigin } from "./verification/bridge";
 import verificationSdk from "./verification/browser-sdk.js" with { type: "text" };
 import { VERIFICATION_LIMITS } from "./verification/protocol";
+import { BrowserAutomation } from "./verification/automation";
+import { browserHostConfig } from "./verification/browser-provider";
+import { createBrowserRouter } from "./verification/browser-router";
 import { createEvaluationService } from "./evaluations/service";
 import { createEvaluationRouter } from "./evaluations/router";
 import { EVALUATION_LIMITS } from "./evaluations/protocol";
@@ -749,6 +752,7 @@ export async function createServer(port: number) {
   }
 
   const verification = createVerificationService({ broadcast, allowedSourceIps, allowedHosts });
+  const browserAutomation = new BrowserAutomation(browserHostConfig(), broadcast);
   const evaluations = createEvaluationService();
   server.on("upgrade", (req, socket, head) => {
     let pathname: string;
@@ -1023,9 +1027,11 @@ export async function createServer(port: number) {
   server.on("close", () => {
     askUserQuestions.closeAll();
     verification.close();
+    void browserAutomation.close();
     evaluations.close();
   });
 
+  app.use("/api/verification/browser", localOriginGuard, createBrowserRouter(browserAutomation, () => currentServerPort() ?? port));
   app.use("/api/verification", createVerificationRouter(verification));
   app.use("/api/evaluations", createEvaluationRouter(evaluations));
 
@@ -1627,10 +1633,13 @@ export async function createServer(port: number) {
     }
     res.json(tailLiveEvents(req.params.id, opts));
   });
-  app.post("/api/clear", (_req, res) => {
-    evaluations.reset();
-    for (const id of verification.bridge.sessions.keys()) verification.bridge.remove(id);
-    clearAll(); broadcast("clear", {}); res.json({ ok: true });
+  app.post("/api/clear", async (_req, res, next) => {
+    try {
+      await browserAutomation.reset();
+      evaluations.reset();
+      for (const id of verification.bridge.sessions.keys()) verification.bridge.remove(id);
+      clearAll(); broadcast("clear", {}); res.json({ ok: true });
+    } catch (error) { next(error); }
   });
 
   app.get("/api/workspace/active", (_req, res) => {
@@ -2780,6 +2789,7 @@ export async function createServer(port: number) {
   return {
     app,
     server,
+    closeBrowserWorkers: () => browserAutomation.close(),
     get port() {
       return currentServerPort() ?? port;
     },

@@ -54,7 +54,7 @@ async function runBackend(): Promise<void> {
   const requestedPort = getConfiguredPort();
   const port = hasExplicitPort() ? requestedPort : await findFreePort(requestedPort);
   const bindHost = getConfiguredBindHost();
-  const { server } = await createServer(port);
+  const { server, closeBrowserWorkers } = await createServer(port);
 
   server.listen(port, bindHost, () => {
     printPortFallback(requestedPort, port);
@@ -73,11 +73,17 @@ async function runBackend(): Promise<void> {
   });
   process.on("uncaughtException", (err) => {
     console.error("[runphantom] uncaught exception, shutting down:", err?.stack ?? err);
-    try { server.close(); } catch { /* already closing */ }
-    process.exit(1);
+    void closeBrowserWorkers().finally(() => { try { server.close(); } catch { /* already closing */ } process.exit(1); });
   });
 
-  const shutdown = () => { server.close(); process.exit(0); };
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    await closeBrowserWorkers();
+    server.close();
+    process.exit(0);
+  };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
   process.on("SIGUSR2", shutdown); // nodemon/tsx watch sends SIGUSR2

@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 /** Select shared or local authority before loading either runtime. */
-if (process.argv[2] === "team") {
+if (process.argv[2] === "--internal-browser-worker") {
+  const { runBrowserWorker } = await import("./verification/browser-worker");
+  await runBrowserWorker();
+} else if (process.argv[2] === "team") {
   try {
     const { runTeamCli } = await import("./team/cli");
     process.exit(await runTeamCli(process.argv.slice(3)));
