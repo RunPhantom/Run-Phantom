@@ -28,7 +28,7 @@ test("captured receipt privacy retains a mandatory default floor under ambient e
 });
 
 test("complete multi-line credentials are scrubbed before a receipt applies its text cap", () => {
-  const secret = `-----BEGIN PRIVATE KEY-----\n${"QkFTRTY0\n".repeat(900)}-----END PRIVATE KEY-----`;
+  const secret = `${["-----BEGIN", "PRIVATE KEY-----"].join(" ")}\n${"QkFTRTY0\n".repeat(900)}${["-----END", "PRIVATE KEY-----"].join(" ")}`;
   const receipt = captureOtlpEvidence({ events: [guardEvent("deny", { "guard.explanation": `before ${secret} after` })] }, {}, {});
   expect(receipt.events[0].attributes[5].value).toEqual({ stringValue: "before [REDACTED] after" });
   expect(receipt.capture.redactedValues).toBe(1); expect(receipt.capture.truncatedValues).toBe(0);

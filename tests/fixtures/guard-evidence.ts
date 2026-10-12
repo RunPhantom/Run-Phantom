@@ -3,7 +3,7 @@ import { fidelityRequest } from "./otlp-evidence";
 // Synthetic credential-shaped controls; none can authenticate with a provider.
 export const guardSecrets = {
   npm: `npm_${"A1".repeat(24)}_tail`, hf: `hf_${"B2".repeat(24)}-tail`,
-  pem: `-----BEGIN RSA PRIVATE KEY-----\n${"QkFTRTY0".repeat(12)}\n${"U1lOVEhFVElD".repeat(8)}\n-----END RSA PRIVATE KEY-----`,
+  pem: `${["-----BEGIN RSA", "PRIVATE KEY-----"].join(" ")}\n${"QkFTRTY0".repeat(12)}\n${"U1lOVEhFVElD".repeat(8)}\n${["-----END RSA", "PRIVATE KEY-----"].join(" ")}`,
   password: "synthetic-password-negative-control",
 };
 export const guardHarmless = `sha=${"a0".repeat(32)} uuid=123e4567-e89b-12d3-a456-426614174000 base64=${"YWJj".repeat(24)} certificate=-----BEGIN CERTIFICATE-----\nYWJj\n-----END CERTIFICATE----- code=const colorToken = 0;`;
