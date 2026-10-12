@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import type { DatasetExport, DatasetRevision } from "../../src/evaluations/protocol";
 import { expect, test } from "./fixtures";
 import {
+  FIXTURE_LIVE_RUN_ID,
   FIXTURE_PRIMARY_RUN_ID,
   FIXTURE_SPAN_COUNT,
   readRunPhantomRun,
@@ -109,6 +110,10 @@ for (const width of [1440, 1024, 390, 320]) {
       try { return JSON.parse(frame).event === "agent_provider"; } catch { return false; }
     }), { message: "connected status requires real daemon WebSocket traffic" }).toBe(true);
     const mobile = MOBILE_WIDTHS.has(width);
+    const liveRunBefore = await readRunPhantomRun(runPhantom.url, FIXTURE_LIVE_RUN_ID);
+    const liveSpansBefore = await readRunPhantomSpans(runPhantom.url, FIXTURE_LIVE_RUN_ID);
+    expect(liveRunBefore).not.toBeNull();
+    expect(liveSpansBefore.length).toBeGreaterThan(0);
     let navigation = await openNavigation(page, mobile);
     await expectNavigationType(navigation, mobile);
     const theme = await page.evaluate(async () => {
@@ -130,7 +135,15 @@ for (const width of [1440, 1024, 390, 320]) {
     for (const section of SECTIONS) {
       navigation = await openNavigation(page, mobile);
       await navigation.getByRole("link", { name: section.name, exact: true }).click();
-      await expect(page).toHaveURL(`${runPhantom.url}${section.path}`);
+      const expectedPath = section.name === "Runs" && !mobile
+        ? `/runs/${FIXTURE_LIVE_RUN_ID}`
+        : section.path;
+      await expect(page).toHaveURL(`${runPhantom.url}${expectedPath}`);
+      if (section.name === "Runs") {
+        if (!mobile) await expect(page.getByRole("tab", { name: "Span Tree", exact: true })).toBeVisible();
+        expect(await readRunPhantomRun(runPhantom.url, FIXTURE_LIVE_RUN_ID)).toEqual(liveRunBefore);
+        expect(await readRunPhantomSpans(runPhantom.url, FIXTURE_LIVE_RUN_ID)).toEqual(liveSpansBefore);
+      }
       await expectHeader(page, section.name);
       if (mobile) await expect(page.getByRole("dialog", { name: "Navigation", exact: true })).toBeHidden();
       else await expect(navigation.getByRole("link", { name: section.name, exact: true })).toHaveAttribute("aria-current", "page");
