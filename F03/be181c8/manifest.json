@@ -1,0 +1,102 @@
+{
+  "feature": "F03",
+  "head": "be181c810a140c35174fe349d7fd49ebeaa9bdf5",
+  "maintainer": "Divyam Talwar",
+  "checks": {
+    "backend": {
+      "passed": 802,
+      "skipped": 2,
+      "failed": 0,
+      "assertions": 5704,
+      "files": 74,
+      "seconds": 70.1,
+      "explicit_skips": [
+        "native Windows ancestor junction test on macOS",
+        "full shipped CLI artifact opt-in, subsequently activated against the actual copied artifact"
+      ]
+    },
+    "source_chromium": {
+      "passed": 114,
+      "skipped": 10,
+      "failed": 0,
+      "flaky": 0,
+      "workers": 1,
+      "retries": 0,
+      "seconds": 234.45,
+      "explicit_skips": {
+        "paid_provider_live": 7,
+        "compiled_only_subsequently_passed": 3
+      }
+    },
+    "copied_product_chromium": {
+      "passed": 3,
+      "skipped": 0,
+      "failed": 0,
+      "flaky": 0,
+      "workers": 1,
+      "retries": 0
+    },
+    "actual_shipped_cli_regressions": {
+      "passed": 2,
+      "skipped": 0,
+      "failed": 0,
+      "assertions": 936,
+      "cells_per_entry": 65,
+      "real_supervisor_jobs_per_entry": 1,
+      "entries": [
+        "actual source CLI",
+        "actual whole copied compiled CLI"
+      ]
+    },
+    "detailed_copied_proof": {
+      "operations": 44,
+      "copied_cli_cells": 42,
+      "actual_source_cli_identity_operations": 1,
+      "source_supervisor_with_actual_copied_reader_operations": 1,
+      "early_refusals_leave_stdin_open_and_unwritten": true,
+      "all_profile_cwd_snapshots_entirely_empty": true,
+      "cache_allowances": [],
+      "explicitly_recorded_owned_pids_reaped": 45,
+      "all_43_direct_cli_readers_stderr_empty": true,
+      "supervisor_reader_stderr": "Ignored by the reviewed worker factory contract; not independently observed in this controller."
+    }
+  },
+  "artifact": {
+    "sha256": "1a0c9f109c687e1c7caf4ad95bc0672a5c312141131432e51d1588394d5950be",
+    "bytes": 68301328,
+    "platform": "macOS arm64",
+    "sourceFreeActualCopy": true
+  },
+  "screenshots": [
+    {
+      "file": "runphantom-desktop-detail.png",
+      "sha256": "ec3ae1b6cdfd6e1737fbe50c64a8690f478f2e391c88275f903510f572e8dcaa",
+      "origin": "actual copied executable with synthetic demo capture; existing UI bootstrap"
+    },
+    {
+      "file": "runphantom-desktop.png",
+      "sha256": "26a8cd0df8f5d1c0314a7f6c9814c92f8b0829b3a58e23cd46d7ff8067bc4b64",
+      "origin": "actual copied executable with synthetic demo capture; existing UI bootstrap"
+    },
+    {
+      "file": "runphantom-mobile.png",
+      "sha256": "90df4b49a44902de916c21a1d495012652897ba91bdb65183489a14defe3067a",
+      "origin": "actual copied executable with synthetic demo capture; existing UI bootstrap"
+    }
+  ],
+  "rootPublicationReviewSha256": "2e620221cc5522500a1747b0d8e9eaff46cd29b292936f37828914772f17f4ad",
+  "privateVerificationSha256": "f099e72f76330b72a2580146ca618381234ce25938ebe6858f4c1a33c0762399",
+  "providerSpendUsd": 0,
+  "platformAcceptance": false,
+  "limitations": [
+    "Native Windows and Linux reruns at this exact correction head remain pending; old failures remain failures.",
+    "This is F03 current-head backend/source UI/copied product qualification. Later F04/F48/global V1 composition or all-feature completion is not claimed.",
+    "The controller runs the actual source EvidenceSupervisor with a factory targeting the actual copied whole-product reader; this does not assert an inaccessible compiled default-supervisor API is exposed before the later import bridge.",
+    "Closed worker authority is an application contract, not an OS sandbox or a guarantee about arbitrary pre-JavaScript native runtime variables.",
+    "No source edits, dependency/workflow edits, push, PR edit, merge or publication occurred in this qualification.",
+    "Zero-stderr observations apply to the 43 direct CLI cells. The supervisor factory discards reader stderr, so that stream is not qualified as empty."
+  ],
+  "workerEntryBytes": 4084,
+  "pinnedCacheThresholdBytes": 4096,
+  "wholeProjectAccepted": false
+}
