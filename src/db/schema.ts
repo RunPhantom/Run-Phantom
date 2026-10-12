@@ -166,6 +166,28 @@ export const verification_reports = sqliteTable("verification_reports", {
   created_at: integer("created_at").notNull(),
 }, (table) => [index("idx_verification_reports_run").on(table.run_id), index("idx_verification_reports_created").on(table.created_at)]);
 
+export const verification_snapshots = sqliteTable("verification_snapshots", {
+  id: text("id").primaryKey(),
+  run_id: text("run_id").references(() => runs.id, { onDelete: "cascade" }),
+  session_id: text("session_id"),
+  name: text("name").notNull(),
+  origin: text("origin").notNull(),
+  captured_at: integer("captured_at").notNull(),
+  stored_at: integer("stored_at").notNull(),
+  source: text("source", { enum: ["paired-sdk", "imported-evidence"] }).notNull(),
+  content_sha256: text("content_sha256").notNull(),
+  coverage_sha256: text("coverage_sha256").notNull(),
+  payload: text("payload").notNull(),
+}, (table) => [
+  index("idx_verification_snapshots_stored").on(table.stored_at, table.id),
+  index("idx_verification_snapshots_run").on(table.run_id, table.stored_at, table.id),
+  check("verification_snapshots_payload_bound", sql`json_valid(${table.payload}) AND length(cast(${table.payload} AS blob)) <= 32768`),
+  check("verification_snapshots_text_bound", sql`length(${table.id}) BETWEEN 1 AND 128 AND length(cast(${table.id} AS blob)) <= 512 AND length(${table.name}) BETWEEN 1 AND 128 AND length(cast(${table.name} AS blob)) <= 512 AND length(cast(${table.origin} AS blob)) BETWEEN 1 AND 2048 AND (${table.session_id} IS NULL OR length(cast(${table.session_id} AS blob)) BETWEEN 1 AND 512)`),
+  check("verification_snapshots_time_bound", sql`typeof(${table.captured_at}) = 'integer' AND ${table.captured_at} BETWEEN 0 AND 9007199254740991 AND typeof(${table.stored_at}) = 'integer' AND ${table.stored_at} BETWEEN 0 AND 9007199254740991`),
+  check("verification_snapshots_source_bound", sql`(${table.source} = 'paired-sdk' AND ${table.session_id} IS NOT NULL) OR (${table.source} = 'imported-evidence' AND ${table.session_id} IS NULL)`),
+  check("verification_snapshots_digest_bound", sql`length(${table.content_sha256}) = 64 AND ${table.content_sha256} NOT GLOB '*[^0-9a-f]*' AND length(${table.coverage_sha256}) = 64 AND ${table.coverage_sha256} NOT GLOB '*[^0-9a-f]*'`),
+]);
+
 export const evaluation_datasets = sqliteTable("evaluation_datasets", {
   id: text("id").primaryKey(), name: text("name").notNull(), latest_version: integer("latest_version").notNull(),
   case_count: integer("case_count").notNull(), created_at: integer("created_at").notNull(),

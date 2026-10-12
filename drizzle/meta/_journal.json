@@ -64,6 +64,13 @@
       "when": 1791757794360,
       "tag": "0008_otlp_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1791773224836,
+      "tag": "0009_semantic_snapshots",
+      "breakpoints": true
     }
   ]
 }
