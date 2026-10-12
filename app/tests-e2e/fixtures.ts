@@ -1,7 +1,7 @@
 import { test as base, expect } from "@playwright/test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { startManagedDaemon, type RuntimeProvenance } from "./daemon-runtime";
+import { startFixtureDaemon, type RuntimeProvenance } from "./daemon-runtime";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..");
@@ -26,7 +26,7 @@ export const test = base.extend<{ runPhantom: ManagedRunPhantomHandle; localNetw
     await use();
   }, { auto: true }],
   runPhantom: async ({}, use, testInfo) => {
-    const daemon = await startManagedDaemon(REPO_ROOT, process.env, testInfo.workerIndex);
+    const daemon = await startFixtureDaemon(REPO_ROOT, process.env, testInfo.workerIndex);
     await testInfo.attach("runphantom-runtime-start", { body: JSON.stringify(daemon.runtime, null, 2), contentType: "application/json" });
     try {
       await use(daemon);

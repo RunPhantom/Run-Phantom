@@ -317,8 +317,14 @@ For a direct Playwright invocation, set `RUNPHANTOM_E2E_RUNTIME=installed`,
 `RUNPHANTOM_E2E_BINARY` to an absolute executable path and
 `RUNPHANTOM_E2E_SHA256` to its SHA256. Source remains the default and is labelled
 as source in receipts. The three standalone compiled smoke gates retain their
-existing opt-in commands. Selected native journeys qualify only the host and
-features actually executed; other architectures, Windows, Linux and provider
+existing opt-in commands. The qualifier owns each copied daemon through a
+private authenticated fixture channel and closes those handles even if the
+Playwright runner is interrupted. It accepts only pinned fixture start/stop
+jobs; it cannot execute arbitrary commands or terminate supplied PIDs.
+Catchable SIGINT/SIGTERM also closes the runner and fixtures. Abrupt SIGKILL
+of the qualifier or host shutdown cannot run cleanup and is not covered by
+this JavaScript lifecycle guarantee. Selected native journeys qualify only the
+host and features actually executed; other architectures, Windows, Linux and provider
 acceptance require their own runs. Windows records the requested working
 directory separately because CIM does not expose an observed process cwd.
 

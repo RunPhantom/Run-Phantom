@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { fileSha256, outsideCheckout, launchOwnedProcess, stopOwnedProcess, type RuntimeProvenance } from "../app/tests-e2e/daemon-runtime";
+import { fileSha256, outsideCheckout, startFixtureSupervisor, launchOwnedProcess, stopOwnedProcess, type RuntimeProvenance } from "../app/tests-e2e/daemon-runtime";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 type Attachment = { name: string; body?: string; path?: string };
@@ -65,18 +65,24 @@ async function main() {
   await mkdir(selection.output); // Existing output must never be overwritten.
   const output = await realpath(selection.output), reportPath = path.join(output, "playwright.json");
   const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("RUNPHANTOM_") && !["ANTHROPIC_API_KEY", "OPENAI_API_KEY"].includes(key)));
+  const supervisor = await startFixtureSupervisor(root, { ...cleanEnv, ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "", RUNPHANTOM_E2E_RUNTIME: "installed",
+    RUNPHANTOM_E2E_BINARY: artifact, RUNPHANTOM_E2E_SHA256: selection.sha256 });
   const runner = launchOwnedProcess("node", [path.join(root, "app/node_modules/@playwright/test/cli.js"), "test", "--config", path.join(root, "app/playwright.config.ts"),
     ...selection.specs, "--project=chromium", "--workers=1", "--retries=0", "--global-timeout=1800000", "--reporter=json", `--output=${path.join(output, "test-results")}`], root,
     { ...cleanEnv, ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "", RUNPHANTOM_E2E_RUNTIME: "installed", RUNPHANTOM_E2E_BINARY: artifact,
-      RUNPHANTOM_E2E_SHA256: selection.sha256, PLAYWRIGHT_JSON_OUTPUT_NAME: reportPath });
+      RUNPHANTOM_E2E_SHA256: selection.sha256, ...supervisor.environment, PLAYWRIGHT_JSON_OUTPUT_NAME: reportPath });
   let log = ""; const capture = (data: Buffer) => { if (log.length < 64 * 1024) log += data.toString().slice(0, 64 * 1024 - log.length); };
   runner.child.stdout?.on("data", capture); runner.child.stderr?.on("data", capture);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const manifest: Record<string, unknown> = { status: "failed", sourceHead, platform: process.platform, architecture: process.arch, artifact, sha256: selection.sha256,
     specs: selection.specs, workers: 1, assertionRetries: 0, coverage: "selected copied-native journeys only; other hosts, providers and full feature acceptance remain pending" };
   let failure: Error | undefined;
+  let interrupt!: (error: Error) => void;
+  const interrupted = new Promise<never>((_, reject) => { interrupt = reject; });
+  const onInterrupt = () => { interrupt(new Error("native_qualifier_interrupted")); };
+  process.on("SIGINT", onInterrupt); process.on("SIGTERM", onInterrupt);
   try {
-    await Promise.race([runner.closed, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("native_runner_timeout")), 1_860_000); })]);
+    await Promise.race([runner.closed, interrupted, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("native_runner_timeout")), 1_860_000); })]);
     if (runner.error || runner.child.exitCode !== 0) throw new Error("native_runner_failed");
     const report = JSON.parse((await boundedFile(reportPath, 32 * 1024 * 1024)).toString("utf8")) as Report;
     if (!report.stats.expected || report.stats.unexpected || report.stats.flaky || report.stats.skipped) throw new Error("native_journey_not_passed");
@@ -97,12 +103,23 @@ async function main() {
   } catch (error) { failure = error instanceof Error ? error : new Error("native_qualification_failed"); manifest.failure = failure.message; }
   finally {
     clearTimeout(timer);
-    try { manifest.runner = await stopOwnedProcess(runner); }
-    catch (error) {
-      manifest.status = "failed"; manifest.cleanupFailure = error instanceof Error ? error.message : "native_runner_cleanup_failed";
-      failure = failure ? new AggregateError([failure, error], "native_qualification_and_cleanup_failed") : error instanceof Error ? error : new Error("native_runner_cleanup_failed");
+    const cleanup = await Promise.allSettled([stopOwnedProcess(runner), supervisor.close()]);
+    if (cleanup[0].status === "fulfilled") manifest.runner = cleanup[0].value;
+    if (cleanup[1].status === "fulfilled") {
+      const jobs = cleanup[1].value; manifest.supervisor = { jobs };
+      const journeys = manifest.journeys as { runtime: RuntimeProvenance; cleanup: Cleanup }[] | undefined;
+      if (manifest.status === "passed" && (!journeys || journeys.length !== jobs.length || journeys.some(journey => !jobs.some(job =>
+        JSON.stringify(job.runtime) === JSON.stringify(journey.runtime) && JSON.stringify({ runtime: job.runtime, ...job.cleanup }) === JSON.stringify(journey.cleanup))))) {
+        manifest.status = "failed"; failure = new Error("native_supervisor_receipt_mismatch");
+      }
     }
-    finally { await writeFile(path.join(output, "runner.log"), log); await writeFile(path.join(output, "qualification.json"), JSON.stringify(manifest, null, 2)); }
+    const errors = cleanup.filter(result => result.status === "rejected").map(result => result.reason as unknown);
+    if (errors.length) {
+      manifest.status = "failed"; manifest.cleanupFailure = "native_owned_cleanup_failed";
+      failure = new AggregateError(failure ? [failure, ...errors] : errors, "native_qualification_and_cleanup_failed");
+    }
+    process.off("SIGINT", onInterrupt); process.off("SIGTERM", onInterrupt);
+    await writeFile(path.join(output, "runner.log"), log); await writeFile(path.join(output, "qualification.json"), JSON.stringify(manifest, null, 2));
   }
   if (failure) throw failure;
   console.log(JSON.stringify({ status: manifest.status, report: path.join(output, "qualification.json") }));

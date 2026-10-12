@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileSha256, launchOwnedProcess, startManagedDaemon, stopOwnedProcess } from "../app/tests-e2e/daemon-runtime";
+import { fileSha256, launchOwnedProcess, startManagedDaemon, startFixtureDaemon, startFixtureSupervisor, stopOwnedProcess } from "../app/tests-e2e/daemon-runtime";
 
 const root = path.resolve(import.meta.dir, "..");
 const probeBirth = (pid: number) => {
@@ -145,3 +146,43 @@ test("a counterfeit owned handle cannot terminate a genuine live process", async
   try { await ready(owned); await expectFailure(stopOwnedProcess({ ...owned }), "fixture_process_unknown_owner"); expect(alive(owned.child.pid!)).toBe(true); }
   finally { await stopOwnedProcess(owned); }
 });
+
+test("the qualifier-owned source supervisor closes normal and interrupted fixture daemons without trusting runner receipts", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "runphantom-source-supervisor-"));
+  const supervisor = await startFixtureSupervisor(root, { ...process.env, RUNPHANTOM_E2E_RUNTIME: "source", RUNPHANTOM_E2E_BINARY: undefined, RUNPHANTOM_E2E_SHA256: undefined });
+  let runner: ReturnType<typeof launchOwnedProcess> | undefined;
+  const unrelated = launchOwnedProcess(process.execPath, ["-e", 'console.log("ready");setInterval(()=>{},1000)'], root, process.env);
+  let closed = false;
+  try {
+    await ready(unrelated);
+    const environment = { ...process.env, ...supervisor.environment };
+    await expectFailure(startFixtureDaemon(root, { ...environment, RUNPHANTOM_E2E_SUPERVISOR_TOKEN: "0".repeat(64) }, 0), "fixture_supervisor_auth");
+    const normal = await startFixtureDaemon(root, environment, 0);
+    expect(normal.runtime.mode).toBe("source"); expect((await fetch(`${normal.url}/health`)).ok).toBe(true);
+    await expectFailure(startFixtureDaemon(root, environment, 1), "fixture_supervisor_job_limit");
+    const refused = async (message: Record<string, unknown>) => await new Promise<string>((resolve, reject) => {
+      const socket = createConnection({ host: "127.0.0.1", port: Number(supervisor.environment.RUNPHANTOM_E2E_SUPERVISOR_PORT) });
+      let body = ""; socket.setTimeout(3000, () => { socket.destroy(); reject(new Error("probe_protocol_timeout")); });
+      socket.on("error", reject); socket.once("connect", () => { socket.write(JSON.stringify({ token: supervisor.environment.RUNPHANTOM_E2E_SUPERVISOR_TOKEN, ...message }) + "\n"); });
+      socket.on("data", chunk => { body += String(chunk); if (body.includes("\n")) { socket.destroy(); resolve((JSON.parse(body) as { error: string }).error); } });
+    });
+    expect(await refused({ op: "stop", job: "0".repeat(32) })).toBe("fixture_supervisor_unknown_job");
+    expect(await refused({ op: "start", command: "kill", pid: unrelated.child.pid })).toBe("fixture_supervisor_protocol");
+    expect(alive(unrelated.child.pid!)).toBe(true);
+    const cleanup = await normal.stop(); expect(cleanup.process.closeObserved).toBe(true); expect(alive(normal.runtime.pid)).toBe(false);
+    const receipt = path.join(directory, "daemon.json");
+    const program = path.join(directory, "runner.ts");
+    await writeFile(program, `import {startFixtureDaemon} from ${JSON.stringify(path.join(root, "app/tests-e2e/daemon-runtime.ts"))}; const daemon=await startFixtureDaemon(${JSON.stringify(root)},process.env,0);await Bun.write(${JSON.stringify(receipt)},JSON.stringify({runtime:daemon.runtime,url:daemon.url}));setInterval(()=>{},1000);`);
+    runner = launchOwnedProcess(process.execPath, [program], directory, environment); runner.child.stdout?.resume(); runner.child.stderr?.resume();
+    let daemon: { runtime: { pid: number; mode: string; stateDirectory: string }; url: string } | undefined;
+    for (let i = 0; i < 200; i++) { try { daemon = JSON.parse(await readFile(receipt, "utf8")) as typeof daemon; break; } catch { await Bun.sleep(50); } }
+    if (!daemon) throw new Error("source_supervisor_probe_missing");
+    expect(daemon.runtime.mode).toBe("source"); expect((await fetch(`${daemon.url}/health`)).ok).toBe(true);
+    await stopOwnedProcess(runner); expect(alive(daemon.runtime.pid)).toBe(true);
+    const jobs = await supervisor.close(); closed = true;
+    expect(jobs).toHaveLength(2); expect(alive(daemon.runtime.pid)).toBe(false);
+    expect((await readdir(path.dirname(daemon.runtime.stateDirectory))).includes(path.basename(daemon.runtime.stateDirectory))).toBe(false);
+    expect(alive(unrelated.child.pid!)).toBe(true);
+    console.log(JSON.stringify({ probe: "source-supervisor-interruption", runnerPid: runner.child.pid, daemonPid: daemon.runtime.pid, jobs: jobs.map(job => ({pid:job.runtime.pid,closeObserved:job.cleanup.process.closeObserved,directoryRemoved:job.cleanup.directoryRemoved})) }));
+  } finally { if (runner) await stopOwnedProcess(runner); if (!closed) await supervisor.close(); await stopOwnedProcess(unrelated); await rm(directory, { recursive: true, force: true }); }
+}, 25_000);

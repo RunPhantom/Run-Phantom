@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileSha256, outsideCheckout, launchOwnedProcess, stopOwnedProcess, startManagedDaemon, type RuntimeProvenance } from "../app/tests-e2e/daemon-runtime";
@@ -44,7 +44,12 @@ test("outside-checkout projection accepts another Windows drive and refuses the 
 });
 
 const binary = process.env.RUNPHANTOM_F48_TEST_BINARY;
-test.skipIf(!binary || process.platform !== "darwin")("interrupted actual copied qualifier reaps its daemon and private profile independently of the runner", async () => {
+function terminateRecorded(pid: number, identity: string | undefined, birth: (pid: number) => string): void {
+  try { process.kill(pid, 0); } catch { return; }
+  if (!identity || birth(pid) !== identity) throw new Error("probe_cleanup_identity_changed");
+  process.kill(pid, "SIGKILL");
+}
+async function interruptedQualifier(target: "runner" | "qualifier") {
   const root = path.resolve(import.meta.dir, "..");
   const directory = await mkdtemp(path.join(tmpdir(), "runphantom-qualifier-interruption-"));
   const receipt = path.join(directory, "probe.json"), output = path.join(directory, "qualification");
@@ -61,19 +66,29 @@ test.skipIf(!binary || process.platform !== "darwin")("interrupted actual copied
     if (!probe) throw new Error("qualifier_probe_missing");
     for (const pid of [probe.runnerPid, probe.workerPid, probe.runtime.pid]) { const identity = birth(pid); expect(identity.length).toBeGreaterThan(0); births.set(pid, identity); }
     expect((await fetch(`${probe.url}/health`, { signal: AbortSignal.timeout(1000) })).status).toBe(200);
-    for (const pid of [probe.workerPid, probe.runnerPid]) { if (birth(pid) !== births.get(pid)) throw new Error("probe_runner_identity_changed"); process.kill(pid, "SIGKILL"); }
+    if (target === "runner") {
+      for (const pid of [probe.workerPid, probe.runnerPid]) { if (birth(pid) !== births.get(pid)) throw new Error("probe_runner_identity_changed"); process.kill(pid, "SIGKILL"); }
+    } else {
+      if (`${qualifier.child.pid}:${birth(qualifier.child.pid!)}` !== await qualifier.identity) throw new Error("probe_qualifier_identity_changed"); qualifier.child.kill("SIGTERM");
+    }
     await Promise.race([qualifier.closed, Bun.sleep(15_000).then(() => { throw new Error("qualifier_interruption_not_closed"); })]);
     let removed = false; try { await stat(probe.runtime.stateDirectory); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") removed = true; else throw error; }
-    console.log(JSON.stringify({ probe: "interrupted-qualifier", qualifierPid: qualifier.child.pid, ...probe, daemonAlive: alive(probe.runtime.pid), directoryRemoved: removed, qualifierExit: qualifier.child.exitCode }));
+    if (process.env.PHANTOM_F48_PROOF_DIRECTORY) {
+      await writeFile(path.join(process.env.PHANTOM_F48_PROOF_DIRECTORY, `native-interruption-${target}-${qualifier.child.pid}.json`), await readFile(path.join(output, "qualification.json")));
+    }
+    console.log(JSON.stringify({ probe: "interrupted-qualifier", target, qualifierPid: qualifier.child.pid, ...probe, daemonAlive: alive(probe.runtime.pid), directoryRemoved: removed, qualifierExit: qualifier.child.exitCode }));
     expect(qualifier.child.exitCode).toBe(1); expect(alive(probe.runtime.pid)).toBe(false); expect(removed).toBe(true); expect(alive(unrelated.child.pid!)).toBe(true);
     let serving = false; try { serving = (await fetch(`${probe.url}/health`, { signal: AbortSignal.timeout(1000) })).ok; } catch { /* closed listener */ }
     expect(serving).toBe(false);
   } finally {
     for (const pid of probe ? [probe.workerPid, probe.runnerPid, probe.runtime.pid] : []) {
-      if (alive(pid)) { if (birth(pid) !== births.get(pid)) throw new Error("probe_cleanup_identity_changed"); process.kill(pid, "SIGKILL"); }
+      terminateRecorded(pid, births.get(pid), birth);
     }
     if (!qualifier.closeObserved) await stopOwnedProcess(qualifier);
     if (probe) { for (let i = 0; i < 100 && alive(probe.runtime.pid); i++) await Bun.sleep(25); expect(alive(probe.runtime.pid)).toBe(false); await rm(probe.runtime.stateDirectory, { recursive: true, force: true }); }
     await stopOwnedProcess(unrelated); await rm(directory, { recursive: true, force: true });
   }
-}, 40_000);
+}
+
+test.skipIf(!binary || process.platform !== "darwin")("interrupted actual copied qualifier reaps its daemon and private profile independently of the runner", async () => { await interruptedQualifier("runner"); }, 40_000);
+test.skipIf(!binary || process.platform !== "darwin")("catchable qualifier interruption closes its actual copied daemon and runner", async () => { await interruptedQualifier("qualifier"); }, 40_000);

@@ -1,9 +1,9 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { access, chmod, copyFile, mkdir, mkdtemp, open, readFile, readdir, readlink, realpath, stat } from "node:fs/promises";
 import { constants } from "node:fs";
-import { createServer } from "node:net";
+import { createServer, createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { removeOwnedDirectory } from "./owned-directory";
@@ -293,4 +293,99 @@ export async function startManagedDaemon(repoRoot: string, env: NodeJS.ProcessEn
     await removeOwnedDirectory(directory);
     throw error;
   }
+}
+
+
+type ManagedDaemon = Awaited<ReturnType<typeof startManagedDaemon>>;
+type DaemonCleanup = Awaited<ReturnType<ManagedDaemon["stop"]>>;
+type SupervisorJob = { daemon: Promise<ManagedDaemon>; stopped?: Promise<DaemonCleanup>; runtime?: RuntimeProvenance; closed?: boolean };
+type SupervisorReply = { job: string; url: string; dbPath: string; port: number; runtime: RuntimeProvenance };
+const SUPERVISOR_MESSAGE_BYTES = 64 * 1024;
+function supervisorError(error: unknown): string { return error instanceof Error ? error.message : "fixture_supervisor_failed"; }
+export async function startFixtureSupervisor(repoRoot: string, env: NodeJS.ProcessEnv) {
+  // Only the qualifier chooses execution options; the channel accepts no PID/path/env commands.
+  runtimeSelection(env);
+  const token = randomBytes(32).toString("hex"), jobs = new Map<string, SupervisorJob>(), sockets = new Set<Socket>();
+  let closing = false, nextWorker = 0;
+  const stopJob = (job: SupervisorJob): Promise<DaemonCleanup> => job.stopped ??= job.daemon.then(daemon => daemon.stop()).then(cleanup => { job.closed = true; return cleanup; });
+  const dispatch = async (input: unknown) => {
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw refusal("fixture_supervisor_protocol");
+    const message = input as Record<string, unknown>;
+    if (typeof message.token !== "string" || !/^[a-f0-9]{64}$/.test(message.token) || !timingSafeEqual(Buffer.from(message.token, "hex"), Buffer.from(token, "hex"))) throw refusal("fixture_supervisor_auth");
+    if (closing) throw refusal("fixture_supervisor_closed");
+    if (message.op === "start" && Object.keys(message).sort().join(",") === "op,token") {
+      if (jobs.size >= 256 || [...jobs.values()].some(job => !job.closed)) throw refusal("fixture_supervisor_job_limit");
+      const id = randomBytes(16).toString("hex");
+      // Register launch ownership synchronously, before any artifact/readiness await can finish.
+      const job: SupervisorJob = { daemon: startManagedDaemon(repoRoot, env, nextWorker++) }; jobs.set(id, job);
+      const daemon = await job.daemon; job.runtime = daemon.runtime;
+      return { job: id, url: daemon.url, dbPath: daemon.dbPath, port: daemon.port, runtime: daemon.runtime } satisfies SupervisorReply;
+    }
+    if (message.op === "stop" && Object.keys(message).sort().join(",") === "job,op,token" && typeof message.job === "string" && /^[a-f0-9]{32}$/.test(message.job)) {
+      const job = jobs.get(message.job); if (!job) throw refusal("fixture_supervisor_unknown_job");
+      return await stopJob(job);
+    }
+    throw refusal("fixture_supervisor_protocol");
+  };
+  const server = createServer(socket => {
+    if (closing || sockets.size >= 8) { socket.destroy(); return; }
+    sockets.add(socket); socket.once("close", () => sockets.delete(socket)); socket.on("error", () => { socket.destroy(); }); socket.setTimeout(5000, () => socket.destroy());
+    let bytes = 0, buffer = "", started = false;
+    socket.on("data", (chunk: Buffer) => {
+      if (started) { socket.destroy(); return; }
+      bytes += chunk.length; if (bytes > 4096) { socket.destroy(); return; }
+      buffer += chunk.toString("utf8");
+      const end = buffer.indexOf("\n"); if (end < 0) return;
+      started = true; socket.setTimeout(60_000);
+      void (async () => {
+        let response: { ok: boolean; value?: unknown; error?: string };
+        try { if (end !== buffer.length - 1) throw refusal("fixture_supervisor_protocol"); response = { ok: true, value: await dispatch(JSON.parse(buffer.slice(0, end))) }; }
+        catch (error) { response = { ok: false, error: supervisorError(error) }; }
+        const body = JSON.stringify(response) + "\n";
+        if (Buffer.byteLength(body) > SUPERVISOR_MESSAGE_BYTES) socket.destroy(); else socket.end(body);
+      })();
+    });
+  });
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", () => { server.off("error", reject); resolve(); }); });
+  const address = server.address(); if (!address || typeof address === "string") throw refusal("fixture_supervisor_address");
+  return {
+    environment: { RUNPHANTOM_E2E_SUPERVISOR_PORT: String(address.port), RUNPHANTOM_E2E_SUPERVISOR_TOKEN: token },
+    async close() {
+      closing = true;
+      for (const socket of sockets) socket.destroy();
+      const serverClosed = new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+      // Each promise is the actual launch handle, never reconstructed from a worker receipt.
+      const results = await Promise.allSettled([...jobs.values()].map(async job => ({ runtime: (await job.daemon).runtime, cleanup: await stopJob(job) })));
+      await serverClosed;
+      const failures = results.filter(result => result.status === "rejected");
+      if (failures.length) throw new AggregateError(failures.map(result => result.reason), "fixture_supervisor_cleanup_failed");
+      return results.map(result => (result as PromiseFulfilledResult<{ runtime: RuntimeProvenance; cleanup: DaemonCleanup }>).value);
+    },
+  };
+}
+async function supervisorRequest(env: NodeJS.ProcessEnv, message: { op: "start" } | { op: "stop"; job: string }): Promise<unknown> {
+  const port = env.RUNPHANTOM_E2E_SUPERVISOR_PORT, token = env.RUNPHANTOM_E2E_SUPERVISOR_TOKEN;
+  if (!port || !/^[1-9][0-9]{0,4}$/.test(port) || Number(port) > 65535 || !token || !/^[a-f0-9]{64}$/.test(token)) throw refusal("fixture_supervisor_selection");
+  return await new Promise((resolve, reject) => {
+    const socket = createConnection({ host: "127.0.0.1", port: Number(port) }); let bytes = 0, body = "", settled = false;
+    const finish = (error?: Error, value?: unknown) => { if (settled) return; settled = true; socket.destroy(); if (error) reject(error); else resolve(value); };
+    socket.setTimeout(60_000, () => finish(refusal("fixture_supervisor_timeout")));
+    socket.on("error", error => finish(error)); socket.on("close", () => { if (!settled) finish(refusal("fixture_supervisor_disconnected")); });
+    socket.once("connect", () => { socket.write(JSON.stringify({ ...message, token }) + "\n"); });
+    socket.on("data", (chunk: Buffer) => {
+      bytes += chunk.length; if (bytes > SUPERVISOR_MESSAGE_BYTES) { finish(refusal("fixture_supervisor_reply_limit")); return; }
+      body += chunk.toString("utf8"); const end = body.indexOf("\n"); if (end < 0) return;
+      try {
+        if (end !== body.length - 1) throw refusal("fixture_supervisor_protocol");
+        const response = JSON.parse(body.slice(0, end)) as { ok: boolean; value?: unknown; error?: string };
+        if (response.ok !== true) throw refusal(response.error ?? "fixture_supervisor_failed");
+        finish(undefined, response.value);
+      } catch (error) { finish(error instanceof Error ? error : refusal("fixture_supervisor_protocol")); }
+    });
+  });
+}
+export async function startFixtureDaemon(repoRoot: string, env: NodeJS.ProcessEnv, workerIndex: number): Promise<ManagedDaemon> {
+  if (!env.RUNPHANTOM_E2E_SUPERVISOR_PORT && !env.RUNPHANTOM_E2E_SUPERVISOR_TOKEN) return await startManagedDaemon(repoRoot, env, workerIndex);
+  const daemon = await supervisorRequest(env, { op: "start" }) as SupervisorReply;
+  return { ...daemon, logs: () => "", stop: async () => await supervisorRequest(env, { op: "stop", job: daemon.job }) as DaemonCleanup };
 }
