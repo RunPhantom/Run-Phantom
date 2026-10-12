@@ -7,12 +7,35 @@ import { seedEvaluationRuns, EVALUATION_RUNS } from "./evaluation-fixture";
 const sentinel = "PRIVATE_CAPTURED_SENTINEL";
 async function imported(page: Page) {
   const workspace = page.getByTestId("evidence-workspace");
-  await workspace.getByLabel("Report files", { exact: true }).setInputFiles({ name: "authority.xml", mimeType: "application/xml", buffer: Buffer.from(`<testsuite><testcase name="${sentinel}"/></testsuite>`) });
+  const input = workspace.getByLabel("Report files", { exact: true });
+  await expect(input).toBeEnabled();
+  await input.setInputFiles({ name: "authority.xml", mimeType: "application/xml", buffer: Buffer.from(`<testsuite><testcase name="${sentinel}"/></testsuite>`) });
   await workspace.getByRole("button", { name: "Import reports", exact: true }).click();
   const report = workspace.getByRole("region", { name: "Persisted evidence report", exact: true }); await expect(report).toBeVisible();
   await report.getByRole("article").locator("summary").click(); await expect(report.getByText(sentinel, { exact: true })).toBeVisible();
   return { workspace, report, setId: new URL(page.url()).searchParams.get("evidenceSet")! };
 }
+
+test("file selection waits for actual capabilities after attachment authority is ready", async ({ page, request, runPhantom }, testInfo) => {
+  await seedEvaluationRuns(request, runPhantom.url);
+  const spansBefore = await (await request.get(`${runPhantom.url}/api/runs/${EVALUATION_RUNS.baseline}/spans`)).text();
+  const inventory = await request.put(`${runPhantom.url}/api/evaluations/evidence/inventories`, { data: { anchor: { kind: "run", id: EVALUATION_RUNS.baseline }, expectedRevision: 0, expected: [{ shardId: "unit", kind: "junit", constraints: { runnerId: null, commit: null, sourceSha256: null } }] } }); expect(inventory.status()).toBe(201);
+  const capabilities = await hold(page, "/api/evaluations/evidence/capabilities");
+  try {
+    await page.goto(`${runPhantom.url}/evaluations?view=evidence&anchorKind=run&anchorId=${EVALUATION_RUNS.baseline}`); await capabilities.ready;
+    const workspace = page.getByTestId("evidence-workspace"), input = workspace.getByLabel("Report files", { exact: true });
+    await expect(workspace.getByText("No saved external reports for this attachment yet.", { exact: true })).toBeVisible();
+    await expect(workspace.getByText("Revision 1 · retrospective", { exact: true })).toBeVisible();
+    const observed = { actualCapabilitiesResponseStatus: 200, responseHeld: true, currentHistoryVisible: true, currentInventoryVisible: true, nativeFileInputDisabled: await input.isDisabled(), importDisabled: await workspace.getByRole("button", { name: "Import reports", exact: true }).isDisabled() };
+    writeFileSync(testInfo.outputPath("capabilities-readiness.json"), JSON.stringify(observed, null, 2));
+    await input.scrollIntoViewIfNeeded(); await page.screenshot({ path: testInfo.outputPath("capabilities-pending.png"), fullPage: true });
+    expect(observed.nativeFileInputDisabled).toBe(true); expect(observed.importDisabled).toBe(true);
+    capabilities.release(); await capabilities.done; await expect(input).toBeEnabled();
+    const { report } = await imported(page); await expect(report.getByText("Reports pass", { exact: true })).toBeVisible();
+    expect(await (await request.get(`${runPhantom.url}/api/runs/${EVALUATION_RUNS.baseline}/spans`)).text()).toBe(spansBefore);
+    await expect(workspace.getByRole("alert")).toHaveCount(0); await report.scrollIntoViewIfNeeded(); await page.screenshot({ path: testInfo.outputPath("capabilities-ready-import.png"), fullPage: true });
+  } finally { await capabilities.close(); }
+});
 async function hold(page: Page, pathname: string) {
   let release!: () => void, acquired!: () => void, delivered!: () => void;
   const pending = new Promise<void>(resolve => { release = resolve; }), ready = new Promise<void>(resolve => { acquired = resolve; }), done = new Promise<void>(resolve => { delivered = resolve; });
