@@ -95,6 +95,7 @@ describe("team runtime authority boundary", () => {
     const allowed = new Set([
       "src/evaluations/evidence-worker.ts", "src/evaluations/evidence-worker-environment.ts", "src/evaluations/external-evidence.ts", "src/evaluations/evidence-protocol.ts",
       "src/evaluations/evidence-validation.ts", "src/evaluations/json-evidence.ts", "src/evaluations/evidence-reader/json.ts",
+      "src/evaluations/finding-validation.ts", "src/evaluations/finding-protocol.ts",
       "src/evaluations/evidence-reader/limits.ts", "src/evaluations/evidence-reader/xml.ts",
       "src/verification/serialization.ts", "src/verification/redaction.ts", "src/verification/protocol.ts",
     ]);
