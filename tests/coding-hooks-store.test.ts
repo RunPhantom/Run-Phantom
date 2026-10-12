@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { getDrizzleDb, closeDb, deleteRun, insertSpan } from "../src/db";
@@ -10,13 +10,13 @@ import { normalizeClaudeHook } from "../src/coding-hooks/claude";
 import { hookFixture, transcriptRecord, transcriptSnapshot } from "./fixtures/coding-hooks-claude";
 import { parseHookAdmission, parseHookPublication, validateClaudeBatch, hookDigest, HOOK_PROTOCOL, HookRefusal } from "../src/coding-hooks/protocol";
 
-// Exact root-reviewed SQL in an actual owner SQLite fixture. This is not a product migration.
-// The exact SQL component fixture supplies a trusted test-only owner guard; product startup uses the kernel lease.
+// Actual source migrations in a temporary owner SQLite fixture.
+// The actual source migration supplies schema; these store fixtures use a trusted test-only guard. Product startup uses the kernel lease.
 let directory: string, store: CodingHookStore, db: ReturnType<typeof getDrizzleDb>["$client"], prior: string | undefined;
 const admit = (token: string, identity: string) => store.admit(token, identity, claimsForRegistration(store.authenticate(token).binding));
 const token = "a".repeat(64), id = "a".repeat(32), sourceIdentity = "b".repeat(64);
 const binding = (mode: "metadata" | "full" = "metadata", installationId = id): InstallationBinding => ({ installationId, scope: "local", captureMode: mode, workspace: "/private/project", registeredWorkspace: "/private/project", transcriptRoot: "/private/projects", projectDirectory: "/private/projects/project", homeDirectory: "/private/home", settingsPath: "/private/project/.claude/settings.local.json", executable: "/private/bin/runphantom" });
-beforeEach(() => { closeDb(); prior = process.env.RUNPHANTOM_DB_PATH; directory = mkdtempSync(path.join(tmpdir(), "runphantom-f11-store-")); process.env.RUNPHANTOM_DB_PATH = path.join(directory, "owner.sqlite"); db = getDrizzleDb().$client; db.exec(readFileSync(path.join(import.meta.dir, "fixtures/coding-hooks-bootstrap.sql"), "utf8")); store = new CodingHookStore(db, {}, () => true); store.beginOwner(); });
+beforeEach(() => { closeDb(); prior = process.env.RUNPHANTOM_DB_PATH; directory = mkdtempSync(path.join(tmpdir(), "runphantom-f11-store-")); process.env.RUNPHANTOM_DB_PATH = path.join(directory, "owner.sqlite"); db = getDrizzleDb().$client; store = new CodingHookStore(db, {}, () => true); store.beginOwner(); });
 afterEach(() => { closeDb(); if (prior === undefined) delete process.env.RUNPHANTOM_DB_PATH; else process.env.RUNPHANTOM_DB_PATH = prior; rmSync(directory, { recursive: true, force: true }); });
 function active(mode: "metadata" | "full" = "metadata") {
   const receipt = store.prepareInstallation(binding(mode), token, "c".repeat(64));
@@ -128,9 +128,10 @@ test("owner rotation fences prepared management receipts before authority activa
 });
 
 test("actual second-connection writer lock refuses publication without partial canonical state", () => {
-  const admission = active("full"), other = new Database(db.filename); other.exec("BEGIN IMMEDIATE"); const started = performance.now();
+  const admission = active("full"), other = new Database(db.filename), timeout = db.query("PRAGMA busy_timeout").get(); other.exec("BEGIN IMMEDIATE"); const started = performance.now();
   try { expect(() => store.publish(token, admission, batch(admission))).toThrow(); expect(performance.now() - started).toBeLessThan(250); }
   finally { other.exec("ROLLBACK"); other.close(); }
+  expect(db.query("PRAGMA busy_timeout").get()).toEqual(timeout);
   expect(db.query("SELECT id FROM runs WHERE id=?").get(admission.runId)).toBeNull(); expect(db.query("SELECT entity_key FROM coding_hook_entities").all()).toEqual([]);
   expect(store.publish(token, admission, batch(admission)).status).toBe("accepted");
 });

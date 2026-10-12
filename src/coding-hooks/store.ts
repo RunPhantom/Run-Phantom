@@ -38,7 +38,15 @@ export class CodingHookStore {
     this.limits = { ...STORE_LIMITS, ...limits };
     for (const key of Object.keys(STORE_LIMITS) as (keyof typeof STORE_LIMITS)[]) if (!Number.isSafeInteger(this.limits[key]) || this.limits[key] < 1 || this.limits[key] > STORE_LIMITS[key]) refuse("malformed", 400);
   }
-  private transaction<T>(work: () => T): T { try { return this.db.transaction(work).immediate(); } catch (error) { if (error instanceof HookRefusal) throw error; refuse("unavailable", 503); } }
+  private transaction<T>(work: () => T): T {
+    let prior: number | undefined;
+    try {
+      prior = (this.db.query("PRAGMA busy_timeout").get() as { timeout: number }).timeout;
+      // Hook transactions cannot spend the host callback lifetime waiting on an external writer.
+      this.db.exec("PRAGMA busy_timeout=0"); return this.db.transaction(work).immediate();
+    } catch (error) { if (error instanceof HookRefusal) throw error; return refuse("unavailable", 503); }
+    finally { if (prior !== undefined) this.db.exec(`PRAGMA busy_timeout=${prior}`); }
+  }
   beginOwner(): void { this.transaction(() => { this.requireOwner(); this.db.query("INSERT INTO coding_hook_owner VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,updated_at=excluded.updated_at").run(random(), random(), Date.now()); this.checkQuota(); }); }
   rotateOwner(): void { this.transaction(() => { this.owner(); this.db.query("UPDATE coding_hook_owner SET generation=?,updated_at=? WHERE id=1").run(random(), Date.now()); }); }
   private owner(): { generation: string; source_epoch: string } {

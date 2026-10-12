@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { linkSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { linkSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { createConnection, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -13,7 +13,7 @@ const children: ReturnType<typeof Bun.spawn>[] = [];
 beforeEach(() => {
   directory = realpathSync(mkdtempSync(path.join(tmpdir(), "runphantom-f11-owner-"))); file = path.join(directory, "owner.sqlite");
   closeDb(); prior = process.env.RUNPHANTOM_DB_PATH; process.env.RUNPHANTOM_DB_PATH = file;
-  getDrizzleDb().$client.exec(readFileSync(path.join(import.meta.dir, "fixtures/coding-hooks-bootstrap.sql"), "utf8")); closeDb();
+  getDrizzleDb(); closeDb();
 });
 afterEach(async () => { for (const child of children.splice(0)) { child.kill("SIGKILL"); await child.exited; } closeDb(); if (prior === undefined) delete process.env.RUNPHANTOM_DB_PATH; else process.env.RUNPHANTOM_DB_PATH = prior; rmSync(directory, { recursive: true, force: true }); });
 async function launch(dbPath = file) {
@@ -37,7 +37,7 @@ test("actual SIGKILL recovery releases the lease and creates a new birth/generat
 });
 test("two unrelated actual database files can be owned concurrently", async () => {
   const other = path.join(directory, "other.sqlite"); process.env.RUNPHANTOM_DB_PATH = other;
-  getDrizzleDb().$client.exec(readFileSync(path.join(import.meta.dir, "fixtures/coding-hooks-bootstrap.sql"), "utf8")); closeDb();
+  getDrizzleDb(); closeDb();
   const fixture = new Database(other); expect(fixture.query("SELECT count(*) count FROM coding_hook_owner").get()).toEqual({ count: 0 }); fixture.close();
   // Distinct deterministic lease ports qualify this positive fixture; collisions have a separate refusal control.
   expect(codingHookOwnerPort(other)).not.toBe(codingHookOwnerPort(file));

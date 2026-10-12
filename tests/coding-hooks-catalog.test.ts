@@ -14,7 +14,7 @@ import { normalizeClaudeHook } from "../src/coding-hooks/claude";
 import { hookFixture, transcriptRecord, transcriptSnapshot } from "./fixtures/coding-hooks-claude";
 
 interface Registration { registrationId: string; registeredWorkspace: string; transcriptRoot: string; projectDirectory: string; homeDirectory: string; }
-// The exact SQL component fixture supplies a trusted test-only owner guard; product startup uses the kernel lease.
+// The actual source migration supplies schema; these store fixtures use a trusted test-only guard. Product startup uses the kernel lease.
 let directory: string, prior: string | undefined, store: CodingHookStore, manager: ClaudeHookManagement, binding: InstallationBinding, registrations: Registration[];
 const identity = "b".repeat(64);
 const claims = (registration: Registration) => ({ workspaceClaim: hookDigest(JSON.stringify(["runphantom.claude.workspace-claim/v1", registration.registeredWorkspace])), projectClaim: hookDigest(JSON.stringify(["runphantom.claude.project-claim/v1", registration.projectDirectory])) });
@@ -24,7 +24,7 @@ const token = (id = binding.installationId) => readClaudeCapability(path.join(di
 beforeEach(() => {
   closeDb(); prior = process.env.RUNPHANTOM_DB_PATH; directory = realpathSync(mkdtempSync(path.join(tmpdir(), "runphantom-f11-catalog-")));
   for (const name of ["workspace-one/.claude", "workspace-two/.claude", "projects/one", "projects/two", "home/.claude"]) mkdirSync(path.join(directory, name), { recursive: true });
-  process.env.RUNPHANTOM_DB_PATH = path.join(directory, "owner.sqlite"); const db = getDrizzleDb().$client; db.exec(readFileSync(path.join(import.meta.dir, "fixtures/coding-hooks-bootstrap.sql"), "utf8")); store = new CodingHookStore(db, {}, () => true); store.beginOwner(); manager = new ClaudeHookManagement(store, "http://127.0.0.1:5947");
+  process.env.RUNPHANTOM_DB_PATH = path.join(directory, "owner.sqlite"); const db = getDrizzleDb().$client; store = new CodingHookStore(db, {}, () => true); store.beginOwner(); manager = new ClaudeHookManagement(store, "http://127.0.0.1:5947");
   registrations = ["one", "two"].map(name => { const registeredWorkspace = path.join(directory, "workspace-" + name), transcriptRoot = path.join(directory, "projects"), projectDirectory = path.join(transcriptRoot, name); return { registrationId: hookDigest(JSON.stringify(["runphantom.claude.root/v1", registeredWorkspace, transcriptRoot, projectDirectory])), registeredWorkspace, transcriptRoot, projectDirectory, homeDirectory: path.join(directory, "home") }; });
   const settingsPath = path.join(directory, "home/.claude/settings.json"), first = registrations[0]; binding = { installationId: installationIdForSettings("global", settingsPath), scope: "global", captureMode: "metadata", workspace: null, registeredWorkspace: first.registeredWorkspace, transcriptRoot: first.transcriptRoot, projectDirectory: first.projectDirectory, homeDirectory: first.homeDirectory, settingsPath, executable: process.execPath };
 });
