@@ -1,0 +1,29 @@
+{
+  "product": "Run Phantom",
+  "maintainer": "Divyam Talwar",
+  "feature": "F24",
+  "sourceHead": "4e2d6c3112893f52ba96ae9f721d87cb30f15125",
+  "scope": "Actual copied macOS ARM64 UI; synthetic local fixtures. Inherited mobile assistant dock and complete reference-theme/platform composition remain pending. No paid-provider calls.",
+  "screenshots": [
+    {
+      "file": "native-performance-desktop.png",
+      "bytes": 136850,
+      "sha256": "1a1f6c6f899fc92c9cdfacb40e2908e9863c44891305b4e4a6743dff2502f91e"
+    },
+    {
+      "file": "native-performance-mobile.png",
+      "bytes": 87351,
+      "sha256": "2c6b767c93a6ad2669b36f8490457ed3125026052c0598637660cc824451ce07"
+    },
+    {
+      "file": "native-failed-report-320.png",
+      "bytes": 71459,
+      "sha256": "d35a085ef396e893469ae4baa07988ec1442a784a73d07d775e8f7f446d77e47"
+    },
+    {
+      "file": "original-output-after-restart.png",
+      "bytes": 87975,
+      "sha256": "631e7e034292c602955a891e75a251d9f3d887054c378fe8cadb1c9da3ab27c6"
+    }
+  ]
+}
