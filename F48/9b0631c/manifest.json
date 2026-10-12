@@ -1,0 +1,140 @@
+{
+  "feature": "F48",
+  "head": "9b0631c5824cb390e968cf1ef1629437b1fe4495",
+  "maintainer": "Divyam Talwar",
+  "meaningfulFeatureCommits": 10,
+  "ownedFiles": 10,
+  "counts": {
+    "backend": {
+      "passed": 692,
+      "skipped": 1,
+      "failed": 0,
+      "assertions": 3853,
+      "files": 68,
+      "nativeCopiedInterruptionsEnabled": true
+    },
+    "sourceChromium": {
+      "passed": 126,
+      "skipped": 10,
+      "unexpected": 0,
+      "flaky": 0,
+      "workers": 1,
+      "retries": 0,
+      "managedSourceReceipts": 107,
+      "independentFixtureCases": 19
+    },
+    "copiedFoundation": {
+      "passed": 2,
+      "skipped": 0,
+      "unexpected": 0,
+      "flaky": 0,
+      "workers": 1,
+      "retries": 0
+    },
+    "legacyCopiedCompiled": {
+      "passed": 3,
+      "skipped": 0,
+      "unexpected": 0,
+      "flaky": 0,
+      "workers": 1,
+      "retries": 0
+    },
+    "observedOwnedAbsence": {
+      "pids": 128,
+      "stateRoots": 112,
+      "interruptionListenersRefused": 2
+    }
+  },
+  "gates": [
+    {
+      "gate": "backend",
+      "exitCode": 0,
+      "head": "9b0631c5824cb390e968cf1ef1629437b1fe4495"
+    },
+    {
+      "gate": "lint",
+      "exitCode": 0,
+      "head": "9b0631c5824cb390e968cf1ef1629437b1fe4495"
+    },
+    {
+      "gate": "root-build",
+      "exitCode": 0,
+      "head": "9b0631c5824cb390e968cf1ef1629437b1fe4495"
+    },
+    {
+      "gate": "root-types",
+      "exitCode": 0,
+      "head": "9b0631c5824cb390e968cf1ef1629437b1fe4495"
+    },
+    {
+      "gate": "app-types",
+      "exitCode": 0,
+      "head": "9b0631c5824cb390e968cf1ef1629437b1fe4495"
+    },
+    {
+      "gate": "browser-types",
+      "exitCode": 0,
+      "head": "9b0631c5824cb390e968cf1ef1629437b1fe4495"
+    },
+    {
+      "gate": "source-chromium",
+      "exitCode": 0,
+      "head": "9b0631c5824cb390e968cf1ef1629437b1fe4495"
+    },
+    {
+      "gate": "copied-journeys",
+      "exitCode": 0,
+      "head": "9b0631c5824cb390e968cf1ef1629437b1fe4495"
+    },
+    {
+      "gate": "legacy-compiled",
+      "exitCode": 0,
+      "head": "9b0631c5824cb390e968cf1ef1629437b1fe4495"
+    }
+  ],
+  "artifact": {
+    "bytes": 68350576,
+    "sha256": "f4390940a3535cb6240740d84497f3a38249147eca151ffb230cae4ae5519cd4",
+    "qualificationKind": "retained original artifact against current fixture code; no new whole-product compile claimed"
+  },
+  "screenshots": [
+    {
+      "file": "copied-legacy-mobile.png",
+      "sha256": "b87553f7585c75f89d3267a1f85257d0f878743e51ef70912d114c7122089163",
+      "width": 390,
+      "height": 844,
+      "origin": "actual copied macOS product; synthetic fixture capture"
+    },
+    {
+      "file": "copied-recovered-live-trajectory.png",
+      "sha256": "35edeb683d982ffd784ced3b593bfed6e9ca6e6e54cc6804746112fbee8c07f3",
+      "width": 1280,
+      "height": 720,
+      "origin": "actual copied macOS product; synthetic fixture capture"
+    },
+    {
+      "file": "source-recovered-live-trajectory.png",
+      "sha256": "35edeb683d982ffd784ced3b593bfed6e9ca6e6e54cc6804746112fbee8c07f3",
+      "width": 1280,
+      "height": 720,
+      "origin": "actual source macOS application; synthetic fixture capture"
+    }
+  ],
+  "standardCleaner": "documented no-op",
+  "rootReviewSha256": "1b9a1e5ba8c3b2c343d4e341b3c480b82df7b493fb0b82c8831320842cfa22ec",
+  "privateVerificationSha256": "2c615b7ce4bddc9d1aca503d1061ee3331fef35edf2ba543ef81ac3366841772",
+  "providerSpendUsd": 0,
+  "nativePlatformAcceptance": false,
+  "completeProjectAccepted": false,
+  "limitations": [
+    "Native Windows CIM/taskkill and demonstrated original HTTP EBUSY case",
+    "Native Linux and macOS x64 execution",
+    "Seven paid-provider live cases",
+    "Complete selected feature composition and full native feature suite",
+    "Unobserved child/orphan intervals remain outside sampled ownership",
+    "Qualifier SIGKILL or host shutdown cannot execute JS cleanup",
+    "Stable identity tampering controls are simulated; genuine operating-system PID reuse was not observed.",
+    "The current fixture uses the retained original compiled artifact after proving an unchanged product graph and matching freshly built assets. A new whole-product compile is not claimed.",
+    "The inherited floating assistant still appears on mobile; final global shell composition remains pending."
+  ]
+}
