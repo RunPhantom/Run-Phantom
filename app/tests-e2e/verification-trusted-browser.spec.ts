@@ -1,4 +1,5 @@
 import { test, expect } from "./fixtures";
+import { writeFileSync } from "node:fs";
 
 test("source-runtime unavailable runtime UI preserves the paired workflow", async ({ page, runPhantom }, testInfo) => {
   await page.goto(`${runPhantom.url}/verification`);
@@ -94,4 +95,52 @@ browserTest("changing explicit connections fences the late input result in the a
   await expect(panel.getByRole("combobox", { name: "Browser connection", exact: true })).toHaveValue(second.id);
   await expect(panel.getByLabel("Browser input result", { exact: true })).toHaveCount(0);
   expect(browserTarget.events.filter(event => event.type === "covered")).toEqual([]);
+});
+
+browserTest("explicit empty selection survives a held real native open response and retains the draft", async ({ page, browserApp, browserTarget, request }, testInfo) => {
+  browserTest.skip(!process.env.RUNPHANTOM_TEST_BROWSER_MODULE, "Explicit installed closure required for real browser qualification.");
+  await page.goto(`${browserApp.url}/verification`);
+  const panel = page.getByRole("region", { name: "Trusted browser", exact: true });
+  const selection = panel.getByRole("combobox", { name: "Browser connection", exact: true });
+  const open = panel.getByRole("button", { name: "Open browser", exact: true });
+  await panel.getByLabel(/^Browser target URL/).fill(browserTarget.origin);
+  await open.click(); await expect(selection).toContainText("ready");
+  const first = await selection.inputValue(); expect(first).toMatch(/^[0-9a-f]{32}$/);
+  await panel.getByLabel(/^Browser control target/).fill("#pay");
+  await panel.getByLabel("Element selector", { exact: true }).fill("#paid");
+  await panel.locator("summary").click();
+  await panel.getByLabel("I consent to downloading unmasked private artifacts", { exact: true }).check();
+  let held!: () => void, release!: () => void;
+  const responseHeld = new Promise<void>(resolve => { held = resolve; });
+  const released = new Promise<void>(resolve => { release = resolve; });
+  let second!: { id: string; state: string; engine: string; providerVersion: string };
+  await page.route("**/api/verification/browser/sessions", async route => {
+    if (route.request().method() !== "POST") { await route.continue(); return; }
+    const response = await route.fetch(); second = await response.json();
+    expect(response.status()).toBe(201); expect(second.state).toBe("ready"); expect(second.engine).toBe("chromium"); expect(second.providerVersion).toBe("1.62.1"); expect(second.id).not.toBe(first);
+    writeFileSync(testInfo.outputPath("f28-held-native-open.json"), JSON.stringify({ status: response.status(), body: second }, null, 2));
+    held(); await released; await route.fulfill({ response });
+  });
+  try {
+    const delivered = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith("/api/verification/browser/sessions"));
+    await open.click(); await responseHeld;
+    await expect(panel.getByRole("status")).toContainText("Opening isolated browser");
+    await expect(selection).toBeEnabled(); await selection.selectOption(""); await expect(selection).toHaveValue("");
+    writeFileSync(testInfo.outputPath("f28-empty-before-release.json"), JSON.stringify({ selection: await selection.inputValue(), first, heldNativeId: second.id }, null, 2));
+    release(); expect((await delivered).status()).toBe(201);
+    await expect(open).toBeEnabled();
+    await expect(selection.locator("option")).toHaveCount(3);
+    const nativeSessions = await (await request.get(`${browserApp.url}/api/verification/browser/sessions`)).json();
+    writeFileSync(testInfo.outputPath("f28-empty-after-release.json"), JSON.stringify({ selection: await selection.inputValue(), first, heldNativeId: second.id, nativeSessions, targetEvents: browserTarget.events }, null, 2));
+    await expect(selection).toHaveValue("");
+    await expect(panel.getByRole("status")).not.toContainText("Opening isolated browser");
+    await expect(panel.getByRole("status")).not.toContainText("Browser ready");
+    await expect(panel.getByLabel("Browser input result", { exact: true })).toHaveCount(0);
+    await expect(panel.getByRole("img")).toHaveCount(0);
+    await expect(panel.getByLabel("I consent to downloading unmasked private artifacts", { exact: true })).not.toBeChecked();
+    expect(nativeSessions).toHaveLength(2); expect(nativeSessions.map((session: { state: string }) => session.state)).toEqual(["ready", "ready"]); expect(browserTarget.events).toEqual([]);
+    await selection.selectOption(first);
+    await expect(panel.getByLabel(/^Browser control target/)).toHaveValue("#pay");
+    await expect(panel.getByLabel("Element selector", { exact: true })).toHaveValue("#paid");
+  } finally { release(); }
 });
