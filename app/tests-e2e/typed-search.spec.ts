@@ -67,7 +67,7 @@ test("typed original source populations stay unavailable through the actual desk
   for(const value of ["source-only","import-only"]){
     await page.getByLabel("Filter value",{exact:true}).fill(value);await expect(page.locator(`datalist option[value="${value}"]`)).toHaveCount(0);
     await page.getByLabel("Filter value",{exact:true}).press("Enter");await expect(page.getByText("No matching runs",{exact:true})).toBeVisible();
-    await page.getByRole("button",{name:`Remove Tag equals ${value}`,exact:true}).click();
+    const chip=page.getByRole("button",{name:`Remove Tag equals ${value}`,exact:true});await chip.click();await expect(chip).toHaveCount(0);
   }
   await page.getByLabel("Filter operator",{exact:true}).selectOption("ne");await page.getByLabel("Filter value",{exact:true}).fill("missing");await page.getByLabel("Filter value",{exact:true}).press("Enter");
   await expect(page.locator("[data-run-id]")).toHaveCount(1);await expect(page.locator(`[data-run-id="${run(8)}"]`)).toBeVisible();
