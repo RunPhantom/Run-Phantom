@@ -34,6 +34,13 @@ var VERIFICATION_LIMITS = {
 function relativeTargetKey(target) {
   return JSON.stringify(target.kind === "state" ? [target.kind, target.store, target.path] : [target.kind, target.selector]);
 }
+function relativeTargets(predicate) {
+  if (predicate.kind === "relative")
+    return [predicate.target];
+  if (predicate.kind !== "allOf" && predicate.kind !== "anyOf")
+    return [];
+  return [...new Map(predicate.predicates.flatMap(relativeTargets).map((target) => [relativeTargetKey(target), target])).values()];
+}
 
 // src/verification/redaction.ts
 var REDACTED_VALUE = "[REDACTED]";
@@ -436,6 +443,53 @@ function text(value, label, max = VERIFICATION_LIMITS.MAX_TEXT_LENGTH, empty = f
   }
   return value;
 }
+function bool(value, label) {
+  if (typeof value !== "boolean")
+    return invalid(`${label} must be boolean`);
+  return value;
+}
+function integer(value, label, min, max) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max) {
+    return invalid(`${label} must be an integer between ${min} and ${max}`);
+  }
+  return value;
+}
+function jsonValue(value, label, depth = 0, budget = { nodes: 0 }) {
+  if (depth > 12 || ++budget.nodes > 1500)
+    invalid(`${label} exceeds the structured value limit`);
+  if (value === null || typeof value === "boolean")
+    return;
+  if (typeof value === "number" && Number.isFinite(value))
+    return;
+  if (typeof value === "string") {
+    text(value, label, VERIFICATION_LIMITS.MAX_FRAME_BYTES, true);
+    return;
+  }
+  if (Array.isArray(value)) {
+    if (value.length > 1000)
+      invalid(`${label} contains too many items`);
+    for (let i = 0;i < value.length; i++) {
+      const d = Object.getOwnPropertyDescriptor(value, String(i));
+      if (!d || !("value" in d))
+        invalid(`${label} must contain JSON array values`);
+      jsonValue(d.value, label, depth + 1, budget);
+    }
+    return;
+  }
+  const obj = record(value, label);
+  const names = Object.keys(obj);
+  if (names.length > 1000)
+    invalid(`${label} contains too many fields`);
+  for (const key of names) {
+    text(key, `${label} key`, 256);
+    jsonValue(obj[key], label, depth + 1, budget);
+  }
+}
+function size(value, max, label) {
+  jsonValue(value, label);
+  if (new TextEncoder().encode(JSON.stringify(value)).byteLength > max)
+    invalid(`${label} exceeds its byte limit`);
+}
 function optionalString(obj, key, max) {
   return Object.hasOwn(obj, key) ? text(obj[key], key, max) : undefined;
 }
@@ -511,12 +565,123 @@ function parseRelativeTarget(raw) {
   }
   return invalid("unsupported relative target");
 }
+function parsePredicate(value) {
+  let nodes = 0;
+  function parse(raw, depth) {
+    if (depth > VERIFICATION_LIMITS.MAX_PREDICATE_DEPTH || ++nodes > VERIFICATION_LIMITS.MAX_PREDICATE_NODES)
+      invalid("predicate exceeds its complexity limit");
+    const obj = record(raw, "predicate");
+    switch (obj.kind) {
+      case "relative": {
+        keys(obj, ["kind", "target", "relation", "equals"], "relative predicate");
+        const target = parseRelativeTarget(obj.target);
+        if (obj.relation === "becomes") {
+          if (!Object.hasOwn(obj, "equals"))
+            invalid("becomes requires an expected value");
+          size(obj.equals, VERIFICATION_LIMITS.MAX_EVENT_BYTES, "relative expectation");
+          if (target.kind === "element" && (typeof obj.equals !== "number" || !Number.isSafeInteger(obj.equals) || obj.equals < 0))
+            invalid("relative element expectations must be nonnegative whole counts");
+          return { kind: "relative", target, relation: "becomes", equals: obj.equals };
+        }
+        if (!["changed", "increased", "decreased"].includes(String(obj.relation)) || Object.hasOwn(obj, "equals"))
+          invalid("unsupported relative comparison or expectation");
+        return { kind: "relative", target, relation: obj.relation };
+      }
+      case "network": {
+        keys(obj, ["kind", "urlContains", "method", "status"], "network predicate");
+        const method = optionalString(obj, "method", 16);
+        if (method !== undefined && !/^[A-Za-z]+$/.test(method))
+          invalid("network method must contain only letters");
+        return {
+          kind: "network",
+          urlContains: text(obj.urlContains, "urlContains", VERIFICATION_LIMITS.MAX_TEXT_LENGTH),
+          ...method === undefined ? {} : { method: method.toUpperCase() },
+          ...Object.hasOwn(obj, "status") ? { status: integer(obj.status, "status", 100, 599) } : {}
+        };
+      }
+      case "console":
+        keys(obj, ["kind", "level", "absent"], "console predicate");
+        if (obj.level !== "error" && obj.level !== "warn")
+          invalid("console level must be error or warn");
+        return { kind: "console", level: obj.level, absent: bool(obj.absent, "absent") };
+      case "signal":
+        keys(obj, ["kind", "name"], "signal predicate");
+        return { kind: "signal", name: text(obj.name, "signal name", VERIFICATION_LIMITS.MAX_NAME_LENGTH) };
+      case "state": {
+        keys(obj, ["kind", "store", "path", "equals"], "state predicate");
+        if (!Object.hasOwn(obj, "equals"))
+          invalid("state predicate requires equals");
+        const path = text(obj.path, "state path", VERIFICATION_LIMITS.MAX_SELECTOR_LENGTH, true);
+        const parts = path === "" ? [] : path.split(".");
+        if (parts.length > 32 || parts.some((p) => !p || forbiddenKeys.has(p)))
+          invalid("state path contains an unsupported segment");
+        size(obj.equals, VERIFICATION_LIMITS.MAX_EVENT_BYTES, "state expectation");
+        return { kind: "state", store: text(obj.store, "store", VERIFICATION_LIMITS.MAX_NAME_LENGTH), path, equals: obj.equals };
+      }
+      case "element":
+        keys(obj, ["kind", "selector", "state"], "element predicate");
+        if (obj.state !== "present" && obj.state !== "absent")
+          invalid("element state must be present or absent");
+        return { kind: "element", selector: text(obj.selector, "selector", VERIFICATION_LIMITS.MAX_SELECTOR_LENGTH), state: obj.state };
+      case "allOf":
+      case "anyOf":
+        keys(obj, ["kind", "predicates"], "composite predicate");
+        if (!Array.isArray(obj.predicates) || obj.predicates.length === 0 || obj.predicates.length > 20)
+          invalid("composite predicate requires 1 to 20 predicates");
+        return { kind: obj.kind, predicates: obj.predicates.map((p) => parse(p, depth + 1)) };
+      default:
+        return invalid("unsupported predicate kind");
+    }
+  }
+  const parsed = parse(value, 0);
+  if (relativeTargets(parsed).length > VERIFICATION_LIMITS.MAX_BASELINE_TARGETS)
+    invalid("relative predicate exceeds its 20 target limit");
+  return parsed;
+}
 function assertSafeSelector(selector) {
   if (selector.includes("\\"))
     invalid("saved flows cannot contain escaped selectors; use an ordinary selector so credential fields remain identifiable");
   const parts = selector.split(/[^A-Za-z0-9_-]+/).filter(Boolean);
   if (parts.some(isSensitiveKey))
     invalid("saved flows cannot target credential-bearing selectors");
+}
+function assertSafePredicate(predicate) {
+  if (predicate.kind === "allOf" || predicate.kind === "anyOf") {
+    predicate.predicates.forEach(assertSafePredicate);
+  } else if (predicate.kind === "element") {
+    assertSafeSelector(predicate.selector);
+  } else if (predicate.kind === "state" && [...predicate.path.split("."), predicate.store].some(isSensitiveKey)) {
+    invalid("saved flows cannot assert credential-bearing state paths");
+  }
+}
+function parseFlowSteps(value) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > VERIFICATION_LIMITS.MAX_STEPS)
+    invalid(`flow requires 1 to ${VERIFICATION_LIMITS.MAX_STEPS} steps`);
+  size(value, VERIFICATION_LIMITS.MAX_FRAME_BYTES, "flow steps");
+  return value.map((raw) => {
+    const obj = record(raw, "flow step");
+    keys(obj, ["command", "predicate"], "flow step");
+    const predicate = parsePredicate(obj.predicate);
+    assertSafePredicate(predicate);
+    const command = Object.hasOwn(obj, "command") ? parseCommand(obj.command) : undefined;
+    const targets = relativeTargets(predicate);
+    if (targets.length && command?.type !== "click" && command?.type !== "causal-click")
+      invalid("saved relative checks require an explicit click action");
+    if (targets.length && command?.type === "causal-click" && (command.targets.length !== targets.length || command.targets.some((target) => !targets.some((expected) => relativeTargetKey(expected) === relativeTargetKey(target))))) {
+      invalid("saved causal targets must match their declared relative checks");
+    }
+    if (command?.type === "fill")
+      invalid("saved flows cannot contain fill commands; use live fill so entered values are never persisted");
+    if (command?.type === "state" && isSensitiveKey(command.store))
+      invalid("saved flows cannot read credential-bearing stores");
+    if (command && "selector" in command && command.selector !== undefined)
+      assertSafeSelector(command.selector);
+    const step = { ...command === undefined ? {} : { command }, predicate };
+    const sanitized = sanitizeWithReport(step);
+    if (sanitized.redacted || sanitized.truncation)
+      invalid("saved flow contains a secret or exceeds the safe persistence limits");
+    return step;
+  });
 }
 
 // src/verification/browser/patching/capture-method.ts
@@ -1026,9 +1191,522 @@ function selectPath(root, path) {
   }
 }
 
+// src/verification/baseline.ts
+var capturedAttributions = new WeakSet;
+
+class BaselineInputError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "BaselineInputError";
+  }
+}
+var MAX_DEPTH = 8;
+var MAX_ITEMS = 100;
+var MAX_NODES = 500;
+var forbidden = new Set(["__proto__", "prototype", "constructor"]);
+function record2(raw, allowed) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+    throw new BaselineInputError("Baseline metadata must be a plain object");
+  const proto = Object.getPrototypeOf(raw);
+  if (proto !== Object.prototype && proto !== null)
+    throw new BaselineInputError("Baseline metadata must be a plain object");
+  const names = Reflect.ownKeys(raw);
+  if (names.length > allowed.length)
+    throw new BaselineInputError("Unsupported baseline metadata");
+  const out = Object.create(null);
+  for (const name of names) {
+    if (typeof name !== "string" || !allowed.includes(name))
+      throw new BaselineInputError("Unsupported baseline metadata");
+    const descriptor = Object.getOwnPropertyDescriptor(raw, name);
+    if (!descriptor || !("value" in descriptor))
+      throw new BaselineInputError("Baseline metadata cannot contain accessors");
+    out[name] = descriptor.value;
+  }
+  return out;
+}
+function identifier(raw) {
+  if (typeof raw !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(raw))
+    throw new BaselineInputError("Invalid baseline identity");
+  const clean = sanitizeWithReport(raw);
+  if (clean.redacted || clean.truncation || clean.value !== raw)
+    throw new BaselineInputError("Baseline identities cannot contain credentials");
+  return raw;
+}
+function baselineCursor(raw) {
+  if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < 0)
+    throw new BaselineInputError("Invalid baseline cursor or generation");
+  return raw;
+}
+function captureBaselineScope(raw) {
+  const scope = record2(raw, ["sessionId", "generation", "kind", "target", "path"]);
+  const sessionId = identifier(scope.sessionId);
+  const generation = baselineCursor(scope.generation);
+  if (typeof scope.target !== "string")
+    throw new BaselineInputError("A baseline requires a store or selector");
+  const clean = sanitizeWithReport(scope.target);
+  if (clean.redacted || clean.truncation || clean.value !== scope.target)
+    throw new BaselineInputError("Baseline targets cannot contain credentials");
+  if (scope.kind === "state") {
+    const path = scope.path ?? "";
+    if (typeof path !== "string")
+      throw new BaselineInputError("Invalid baseline state path");
+    parseFlowSteps([{ predicate: { kind: "state", store: scope.target, path, equals: null } }]);
+    return Object.freeze({ sessionId, generation, kind: "state", target: scope.target, path });
+  }
+  if (scope.kind === "element" && !Object.hasOwn(scope, "path")) {
+    parseFlowSteps([{ predicate: { kind: "element", selector: scope.target, state: "present" } }]);
+    return Object.freeze({ sessionId, generation, kind: "element", target: scope.target });
+  }
+  throw new BaselineInputError("Unsupported baseline scope");
+}
+class SnapshotError extends Error {
+  reason;
+  constructor(reason) {
+    super(reason);
+    this.reason = reason;
+  }
+}
+function cloneJson(raw, depth, budget, seen) {
+  if (depth > MAX_DEPTH || ++budget.nodes > MAX_NODES)
+    throw new SnapshotError("limit");
+  if (raw === null || typeof raw === "boolean")
+    return raw;
+  if (typeof raw === "number" && Number.isFinite(raw))
+    return raw;
+  if (typeof raw === "string") {
+    budget.characters += raw.length;
+    if (raw.length > VERIFICATION_LIMITS.MAX_TEXT_LENGTH || budget.characters > VERIFICATION_LIMITS.MAX_EVENT_BYTES)
+      throw new SnapshotError("limit");
+    return raw;
+  }
+  if (typeof raw !== "object" || raw === null || seen.has(raw))
+    throw new SnapshotError("non-json");
+  const array = Array.isArray(raw);
+  const proto = Object.getPrototypeOf(raw);
+  if (!array && proto !== Object.prototype && proto !== null)
+    throw new SnapshotError("non-json");
+  const names = Reflect.ownKeys(raw);
+  if (names.length > MAX_ITEMS + (array ? 1 : 0))
+    throw new SnapshotError("limit");
+  seen.add(raw);
+  try {
+    if (array) {
+      const length = Object.getOwnPropertyDescriptor(raw, "length")?.value;
+      if (!Number.isSafeInteger(length) || length < 0)
+        throw new SnapshotError("non-json");
+      if (length > MAX_ITEMS)
+        throw new SnapshotError("limit");
+      if (names.length !== length + 1)
+        throw new SnapshotError("non-json");
+      const out2 = [];
+      for (let index = 0;index < length; index++) {
+        const descriptor = Object.getOwnPropertyDescriptor(raw, String(index));
+        if (!descriptor || !("value" in descriptor))
+          throw new SnapshotError("non-json");
+        out2.push(cloneJson(descriptor.value, depth + 1, budget, seen));
+      }
+      return out2;
+    }
+    const out = Object.create(null);
+    for (const name of names) {
+      if (typeof name !== "string" || forbidden.has(name))
+        throw new SnapshotError("non-json");
+      budget.characters += name.length;
+      if (name.length > 256 || budget.characters > VERIFICATION_LIMITS.MAX_EVENT_BYTES)
+        throw new SnapshotError("limit");
+      const descriptor = Object.getOwnPropertyDescriptor(raw, name);
+      if (!descriptor || !descriptor.enumerable || !("value" in descriptor))
+        throw new SnapshotError("non-json");
+      out[name] = cloneJson(descriptor.value, depth + 1, budget, seen);
+    }
+    return out;
+  } finally {
+    seen.delete(raw);
+  }
+}
+function freezeSnapshot(value) {
+  if (value !== null && typeof value === "object") {
+    for (const entry of Object.values(value))
+      freezeSnapshot(entry);
+    Object.freeze(value);
+  }
+  return value;
+}
+function unavailableSnapshot(value) {
+  if (typeof value === "string")
+    return /\[(?:REDACTED|TRUNCATED|UNSERIALIZABLE|CIRCULAR)\]/.test(value);
+  return value !== null && typeof value === "object" && Object.values(value).some(unavailableSnapshot);
+}
+function captureBaselineReading(metadata, value) {
+  const raw = record2(metadata, ["scope", "cursor", "fresh", "complete", "actionId", "outcome", "truncated", "redacted"]);
+  const scope = captureBaselineScope(raw.scope);
+  const cursor = baselineCursor(raw.cursor);
+  for (const key of ["fresh", "complete", "truncated", "redacted"]) {
+    if ((key === "fresh" || key === "complete" || Object.hasOwn(raw, key)) && typeof raw[key] !== "boolean")
+      throw new BaselineInputError("Baseline coverage flags must be boolean");
+  }
+  const actionId = Object.hasOwn(raw, "actionId") ? identifier(raw.actionId) : undefined;
+  let outcome;
+  if (Object.hasOwn(raw, "outcome")) {
+    const operation = record2(raw.outcome, ["operationId", "phase"]);
+    if (operation.phase !== "accepted" && operation.phase !== "final")
+      throw new BaselineInputError("Unsupported operation outcome phase");
+    outcome = Object.freeze({ operationId: identifier(operation.operationId), phase: operation.phase });
+  }
+  const base = {
+    version: 1,
+    scope,
+    cursor,
+    fresh: raw.fresh,
+    complete: raw.complete,
+    ...actionId === undefined ? {} : { actionId },
+    ...outcome === undefined ? {} : { outcome },
+    ...raw.truncated === true ? { truncated: true } : {},
+    ...raw.redacted === true ? { redacted: true } : {}
+  };
+  if (!base.complete)
+    return Object.freeze({ ...base, availability: "unavailable", value: null, unavailableReason: "capture-incomplete" });
+  try {
+    if (scope.kind === "element" && (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0))
+      throw new SnapshotError("invalid-reading");
+    const cloned = cloneJson(value, 0, { nodes: 0, characters: 0 }, new Set);
+    if (new TextEncoder().encode(JSON.stringify(cloned)).byteLength > VERIFICATION_LIMITS.MAX_EVENT_BYTES)
+      throw new SnapshotError("limit");
+    const clean = sanitizeWithReport(cloned);
+    if (new TextEncoder().encode(JSON.stringify(clean.value)).byteLength > VERIFICATION_LIMITS.MAX_EVENT_BYTES)
+      throw new SnapshotError("limit");
+    const partial = raw.truncated === true || raw.redacted === true || clean.truncation || clean.redacted || unavailableSnapshot(clean.value);
+    return Object.freeze({
+      ...base,
+      availability: partial ? "partial" : "complete",
+      value: freezeSnapshot(clean.value),
+      ...clean.redacted ? { redacted: true } : {},
+      ...clean.truncation ? { truncated: true } : {}
+    });
+  } catch (error) {
+    return Object.freeze({
+      ...base,
+      availability: "unavailable",
+      value: null,
+      unavailableReason: error instanceof SnapshotError ? error.reason : "non-json"
+    });
+  }
+}
+
+// src/verification/browser/store-adapters.ts
+var adapters = new WeakMap;
+var encoder = new TextEncoder;
+var forbidden2 = new Set(["__proto__", "prototype", "constructor"]);
+var scope = Object.freeze({ sessionId: "adapter", generation: 0, kind: "state", target: "adapter", path: "" });
+
+class AdapterInputError extends Error {
+  constructor() {
+    super("Unsupported or oversized explicit store configuration");
+  }
+}
+function invalid2() {
+  throw new AdapterInputError;
+}
+function object(raw) {
+  if (raw === null || typeof raw !== "object" && typeof raw !== "function")
+    invalid2();
+  return raw;
+}
+function data(raw, key) {
+  const descriptor = Object.getOwnPropertyDescriptor(object(raw), key);
+  if (!descriptor || !("value" in descriptor))
+    invalid2();
+  return descriptor.value;
+}
+function fields(raw, allowed) {
+  const value = object(raw);
+  if (Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value)))
+    invalid2();
+  const names = Reflect.ownKeys(value);
+  if (names.length > 32)
+    invalid2();
+  const out = Object.create(null);
+  for (const key of names) {
+    if (typeof key !== "string" || forbidden2.has(key) || allowed && !allowed.includes(key))
+      invalid2();
+    out[key] = data(value, key);
+  }
+  return out;
+}
+function list(raw, max) {
+  if (!Array.isArray(raw))
+    invalid2();
+  const length = data(raw, "length");
+  if (typeof length !== "number" || !Number.isSafeInteger(length) || length < 0 || length > max || Reflect.ownKeys(raw).length !== length + 1)
+    invalid2();
+  const values = [];
+  for (let n = 0;n < length; n++)
+    values.push(data(raw, String(n)));
+  return values;
+}
+function method(source, key) {
+  const receiver = object(source);
+  let current = receiver;
+  for (let depth = 0;current && depth < 4; depth++, current = Object.getPrototypeOf(current)) {
+    const descriptor = Object.getOwnPropertyDescriptor(current, key);
+    if (!descriptor)
+      continue;
+    if (!("value" in descriptor) || typeof descriptor.value !== "function")
+      invalid2();
+    const call = descriptor.value;
+    return (...args) => Reflect.apply(call, receiver, args);
+  }
+  return invalid2();
+}
+function sensitiveSelection(name) {
+  return defaultIsSensitiveKey(name) || isSensitiveKey(name);
+}
+function selections(raw) {
+  const entries = fields(raw);
+  const names = Object.keys(entries).sort();
+  if (!names.length || names.length > 20)
+    invalid2();
+  return names.map((name) => {
+    const path = entries[name];
+    if (!/^[A-Za-z0-9_:-]{1,128}$/.test(name) || typeof path !== "string" || path.length > 1024)
+      invalid2();
+    const parts = path === "" ? [] : path.split(".");
+    if (sensitiveSelection(name) || parts.length > 32 || parts.some((part) => !part || forbidden2.has(part) || sensitiveSelection(part)))
+      invalid2();
+    return Object.freeze([name, path]);
+  });
+}
+function select(raw, path) {
+  let value = raw;
+  for (const part of path === "" ? [] : path.split("."))
+    value = data(value, part);
+  return value;
+}
+function project(raw, selected) {
+  const values = Object.create(null);
+  for (const [name, path] of selected)
+    values[name] = select(raw, path);
+  return values;
+}
+function unavailable(reason) {
+  return Object.freeze({ availability: "unavailable", value: null, reason });
+}
+function snapshot(raw, partial = false) {
+  const reading = captureBaselineReading({ scope, cursor: 0, fresh: true, complete: true }, raw);
+  if (reading.availability === "unavailable")
+    return unavailable("snapshot-unavailable");
+  return Object.freeze({
+    availability: partial ? "partial" : reading.availability,
+    value: reading.value,
+    ...partial ? { reason: "query-unavailable" } : reading.availability === "partial" ? { reason: "snapshot-unavailable" } : {}
+  });
+}
+function create(kind, details) {
+  const adapter = Object.freeze({ kind });
+  adapters.set(adapter, Object.freeze(details));
+  return adapter;
+}
+function storeAdapterDetails(raw) {
+  return raw !== null && (typeof raw === "object" || typeof raw === "function") ? adapters.get(raw) : undefined;
+}
+function canonicalQueryKey(raw) {
+  if (!Array.isArray(raw))
+    invalid2();
+  let nodes = 0;
+  const seen = new Set;
+  const clone = (value2, depth) => {
+    if (++nodes > 100 || depth > 4)
+      invalid2();
+    if (value2 === null || typeof value2 === "boolean")
+      return value2;
+    if (typeof value2 === "number" && Number.isFinite(value2))
+      return value2;
+    if (typeof value2 === "string" && value2.length <= 512)
+      return value2;
+    const source = object(value2);
+    if (seen.has(source))
+      invalid2();
+    seen.add(source);
+    try {
+      if (Array.isArray(source))
+        return list(source, 32).map((item) => clone(item, depth + 1));
+      const props = fields(source);
+      const result = Object.create(null);
+      for (const name of Object.keys(props).sort()) {
+        if (name.length > 128)
+          invalid2();
+        result[name] = clone(props[name], depth + 1);
+      }
+      return result;
+    } finally {
+      seen.delete(source);
+    }
+  };
+  const value = clone(raw, 0);
+  const identity = JSON.stringify(value);
+  if (encoder.encode(identity).byteLength > 2048)
+    invalid2();
+  return identity;
+}
+function publicQueryIdentity(id) {
+  let redacted = false;
+  const floor = (value) => {
+    if (Array.isArray(value))
+      return value.map(floor);
+    if (value === null || typeof value !== "object")
+      return value;
+    const result = Object.create(null);
+    for (const name of Object.keys(value)) {
+      if (defaultIsSensitiveKey(name)) {
+        result[name] = REDACTED_VALUE;
+        redacted = true;
+      } else
+        result[name] = floor(data(value, name));
+    }
+    return result;
+  };
+  const clean = sanitizeWithReport(floor(JSON.parse(id)));
+  if (clean.truncation)
+    invalid2();
+  return { keyId: JSON.stringify(clean.value), key: clean.value, redacted: redacted || clean.redacted === true };
+}
+function shapeStore(source, options) {
+  const selected = selections(fields(options, ["select"]).select);
+  const getState = method(source, "getState");
+  const subscribe = method(source, "subscribe");
+  return create("shape", {
+    source,
+    configuration: JSON.stringify(["shape", selected]),
+    read: () => {
+      try {
+        return snapshot({ adapter: "shape", values: project(getState(), selected) });
+      } catch {
+        return unavailable("source-unavailable");
+      }
+    },
+    subscribe: (listener) => {
+      const release = subscribe(listener);
+      if (typeof release !== "function")
+        invalid2();
+      return release;
+    }
+  });
+}
+function piniaStore(source, options) {
+  const selected = selections(fields(options, ["select"]).select);
+  const subscribe = method(source, "$subscribe");
+  object(source);
+  const getState = () => {
+    const descriptor = Object.getOwnPropertyDescriptor(source, "$state");
+    if (!descriptor)
+      invalid2();
+    if ("value" in descriptor)
+      return descriptor.value;
+    const get = Reflect.get(descriptor, "get");
+    return typeof get === "function" ? Reflect.apply(get, source, []) : invalid2();
+  };
+  return create("pinia", {
+    source,
+    configuration: JSON.stringify(["pinia", selected]),
+    read: () => {
+      try {
+        return snapshot({ adapter: "pinia", values: project(getState(), selected) });
+      } catch {
+        return unavailable("source-unavailable");
+      }
+    },
+    subscribe: (listener) => {
+      const release = subscribe(() => listener(), { detached: true, flush: "sync" });
+      if (typeof release !== "function")
+        invalid2();
+      return release;
+    }
+  });
+}
+function queryStore(source, options) {
+  const opts = fields(options, ["keys", "includeErrorMessage"]);
+  if (opts.includeErrorMessage !== undefined && typeof opts.includeErrorMessage !== "boolean")
+    invalid2();
+  let selectedCount = 0, keyBytes = 0;
+  const keys2 = list(opts.keys, 20).map((item) => {
+    const entry = fields(item, ["queryKey", "select"]);
+    const id = canonicalQueryKey(entry.queryKey);
+    keyBytes += encoder.encode(id).byteLength;
+    const selected = entry.select === undefined ? [] : selections(entry.select);
+    selectedCount += selected.length;
+    if (selectedCount > 20 || keyBytes > 4096)
+      invalid2();
+    return { id, selected };
+  });
+  if (!keys2.length || new Set(keys2.map((key) => key.id)).size !== keys2.length)
+    invalid2();
+  const getCache = method(source, "getQueryCache"), defaults = method(source, "defaultQueryOptions");
+  const cache = object(getCache()), get = method(cache, "get"), subscribe = method(cache, "subscribe");
+  return create("query", {
+    source,
+    configuration: JSON.stringify(["query", keys2.map(({ id, selected }) => [id, selected]), opts.includeErrorMessage === true]),
+    read: () => {
+      try {
+        if (getCache() !== cache)
+          return unavailable("query-unavailable");
+        let partial = false;
+        const queries = keys2.map(({ id, selected }) => {
+          const identity = publicQueryIdentity(id);
+          try {
+            const hash = data(defaults({ queryKey: JSON.parse(id) }), "queryHash");
+            if (typeof hash !== "string" || !hash || hash.length > 4096)
+              invalid2();
+            const query = get(hash);
+            if (canonicalQueryKey(data(query, "queryKey")) !== id)
+              invalid2();
+            const state = data(query, "state"), status = data(state, "status"), fetchStatus = data(state, "fetchStatus");
+            const dataUpdatedAt = data(state, "dataUpdatedAt"), isStale = method(query, "isStale")();
+            if (typeof status !== "string" || typeof fetchStatus !== "string" || typeof isStale !== "boolean" || !["pending", "error", "success"].includes(status) || !["idle", "fetching", "paused"].includes(fetchStatus) || typeof dataUpdatedAt !== "number" || !Number.isSafeInteger(dataUpdatedAt) || dataUpdatedAt < 0)
+              invalid2();
+            const error = data(state, "error");
+            let errorMessage;
+            if (opts.includeErrorMessage === true && error !== null && error !== undefined) {
+              const message = data(error, "message");
+              if (typeof message !== "string" || message.length > 1000)
+                invalid2();
+              errorMessage = message;
+            }
+            return {
+              keyId: identity.keyId,
+              key: identity.key,
+              availability: identity.redacted ? "partial" : "complete",
+              status,
+              fetchStatus,
+              dataUpdatedAt,
+              isStale,
+              hasError: error !== null && error !== undefined,
+              ...errorMessage !== undefined ? { errorMessage } : {},
+              ...selected.length ? { values: project(data(state, "data"), selected) } : {}
+            };
+          } catch {
+            partial = true;
+            return { keyId: identity.keyId, key: identity.key, availability: "unavailable", reason: "query-unavailable" };
+          }
+        });
+        return snapshot({ adapter: "query", queries }, partial);
+      } catch {
+        return unavailable("query-unavailable");
+      }
+    },
+    subscribe: (listener) => {
+      if (getCache() !== cache)
+        invalid2();
+      const release = subscribe(listener);
+      if (typeof release !== "function")
+        invalid2();
+      return release;
+    }
+  });
+}
+
 // src/verification/browser/index.ts
 var ACTIVE_RUNTIME = Symbol.for("runphantom.verification.active");
-var encoder = new TextEncoder;
+var encoder2 = new TextEncoder;
 function nameValid(value) {
   return typeof value === "string" && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
 }
@@ -1056,6 +1734,8 @@ function connect(options) {
     throw error;
   }
   const stores = new Map;
+  let storeLeaseCount = 0;
+  const owners = new WeakMap;
   const teardown = [];
   const coverage = { network: false, console: false, route: false, dom: true, state: true, signal: true };
   const secrets = new Set([options.token]);
@@ -1095,17 +1775,17 @@ function connect(options) {
     if (!active || socket.readyState !== WebSocket.OPEN)
       return false;
     const text2 = JSON.stringify(message);
-    if (encoder.encode(text2).byteLength > VERIFICATION_LIMITS.MAX_FRAME_BYTES)
+    if (encoder2.encode(text2).byteLength > VERIFICATION_LIMITS.MAX_FRAME_BYTES)
       return false;
     socket.send(text2);
     return true;
   };
-  const prepareEvent = (type, data) => {
-    const fields = type === "console" ? ["message", "stack"] : type === "network" || type === "network.start" ? ["url", "error"] : type === "route" ? ["url"] : type === "signal" ? ["data"] : type === "observer.error" ? ["message"] : type === "action.reading" ? ["value"] : [];
+  const prepareEvent = (type, data2) => {
+    const fields2 = type === "console" ? ["message", "stack"] : type === "network" || type === "network.start" ? ["url", "error"] : type === "route" ? ["url"] : type === "signal" ? ["data"] : type === "observer.error" ? ["message"] : type === "action.reading" || type === "state" ? ["value"] : [];
     const value = {};
     let truncated = false;
-    for (const [field, item] of Object.entries(data)) {
-      if (fields.includes(field)) {
+    for (const [field, item] of Object.entries(data2)) {
+      if (fields2.includes(field)) {
         const safe = prepare(item);
         value[field] = safe.value;
         truncated ||= safe.truncated;
@@ -1117,7 +1797,7 @@ function connect(options) {
     }
     return { value, truncated };
   };
-  const emit = (type, data, actionId = currentActionId, truncated = false) => observeSafely(() => {
+  const emit = (type, data2, actionId = currentActionId, truncated = false) => observeSafely(() => {
     if (!active)
       return;
     if (sending || socket.bufferedAmount > VERIFICATION_LIMITS.MAX_FRAME_BYTES * 2) {
@@ -1126,9 +1806,9 @@ function connect(options) {
     }
     sending = true;
     try {
-      const safe = prepareEvent(type, data);
+      const safe = prepareEvent(type, data2);
       const event = { type, data: safe.value, ...actionId ? { actionId } : {}, ...safe.truncated || truncated ? { truncated: true } : {} };
-      const bytes = encoder.encode(JSON.stringify(event)).byteLength;
+      const bytes = encoder2.encode(JSON.stringify(event)).byteLength;
       if (bytes > VERIFICATION_LIMITS.MAX_EVENT_BYTES) {
         disconnect();
         return;
@@ -1156,7 +1836,10 @@ function connect(options) {
     for (const cleanup of teardown.reverse())
       observeSafely(cleanup);
     teardown.length = 0;
+    for (const store of stores.values())
+      store.remove();
     stores.clear();
+    window.removeEventListener("pagehide", disconnect);
     secrets.clear();
     secretSpellings.clear();
     earlyEvents.length = 0;
@@ -1205,11 +1888,12 @@ function connect(options) {
       } else {
         const read = stores.get(target.store);
         if (read) {
-          const safe = prepare(read());
+          const reading = read.read();
+          const safe = prepare(reading.value);
           const selected = selectPath(safe.value, target.path);
-          available = !safe.truncated && selected.found;
+          truncated = safe.truncated || reading.truncated;
+          available = !truncated && selected.found;
           value = selected.value;
-          truncated = safe.truncated;
         }
       }
     } catch {
@@ -1244,9 +1928,18 @@ function connect(options) {
         const read = stores.get(command.store);
         if (!read)
           throw new Error("Requested store is not registered");
-        const safe2 = prepare(read());
+        const reading = read.read();
+        const safe2 = prepare(reading.value);
         const store = sanitizeWithReport(command.store);
-        output = { result: { store: store.value, value: safe2.value }, truncated: Boolean(safe2.truncated || store.truncation || store.redacted) };
+        output = {
+          result: {
+            store: store.value,
+            value: safe2.value,
+            ...reading.availability ? { availability: reading.availability } : {},
+            ...reading.reason ? { reason: reading.reason } : {}
+          },
+          truncated: Boolean(reading.truncated || safe2.truncated || store.truncation || store.redacted)
+        };
       } else if (command.type === "causal-click") {
         output = runDomCommand({ type: "click", selector: command.selector }, prepare);
         for (const target of command.targets)
@@ -1263,7 +1956,7 @@ function connect(options) {
   };
   const onMessage = (event) => {
     try {
-      if (typeof event.data !== "string" || encoder.encode(event.data).byteLength > VERIFICATION_LIMITS.MAX_FRAME_BYTES) {
+      if (typeof event.data !== "string" || encoder2.encode(event.data).byteLength > VERIFICATION_LIMITS.MAX_FRAME_BYTES) {
         disconnect();
         return;
       }
@@ -1294,36 +1987,147 @@ function connect(options) {
       disconnect();
     }
   };
+  window.addEventListener("pagehide", disconnect);
   socket.addEventListener("open", onOpen);
   socket.addEventListener("message", onMessage);
   socket.addEventListener("close", disconnect);
   socket.addEventListener("error", disconnect);
   return {
     disconnect,
-    signal(name, data) {
+    signal(name, data2) {
       if (!active)
         throw new Error("Verification runtime is disconnected");
       if (!nameValid(name))
         throw new Error("Signal name must be 1–128 letters, digits or ._:-");
-      emit("signal", { name, ...data === undefined ? {} : { data } });
+      emit("signal", { name, ...data2 === undefined ? {} : { data: data2 } });
     },
-    registerStore(name, read) {
+    registerStore(name, source) {
       if (!active)
         throw new Error("Verification runtime is disconnected");
-      if (!nameValid(name) || typeof read !== "function")
-        throw new Error("A valid store name and reader function are required");
-      if (stores.has(name))
-        throw new Error("Store name is already registered");
-      if (stores.size >= 100)
+      if (!nameValid(name))
+        throw new Error("A valid store name is required");
+      if (storeLeaseCount >= 100)
+        throw new Error("Registered store lease limit reached");
+      const adapter = storeAdapterDetails(source);
+      if (!adapter && typeof source !== "function")
+        throw new Error("A reader or explicit store adapter is required");
+      const existing = stores.get(name);
+      const owner = adapter && owners.get(adapter.source);
+      if (owner && owner !== existing)
+        throw new Error("The explicit source is already registered under another name");
+      if (existing && (!adapter || existing.source !== adapter.source || existing.configuration !== adapter.configuration)) {
+        throw new Error("Store name is already registered with another source or projection");
+      }
+      if (!existing && stores.size >= 100)
         throw new Error("Registered store limit reached");
-      stores.set(name, read);
-      return () => {
-        if (stores.get(name) === read)
-          stores.delete(name);
-      };
+      const lease2 = {};
+      storeLeaseCount++;
+      let acquired = false;
+      try {
+        let registration = existing;
+        if (!registration) {
+          let releaseSubscription;
+          let lastComplete;
+          let acquiring = true, observing = false;
+          const entry = {
+            active: true,
+            leases: new Set,
+            ...adapter ? { source: adapter.source, configuration: adapter.configuration } : {},
+            read: () => {
+              if (!entry.active || !active)
+                throw new Error("Registered store is unavailable");
+              if (!adapter)
+                return { value: source(), truncated: false };
+              const snapshot2 = adapter.read();
+              return {
+                value: snapshot2.value,
+                truncated: snapshot2.availability !== "complete",
+                availability: snapshot2.availability,
+                ...snapshot2.reason ? { reason: snapshot2.reason } : {}
+              };
+            },
+            remove: () => {
+              if (!entry.active)
+                return;
+              entry.active = false;
+              storeLeaseCount -= entry.leases.size;
+              entry.leases.clear();
+              if (stores.get(name) === entry)
+                stores.delete(name);
+              if (adapter && owners.get(adapter.source) === entry)
+                owners.delete(adapter.source);
+              const release = releaseSubscription;
+              releaseSubscription = undefined;
+              if (release)
+                observeSafely(release);
+            }
+          };
+          stores.set(name, entry);
+          if (adapter)
+            owners.set(adapter.source, entry);
+          if (adapter) {
+            const changed = () => observeSafely(() => {
+              if (acquiring || !active || !entry.active || stores.get(name) !== entry)
+                return;
+              if (observing) {
+                disconnect();
+                return;
+              }
+              observing = true;
+              try {
+                const reading = entry.read(), safe = prepare(reading.value);
+                const partial = reading.truncated || safe.truncated;
+                const presented = JSON.stringify(safe.value);
+                if (!partial && presented === lastComplete)
+                  return;
+                lastComplete = partial ? undefined : presented;
+                emit("state", { store: name, value: safe.value }, currentActionId, partial);
+              } finally {
+                observing = false;
+              }
+            }, disconnect);
+            try {
+              releaseSubscription = adapter.subscribe(changed);
+              acquiring = false;
+              if (!active || !entry.active) {
+                if (releaseSubscription)
+                  observeSafely(releaseSubscription);
+                releaseSubscription = undefined;
+                throw new Error("Registration lost its connection");
+              }
+              const initial = entry.read(), safe = prepare(initial.value);
+              if (!active || !entry.active)
+                throw new Error("Registration lost its connection");
+              if (!initial.truncated && !safe.truncated)
+                lastComplete = JSON.stringify(safe.value);
+            } catch {
+              entry.remove();
+              throw new Error("Explicit store subscription is unavailable");
+            }
+          }
+          registration = entry;
+        }
+        registration.leases.add(lease2);
+        acquired = true;
+        const registered = registration;
+        return () => {
+          if (!registered.leases.delete(lease2))
+            return;
+          storeLeaseCount--;
+          if (!registered.leases.size)
+            registered.remove();
+        };
+      } finally {
+        if (!acquired)
+          storeLeaseCount--;
+      }
     }
   };
 }
 export {
-  connect
+  canonicalQueryKey,
+  connect,
+  piniaStore,
+  queryStore,
+  shapeStore
 };
