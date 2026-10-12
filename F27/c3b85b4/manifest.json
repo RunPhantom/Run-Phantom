@@ -1,0 +1,75 @@
+{
+  "feature": "Evaluation distributions and trends",
+  "product": "Run Phantom",
+  "maintainer": "Divyam Talwar",
+  "publicationHead": "72a61dc862b93ef250e724274f5c7f4ae9853c7c",
+  "macSourceAndCopiedExecutedHead": "c3b85b4c430110b472da2a6f27755c8cca1bbcb3",
+  "productBytesUnchangedAfterUpstreamTestOnlyComposition": true,
+  "ownMeaningfulSourceCommits": 6,
+  "fullSourceBackend": {
+    "passed": 694,
+    "skipped": 1,
+    "failed": 0
+  },
+  "fullSourceChromium": {
+    "passed": 128,
+    "skipped": 10,
+    "failed": 0,
+    "flaky": 0,
+    "retries": 0
+  },
+  "currentComposedShell": {
+    "passed": 10,
+    "skipped": 0,
+    "failed": 0,
+    "flaky": 0,
+    "retries": 0
+  },
+  "copiedFeature": {
+    "passed": 4,
+    "skipped": 0,
+    "failed": 0,
+    "retries": 0
+  },
+  "copiedCommon": {
+    "passed": 3,
+    "skipped": 0,
+    "failed": 0,
+    "retries": 0
+  },
+  "copiedArtifactSha256": "e628f4df705922350a2b26703cd88c3c1dad719922ff68e79207922559342295",
+  "screenshots": [
+    {
+      "file": "distribution-1440.png",
+      "sha256": "39a449b36f24941c8d0f419e49e1332ba1e3649576ee9279625e65418a2c8de4",
+      "runtime": "genuine copied macOS arm64 executable",
+      "fixture": "synthetic captured experiments, real local HTTP API and persisted database"
+    },
+    {
+      "file": "distribution-320.png",
+      "sha256": "6f866c5d8fcd1978c4ebd36b11acd356126cb2882f28b45d17c7e03c19d906f5",
+      "runtime": "genuine copied macOS arm64 executable",
+      "fixture": "synthetic captured experiments, real local HTTP API and persisted database"
+    },
+    {
+      "file": "distribution-restarted.png",
+      "sha256": "e4d282843bb6a54a370b8063cbe076a63232d4cc7c655d5e601ce4ad3f17d3e0",
+      "runtime": "genuine copied macOS arm64 executable",
+      "fixture": "synthetic captured experiments, real local HTTP API and persisted database"
+    },
+    {
+      "file": "distribution-incompatible.png",
+      "sha256": "e450f7807f79b48c44ff147accd4e22a68dc6b12c705f222ec5768cc0addd46a",
+      "runtime": "genuine copied macOS arm64 executable",
+      "fixture": "synthetic captured experiments, real local HTTP API and persisted database"
+    }
+  ],
+  "providerSpendUsd": 0,
+  "unmerged": true,
+  "pending": [
+    "Actual Windows/Linux",
+    "Coarse-pointer mobile download and full global shell; current 320px assistant overlaps download edge",
+    "Full selected-feature composition and paid-provider quality"
+  ],
+  "retainedSupplementaryHelperFailure": "Original four tests passed; a post-test Playwright transform cache left a private helper exit1. Owned apps/profiles were already reaped; cache removed after independent cleanup checks without rerunning assertions."
+}
