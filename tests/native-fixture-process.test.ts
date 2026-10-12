@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/pro
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileSha256, launchOwnedProcess, startManagedDaemon, startFixtureDaemon, startFixtureSupervisor, stopOwnedProcess } from "../app/tests-e2e/daemon-runtime";
+import { fileSha256, launchOwnedProcess, ownedProcessMatches, startManagedDaemon, startFixtureDaemon, startFixtureSupervisor, stopOwnedProcess } from "../app/tests-e2e/daemon-runtime";
 
 const root = path.resolve(import.meta.dir, "..");
 const probeBirth = (pid: number) => {
@@ -30,6 +30,41 @@ async function ready(child: ReturnType<typeof launchOwnedProcess>): Promise<void
     child.child.once("error", error => { clearTimeout(timer); reject(error); });
   });
 }
+
+test("a live registered process acquires an exact native birth before cleanup authority is used", async () => {
+  const owned = launchOwnedProcess(process.execPath, ["-e", 'console.log("ready");setInterval(()=>{},1000)'], root, process.env);
+  let independentBirth = "";
+  try {
+    await ready(owned);
+    const identity = await owned.identity;
+    if (!identity && process.platform === "win32") {
+      const script = `$p=Get-CimInstance Win32_Process -Filter "ProcessId = ${owned.child.pid}";if($p){$p.CreationDate.ToUniversalTime().ToString("o")}`;
+      for (const mode of ["full", "current-wrapper"] as const) {
+        const began = performance.now();
+        const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+          encoding: "utf8", timeout: 3000, maxBuffer: 64 * 1024, windowsHide: true,
+          env: mode === "full" ? process.env : { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, LANG: "C", TZ: "UTC" },
+        });
+        if (mode === "full" && result.status === 0) independentBirth = result.stdout.trim();
+        console.log(JSON.stringify({ probe: "windows-birth-acquisition", mode, pid: owned.child.pid,
+          status: result.status, signal: result.signal, errorCode: (result.error as NodeJS.ErrnoException | undefined)?.code ?? null,
+          hasBirth: !!result.stdout?.trim(), wallMs: Math.round(performance.now() - began) }));
+      }
+    }
+    expect(identity).not.toBeNull();
+    expect(identity?.startsWith(`${owned.child.pid}:`)).toBe(true);
+    expect(await ownedProcessMatches(owned)).toBe(true);
+    expect(alive(owned.child.pid!)).toBe(true);
+    const stopped = await stopOwnedProcess(owned);
+    expect(stopped.identity).toBe(identity); expect(stopped.closeObserved).toBe(true);
+    expect(alive(owned.child.pid!)).toBe(false);
+  } finally {
+    if (independentBirth && alive(owned.child.pid!)) {
+      terminateRecorded(owned.child.pid!, independentBirth, probeBirth);
+      await Promise.race([owned.closed, Bun.sleep(3000).then(() => { throw new Error("probe_pipe_not_closed"); })]);
+    } else await stopOwnedProcess(owned);
+  }
+}, 15_000);
 
 test("a native digest mismatch and a script artifact refuse before a daemon or private store exists", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "runphantom-native-refusal-"));
