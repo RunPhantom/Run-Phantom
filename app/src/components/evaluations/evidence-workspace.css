@@ -13,6 +13,7 @@
   --rp-ink-muted: #525866;
   --rp-border: #d9deea;
   --rp-surface: #ffffff;
+  --rp-focus: #0021cc;
   --rp-ink-wash: #eef2ff;
   --rp-ink-wash-strong: #e8ecf5;
   color: #0e121b;
@@ -43,7 +44,7 @@
 .evidence-workspace input[type="file"]::file-selector-button { padding: 7px 12px; border: 1px solid #d9deea; border-radius: 5px; background: #eef2ff; color: #0021cc; margin-right: 12px; cursor: pointer; }
 .evidence-workspace button.evidence-primary { background: #0021cc; color: #fff; padding-inline: 20px; }
 .evidence-workspace button.evidence-primary:hover { background: #001aa3; }
-.evidence-workspace :is(button, input, select, summary):focus-visible { outline: 2px solid #0021cc; outline-offset: 2px; box-shadow: none; }
+.evidence-workspace :is(button, input, select, summary):focus-visible { outline: 2px solid #0021cc !important; outline-offset: 2px !important; box-shadow: none; }
 .evidence-workspace details > summary { cursor: pointer; min-height: 44px; padding-block: 12px; font-size: 13px; font-weight: 500; }
 .evidence-details { margin-top: 10px; display: grid; gap: 16px; font-size: 13px; overflow-wrap: anywhere; }
 .evidence-empty { color: #525866; padding: 18px 0 0; font-size: 13px; }
