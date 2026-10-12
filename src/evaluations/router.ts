@@ -6,6 +6,7 @@ import * as store from "./store";
 import { redactText } from "../verification/serialization";
 import { createEvaluationReport, evaluationReportJUnit } from "./report";
 import { analyzeTrials, parseTrialSelection } from "./trials";
+import { analyzeScoreDistribution, parseDistributionRequest } from "./distributions";
 
 function version(value: unknown): number | undefined {
   if (value === undefined) return undefined;
@@ -30,6 +31,10 @@ export function createEvaluationRouter(service: EvaluationService): express.Rout
   router.post("/analyses/repeated-trials", route((req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.json(analyzeTrials(parseTrialSelection(req.body), store.readExperimentSelection));
+  }));
+  router.post("/analyses/score-distributions", route((req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(analyzeScoreDistribution(parseDistributionRequest(req.body), store.readDistributionSelection));
   }));
   router.post("/experiments", route((req, res) => res.status(202).json(service.start(req.body))));
   router.get("/compare", route((req, res) => res.json(service.compare(parseId(req.query.baseline), parseId(req.query.candidate)))));

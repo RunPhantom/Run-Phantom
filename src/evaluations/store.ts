@@ -5,6 +5,7 @@ import { evaluation_datasets as datasets, evaluation_revisions as revisions, eva
 import { canonicalCaseDefinitions, EvaluationError } from "./validation";
 import { EVALUATION_LIMITS as L, type Dataset, type DatasetCase, type DatasetRevision, type Experiment, type ExperimentSummary, type Review } from "./protocol";
 import { MAX_TRIAL_ACQUISITION_BYTES, parseTrialSelection } from "./trials";
+import { parseDistributionIds } from "./distributions";
 
 export function listDatasets(): Dataset[] {
   return getDrizzleDb().select().from(datasets).orderBy(desc(datasets.created_at)).all()
@@ -85,14 +86,24 @@ export function getExperimentRecord(id: string) {
 export function getExperiment(id: string): Experiment { return getExperimentRecord(id).experiment; }
 export function readExperimentSelection(ids: string[], consume: (experiment: Experiment) => void): void {
   parseTrialSelection({ experimentIds: ids });
+  readFrozenSelection(ids, consume);
+}
+export function readDistributionSelection(ids: string[], consume: (experiment: Experiment) => void): void {
+  readFrozenSelection(parseDistributionIds(ids), consume);
+}
+function readFrozenSelection(ids: string[], consume: (experiment: Experiment) => void): void {
   getDrizzleDb().transaction(tx => {
-    const bound = tx.select({ count: count(), bytes: sql<number>`coalesce(sum(length(cast(${experiments.data} as blob))), 0)` })
+    const bound = tx.select({ count: count(), bytes: sql<number>`coalesce(sum(length(cast(${experiments.data} as blob))), 0)`, largest: sql<number>`coalesce(max(length(cast(${experiments.data} as blob))), 0)` })
       .from(experiments).where(inArray(experiments.id, ids)).get()!;
     if (bound.count !== ids.length) throw new EvaluationError("Experiment not found", 404);
     if (bound.bytes > MAX_TRIAL_ACQUISITION_BYTES) throw new EvaluationError("Selected experiment evidence exceeds 8 MiB", 413);
+    if (!Number.isSafeInteger(bound.bytes) || bound.largest > L.MAX_EXPERIMENT) throw new EvaluationError("Individual experiment evidence exceeds 4 MiB", 413);
     for (const id of ids) {
       const row = tx.select({ data: experiments.data }).from(experiments).where(eq(experiments.id, id)).get()!;
-      consume(JSON.parse(row.data) as Experiment);
+      let experiment: Experiment;
+      try { experiment = JSON.parse(row.data) as Experiment; }
+      catch { throw new EvaluationError("Frozen experiment evidence is invalid", 409); }
+      consume(experiment);
     }
   });
 }
