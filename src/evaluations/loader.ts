@@ -50,13 +50,14 @@ export function loadSnapshot(runId: string, outputSpanId?: string) {
       CASE WHEN length(CAST(input_payload AS BLOB)) <= ? THEN length(CAST(input_payload AS BLOB)) ELSE 0 END +
       CASE WHEN length(CAST(output_payload AS BLOB)) <= ? THEN length(CAST(output_payload AS BLOB)) ELSE 0 END +
       CASE WHEN length(CAST(attributes AS BLOB)) <= ? THEN length(CAST(attributes AS BLOB)) ELSE 0 END +
+      CASE WHEN length(CAST(otlp_evidence AS BLOB)) <= ? THEN length(CAST(otlp_evidence AS BLOB)) ELSE 0 END +
       length(CAST(id AS BLOB)) + length(CAST(run_id AS BLOB)) + COALESCE(length(CAST(parent_span_id AS BLOB)), 0) +
       CASE WHEN length(CAST(name AS BLOB)) <= 4096 THEN length(CAST(name AS BLOB)) ELSE 0 END +
       CASE WHEN length(CAST(model AS BLOB)) <= 4096 THEN length(CAST(model AS BLOB)) ELSE 0 END +
       CASE WHEN length(CAST(provider AS BLOB)) <= 4096 THEN length(CAST(provider AS BLOB)) ELSE 0 END +
       CASE WHEN length(CAST(status AS BLOB)) <= 128 THEN length(CAST(status AS BLOB)) ELSE 0 END +
       CASE WHEN length(CAST(span_type AS BLOB)) <= 128 THEN length(CAST(span_type AS BLOB)) ELSE 0 END), 0) AS bytes
-      FROM spans WHERE run_id = ?`).get(L.MAX_PAYLOAD_BYTES, L.MAX_PAYLOAD_BYTES, L.MAX_PAYLOAD_BYTES, runId) as { bytes: number };
+      FROM spans WHERE run_id = ?`).get(L.MAX_PAYLOAD_BYTES, L.MAX_PAYLOAD_BYTES, L.MAX_PAYLOAD_BYTES, L.MAX_PAYLOAD_BYTES, runId) as { bytes: number };
     if (size.bytes > L.MAX_ACQUIRED_PAYLOAD_BYTES) throw new EvaluationError("Trace payloads exceed the bounded evaluation acquisition limit", 413);
     const rows = db.$client.query(`SELECT id, run_id, parent_span_id,
       CASE WHEN length(CAST(name AS BLOB)) <= 4096 THEN name ELSE '[TRUNCATED]' END AS name,
@@ -68,13 +69,15 @@ export function loadSnapshot(runId: string, outputSpanId?: string) {
       CASE WHEN length(CAST(input_payload AS BLOB)) <= ? THEN input_payload ELSE NULL END AS input_payload,
       CASE WHEN length(CAST(output_payload AS BLOB)) <= ? THEN output_payload ELSE NULL END AS output_payload,
       CASE WHEN length(CAST(attributes AS BLOB)) <= ? THEN attributes ELSE NULL END AS attributes,
+      CASE WHEN length(CAST(otlp_evidence AS BLOB)) <= ? THEN otlp_evidence ELSE NULL END AS otlp_evidence,
       COALESCE(length(CAST(input_payload AS BLOB)) > ?, 0) AS input_unavailable,
       COALESCE(length(CAST(output_payload AS BLOB)) > ?, 0) AS output_unavailable,
-      COALESCE(length(CAST(attributes AS BLOB)) > ?, 0) AS attributes_unavailable
+      COALESCE(length(CAST(attributes AS BLOB)) > ?, 0) AS attributes_unavailable,
+      COALESCE(length(CAST(otlp_evidence AS BLOB)) > ?, 0) AS otlp_unavailable
       FROM spans WHERE run_id = ?`).all(L.MAX_PAYLOAD_BYTES, L.MAX_PAYLOAD_BYTES, L.MAX_PAYLOAD_BYTES,
-        L.MAX_PAYLOAD_BYTES, L.MAX_PAYLOAD_BYTES, L.MAX_PAYLOAD_BYTES, runId) as Array<SnapshotSpan & { input_unavailable: number; output_unavailable: number; attributes_unavailable: number }>;
-    const spans: SnapshotSpan[] = rows.map(({ input_unavailable, output_unavailable, attributes_unavailable, ...span }) => ({
-      ...span, unavailable: { input: !!input_unavailable, output: !!output_unavailable, attributes: !!attributes_unavailable } }));
+        L.MAX_PAYLOAD_BYTES, L.MAX_PAYLOAD_BYTES, L.MAX_PAYLOAD_BYTES, L.MAX_PAYLOAD_BYTES, L.MAX_PAYLOAD_BYTES, runId) as Array<SnapshotSpan & { input_unavailable: number; output_unavailable: number; attributes_unavailable: number; otlp_unavailable: number }>;
+    const spans: SnapshotSpan[] = rows.map(({ input_unavailable, output_unavailable, attributes_unavailable, otlp_unavailable, ...span }) => ({
+      ...span, unavailable: { input: !!input_unavailable, output: !!output_unavailable, attributes: !!attributes_unavailable, otlpEvidence: !!otlp_unavailable } }));
     if (outputSpanId !== undefined && !spans.some((span) => span.id === outputSpanId)) throw new EvaluationError("Selected output span does not belong to this exact run", 400);
     return snapshotRun(run, spans, outputSpanId);
   });

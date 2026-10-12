@@ -1,0 +1,22 @@
+Run Phantom compatibility metadata attribution
+
+The interoperability recipe and synthetic vector search / embedding metadata
+shapes were adapted from the following source at immutable revision:
+OpenLIT, 066e2c582c7e0365437f1eeda65ece4c4360ff58.
+Copyright [2026] [Aman Agarwal]. Apache License, Version 2.0.
+See LICENSE-compatibility for the complete mandatory license notice.
+
+Reviewed source paths:
+sdk/typescript/src/semantic-convention.ts
+sdk/typescript/src/instrumentation/qdrant/wrapper.ts
+sdk/typescript/src/instrumentation/__tests__/qdrant-trace-comparison.test.ts
+sdk/typescript/src/instrumentation/openai/wrapper.ts
+sdk/typescript/src/index.ts
+sdk/typescript/src/config.ts
+sdk/typescript/src/otel/tracing.ts
+
+Modifications: finite TypeScript telemetry mapping and entirely local synthetic
+fixtures/example; no upstream instrumentation wrapper, provider implementation,
+pricing fetcher or SDK runtime is transplanted into the daemon. Run Phantom's
+stream roster event contract is application-owned and separate from source SDK
+metadata. Source inspection establishes shapes only, not runtime qualification.

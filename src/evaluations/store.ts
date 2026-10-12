@@ -1,3 +1,4 @@
+import { parseCapturedAgentDefinitions } from "../agent-definitions";
 import { randomUUID, createHash } from "node:crypto";
 import { and, asc, desc, eq, inArray, count, sql } from "drizzle-orm";
 import { getDrizzleDb } from "../db";
@@ -54,7 +55,14 @@ function summarize(experiment: Experiment): ExperimentSummary {
   const { results: _results, ...summary } = experiment;
   return summary;
 }
+function validateFrozenDefinitions(experiment: Experiment): void {
+  for (const result of experiment.results) if (result.snapshot.agentDefinitions !== undefined) {
+    try { parseCapturedAgentDefinitions(result.snapshot.agentDefinitions); }
+    catch { throw new EvaluationError("Frozen definition provenance is invalid", 409); }
+  }
+}
 function encoded(experiment: Experiment): string {
+  validateFrozenDefinitions(experiment);
   const data = JSON.stringify(experiment);
   if (Buffer.byteLength(data) > L.MAX_EXPERIMENT) throw new EvaluationError("Experiment exceeds the retained result size limit", 413);
   return data;
@@ -80,7 +88,8 @@ export function insertExperiment(experiment: Experiment, token: string): void {
 export function getExperimentRecord(id: string) {
   const row = getDrizzleDb().select().from(experiments).where(eq(experiments.id, id)).get();
   if (!row) throw new EvaluationError("Experiment not found", 404);
-  return { experiment: JSON.parse(row.data) as Experiment, token: row.job_token, completedChecks: row.completed_checks };
+  const experiment = JSON.parse(row.data) as Experiment; validateFrozenDefinitions(experiment);
+  return { experiment, token: row.job_token, completedChecks: row.completed_checks };
 }
 export function getExperiment(id: string): Experiment { return getExperimentRecord(id).experiment; }
 export function readExperimentSelection(ids: string[], consume: (experiment: Experiment) => void): void {
@@ -92,7 +101,7 @@ export function readExperimentSelection(ids: string[], consume: (experiment: Exp
     if (bound.bytes > MAX_TRIAL_ACQUISITION_BYTES) throw new EvaluationError("Selected experiment evidence exceeds 8 MiB", 413);
     for (const id of ids) {
       const row = tx.select({ data: experiments.data }).from(experiments).where(eq(experiments.id, id)).get()!;
-      consume(JSON.parse(row.data) as Experiment);
+      const experiment = JSON.parse(row.data) as Experiment; validateFrozenDefinitions(experiment); consume(experiment);
     }
   });
 }
