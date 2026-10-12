@@ -1,7 +1,8 @@
 import { normalizeOtelId } from "./ids";
 import { normalizeSpan } from "./spans/normalize";
 import type { NormalizedSpan } from "./spans/normalized";
-import { defaultIsSensitiveKey, redactUrl, scrubKnownSecrets } from "./verification/redaction";
+import { isCapturedCategoricalTag } from "./captured-tags";
+import { SEARCH_FILTER_LIMITS } from "./search-protocol";
 
 export interface ParsedSpan {
   traceId: string; spanId: string; parentSpanId?: string; name: string; spanType: string;
@@ -74,9 +75,11 @@ function getAttr(attrs: any[], key: string): string | number | boolean | undefin
 function collectAttrs(
   attrs: any[] | undefined,
   into: Record<string, string | number | boolean>,
+  unavailableTags = false,
 ): void {
   for (const a of attrs ?? []) {
     if (typeof a?.key !== "string") continue;
+    if (unavailableTags && a.key === "tags") { into.tags = "[UNAVAILABLE]"; continue; }
     const v = anyValue(a.value);
     if (v !== undefined) into[a.key] = v;
   }
@@ -84,21 +87,23 @@ function collectAttrs(
 
 // Only an explicit span tags array supplies complete membership evidence.
 // Other composites and legacy JSON strings retain their scalar representation.
-function capturedTags(attrs: any[]): string[] | "[UNAVAILABLE]" | undefined {
-  let wire: any;
-  for (const attribute of attrs) if (attribute?.key === "tags") wire = attribute.value;
-  if (!wire || Object.keys(wire).length !== 1 || !wire.arrayValue) return undefined;
-  const values = wire.arrayValue.values ?? [];
-  if (!Array.isArray(values) || values.length > 64) return undefined;
+function capturedTags(attrs: any[], droppedAttributesCount: unknown): string[] | "[UNAVAILABLE]" | undefined {
+  let wire: any, occurrences = 0;
+  for (const attribute of attrs) if (attribute?.key === "tags") { occurrences++; wire = attribute.value; }
+  if (occurrences > 1) return "[UNAVAILABLE]";
+  if (!wire || typeof wire !== "object" || !Object.hasOwn(wire, "arrayValue")) return undefined;
+  if (droppedAttributesCount !== undefined && (typeof droppedAttributesCount !== "number"
+    || !Number.isSafeInteger(droppedAttributesCount) || droppedAttributesCount !== 0)) return "[UNAVAILABLE]";
+  if (Object.keys(wire).length !== 1 || !wire.arrayValue || typeof wire.arrayValue !== "object"
+    || Array.isArray(wire.arrayValue) || Object.keys(wire.arrayValue).some(key => key !== "values")) return "[UNAVAILABLE]";
+  const values = Object.hasOwn(wire.arrayValue, "values") ? wire.arrayValue.values : [];
+  if (!Array.isArray(values) || values.length > SEARCH_FILTER_LIMITS.tags) return "[UNAVAILABLE]";
   const tags: string[] = [];
+  const seen = new Set<string>();
   for (const value of values) {
     const tag = value?.stringValue;
-    if (!value || Object.keys(value).length !== 1 || typeof tag !== "string" || !tag
-      || tag.length > 256 || Buffer.byteLength(tag) > 512 || Array.from(tag).some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) return undefined;
-    // A scrubbed member makes the complete population unknown, never absent.
-    if (["[REDACTED]", "[UNAVAILABLE]", "[TRUNCATED]", "[UNSERIALIZABLE]"].includes(tag) || scrubKnownSecrets(tag) !== tag || /rp_team_(?:session|setup|invite|ingest)_[A-Za-z0-9_-]{16,}|\b(?:Bearer|Basic)\s+[A-Za-z0-9+/_=.-]{8,}/i.test(tag)
-      || tag.replace(/\b(?:https?|wss?):\/\/[^\s<>"']+/gi, url => redactUrl(url, defaultIsSensitiveKey)) !== tag
-      || /\b(?:authorization|proxy-authorization|x-api-key|api[_-]?key|password|cookie|set-cookie)\s*[:=]/i.test(tag)) return "[UNAVAILABLE]";
+    if (!value || Object.keys(value).length !== 1 || !isCapturedCategoricalTag(tag) || seen.has(tag)) return "[UNAVAILABLE]";
+    seen.add(tag);
     tags.push(tag);
   }
   return tags;
@@ -255,6 +260,7 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
     for (const ss of rs.scopeSpans ?? []) {
       for (const s of ss.spans ?? []) {
         const attrs = s.attributes ?? [];
+        const tags = capturedTags(attrs, s.droppedAttributesCount);
         // BigInt() throws SyntaxError on anything non-numeric, so a single bad
         // timestamp from one exporter used to abort the whole batch with a 500.
         // Yield NaN instead and let the ingest validator reject that span with a
@@ -274,7 +280,7 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
         if (typeof ss.scope?.version === "string" && ss.scope.version) {
           allAttrs["otel.scope.version"] = ss.scope.version;
         }
-        collectAttrs(attrs, allAttrs);
+        collectAttrs(attrs, allAttrs, tags === "[UNAVAILABLE]");
         for (const [k, v] of Object.entries(allAttrs)) {
           if (typeof v === "string") allAttrs[k] = stripNul(v);
         }
@@ -358,7 +364,6 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
           }
         }
 
-        const tags = capturedTags(attrs);
         spans.push({
           traceId: normalizeOtelId(s.traceId, 16) ?? s.traceId,
           spanId: normalizeOtelId(s.spanId, 8) ?? s.spanId,

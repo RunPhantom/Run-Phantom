@@ -26,10 +26,10 @@ const token = /^[A-Za-z0-9+/_=.-]{8}/;
 
 export function isCapturedCategoricalTag(value: unknown): value is string {
   if (typeof value !== "string" || !value || value.length > L.valueChars || Buffer.byteLength(value) > L.valueBytes
-    || /[\x00-\x1f\x7f]/.test(value)) return false;
+    || Array.from(value).some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) return false;
   const lower = asciiLower(value);
   if (markers.some(marker => lower.includes(marker)) || secrets.some(family => family.pattern.test(family.fold ? lower : value))
-    || jwt.test(value) || /(?:https?|wss?):\/\//.test(lower) || /^[\[{\"]/.test(value.trimStart())) return false;
+    || jwt.test(value) || /(?:https?|wss?):\/\//.test(lower) || ['[', '{', '"'].includes(value.trimStart()[0])) return false;
   const compact = lower.replace(whitespacePattern, "").replace(/["']/g, "");
   if (authKeys.some(key => compact.includes(key + ":") || compact.includes(key + "="))) return false;
   const spaced = lower.replace(whitespacePattern, " ");
