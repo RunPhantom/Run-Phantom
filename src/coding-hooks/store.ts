@@ -47,6 +47,8 @@ export class CodingHookStore {
     if (!row || !isHex(row.generation, 32) || !isHex(row.source_epoch, 32)) refuse("inactive", 503); return row;
   }
   private requireOwner(): void { if (!this.ownerActive()) refuse("inactive", 503); }
+  isOwnerActive(): boolean { try { this.owner(); return true; } catch { return false; } }
+  currentOwnerGeneration(): string { return this.owner().generation; }
   private installation(id: string): InstallationRow | null {
     if (!isHex(id, 32)) refuse("malformed", 400);
     return this.db.query("SELECT id,generation,capture_mode,state,source_root_key,token_sha256,config_sha256,CASE WHEN length(CAST(data AS BLOB))<=16384 THEN data END data FROM coding_hook_installations WHERE id=?").get(id) as InstallationRow | null;

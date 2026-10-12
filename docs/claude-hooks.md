@@ -9,7 +9,7 @@ An installed settings entry alone does not establish captured evidence.
 The callback command is:
 
 ```text
-runphantom hooks handle claude --installation-id <32 lowercase hexadecimal characters>
+runphantom hooks handle claude --installation-id <32 lowercase hexadecimal characters> --capability-file <canonical absolute private file>
 ```
 
 Settings use a direct absolute executable plus an argument vector, a three-second
@@ -17,6 +17,27 @@ vendor timeout and `onFailure: "continue"`. The callback exits zero with empty
 stdout and stderr. It does not start a daemon or provider, inspect credentials or
 choose a database. Extra arguments are refused before stdin acquisition. While
 authority is inactive, even a valid callback publishes no evidence.
+
+The installed capability path is supplied by trusted management and remains one
+argument, including spaces or shell metacharacters. It carries no credential in
+settings or argv. There is no ambient profile lookup or fallback to another
+workspace's file. The separate private descriptor component requires an owned
+0600 regular file in an owned 0700 parent, nonsymlink canonical ancestors,
+O_NOFOLLOW and exact descriptor/current-path checks. Acquisition has a 250 ms
+deadline and a 16 KiB byte cap. Its closed descriptor binds the exact filename,
+installation ID, actual owner identity, current token and generations, and a
+trusted fixed numeric-loopback origin. A disabled descriptor has null token,
+generations and origin. File configuration alone grants no capture; the actual
+server must authenticate current policy and generations. The inactive callback
+does not read this descriptor or initiate transport yet.
+
+Management without a trusted transport or active owner installs inert settings
+and reports disabled policy, inactive coverage and zero active registrations.
+It creates no fake owner generation. Trusted known-binding doctor and uninstall
+can inspect/remove this inert configuration without promoting policy. Current
+owner restart refreshes the descriptor generation while preserving an identical
+catalog and installation token. Default and custom profiles use distinct private
+paths; a copied descriptor or same-ID vector for another owner is refused.
 
 The callback acquires at most 256 KiB of actual stdin bytes and requires EOF within
 250 ms. Its overall deadline is 1.5 seconds. Invalid UTF-8, malformed JSON,

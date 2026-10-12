@@ -8,6 +8,9 @@ import { CodingHookStore, type InstallationBinding } from "../src/coding-hooks/s
 import { acquireRegisteredClaudeTranscript, ClaudeHookManagement, installationIdForSettings, readClaudeCapability } from "../src/coding-hooks/management";
 import { hookFixture } from "./fixtures/coding-hooks-claude";
 import { parseClaudeHookInput } from "../src/coding-hooks/shared";
+import { capabilityOwnerKey, readClaudeCapabilityDescriptor } from "../src/coding-hooks/capability";
+import { Database } from "bun:sqlite";
+import { startCodingHookOwner } from "../src/coding-hooks/owner";
 
 // The exact SQL component fixture supplies a trusted test-only owner guard; product startup uses the kernel lease.
 let directory: string, prior: string | undefined, store: CodingHookStore, manager: ClaudeHookManagement, binding: InstallationBinding, capability: string;
@@ -15,7 +18,7 @@ beforeEach(() => {
   closeDb(); prior = process.env.RUNPHANTOM_DB_PATH; directory = realpathSync(mkdtempSync(path.join(tmpdir(), "runphantom-f11-management-")));
   for (const relative of ["workspace/.claude", "projects/project", "projects/other", "home"]) mkdirSync(path.join(directory, relative), { recursive: true });
   process.env.RUNPHANTOM_DB_PATH = path.join(directory, "owner.sqlite"); const db = getDrizzleDb().$client;
-  db.exec(readFileSync(path.join(import.meta.dir, "fixtures/coding-hooks-bootstrap.sql"), "utf8")); store = new CodingHookStore(db, {}, () => true); store.beginOwner(); manager = new ClaudeHookManagement(store);
+  db.exec(readFileSync(path.join(import.meta.dir, "fixtures/coding-hooks-bootstrap.sql"), "utf8")); store = new CodingHookStore(db, {}, () => true); store.beginOwner(); manager = new ClaudeHookManagement(store, "http://127.0.0.1:5947");
   const workspace = path.join(directory, "workspace"), settingsPath = path.join(workspace, ".claude/settings.local.json");
   binding = { installationId: installationIdForSettings("local", settingsPath), scope: "local", captureMode: "metadata", workspace, registeredWorkspace: workspace, transcriptRoot: path.join(directory, "projects"), projectDirectory: path.join(directory, "projects/project"), homeDirectory: path.join(directory, "home"), settingsPath, executable: process.execPath };
   capability = path.join(directory, "coding-hooks/claude", binding.installationId + ".json");
@@ -73,4 +76,49 @@ test("an owner rotation across actual capability/settings awaits cannot activate
 test("doctor distinguishes installed settings from an unavailable private capability", async () => {
   await manager.install(binding); expect((await manager.doctor(binding.installationId)).capability).toBe("available"); rmSync(capability);
   const status = await manager.doctor(binding.installationId); expect(status.configuration).toBe("installed"); expect(status.capability).toBe("unavailable"); expect(status.transport).toBe("unavailable"); expect(status.captureVerified).toBe(false);
+});
+test("inactive installation creates only inert configuration and a disabled private descriptor without fake owner generations", async () => {
+  store.db.exec("DELETE FROM coding_hook_owner"); const inactive = new ClaudeHookManagement(new CodingHookStore(store.db));
+  const before = JSON.stringify(store.db.query("SELECT * FROM coding_hook_owner").all()), result = await inactive.install({ ...binding, captureMode: "full" }, { fullConsent: true });
+  expect(result.policy).toBe("disabled"); expect(result.captureMode).toBe("metadata"); expect(result.transport).toBe("unavailable"); expect(result.captureVerified).toBe(false);
+  expect(JSON.stringify(store.db.query("SELECT * FROM coding_hook_owner").all())).toBe(before); expect(store.db.query("SELECT * FROM coding_hook_installations").all()).toEqual([]);
+  const descriptor = await readClaudeCapabilityDescriptor(capability, binding.installationId, capabilityOwnerKey(realpathSync(store.db.filename)));
+  expect(descriptor.state).toBe("disabled"); expect(descriptor.token).toBeNull(); expect(descriptor.ownerGeneration).toBeNull(); expect(descriptor.installationGeneration).toBeNull(); expect(descriptor.origin).toBeNull();
+  expect(readFileSync(binding.settingsPath, "utf8")).toContain(capability); expect(() => new CodingHookStore(store.db).beginOwner()).toThrow("inactive");
+  expect(result.captureCoverage).toBe("inactive"); expect(result.registrationCount).toBe(0);
+  const configuredOrigin = new ClaudeHookManagement(new CodingHookStore(store.db), "http://127.0.0.1:5947"); expect((await configuredOrigin.install({ ...binding, captureMode: "full" }, { fullConsent: true })).policy).toBe("disabled");
+  expect(JSON.stringify(store.db.query("SELECT * FROM coding_hook_owner").all())).toBe(before);
+  const diagnostic = await inactive.doctor(binding.installationId, binding); expect(diagnostic.configuration).toBe("installed"); expect(diagnostic.capturePolicy).toBe("inactive"); expect(diagnostic.owner).toBe("inactive"); expect(diagnostic.captureVerified).toBe(false);
+  expect((await inactive.uninstall(binding.installationId, binding)).status).toBe("removed"); expect(existsSync(capability)).toBe(false); expect(readFileSync(binding.settingsPath, "utf8")).not.toContain(binding.installationId);
+  expect(JSON.stringify(store.db.query("SELECT * FROM coding_hook_owner").all())).toBe(before);
+});
+test("real lifetime lease release across filesystem awaits fences the final management commit", async () => {
+  const owner = await startCodingHookOwner(store.db), management = new ClaudeHookManagement(owner.store, "http://127.0.0.1:5947"), prepare = owner.store.prepareInstallation.bind(owner.store);
+  let closing: Promise<void> | undefined;
+  owner.store.prepareInstallation = (...args) => { const receipt = prepare(...args); closing = owner.close(); return receipt; };
+  try {
+    await rejects(management.install({ ...binding, captureMode: "full" }, { fullConsent: true })); await closing;
+    expect(owner.lease.isActive()).toBe(false); expect(owner.store.readInstallation(binding.installationId)!.row.state).toBe("disabled");
+    const diagnostic = await management.doctor(binding.installationId); expect(diagnostic.owner).toBe("inactive"); expect(diagnostic.capturePolicy).toBe("inactive"); expect(diagnostic.capability).toBe("unavailable"); expect(diagnostic.captureVerified).toBe(false);
+  } finally { await owner.close(); }
+});
+test("a changed actual owner generation refreshes only the private descriptor and preserves identical catalog/token", async () => {
+  await manager.install(binding); const before = await token(), prior = await readClaudeCapabilityDescriptor(capability, binding.installationId); store.rotateOwner();
+  const repeated = await manager.install(binding), current = await readClaudeCapabilityDescriptor(capability, binding.installationId);
+  expect(repeated.unchanged).toBe(true); expect(current.ownerGeneration).not.toBe(prior.ownerGeneration); expect(current.ownerGeneration).toBe(store.currentOwnerGeneration());
+  expect(current.installationGeneration).toBe(prior.installationGeneration); expect(await token()).toBe(before);
+});
+test("distinct actual profiles cannot borrow duplicate-ID settings or a copied private capability", async () => {
+  const custom = path.join(directory, "custom profile"); mkdirSync(custom, { mode: 0o700 }); const customDb = path.join(custom, "owner.sqlite");
+  // SQLite makes an actual consistent file snapshot including WAL content; this remains test-only bootstrap.
+  store.db.query("VACUUM INTO ?").run(customDb); const db = new Database(customDb);
+  try {
+    const otherStore = new CodingHookStore(db, {}, () => true); otherStore.beginOwner(); const otherManager = new ClaudeHookManagement(otherStore, "http://127.0.0.1:5949");
+    await manager.install(binding); const currentToken = await token(), text = readFileSync(binding.settingsPath, "utf8");
+    await rejects(otherManager.install({ ...binding, executable: "/private/other executable" })); expect(readFileSync(binding.settingsPath, "utf8")).toBe(text); expect(otherStore.readInstallation(binding.installationId)).toBeNull(); expect(admit(currentToken, identity).captureMode).toBe("metadata");
+    const otherCapability = path.join(custom, "coding-hooks/claude", binding.installationId + ".json"); expect(otherCapability).not.toBe(capability); expect(existsSync(otherCapability)).toBe(false);
+    mkdirSync(path.dirname(otherCapability), { recursive: true, mode: 0o700 }); writeFileSync(otherCapability, readFileSync(capability), { mode: 0o600 });
+    await rejects(readClaudeCapabilityDescriptor(otherCapability, binding.installationId, capabilityOwnerKey(realpathSync(customDb))));
+    expect(() => otherStore.authenticate(currentToken)).toThrow("unauthorized");
+  } finally { db.close(); }
 });

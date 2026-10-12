@@ -1,4 +1,5 @@
 import type { Readable } from "node:stream";
+import path from "node:path";
 import { HOOK_LIMITS, parseClaudeHookInput } from "./shared";
 
 export const CALLBACK_LIMITS = Object.freeze({ stdinEOFMs: 250, lifetimeMs: 1500 });
@@ -45,7 +46,8 @@ export function readClaudeHookStdin(input: Readable, signal: AbortSignal): Promi
 
 /** No owner authority is active yet. Never infer consent from settings, stdin or ambient URLs. */
 export async function runClaudeHookCallback(args: string[], input: Readable = process.stdin): Promise<0> {
-  if (args.length !== 2 || args[0] !== "--installation-id" || !/^[a-f0-9]{32}$/.test(args[1])) return 0;
+  if (args.length !== 4 || args[0] !== "--installation-id" || typeof args[1] !== "string" || !/^[a-f0-9]{32}$/.test(args[1]) || args[2] !== "--capability-file" || typeof args[3] !== "string"
+    || !path.isAbsolute(args[3]) || path.normalize(args[3]) !== args[3] || args[3].includes("\0") || Buffer.byteLength(args[3]) > 4096) return 0;
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), CALLBACK_LIMITS.lifetimeMs);
   try {
     const acquired = await readClaudeHookStdin(input, controller.signal);

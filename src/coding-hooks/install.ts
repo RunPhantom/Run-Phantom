@@ -8,7 +8,7 @@ import { CLAUDE_HOOK_EVENTS, type HookJson } from "./shared";
 
 export const SETTINGS_LIMITS = Object.freeze({ bytes: 1048576, depth: 32, nodes: 20000, handlers: 256 });
 /** Only trusted local management supplies these values. No capture policy or credential enters settings. */
-export interface HookInstallAuthority { executable: string; installationId: string; }
+export interface HookInstallAuthority { executable: string; installationId: string; capabilityFile: string; }
 export type SettingsFailure = "invalid_authority" | "invalid_json" | "duplicate_keys" | "unsafe_key" | "byte_limit" | "depth_limit" | "node_limit" | "invalid_fields" | "handler_limit" | "ownership_uncertain" | "path_not_authorized" | "not_regular_file" | "locked" | "settings_changed" | "settings_unavailable";
 export type SettingsResult = { status: "accepted"; text: string | null; changed: boolean; ownedHandlers: number; reason?: never } | { status: "unavailable"; reason: SettingsFailure; changed?: never; text?: never };
 type JsonObject = { [key: string]: HookJson };
@@ -16,11 +16,12 @@ class SettingsRefusal extends Error { constructor(readonly reason: SettingsFailu
 function fail(reason: SettingsFailure): never { throw new SettingsRefusal(reason); }
 function record(value: HookJson | undefined): value is JsonObject { return !!value && typeof value === "object" && !Array.isArray(value); }
 function validateAuthority(authority: HookInstallAuthority): HookInstallAuthority {
-  const executable = Object.getOwnPropertyDescriptor(authority, "executable"), id = Object.getOwnPropertyDescriptor(authority, "installationId");
+  const executable = Object.getOwnPropertyDescriptor(authority, "executable"), id = Object.getOwnPropertyDescriptor(authority, "installationId"), file = Object.getOwnPropertyDescriptor(authority, "capabilityFile");
   if (!executable || !("value" in executable) || typeof executable.value !== "string" || !path.isAbsolute(executable.value)
     || executable.value.includes("\0") || Buffer.byteLength(executable.value, "utf8") > 4096
-    || !id || !("value" in id) || typeof id.value !== "string" || !/^[a-f0-9]{32}$/.test(id.value)) fail("invalid_authority");
-  return { executable: executable.value, installationId: id.value };
+    || !id || !("value" in id) || typeof id.value !== "string" || !/^[a-f0-9]{32}$/.test(id.value)
+    || !file || !("value" in file) || typeof file.value !== "string" || !path.isAbsolute(file.value) || path.normalize(file.value) !== file.value || file.value.includes("\0") || Buffer.byteLength(file.value) > 4096) fail("invalid_authority");
+  return { executable: executable.value, installationId: id.value, capabilityFile: file.value };
 }
 
 function decodeSettings(text: unknown): JsonObject {
@@ -55,10 +56,10 @@ function decodeSettings(text: unknown): JsonObject {
 }
 
 function handler(authority: HookInstallAuthority): JsonObject {
-  return { type: "command", command: authority.executable, args: ["hooks", "handle", "claude", "--installation-id", authority.installationId], timeout: 3, onFailure: "continue" };
+  return { type: "command", command: authority.executable, args: ["hooks", "handle", "claude", "--installation-id", authority.installationId, "--capability-file", authority.capabilityFile], timeout: 3, onFailure: "continue" };
 }
 function candidate(value: JsonObject, authority: HookInstallAuthority): boolean {
-  return value.command === authority.executable && Array.isArray(value.args) && value.args[0] === "hooks"
+  return typeof value.command === "string" && Array.isArray(value.args) && value.args[0] === "hooks"
     && value.args[1] === "handle" && value.args[2] === "claude" && value.args.includes(authority.installationId);
 }
 function exactHandler(value: JsonObject, authority: HookInstallAuthority): boolean {

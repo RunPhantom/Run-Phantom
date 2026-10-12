@@ -5,7 +5,7 @@ import path from "node:path";
 import { CLAUDE_HOOK_EVENTS } from "../src/coding-hooks/shared";
 import { inspectClaudeHookSettings, mergeClaudeSettings, updateClaudeSettings, SETTINGS_LIMITS } from "../src/coding-hooks/install";
 
-const authority = { executable: '/private/Run Phantom $fixture` /runphantom "copy"', installationId: "a".repeat(32) };
+const authority = { executable: '/private/Run Phantom $fixture` /runphantom "copy"', installationId: "a".repeat(32), capabilityFile: "/private/custom profile/coding-hooks/claude/" + "a".repeat(32) + ".json" };
 const original = { permissions: { allow: ["Read"], custom: { enabled: true } }, future: ["preserved", { value: 2 }], hooks: {
   PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "ordinary existing command", timeout: 20 }] }],
   FutureEvent: [{ matcher: "future", hooks: [{ type: "http", url: "https://fixture.invalid/hook" }] }],
@@ -20,7 +20,7 @@ describe("exact owned Claude hook configuration", () => {
     const settings = JSON.parse(result.text);
     for (const event of CLAUDE_HOOK_EVENTS) {
       const group = settings.hooks[event].at(-1);
-      expect(group).toEqual({ matcher: "*", hooks: [{ type: "command", command: authority.executable, args: ["hooks", "handle", "claude", "--installation-id", authority.installationId], timeout: 3, onFailure: "continue" }] });
+      expect(group).toEqual({ matcher: "*", hooks: [{ type: "command", command: authority.executable, args: ["hooks", "handle", "claude", "--installation-id", authority.installationId, "--capability-file", authority.capabilityFile], timeout: 3, onFailure: "continue" }] });
     }
     expect(settings.permissions).toEqual(original.permissions);
     expect(settings.future).toEqual(original.future);
@@ -47,7 +47,7 @@ describe("exact owned Claude hook configuration", () => {
   test("a second installation's exact handlers remain outside this authority", () => {
     const first = merged(original);
     if (first.status !== "accepted") throw new Error("fixture not admitted");
-    const other = { ...authority, installationId: "b".repeat(32) };
+    const other = { ...authority, installationId: "b".repeat(32), capabilityFile: "/private/other profile/" + "b".repeat(32) + ".json" };
     const second = mergeClaudeSettings(first.text, "install", other);
     if (second.status !== "accepted") throw new Error("fixture not admitted");
     const removed = mergeClaudeSettings(second.text, "uninstall", authority);
@@ -79,7 +79,7 @@ describe("exact owned Claude hook configuration", () => {
     if (removed.status === "accepted") expect(JSON.parse(removed.text)).toEqual(fixture);
   });
 
-  test.each(["timeout", "matcher", "group_metadata", "args", "handler_metadata"])("edited %s ownership refuses without silently removing or duplicating entries", edit => {
+  test.each(["timeout", "matcher", "group_metadata", "args", "handler_metadata", "capability_file", "command"])("edited %s ownership refuses without silently removing or duplicating entries", edit => {
     const first = merged({});
     if (first.status !== "accepted") throw new Error("fixture not admitted");
     const settings = JSON.parse(first.text), group = settings.hooks.Stop[0];
@@ -87,6 +87,8 @@ describe("exact owned Claude hook configuration", () => {
     if (edit === "matcher") group.matcher = "edited";
     if (edit === "group_metadata") group.future = "edited";
     if (edit === "args") group.hooks[0].args.push("--edited");
+    if (edit === "capability_file") group.hooks[0].args[6] = "/private/other-owner.json";
+    if (edit === "command") group.hooks[0].command = "/private/other executable";
     if (edit === "handler_metadata") group.hooks[0].future = "edited";
     for (const operation of ["install", "uninstall"] as const) expect(merged(settings, operation)).toEqual({ status: "unavailable", reason: "ownership_uncertain" });
   });

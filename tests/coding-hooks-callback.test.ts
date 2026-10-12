@@ -16,7 +16,7 @@ afterEach(() => rmSync(directory, { recursive: true, force: true }));
 
 async function native(payload: string | Uint8Array | null, extra: string[] = [], executable?: string, env: NodeJS.ProcessEnv = {}) {
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("RUNPHANTOM_") && !/(?:KEY|TOKEN|SECRET|PASSWORD|AUTH)/i.test(key)));
-  const args = ["hooks", "handle", "claude", "--installation-id", installationId, ...extra];
+  const args = ["hooks", "handle", "claude", "--installation-id", installationId, "--capability-file", path.join(profile, "private capability ' $ ` .json"), ...extra];
   const started = performance.now();
   const child = spawn(executable ?? process.execPath, executable ? args : ["--no-env-file", path.join(checkout, "src/index.ts"), ...args], {
     cwd: directory, env: { ...inherited, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", DO_NOT_TRACK: "1", HOME: profile, USERPROFILE: profile, CLAUDE_CONFIG_DIR: path.join(profile, ".claude"), RUNPHANTOM_DB_PATH: path.join(profile, "forbidden.sqlite"), RUNPHANTOM_SECRET_STORE_PATH: path.join(profile, "forbidden-secrets.json"), ...env }, stdio: "pipe",
