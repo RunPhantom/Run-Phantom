@@ -3,6 +3,7 @@ import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { evidenceWorkerLaunchEnv } from "../src/evaluations/evidence-worker-environment";
 import { DEFAULT_READER_LIMITS } from "../src/evaluations/evidence-reader/limits";
 import { readBoundedStream } from "../src/evaluations/evidence-worker";
 
@@ -16,8 +17,7 @@ test("native standalone worker binary parses outside the checkout without a Bun 
     expect({ exit, output: new TextDecoder().decode(output), errors: new TextDecoder().decode(errors) }).toMatchObject({ exit: 0 });
     const cwd = join(directory, "empty-state"); await mkdir(cwd);
     for (const xml of ['<testsuite><testcase name="one"/></testsuite>', '<testsuite><testcase></testsuite>']) {
-      const env: Record<string, string> = { LANG: "C.UTF-8", TZ: "UTC" };
-      if (process.platform === "win32" && process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
+      const env = evidenceWorkerLaunchEnv();
       const child = Bun.spawn([executable], { cwd, env, stdin: "pipe", stdout: "pipe", stderr: "ignore" });
       await child.stdin.write(JSON.stringify({ version: 1, id: "installed", sourceId: "one", dialect: "junit-xml/v1", limits: DEFAULT_READER_LIMITS, bytes: Buffer.from(xml).toString("base64") }));
       await child.stdin.end();

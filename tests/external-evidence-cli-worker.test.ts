@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { evidenceWorkerLaunchEnv } from "../src/evaluations/evidence-worker-environment";
 import { DEFAULT_READER_LIMITS } from "../src/evaluations/evidence-reader/limits";
 import { EvidenceSupervisor } from "../src/evaluations/evidence-supervisor";
 import { EVIDENCE_WORKER_ENTRY, readBoundedStream } from "../src/evaluations/evidence-worker";
@@ -11,11 +12,7 @@ const entry = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 const xml = '<testsuite><testcase name="one"/></testsuite>';
 const input = (bytes: string) => JSON.stringify({ version: 1, id: "installed", sourceId: "one", dialect: "junit-xml/v1",
   limits: DEFAULT_READER_LIMITS, bytes: Buffer.from(bytes).toString("base64") });
-function minimalEnv(): Record<string, string> {
-  const env: Record<string, string> = { LANG: "C.UTF-8", TZ: "UTC" };
-  if (process.platform === "win32" && process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
-  return env;
-}
+const minimalEnv = evidenceWorkerLaunchEnv;
 async function expectNoAuthorityState(cwd: string, profile: string) {
   expect(await readdir(cwd)).toEqual([]);
   const files = await readdir(profile, { recursive: true });

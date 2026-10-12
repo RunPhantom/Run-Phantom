@@ -1,12 +1,20 @@
-import { EVIDENCE_LIMITS, type NormalizedEvidenceSource } from "./evidence-protocol";
-import { evidenceText } from "./evidence-validation";
-import { parseExternalEvidence } from "./external-evidence";
-import { strictEvidenceJson } from "./evidence-reader/json";
-import { readerLimits, type ReaderLimits } from "./evidence-reader/limits";
+import { EVIDENCE_WORKER_FAILURE, finishEvidenceWorkerEnvironment, prepareEvidenceWorkerEnvironment } from "./evidence-worker-environment";
+import type { NormalizedEvidenceSource } from "./evidence-protocol";
+import type { ReaderLimits } from "./evidence-reader/limits";
+
+// Stay below Bun's 4 KiB cache threshold for early refusal.
+if (import.meta.main && !prepareEvidenceWorkerEnvironment()) {
+  await Bun.write(Bun.stdout, EVIDENCE_WORKER_FAILURE);
+  process.exit(1);
+}
+const [{ EVIDENCE_LIMITS: L }, { evidenceText }, { parseExternalEvidence }, { strictEvidenceJson }, { readerLimits }] = await Promise.all([
+  import("./evidence-protocol"), import("./evidence-validation"), import("./external-evidence"),
+  import("./evidence-reader/json"), import("./evidence-reader/limits"),
+]);
 
 export const EVIDENCE_WORKER_ENTRY = "__runphantom_evidence_worker_v1";
-export const EVIDENCE_WORKER_INPUT_BYTES = Math.ceil(EVIDENCE_LIMITS.MAX_SOURCE_BYTES / 3) * 4 + 4096;
-export const EVIDENCE_WORKER_OUTPUT_BYTES = EVIDENCE_LIMITS.MAX_NORMALIZED_BYTES + 4096;
+export const EVIDENCE_WORKER_INPUT_BYTES = Math.ceil(L.MAX_SOURCE_BYTES / 3) * 4 + 4096;
+export const EVIDENCE_WORKER_OUTPUT_BYTES = L.MAX_NORMALIZED_BYTES + 4096;
 export interface EvidenceWorkerRequest { version: 1; id: string; sourceId: string; dialect: string; limits: ReaderLimits; bytes: string }
 export type EvidenceWorkerResponse = { version: 1; id: string; normalized: NormalizedEvidenceSource } |
   { version: 1; id: null; error: "protocol_invalid" };
@@ -37,10 +45,9 @@ function decodeRequest(input: Uint8Array): EvidenceWorkerRequest {
   return { version: 1, id, sourceId, dialect, limits, bytes: request.bytes };
 }
 
-/** Register this function in the installed executable's closed internal entrypoint. */
 export async function runEvidenceWorker(): Promise<number> {
   try {
-    if (Object.keys(process.env).some(key => !["LANG", "TZ", "SYSTEMROOT"].includes(key.toUpperCase()))) throw new Error("protocol_invalid");
+    if (!prepareEvidenceWorkerEnvironment() || !finishEvidenceWorkerEnvironment()) throw new Error("protocol_invalid");
     const request = decodeRequest(await readBoundedStream(Bun.stdin.stream(), EVIDENCE_WORKER_INPUT_BYTES));
     const bytes = Buffer.from(request.bytes, "base64");
     if (bytes.byteLength > request.limits.maxSourceBytes || bytes.toString("base64") !== request.bytes) throw new Error("protocol_invalid");
@@ -50,7 +57,7 @@ export async function runEvidenceWorker(): Promise<number> {
     await Bun.write(Bun.stdout, output);
     return 0;
   } catch {
-    await Bun.write(Bun.stdout, JSON.stringify({ version: 1, id: null, error: "protocol_invalid" } satisfies EvidenceWorkerResponse));
+    await Bun.write(Bun.stdout, EVIDENCE_WORKER_FAILURE);
     return 1;
   }
 }

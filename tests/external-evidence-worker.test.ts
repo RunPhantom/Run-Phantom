@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
+import { evidenceWorkerLaunchEnv } from "../src/evaluations/evidence-worker-environment";
 import { DEFAULT_READER_LIMITS } from "../src/evaluations/evidence-reader/limits";
 import { readBoundedStream } from "../src/evaluations/evidence-worker";
 
 const entry = fileURLToPath(new URL("../src/evaluations/evidence-worker.ts", import.meta.url));
-async function worker(request: unknown, env: Record<string, string> = { LANG: "C.UTF-8" }) {
+async function worker(request: unknown, env: Record<string, string> = evidenceWorkerLaunchEnv()) {
   const child = Bun.spawn([process.execPath, "--no-env-file", "--no-install", entry], { env, stdin: "pipe", stdout: "pipe", stderr: "ignore" });
   await child.stdin.write(JSON.stringify(request));
   await child.stdin.end();
@@ -41,7 +42,7 @@ test("stream output is bounded before concatenating an excessive message", async
   expect(await readBoundedStream(stream, 1024).catch(error => error.message)).toBe("worker_stream_limit");
 });
 test("actual process rejects inherited ambient credentials without exposing values", async () => {
-  const result = await worker(request, { LANG: "C.UTF-8", PHANTOM_SYNTHETIC_SECRET: "never-expose-this-fixture-value" });
+  const result = await worker(request, { ...evidenceWorkerLaunchEnv(), PHANTOM_SYNTHETIC_SECRET: "never-expose-this-fixture-value" });
   expect(result.exit).toBe(1);
   expect(result.output).toEqual({ version: 1, id: null, error: "protocol_invalid" });
 });
