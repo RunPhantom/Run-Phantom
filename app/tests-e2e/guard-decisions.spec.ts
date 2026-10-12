@@ -34,7 +34,10 @@ for (const width of [320, 390, 768, 1024, 1440, 1920]) test(`advisory guard obse
   await expect(error.getByText("Producer error reported", { exact: true }).first()).toBeVisible();
   await expect(error.getByText("Reported allow", { exact: true })).toBeVisible();
   await expect(page.getByText("Run failed", { exact: true })).toHaveCount(0);
-  await region.scrollIntoViewIfNeeded();
+  await error.locator("summary").click();
+  const heading = region.getByRole("heading", { name: "Captured guard decisions" });
+  await heading.scrollIntoViewIfNeeded(); await expect(heading).toBeInViewport({ ratio: 1 });
+  await expect(region.getByText(/Captured producer actions are advisory/)).toBeInViewport({ ratio: 1 });
   const geometry = await region.evaluate(element => { const rectangle = element.getBoundingClientRect(); return {
     viewport: innerWidth, left: rectangle.left, right: rectangle.right, width: rectangle.width,
     contentWidth: element.scrollWidth, clientWidth: element.clientWidth, documentWidth: document.documentElement.scrollWidth,

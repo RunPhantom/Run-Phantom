@@ -98,9 +98,10 @@ function redactUrl(raw, isSensitive = isSensitiveKey) {
   const queryOut = queryStart === -1 ? "" : `?${newQuery}`;
   return `${segments.join("/")}${queryOut}${newHash}`;
 }
-var KNOWN_SECRET = /eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,}|sk-(?:ant|proj|svcacct|admin)-[A-Za-z0-9_-]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[A-Za-z0-9-]{10,}|ya29\.[A-Za-z0-9._-]{20,}/g;
+var KNOWN_SECRET = /eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,}|sk-(?:ant|proj|svcacct|admin)-[A-Za-z0-9_-]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[A-Za-z0-9-]{10,}|ya29\.[A-Za-z0-9._-]{20,}|\bnpm_[A-Za-z0-9_-]{30,}|\bhf_[A-Za-z0-9_-]{20,}/g;
+var PRIVATE_KEY_BLOCK = /-----BEGIN ((?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY)-----[\s\S]*?(?:-----END \1-----|$)/g;
 function scrubKnownSecrets(text) {
-  return text.replace(KNOWN_SECRET, REDACTED_VALUE);
+  return text.replace(PRIVATE_KEY_BLOCK, REDACTED_VALUE).replace(KNOWN_SECRET, REDACTED_VALUE);
 }
 
 // src/verification/serialization.ts
@@ -158,13 +159,13 @@ function sanitize(value, state, depth, key) {
     return value;
   if (typeof value === "string") {
     const scrubbed = scrubInput(value, state);
-    const scanned = scrubbed.slice(0, TRANSPORT_LIMITS.MAX_STRING_LENGTH * 4);
-    if (scanned.length !== scrubbed.length)
-      state.truncatedValues += 1;
-    const redacted = redactText(scanned);
+    const redacted = redactText(scrubbed);
     if (redacted !== value)
       state.redacted = true;
-    return boundedString(redacted, state, key?.toLowerCase() === "error" ? TRANSPORT_LIMITS.MAX_ERROR_LENGTH : TRANSPORT_LIMITS.MAX_STRING_LENGTH);
+    const scanned = redacted.slice(0, TRANSPORT_LIMITS.MAX_STRING_LENGTH * 4);
+    if (scanned.length !== redacted.length)
+      state.truncatedValues += 1;
+    return boundedString(scanned, state, key?.toLowerCase() === "error" ? TRANSPORT_LIMITS.MAX_ERROR_LENGTH : TRANSPORT_LIMITS.MAX_STRING_LENGTH);
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value))
@@ -210,7 +211,7 @@ function sanitize(value, state, depth, key) {
         n += 1;
         continue;
       }
-      const redactedKey = redactText(scrubInput(originalKey, state).slice(0, 4096));
+      const redactedKey = redactText(scrubInput(originalKey, state)).slice(0, 4096);
       if (redactedKey !== originalKey)
         state.redacted = true;
       const sk = boundedString(redactedKey, state, MAX_KEY_LENGTH);
@@ -330,7 +331,7 @@ function sanitize(value, state, depth, key) {
         state.droppedItems += 1;
         continue;
       }
-      const redactedKey = redactText(scrubInput(entry.key, state).slice(0, 4096));
+      const redactedKey = redactText(scrubInput(entry.key, state)).slice(0, 4096);
       if (redactedKey !== entry.key)
         state.redacted = true;
       const safeKey = boundedString(redactedKey, state, MAX_KEY_LENGTH);
@@ -389,8 +390,8 @@ function sanitizeWithReport(value, options = {}) {
     }
   };
 }
-function redactText(text) {
-  return scrubKnownSecrets(text).replace(/\bauthorization["']?\s*[:=]\s*["']?(?:bearer|basic)\s+[^\s"'&,;}]+/gi, `authorization: ${REDACTED_VALUE}`).replace(/\b(Bearer|Basic)\s+(?=[A-Za-z0-9._~+/=-]{16,})(?=[A-Za-z0-9._~+/=-]*[\d._~+/=-])[A-Za-z0-9._~+/=-]+/gi, (_match, scheme) => `${scheme} ${REDACTED_VALUE}`).replace(/https?:\/\/[^\s<>"']+/gi, (url) => redactUrl(url)).replace(/(^|[\s?&#,;{"'])([A-Za-z][A-Za-z0-9_.-]{0,127})(\s*[=:]\s*["']?)([^&\s,;"'}]+)/g, (match, prefix, key, separator) => isSensitiveKey(key) ? `${prefix}${key}${separator}${REDACTED_VALUE}` : match);
+function redactText(text, isSensitive = isSensitiveKey) {
+  return scrubKnownSecrets(text).replace(/\bauthorization["']?\s*[:=]\s*["']?(?:bearer|basic)\s+[^\s"'&,;}]+/gi, `authorization: ${REDACTED_VALUE}`).replace(/\b(Bearer|Basic)\s+(?=[A-Za-z0-9._~+/=-]{16,})(?=[A-Za-z0-9._~+/=-]*[\d._~+/=-])[A-Za-z0-9._~+/=-]+/gi, (_match, scheme) => `${scheme} ${REDACTED_VALUE}`).replace(/https?:\/\/[^\s<>"']+/gi, (url) => redactUrl(url, isSensitive)).replace(/(^|[\s?&#,;{"'])([A-Za-z][A-Za-z0-9_.-]{0,127})(\s*[=:]\s*["']?)([^&\s,;"'}]+)/g, (match, prefix, key, separator) => isSensitive(key) ? `${prefix}${key}${separator}${REDACTED_VALUE}` : match);
 }
 
 // src/verification/validation.ts
