@@ -289,8 +289,13 @@ test("user opts in, diagnoses the actual failed response, replays a healthy cont
       await live.scrollIntoViewIfNeeded();
       await expect(live.getByRole("heading", { name: "Response evidence", exact: true })).toBeVisible();
       const metrics = await page.evaluate(() => ({ viewport: innerWidth, scroll: document.documentElement.scrollWidth,
-        accent: getComputedStyle(document.documentElement).getPropertyValue("--rp-accent").trim(), canvas: getComputedStyle(document.documentElement).getPropertyValue("--rp-canvas").trim() }));
+        accent: getComputedStyle(document.documentElement).getPropertyValue("--rp-accent").trim(), canvas: getComputedStyle(document.documentElement).getPropertyValue("--rp-canvas").trim(),
+        headingFont: getComputedStyle(document.querySelector("h1")!).fontFamily, bodyFont: getComputedStyle(document.body).fontFamily }));
       expect(metrics.scroll).toBeLessThanOrEqual(width);
+      expect(metrics.accent.toLowerCase()).toBe("#0021cc");
+      expect(metrics.canvas.toLowerCase()).toBe("#f9fafc");
+      expect(metrics.headingFont).toContain("Syne");
+      expect(metrics.bodyFont).toContain("Inter");
       inspections.push({ width, ...metrics });
       await page.screenshot({ path: path.join(directory, `response-${width}.png`), fullPage: false });
     }
