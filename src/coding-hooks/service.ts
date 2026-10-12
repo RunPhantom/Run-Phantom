@@ -25,13 +25,13 @@ function acquireBody(request: IncomingMessage, signal: AbortSignal): Promise<str
   });
 }
 
-/** Unregistered controller. Root must compose existing local guards and pre-JSON routes before activation. */
+/** Raw controller behind existing local guards, before general body parsing. */
 export class CodingHookController {
   private closed = false;
   private active = new Set<Work>();
   private queued: Work[] = [];
   private pending = new Set<Promise<void>>();
-  constructor(readonly store: CodingHookStore) {}
+  constructor(readonly store: CodingHookStore, private readonly published: (runId: string) => void = () => {}) {}
   stats() { return { active: this.active.size, queued: this.queued.length, closed: this.closed }; }
   private respond(request: IncomingMessage, response: ServerResponse, status: number, value: unknown): void {
     if (response.destroyed || response.writableEnded) return;
@@ -73,6 +73,7 @@ export class CodingHookController {
             } else {
               const publication = parseHookPublication(raw);
               const result = this.store.publish(token, publication, publication.batch);
+              try { this.published(result.runId); } catch { /* Notification failure cannot undo a committed observation. */ }
               this.respond(request, response, 200, { version: HOOK_PROTOCOL, ...result, coverage: "partial", runtimeVerified: false });
             }
           } catch (error) { this.error(request, response, error); }

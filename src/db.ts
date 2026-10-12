@@ -80,8 +80,11 @@ export function getDrizzleDb(): RunPhantomDb {
   if (_drizzleDb) return _drizzleDb;
   const dbPath = resolveDbPath();
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  _dbPath = dbPath;
-  _sqliteDb = new Database(dbPath, { create: true });
+  // Trusted startup resolves the real parent once so OS aliases such as /var
+  // cannot create a second lifetime-lease identity for the same owner file.
+  const actualDbPath = path.join(fs.realpathSync(path.dirname(dbPath)), path.basename(dbPath));
+  _dbPath = actualDbPath;
+  _sqliteDb = new Database(actualDbPath, { create: true });
   _drizzleDb = drizzle(_sqliteDb, { schema });
   try {
     _sqliteDb.exec("PRAGMA busy_timeout = 1000");
@@ -1023,6 +1026,8 @@ export function getRunsByConvoId(convoId: string) {
 
 export function clearAll() {
   getDrizzleDb().transaction((tx) => {
+    // Keep source epochs and suppression tombstones while fencing every old callback.
+    tx.update(schema.coding_hook_owner).set({ generation: drizzleSql`lower(hex(randomblob(16)))`, updated_at: Date.now() }).where(eq(schema.coding_hook_owner.id, 1)).run();
     tx.delete(schema.evaluation_reviews).run();
     tx.delete(schema.evaluation_experiments).run();
     tx.delete(schema.evaluation_revisions).run();

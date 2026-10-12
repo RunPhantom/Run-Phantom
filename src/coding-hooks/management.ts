@@ -2,12 +2,10 @@ import { randomBytes } from "node:crypto";
 import { type BigIntStats } from "node:fs";
 import { lstat, mkdir, open, realpath, rename, unlink, type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { acquireClaudeTranscript, type TranscriptAcquisition } from "./claude";
 import { inspectClaudeHookSettings, mergeClaudeSettings, readClaudeSettingsText, updateClaudeSettings } from "./install";
 import { hookDigest, isHex, refuse } from "./protocol";
-import { type ClaudeHookInput } from "./shared";
 import { encodeInstallationCatalog, registrationForBinding, validateCatalog, type SourceRegistration } from "./catalog";
-import { CodingHookStore, validateInstallationBinding, type HookAdmission, type InstallationBinding } from "./store";
+import { CodingHookStore, validateInstallationBinding, type InstallationBinding } from "./store";
 
 import { CAPABILITY_VERSION, capabilityOwnerKey, encodeClaudeCapability, readClaudeCapabilityDescriptor, validClaudeCapabilityOrigin, type ClaudeCapabilityDescriptor } from "./capability";
 const sameFile = (left: BigIntStats, right: BigIntStats) => left.dev === right.dev && left.ino === right.ino && left.birthtimeNs === right.birthtimeNs;
@@ -20,21 +18,11 @@ export async function readClaudeCapability(file: string, installationId: string)
   if (descriptor.state !== "active" || descriptor.token === null) refuse("inactive", 503); return descriptor.token;
 }
 
-/** Even a valid local full capability cannot use an unregistered cwd or another project's source. */
-export async function acquireRegisteredClaudeTranscript(hook: ClaudeHookInput, admission: HookAdmission, signal?: AbortSignal): Promise<TranscriptAcquisition> {
-  const binding = admission.binding;
-  if (hook.cwd !== binding.registeredWorkspace) return { status: "unavailable", reason: "path_not_authorized" };
-  const reported = hook.event === "SubagentStop" ? hook.agentTranscriptPath : hook.transcriptPath;
-  if (!reported) return { status: "unavailable", reason: "source_unavailable" };
-  const candidate = reported.startsWith("~/") ? path.join(binding.homeDirectory, reported.slice(2)) : reported;
-  const relative = path.relative(binding.projectDirectory, candidate);
-  if (!path.isAbsolute(candidate) || !relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) return { status: "unavailable", reason: "path_not_authorized" };
-  return acquireClaudeTranscript(hook, { projectsRoot: binding.transcriptRoot, homeDirectory: binding.homeDirectory, cursor: admission.transcriptCursor, prefixBytes: admission.prefixBytes, expectedIncarnationKey: admission.incarnationKey, expectedPrefixSha256: admission.prefixSha256 }, signal);
-}
+export { acquireRegisteredClaudeTranscript } from "./acquisition";
 
 /** Trusted local management only. Caller supplies explicit full consent; callback JSON never enters this API. */
 export class ClaudeHookManagement {
-  constructor(readonly store: CodingHookStore, private readonly transportOrigin: string | null = null) { if (transportOrigin !== null && !validClaudeCapabilityOrigin(transportOrigin)) refuse("malformed", 400); }
+  constructor(readonly store: CodingHookStore, private readonly transportOrigin: string | null = null, private readonly transportActive = false) { if (transportOrigin !== null && !validClaudeCapabilityOrigin(transportOrigin)) refuse("malformed", 400); }
   private async directory(): Promise<string> {
     if (!path.isAbsolute(this.store.db.filename)) refuse("inactive", 503);
     const profile = await realpath(path.dirname(this.store.db.filename));
@@ -71,7 +59,7 @@ export class ClaudeHookManagement {
       await rename(temporary, file);
     } finally { const current = await lstat(temporary, { bigint: true }).catch(() => null); if (current && sameFile(current, temporaryStats!)) await unlink(temporary); }
   }
-  async install(input: InstallationBinding, options: { fullConsent?: boolean; registrations?: SourceRegistration[]; expectedInstallationGeneration?: string } = {}): Promise<{ status: "configured"; installationId: string; policy: "active" | "disabled"; captureMode: "metadata" | "full"; captureCoverage: "inactive" | "registered_workspace_only" | "registered_workspaces"; registrationCount: number; transport: "unavailable"; captureVerified: false; unchanged: boolean }> {
+  async install(input: InstallationBinding, options: { fullConsent?: boolean; registrations?: SourceRegistration[]; expectedInstallationGeneration?: string } = {}): Promise<{ status: "configured"; installationId: string; policy: "active" | "disabled"; captureMode: "metadata" | "full"; captureCoverage: "inactive" | "registered_workspace_only" | "registered_workspaces"; registrationCount: number; transport: "unavailable" | "available"; captureVerified: false; unchanged: boolean }> {
     const binding = await this.binding(input), registrations = validateCatalog(binding, options.registrations);
     for (const registration of registrations) for (const directory of [registration.registeredWorkspace, registration.transcriptRoot, registration.projectDirectory, registration.homeDirectory]) { const stats = await lstat(directory); if (!stats.isDirectory() || stats.isSymbolicLink() || await realpath(directory) !== directory) refuse("unknown_scope", 409); }
     const catalogData = encodeInstallationCatalog(binding, registrations);
@@ -110,7 +98,7 @@ export class ClaudeHookManagement {
         const installed = await updateClaudeSettings(binding.settingsPath, "install", authority);
         if (installed.status !== "accepted" || installed.text === null || hookDigest(installed.text) !== configSha256 || hookDigest(await readClaudeSettingsText(binding.settingsPath) ?? "") !== configSha256 || JSON.stringify(await readClaudeCapabilityDescriptor(capabilityPath, binding.installationId, ownerKey)) !== JSON.stringify(descriptor)) refuse("unavailable", 503);
         this.store.commitInstallation(binding.installationId, receipt.installationGeneration, token, configSha256, receipt.ownerGeneration);
-        return { status: "configured", installationId: binding.installationId, policy: "active", captureMode: binding.captureMode, captureCoverage: binding.scope === "global" && registrations.length > 1 ? "registered_workspaces" : "registered_workspace_only", registrationCount: registrations.length, transport: "unavailable", captureVerified: false, unchanged: receipt.unchanged };
+        return { status: "configured", installationId: binding.installationId, policy: "active", captureMode: binding.captureMode, captureCoverage: binding.scope === "global" && registrations.length > 1 ? "registered_workspaces" : "registered_workspace_only", registrationCount: registrations.length, transport: this.transportActive ? "available" : "unavailable", captureVerified: false, unchanged: receipt.unchanged };
       } catch (error) { this.store.disableInstallation(binding.installationId); throw error; }
     });
   }
@@ -141,7 +129,7 @@ export class ClaudeHookManagement {
     const config = await inspectClaudeHookSettings(binding.settingsPath, { installationId: id, executable: binding.executable, capabilityFile: file });
     if (!before) return { ...config, capability: "unavailable", capturePolicy: "inactive", owner: "inactive", captureMode: "metadata", settingsScope: binding.scope, captureCoverage: "inactive", registrationCount: 0, transport: "unavailable", captureVerified: false } as const;
     let capability: "available" | "unavailable" = "unavailable";
-    try { const value = await readClaudeCapabilityDescriptor(file, id, ownerKey); if (value.state === "active" && value.token !== null && hookDigest(value.token) === before.row.token_sha256 && value.installationGeneration === before.row.generation && this.store.isOwnerActive() && value.ownerGeneration === this.store.currentOwnerGeneration()) capability = "available"; } catch { /* Diagnostic only; no private token is exposed. */ }
-    return { ...config, capability, capturePolicy: this.store.isOwnerActive() ? before.row.state : "inactive", owner: this.store.isOwnerActive() ? "active" : "inactive", captureMode: before.row.capture_mode, settingsScope: before.binding.scope, captureCoverage: before.binding.scope === "global" && before.registrations.length > 1 ? "registered_workspaces" as const : "registered_workspace_only" as const, registrationCount: before.registrations.length, transport: "unavailable" as const, captureVerified: false as const };
+    try { const value = await readClaudeCapabilityDescriptor(file, id, ownerKey); if (value.state === "active" && value.token !== null && hookDigest(value.token) === before.row.token_sha256 && value.installationGeneration === before.row.generation && this.store.isOwnerActive() && value.ownerGeneration === this.store.currentOwnerGeneration() && (!this.transportActive || value.origin === this.transportOrigin)) capability = "available"; } catch { /* Diagnostic only; no private token is exposed. */ }
+    return { ...config, capability, capturePolicy: this.store.isOwnerActive() ? before.row.state : "inactive", owner: this.store.isOwnerActive() ? "active" : "inactive", captureMode: before.row.capture_mode, settingsScope: before.binding.scope, captureCoverage: before.binding.scope === "global" && before.registrations.length > 1 ? "registered_workspaces" as const : "registered_workspace_only" as const, registrationCount: before.registrations.length, transport: this.transportActive && capability === "available" && this.transportOrigin !== null ? "available" as const : "unavailable" as const, captureVerified: false as const };
   }
 }
