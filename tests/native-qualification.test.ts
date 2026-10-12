@@ -70,8 +70,9 @@ test("Windows ownership queries reject nonlocal selectors before constructing a 
   for (const selector of [0, -1, 1.5, Infinity, 4294967296, "71;Stop-Process", "remote"])
     expect(() => windowsOwnershipQuery(selector as number)).toThrow("fixture_process_pid");
   const selected = windowsOwnershipQuery(71), snapshot = windowsOwnershipQuery("all");
-  expect(selected).toContain('-Property ProcessId,ParentProcessId,CreationDate -Filter "ProcessId = 71"');
-  expect(snapshot).not.toContain("-Filter");
+  expect(selected).toContain("SELECT ProcessId,ParentProcessId,CreationDate FROM Win32_Process WHERE ProcessId = 71");
+  expect(snapshot).toContain("SELECT ProcessId,ParentProcessId,CreationDate FROM Win32_Process'");
+  expect(snapshot).not.toContain(" WHERE ");
   for (const script of [selected, snapshot]) {
     expect(script).toContain("$ErrorActionPreference='Stop'");
     expect(script).toContain("$rows.Count -ge 8192");
@@ -175,7 +176,8 @@ test("Windows ownership command discovery uses only the fixed intrinsic built-in
     const script = windowsOwnershipQuery(selector);
     expect(script.startsWith(prefix)).toBe(true);
     expect(script.match(/\$env:PSModulePath=[^;]+;/g)).toEqual([modulePath]);
-    expect(script.indexOf("Get-CimInstance")).toBeGreaterThan(prefix.length);
+    expect(script.indexOf("[System.Reflection.Assembly]::Load")).toBeGreaterThan(prefix.length);
+    expect(script).not.toMatch(/Get-CimInstance|Add-Type|LoadFrom|LoadFile|Process\.StartTime/);
     expect(script).not.toMatch(/\$env:(?:APPDATA|ProgramFiles|PSHOME)|Import-Module|CurrentUser|WindowsPowerShell\\Modules/);
   }
 });
@@ -186,17 +188,28 @@ const firstBirthMarkers = [
   "[Console]::Error.WriteLine('rp-first:after-query');",
   ";[Console]::Error.WriteLine('rp-first:after-serialization');",
 ];
-function originalOwnershipQuery(pid: number | "all"): string {
-  const filter = pid === "all" ? "" : ` -Filter "ProcessId = ${pid}"`;
-  return `$ErrorActionPreference='Stop';$env:PSModulePath=[System.IO.Path]::Combine($PSHOME,'Modules');$rows=[System.Collections.Generic.List[object]]::new();Get-CimInstance -ClassName Win32_Process -Property ProcessId,ParentProcessId,CreationDate${filter} | ForEach-Object {if($_.ProcessId -gt 0){if($rows.Count -ge 8192){throw 'fixture_process_snapshot_limit'};$birth=$null;if($null -ne $_.CreationDate){$birth=$_.CreationDate.ToUniversalTime().ToString("o")};$rows.Add(@{pid=$_.ProcessId;parent=$_.ParentProcessId;birth=$birth})}};ConvertTo-Json -InputObject @($rows.ToArray()) -Compress`;
-}
-test("first Windows birth telemetry markers preserve the entire original selected and snapshot queries", () => {
+test("cold Windows ownership uses trusted framework WQL with exact births and bounded disposal", () => {
+  const framework = "System.Management, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a";
   for (const selector of [71, "all"] as const) {
     const script = windowsOwnershipQuery(selector);
     for (const marker of firstBirthMarkers) expect(script.split(marker).length).toBe(2);
-    expect(firstBirthMarkers.reduce((text, marker) => text.replace(marker, ""), script)).toBe(originalOwnershipQuery(selector));
+    expect(script).toContain(`[System.Reflection.Assembly]::Load('${framework}')`);
+    expect(script).toContain(`$assembly.FullName -ne '${framework}'`);
+    expect(script).toContain("-not $assembly.GlobalAssemblyCache");
+    expect(script).toContain("[System.Management.ManagementObjectSearcher]::new('root\\cimv2',");
+    expect(script).toContain("$searcher.Options.ReturnImmediately=$true");
+    expect(script).toContain("$searcher.Options.Rewindable=$false");
+    expect(script).toContain("$searcher.Options.Timeout=[TimeSpan]::FromMilliseconds(1500)");
+    expect(script).toContain("$raw -isnot [string]");
+    expect(script).toContain("$raw -cnotmatch '^[0-9]{14}\\.[0-9]{6}[+-][0-9]{3}$'");
+    expect(script).toContain("[System.Management.ManagementDateTimeConverter]::ToDateTime($raw).ToUniversalTime().ToString('o')");
+    expect(script).toContain("$birth=$null");
+    expect(script).toContain("finally{$row.Dispose()}");
+    expect(script).toContain("if($null -ne $results){$results.Dispose()}");
+    expect(script).toContain("if($null -ne $searcher){$searcher.Dispose()}");
     expect(script.indexOf(firstBirthMarkers[0])).toBeGreaterThan(script.indexOf("$env:PSModulePath="));
-    expect(script.indexOf(firstBirthMarkers[1])).toBeLessThan(script.indexOf("Get-CimInstance"));
+    expect(script.indexOf(firstBirthMarkers[0])).toBeLessThan(script.indexOf("[System.Reflection.Assembly]::Load"));
+    expect(script.indexOf(firstBirthMarkers[1])).toBeLessThan(script.indexOf("$results=$searcher.Get()"));
     expect(script.indexOf(firstBirthMarkers[2])).toBeGreaterThan(script.indexOf("$rows.Add("));
     expect(script.indexOf(firstBirthMarkers[2])).toBeLessThan(script.indexOf("ConvertTo-Json"));
     expect(script.indexOf(firstBirthMarkers[3])).toBeGreaterThan(script.indexOf("ConvertTo-Json"));

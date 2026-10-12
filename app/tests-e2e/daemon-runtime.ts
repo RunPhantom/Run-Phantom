@@ -214,8 +214,23 @@ export function windowsProcessBirth(raw: string, pid: number): string | null {
 const validWindowsPid = (pid: number) => Number.isInteger(pid) && pid > 0 && pid <= 0xffffffff;
 export function windowsOwnershipQuery(pid: number | "all"): string {
   if (pid !== "all" && !validWindowsPid(pid)) throw refusal("fixture_process_pid");
-  const filter = pid === "all" ? "" : ` -Filter "ProcessId = ${pid}"`;
-  return `$ErrorActionPreference='Stop';$env:PSModulePath=[System.IO.Path]::Combine($PSHOME,'Modules');[Console]::Error.WriteLine('rp-first:entered');$rows=[System.Collections.Generic.List[object]]::new();[Console]::Error.WriteLine('rp-first:before-query');Get-CimInstance -ClassName Win32_Process -Property ProcessId,ParentProcessId,CreationDate${filter} | ForEach-Object {if($_.ProcessId -gt 0){if($rows.Count -ge 8192){throw 'fixture_process_snapshot_limit'};$birth=$null;if($null -ne $_.CreationDate){$birth=$_.CreationDate.ToUniversalTime().ToString("o")};$rows.Add(@{pid=$_.ProcessId;parent=$_.ParentProcessId;birth=$birth})}};[Console]::Error.WriteLine('rp-first:after-query');ConvertTo-Json -InputObject @($rows.ToArray()) -Compress;[Console]::Error.WriteLine('rp-first:after-serialization');`;
+  const query = `SELECT ProcessId,ParentProcessId,CreationDate FROM Win32_Process${pid === "all" ? "" : ` WHERE ProcessId = ${pid}`}`;
+  return `$ErrorActionPreference='Stop';$env:PSModulePath=[System.IO.Path]::Combine($PSHOME,'Modules');[Console]::Error.WriteLine('rp-first:entered');
+$assembly=[System.Reflection.Assembly]::Load('System.Management, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a');
+if(-not $assembly.GlobalAssemblyCache -or $assembly.FullName -ne 'System.Management, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'){throw 'fixture_process_framework'};
+$rows=[System.Collections.Generic.List[object]]::new();$searcher=$null;$results=$null;
+try{
+ $searcher=[System.Management.ManagementObjectSearcher]::new('root\\cimv2','${query}');
+ $searcher.Options.ReturnImmediately=$true;$searcher.Options.Rewindable=$false;$searcher.Options.Timeout=[TimeSpan]::FromMilliseconds(1500);
+ [Console]::Error.WriteLine('rp-first:before-query');$results=$searcher.Get();
+ foreach($row in $results){try{if($row.ProcessId -gt 0){
+  if($rows.Count -ge 8192){throw 'fixture_process_snapshot_limit'};
+  $birth=$null;$raw=$row.CreationDate;
+  if($null -ne $raw){if($raw -isnot [string] -or $raw -cnotmatch '^[0-9]{14}\\.[0-9]{6}[+-][0-9]{3}$'){throw 'fixture_process_birth'};$birth=[System.Management.ManagementDateTimeConverter]::ToDateTime($raw).ToUniversalTime().ToString('o')};
+  $rows.Add(@{pid=$row.ProcessId;parent=$row.ParentProcessId;birth=$birth})
+ }}finally{$row.Dispose()}}
+ [Console]::Error.WriteLine('rp-first:after-query');ConvertTo-Json -InputObject @($rows.ToArray()) -Compress;[Console]::Error.WriteLine('rp-first:after-serialization');
+}finally{if($null -ne $results){$results.Dispose()};if($null -ne $searcher){$searcher.Dispose()}};`;
 }
 type Ownership = { root: ChildProcess; pid: number | undefined; identity: Promise<string | null>; descendants: Map<number, string>; pending: Promise<void>; running?: boolean; timer?: ReturnType<typeof setInterval>; failure?: Error };
 const ownership = new WeakMap<OwnedProcess, Ownership>();
