@@ -1,12 +1,13 @@
 import { normalizeOtelId } from "./ids";
 import { normalizeSpan } from "./spans/normalize";
 import type { NormalizedSpan } from "./spans/normalized";
+import { defaultIsSensitiveKey, redactUrl, scrubKnownSecrets } from "./verification/redaction";
 
 export interface ParsedSpan {
   traceId: string; spanId: string; parentSpanId?: string; name: string; spanType: string;
   status: string; inputPayload?: string; outputPayload?: string; startTimeMs: number;
   endTimeMs: number; durationMs: number; model?: string; provider?: string;
-  inputTokens?: number; outputTokens?: number; attributes: Record<string, string | number | boolean>;
+  inputTokens?: number; outputTokens?: number; attributes: Record<string, string | number | boolean | string[]>;
   eventId?: string; eventName?: string; userId?: string; convoId?: string;
   replayRunId?: string;
   /**
@@ -79,6 +80,28 @@ function collectAttrs(
     const v = anyValue(a.value);
     if (v !== undefined) into[a.key] = v;
   }
+}
+
+// Only an explicit span tags array supplies complete membership evidence.
+// Other composites and legacy JSON strings retain their scalar representation.
+function capturedTags(attrs: any[]): string[] | "[UNAVAILABLE]" | undefined {
+  let wire: any;
+  for (const attribute of attrs) if (attribute?.key === "tags") wire = attribute.value;
+  if (!wire || Object.keys(wire).length !== 1 || !wire.arrayValue) return undefined;
+  const values = wire.arrayValue.values ?? [];
+  if (!Array.isArray(values) || values.length > 64) return undefined;
+  const tags: string[] = [];
+  for (const value of values) {
+    const tag = value?.stringValue;
+    if (!value || Object.keys(value).length !== 1 || typeof tag !== "string" || !tag
+      || tag.length > 256 || Buffer.byteLength(tag) > 512 || Array.from(tag).some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) return undefined;
+    // A scrubbed member makes the complete population unknown, never absent.
+    if (["[REDACTED]", "[UNAVAILABLE]", "[TRUNCATED]", "[UNSERIALIZABLE]"].includes(tag) || scrubKnownSecrets(tag) !== tag || /rp_team_(?:session|setup|invite|ingest)_[A-Za-z0-9_-]{16,}|\b(?:Bearer|Basic)\s+[A-Za-z0-9+/_=.-]{8,}/i.test(tag)
+      || tag.replace(/\b(?:https?|wss?):\/\/[^\s<>"']+/gi, url => redactUrl(url, defaultIsSensitiveKey)) !== tag
+      || /\b(?:authorization|proxy-authorization|x-api-key|api[_-]?key|password|cookie|set-cookie)\s*[:=]/i.test(tag)) return "[UNAVAILABLE]";
+    tags.push(tag);
+  }
+  return tags;
 }
 
 function first(attrs: any[], ...keys: string[]): string | number | boolean | undefined {
@@ -335,6 +358,7 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
           }
         }
 
+        const tags = capturedTags(attrs);
         spans.push({
           traceId: normalizeOtelId(s.traceId, 16) ?? s.traceId,
           spanId: normalizeOtelId(s.spanId, 8) ?? s.spanId,
@@ -350,7 +374,7 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
           model, provider,
           inputTokens: typeof inputTokens === "number" ? inputTokens : undefined,
           outputTokens: typeof outputTokens === "number" ? outputTokens : undefined,
-          attributes: allAttrs,
+          attributes: tags === undefined ? allAttrs : { ...allAttrs, tags },
           eventId, eventName, userId, convoId, replayRunId,
           normalized: match.normalized,
         });

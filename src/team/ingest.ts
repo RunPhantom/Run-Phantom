@@ -269,8 +269,10 @@ export function normalizeTeamIngest(bytes: Uint8Array, format: "json" | "protobu
     if (Object.keys(source.attributes).length > L.SPAN_ATTRIBUTES) throw large();
     const safeAttrs = Object.create(null) as ObjectValue;
     for (const [key, value] of Object.entries(source.attributes)) {
+      const tags = key === "tags" && Array.isArray(value) ? value.map(tag => redactTeamText(tag, activeSecret)) : null;
       safeAttrs[redactTeamText(key, activeSecret)] = defaultIsSensitiveKey(key)
-        ? "[REDACTED]" : typeof value === "string" ? redactTeamText(value, activeSecret) : value;
+        ? "[REDACTED]" : tags ? tags.some((tag,index) => tag !== (value as string[])[index]) ? "[UNAVAILABLE]" : tags
+          : typeof value === "string" ? redactTeamText(value, activeSecret) : value;
     }
     const attrs = JSON.stringify(safeAttrs);
     const input = typeof source.inputPayload === "string" ? redactTeamText(source.inputPayload, activeSecret) : null;
