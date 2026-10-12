@@ -2,10 +2,12 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import type { Database } from "bun:sqlite";
 import type { NormalizedClaudeBatch, NormalizedClaudeEntity } from "./claude";
+import { CATALOG_VERSION, encodeInstallationCatalog, registrationForBinding, selectRegistration, sourceRootKey, validateCatalog, type SourceRegistration } from "./catalog";
+import type { HookSourceClaims } from "./protocol";
 import { parseBoundedHookJson } from "./shared";
 import { HookRefusal, hookDigest, isHex, refuse, validateClaudeBatch, validateClaudeRetainedEntity } from "./protocol";
 
-export const STORE_LIMITS = Object.freeze({ installations: 64, sessions: 10000, sessionEntities: 1000, entities: 100000, bytes: 33554432 });
+export const STORE_LIMITS = Object.freeze({ installations: 64, registrations: 64, sessions: 10000, sessionEntities: 1000, entities: 100000, bytes: 33554432 });
 type StoreLimits = { [Key in keyof typeof STORE_LIMITS]: number };
 export interface InstallationBinding { installationId: string; scope: "global" | "local"; captureMode: "metadata" | "full"; workspace: string | null; registeredWorkspace: string; transcriptRoot: string; projectDirectory: string; homeDirectory: string; settingsPath: string; executable: string; }
 interface InstallationRow { id: string; generation: string; capture_mode: "metadata" | "full"; state: "active" | "disabled"; source_root_key: string; token_sha256: string; config_sha256: string; data: string | null; }
@@ -13,7 +15,7 @@ export interface HookAdmission { ownerGeneration: string; installationGeneration
 interface SessionRow { source_key: string; source_root_key: string; run_id: string; root_span_id: string; state: "open" | "closed" | "unknown" | "suppressed"; incarnation_key: string | null; prefix_sha256: string | null; prefix_bytes: number; source_cursor: number; observed_file_bytes: number; data: string | null; }
 interface EntityRow { data: string | null; projection_sha256: string; observation_sha256: string; span_id: string; kind: NormalizedClaudeEntity["kind"]; phase: NormalizedClaudeEntity["phase"]; incarnation_key: string | null; source_offset: number | null; }
 const random = () => randomBytes(16).toString("hex");
-const rootKey = (binding: InstallationBinding) => hookDigest(JSON.stringify(["runphantom.claude.root/v1", binding.registeredWorkspace, binding.transcriptRoot, binding.projectDirectory]));
+const rootKey = sourceRootKey;
 const terminal = (phase: NormalizedClaudeEntity["phase"]) => ["success", "failure", "interrupted", "complete", "conflict"].includes(phase);
 
 export function validateInstallationBinding(binding: InstallationBinding): InstallationBinding {
@@ -47,14 +49,19 @@ export class CodingHookStore {
     if (!isHex(id, 32)) refuse("malformed", 400);
     return this.db.query("SELECT id,generation,capture_mode,state,source_root_key,token_sha256,config_sha256,CASE WHEN length(CAST(data AS BLOB))<=16384 THEN data END data FROM coding_hook_installations WHERE id=?").get(id) as InstallationRow | null;
   }
-  readInstallation(id: string): { row: InstallationRow; binding: InstallationBinding } | null {
+  readInstallation(id: string): { row: InstallationRow; binding: InstallationBinding; registrations: SourceRegistration[] } | null {
     this.checkQuota(); const row = this.installation(id); if (!row) return null;
     if (!row.data || !isHex(row.generation, 32) || !isHex(row.source_root_key, 64) || !isHex(row.token_sha256, 64) || !isHex(row.config_sha256, 64)) refuse("corrupt", 503);
-    let binding: InstallationBinding; try { const parsed = parseBoundedHookJson(row.data, 16384); if (parsed.status !== "accepted") refuse("corrupt", 503); binding = validateInstallationBinding(parsed.value as unknown as InstallationBinding); } catch { refuse("corrupt", 503); }
+    let binding: InstallationBinding, registrations: SourceRegistration[];
+    try {
+      const parsed = parseBoundedHookJson(row.data, 16384); if (parsed.status !== "accepted" || !parsed.value || typeof parsed.value !== "object" || Array.isArray(parsed.value) || Object.keys(parsed.value).sort().join(",") !== "binding,registrations,version" || parsed.value.version !== CATALOG_VERSION) refuse("corrupt", 503);
+      binding = validateInstallationBinding(parsed.value.binding as unknown as InstallationBinding); registrations = validateCatalog(binding, parsed.value.registrations as unknown as SourceRegistration[]);
+      if (encodeInstallationCatalog(binding, registrations) !== row.data) refuse("corrupt", 503);
+    } catch { refuse("corrupt", 503); }
     if (binding.installationId !== id || binding.captureMode !== row.capture_mode || rootKey(binding) !== row.source_root_key || !["active", "disabled"].includes(row.state)) refuse("corrupt", 503);
-    return { row, binding };
+    return { row, binding, registrations };
   }
-  authenticate(token: string): { row: InstallationRow; binding: InstallationBinding; ownerGeneration: string; sourceEpoch: string } {
+  authenticate(token: string): { row: InstallationRow; binding: InstallationBinding; registrations: SourceRegistration[]; ownerGeneration: string; sourceEpoch: string } {
     if (!isHex(token, 64)) refuse("unauthorized", 401);
     this.checkQuota();
     const found = this.db.query("SELECT id FROM coding_hook_installations WHERE token_sha256=?").get(hookDigest(token)) as { id: string } | null;
@@ -62,10 +69,10 @@ export class CodingHookStore {
     const installed = this.readInstallation(found.id); if (!installed || installed.row.state !== "active") refuse("inactive", 409);
     const owner = this.owner(); return { ...installed, ownerGeneration: owner.generation, sourceEpoch: owner.source_epoch };
   }
-  prepareInstallation(binding: InstallationBinding, token: string, configSha256: string): { installationGeneration: string; ownerGeneration: string; unchanged: boolean } {
-    binding = validateInstallationBinding(binding); if (!isHex(token, 64) || !isHex(configSha256, 64)) refuse("malformed", 400);
+  prepareInstallation(binding: InstallationBinding, token: string, configSha256: string, input: SourceRegistration[] = [registrationForBinding(binding)]): { installationGeneration: string; ownerGeneration: string; unchanged: boolean } {
+    binding = validateInstallationBinding(binding); const registrations = validateCatalog(binding, input), data = encodeInstallationCatalog(binding, registrations); if (!isHex(token, 64) || !isHex(configSha256, 64)) refuse("malformed", 400);
     return this.transaction(() => {
-      const owner = this.owner(); this.checkQuota(); const before = this.readInstallation(binding.installationId), data = JSON.stringify(binding), tokenSha256 = hookDigest(token);
+      const owner = this.owner(); this.checkQuota(); const before = this.readInstallation(binding.installationId), tokenSha256 = hookDigest(token);
       if (before?.row.state === "active" && before.row.data === data && before.row.config_sha256 === configSha256 && before.row.token_sha256 === tokenSha256) return { installationGeneration: before.row.generation, ownerGeneration: owner.generation, unchanged: true };
       const generation = random();
       this.db.query("INSERT INTO coding_hook_installations VALUES(?,1,?,?,'disabled',?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,token_sha256=excluded.token_sha256,state='disabled',capture_mode=excluded.capture_mode,scope=excluded.scope,workspace=excluded.workspace,transcript_root=excluded.transcript_root,source_root_key=excluded.source_root_key,config_sha256=excluded.config_sha256,data=excluded.data,updated_at=excluded.updated_at").run(binding.installationId, generation, tokenSha256, binding.captureMode, binding.scope, binding.workspace, binding.transcriptRoot, rootKey(binding), configSha256, data, Date.now());
@@ -79,7 +86,7 @@ export class CodingHookStore {
   disableInstallation(id: string): void {
     this.transaction(() => { const before = this.readInstallation(id); if (!before) return;
       const binding = { ...before.binding, captureMode: "metadata" as const };
-      this.db.query("UPDATE coding_hook_installations SET state='disabled',capture_mode='metadata',generation=?,token_sha256=?,data=?,updated_at=? WHERE id=?").run(random(), hookDigest(randomBytes(32).toString("hex")), JSON.stringify(binding), Date.now(), id); });
+      this.db.query("UPDATE coding_hook_installations SET state='disabled',capture_mode='metadata',generation=?,token_sha256=?,data=?,updated_at=? WHERE id=?").run(random(), hookDigest(randomBytes(32).toString("hex")), encodeInstallationCatalog(binding, before.registrations), Date.now(), id); });
   }
   private session(sourceKey: string): SessionRow | null {
     if (!isHex(sourceKey, 64)) refuse("malformed", 400);
@@ -87,24 +94,26 @@ export class CodingHookStore {
     if (row && (row.data === null || !isHex(row.run_id, 32) || !isHex(row.root_span_id, 16) || !isHex(row.source_root_key, 64))) refuse("corrupt", 503);
     return row;
   }
-  admit(token: string, identity: string): HookAdmission {
+  admit(token: string, identity: string, claims: HookSourceClaims): HookAdmission {
     if (!isHex(identity, 64)) refuse("malformed", 400);
     return this.transaction(() => {
-      const authority = this.authenticate(token), sourceKey = hookDigest(JSON.stringify(["runphantom.claude.session/v1", authority.sourceEpoch, authority.row.source_root_key, identity]));
+      const authority = this.authenticate(token), registration = selectRegistration(authority.registrations, claims), sourceKey = hookDigest(JSON.stringify(["runphantom.claude.session/v1", authority.sourceEpoch, registration.registrationId, identity]));
       let session = this.session(sourceKey);
       if (!session) {
         const runId = sourceKey.slice(0, 32), rootSpanId = hookDigest(sourceKey + "root").slice(0, 16);
-        this.db.query("INSERT INTO coding_hook_sessions VALUES(?,1,?,?,?,'open',NULL,NULL,0,0,0,?, ?,?)").run(sourceKey, authority.row.source_root_key, runId, rootSpanId, '{"coverage":"partial","producerVerified":false}', Date.now(), Date.now());
+        this.db.query("INSERT INTO coding_hook_sessions VALUES(?,1,?,?,?,'open',NULL,NULL,0,0,0,?, ?,?)").run(sourceKey, registration.registrationId, runId, rootSpanId, '{"coverage":"partial","producerVerified":false}', Date.now(), Date.now());
         this.checkQuota(); session = this.session(sourceKey)!;
       }
       if (session.state === "suppressed") refuse("suppressed");
       return { ownerGeneration: authority.ownerGeneration, installationGeneration: authority.row.generation, sourceKey, runId: session.run_id, rootSpanId: session.root_span_id, captureMode: authority.row.capture_mode,
-        transcriptCursor: session.source_cursor, incarnationKey: session.incarnation_key, prefixBytes: session.prefix_bytes, prefixSha256: session.prefix_sha256, observedFileBytes: session.observed_file_bytes, binding: authority.binding };
+        transcriptCursor: session.source_cursor, incarnationKey: session.incarnation_key, prefixBytes: session.prefix_bytes, prefixSha256: session.prefix_sha256, observedFileBytes: session.observed_file_bytes, binding: { ...authority.binding, registeredWorkspace: registration.registeredWorkspace, transcriptRoot: registration.transcriptRoot, projectDirectory: registration.projectDirectory, homeDirectory: registration.homeDirectory } };
     });
   }
   private checkQuota(): void {
     const count = (table: string) => (this.db.query(`SELECT count(*) count FROM ${table}`).get() as { count: number }).count;
     if (count("coding_hook_installations") > this.limits.installations || count("coding_hook_sessions") > this.limits.sessions || count("coding_hook_entities") > this.limits.entities) refuse("quota", 507);
+    const registrations = this.db.query("SELECT COALESCE(sum(CASE WHEN length(CAST(data AS BLOB))>16384 OR NOT json_valid(data) THEN 65 WHEN json_type(data,'$.registrations')='array' THEN json_array_length(data,'$.registrations') ELSE 65 END),0) count FROM coding_hook_installations").get() as { count: number };
+    if (!Number.isSafeInteger(registrations.count) || registrations.count > this.limits.registrations) refuse("quota", 507);
     if (this.db.query("SELECT source_key FROM coding_hook_entities GROUP BY source_key HAVING count(*)>? LIMIT 1").get(this.limits.sessionEntities)) refuse("quota", 507);
     // Actual UTF8 state includes repeated indexed identities and paths; this is not the physical pages/WAL quota.
     const total = this.db.query(`SELECT
@@ -124,7 +133,7 @@ export class CodingHookStore {
     return this.transaction(() => {
       const authority = this.authenticate(token), session = this.session(admission.sourceKey);
       if (authority.ownerGeneration !== admission.ownerGeneration || authority.row.generation !== admission.installationGeneration) refuse("stale");
-      if (!session || session.source_root_key !== authority.row.source_root_key) refuse("unauthorized", 401); if (session.state === "suppressed") refuse("suppressed");
+      if (!session || !authority.registrations.some(registration => registration.registrationId === session.source_root_key)) refuse("unauthorized", 401); if (session.state === "suppressed") refuse("suppressed");
       const batch = validateClaudeBatch(JSON.stringify(input), admission.sourceKey, authority.row.capture_mode);
       if (session.incarnation_key !== null && batch.incarnationKey !== null && (batch.incarnationKey !== session.incarnation_key || session.prefix_bytes > 0 && (batch.prefixBytes !== session.prefix_bytes || batch.prefixSha256 !== session.prefix_sha256) || batch.transcriptCursor! < session.source_cursor || batch.observedFileBytes! < session.observed_file_bytes)) refuse("source_changed");
       const run = this.db.query("SELECT id FROM runs WHERE id=?").get(session.run_id);

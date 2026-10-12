@@ -73,12 +73,24 @@ uses mode 0600 under a mode 0700 directory. Full policy is available only for an
 explicitly consented local installation. Missing capability, installed settings,
 stored policy and unavailable transport are separate diagnostic facts.
 
-A global settings target currently binds only the workspace and exact transcript
-project directory registered by trusted management. Its reported capture coverage
-is `registered_workspace_only`. Multiple-workspace global metadata coverage remains
-pending; another project's path or a forged cwd grants no authority. The registered
-source identity is shared with a local installation over that same actual project,
-while local full consent and global metadata capability remain separate.
+The unregistered global management helper accepts an explicit catalog of trusted
+existing workspaces and exact vendor project transcript directories. One global
+metadata capability covers those registrations; each local full capability stays
+separate. Admission requires two consistent hashed matching claims and refuses
+unregistered or ambiguous pairs. Those claims register no path and grant no full
+policy. The same registered project shares source and usage identities across
+global metadata and local full; another project has a distinct source identity.
+
+Catalog data uses a closed versioned object in the existing installation row. Each
+entire encoded row is capped at 16 KiB; at most 64 registration occurrences across
+all rows count disabled and local authorities as well. Exact duplicate catalog
+entries are idempotent. A meaningful catalog change or unregister rotates token
+and generation during disabled prepare before capability/settings write awaits.
+Read-only canonical registration and settings preflight happens before prepare.
+Unregister revokes earlier queued callbacks and preserves retained full evidence
+and tombstones. Diagnostics report registration count and `registered_workspaces`
+only for explicit catalog coverage, alongside unavailable transport and false
+`captureVerified`. No unregistered workspace is discovered automatically.
 
 The store uses an injected owner SQLite connection, synchronous immediate
 transactions and actual encoded-state quotas. It checks current token, policy,
@@ -92,5 +104,5 @@ DDL in temporary owner databases; that fixture is not an installed migration.
 Native owner-database, HTTP and filesystem tests cover these helper boundaries,
 including external writer contention, current-policy redaction, quota rollback,
 tombstone refusal, paused-body owner changes and settings failure reconciliation.
-Application startup ownership, migration integration, callback transport, global
-metadata catalog coverage and real installed session acceptance remain pending.
+Application startup ownership, migration integration, callback transport, installed global
+metadata coverage and real installed session acceptance remain pending.

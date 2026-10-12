@@ -5,7 +5,7 @@ import { CLAUDE_HOOK_EVENTS, parseBoundedHookJson, type HookJson } from "./share
 
 export const HOOK_PROTOCOL = "runphantom.claude-hook/v1";
 const COVERAGE_REASONS = new Set(["producer_unverified", "unknown_fields", "transcript_absent", "unresolved_prompt_identity", "unresolved_assistant_identity", "unresolved_subagent_linkage", "tool_output_absent", "terminal_regression", "contradictory_terminal_claims", "assistant_fragments_unmerged", "inconsistent_request_identity", "inconsistent_model_identity", "invalid_timestamp", "invalid_usage", "invalid_record", "unsupported_version", "unsupported_record", "unsupported_content", "transcript_version_absent", "incomplete_tail", "parse_deadline", "record_limit", "line_limit", "entity_limit", "body_partial", "body_redacted", "body_limit", "model_limit", "invalid_json", "byte_limit", "depth_limit", "node_limit", "duplicate_keys", "invalid_number", "unsafe_key", "invalid_fields", "field_limit", "unsupported_event", "source_changed", "source_unavailable", "path_not_authorized", "not_regular_file", "file_limit", "identity_unavailable", "invalid_utf8", "aborted", "deadline"]);
-export class HookRefusal extends Error { constructor(readonly reason: "malformed" | "unauthorized" | "inactive" | "stale" | "suppressed" | "source_changed" | "projection_conflict" | "quota" | "corrupt" | "unavailable" | "busy" | "deadline" | "closed", readonly status = 409) { super(reason); } }
+export class HookRefusal extends Error { constructor(readonly reason: "malformed" | "unauthorized" | "inactive" | "stale" | "suppressed" | "source_changed" | "projection_conflict" | "quota" | "corrupt" | "unavailable" | "busy" | "deadline" | "closed" | "unknown_scope", readonly status = 409) { super(reason); } }
 export function refuse(reason: HookRefusal["reason"], status?: number): never { throw new HookRefusal(reason, status); }
 export const hookDigest = (value: string): string => createHash("sha256").update(value).digest("hex");
 export const isHex = (value: unknown, units: number): value is string => typeof value === "string" && value.length === units && /^[a-f0-9]+$/.test(value);
@@ -14,10 +14,11 @@ const closed = (value: { [key: string]: HookJson }, keys: string[]) => { if (Obj
 const finite = (value: unknown, max = Number.MAX_SAFE_INTEGER): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max;
 const textOrNull = (value: unknown, max: number): boolean => value === null || typeof value === "string" && value.length <= max;
 const parse = (raw: unknown) => { const result = parseBoundedHookJson(raw); if (result.status !== "accepted" || !object(result.value)) refuse("malformed", 400); return result.value; };
-export function parseHookAdmission(raw: unknown): string {
-  const value = parse(raw); closed(value, ["version", "sourceSessionIdentity"]);
-  if (value.version !== HOOK_PROTOCOL || !isHex(value.sourceSessionIdentity, 64)) refuse("malformed", 400);
-  return value.sourceSessionIdentity;
+export interface HookSourceClaims { workspaceClaim: string; projectClaim: string; }
+export function parseHookAdmission(raw: unknown): HookSourceClaims & { sourceSessionIdentity: string } {
+  const value = parse(raw); closed(value, ["version", "sourceSessionIdentity", "workspaceClaim", "projectClaim"]);
+  if (value.version !== HOOK_PROTOCOL || !isHex(value.sourceSessionIdentity, 64) || !isHex(value.workspaceClaim, 64) || !isHex(value.projectClaim, 64)) refuse("malformed", 400);
+  return { sourceSessionIdentity: value.sourceSessionIdentity, workspaceClaim: value.workspaceClaim, projectClaim: value.projectClaim };
 }
 export function parseHookPublication(raw: unknown): { ownerGeneration: string; installationGeneration: string; sourceKey: string; batch: NormalizedClaudeBatch } {
   const value = parse(raw); closed(value, ["version", "ownerGeneration", "installationGeneration", "sourceKey", "batch"]);

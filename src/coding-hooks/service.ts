@@ -68,7 +68,7 @@ export class CodingHookController {
             const raw = await acquireBody(request, signal.signal);
             if (signal.signal.aborted || this.closed) throw new HookRefusal(this.closed ? "closed" : "deadline", this.closed ? 503 : 408);
             if (request.url === "/api/coding-hooks/claude/admission") {
-              const admission = this.store.admit(token, parseHookAdmission(raw));
+              const parsed = parseHookAdmission(raw), admission = this.store.admit(token, parsed.sourceSessionIdentity, { workspaceClaim: parsed.workspaceClaim, projectClaim: parsed.projectClaim });
               this.respond(request, response, 200, { version: HOOK_PROTOCOL, ...admission, coverage: "partial", producerVerified: false, runtimeVerified: false });
             } else {
               const publication = parseHookPublication(raw);

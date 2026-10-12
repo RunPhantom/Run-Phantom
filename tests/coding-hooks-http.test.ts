@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createServer, request, type ClientRequest, type Server } from "node:http";
 import { getDrizzleDb, closeDb, deleteRun } from "../src/db";
+import { claimsForRegistration } from "../src/coding-hooks/catalog";
 import { CodingHookStore, type HookAdmission } from "../src/coding-hooks/store";
 import { CodingHookController, SERVICE_LIMITS } from "../src/coding-hooks/service";
 import { HOOK_PROTOCOL } from "../src/coding-hooks/protocol";
@@ -12,6 +13,7 @@ import { hookFixture } from "./fixtures/coding-hooks-claude";
 
 let directory: string, prior: string | undefined, server: Server, controller: CodingHookController, store: CodingHookStore, port: number;
 const token = "a".repeat(64), id = "a".repeat(32), identity = "b".repeat(64);
+const admit = (token: string, identity: string) => store.admit(token, identity, claimsForRegistration(store.authenticate(token).binding));
 const clients = new Set<ClientRequest>();
 beforeEach(async () => {
   closeDb(); prior = process.env.RUNPHANTOM_DB_PATH; directory = mkdtempSync(path.join(tmpdir(), "runphantom-f11-http-")); process.env.RUNPHANTOM_DB_PATH = path.join(directory, "owner.sqlite");
@@ -26,7 +28,7 @@ function open(endpoint = "admission", headers: Record<string, string> = {}) {
   const result = new Promise<{ status: number; body: string }>((resolve, reject) => { client.once("error", reject); client.once("response", response => { const body: Buffer[] = []; response.on("data", chunk => body.push(chunk)); response.once("end", () => resolve({ status: response.statusCode!, body: Buffer.concat(body).toString() })); response.once("error", reject); }); });
   void result.catch(() => undefined); return { client, result };
 }
-const admissionBody = () => JSON.stringify({ version: HOOK_PROTOCOL, sourceSessionIdentity: identity });
+const admissionBody = () => JSON.stringify({ version: HOOK_PROTOCOL, sourceSessionIdentity: identity, ...claimsForRegistration(store.authenticate(token).binding) });
 const publicationBody = (admission: HookAdmission) => {
   const result = normalizeClaudeHook(hookFixture("PostToolUse", { tool_use_id: "tool_exact", tool_name: "Bash", tool_response: { ordinary: "exact HTTP result", password: "PRIVATE_HTTP_PASSWORD" } }), { sourceKey: admission.sourceKey, captureMode: "full" }, null);
   if (result.status !== "accepted") throw new Error("fixture batch");
@@ -45,7 +47,7 @@ test("host/origin/auth/content-type and body authority overrides fail before pub
   for (const headers of [{ host: "evil.invalid" }, { origin: "http://evil.invalid" }, { origin: "null" }, { authorization: "Bearer forged" }, { "content-type": "application/json;charset=utf-8" }]) {
     const attempt = open("admission", headers); attempt.client.end(admissionBody()); expect((await attempt.result).status).toBeGreaterThanOrEqual(400);
   }
-  const forged = open(); forged.client.end(JSON.stringify({ version: HOOK_PROTOCOL, sourceSessionIdentity: identity, database: "/private/other.sqlite", captureMode: "full" })); expect((await forged.result).status).toBe(400);
+  const forged = open(); forged.client.end(JSON.stringify({ version: HOOK_PROTOCOL, sourceSessionIdentity: identity, ...claimsForRegistration(store.authenticate(token).binding), database: "/private/other.sqlite", captureMode: "full" })); expect((await forged.result).status).toBe(400);
   expect(getDrizzleDb().$client.query("SELECT id FROM runs").all()).toEqual([]);
 });
 test("real chunked oversize and stalled EOF release active reservations within finite lifetime", async () => {
@@ -61,9 +63,9 @@ test("actual two active plus eight paused requests refuse excess and close drain
   const results = await Promise.all(held.map(attempt => attempt.result)); expect(results.every(result => result.status === 503)).toBe(true);
 });
 test("owner rotation and actual anchor deletion during streaming body cannot publish or resurrect", async () => {
-  const admission = store.admit(token, identity), raw = publicationBody(admission), delayed = open("publication"); delayed.client.write(raw.slice(0, -1));
+  const admission = admit(token, identity), raw = publicationBody(admission), delayed = open("publication"); delayed.client.write(raw.slice(0, -1));
   await waitFor(() => controller.stats().active === 1); store.rotateOwner(); delayed.client.end(raw.slice(-1)); expect((await delayed.result).status).toBe(409);
-  const current = store.admit(token, identity), normalized = normalizeClaudeHook(hookFixture("Stop"), { sourceKey: current.sourceKey, captureMode: "full" }, null); if (normalized.status !== "accepted") throw new Error("fixture"); store.publish(token, current, normalized.value);
+  const current = admit(token, identity), normalized = normalizeClaudeHook(hookFixture("Stop"), { sourceKey: current.sourceKey, captureMode: "full" }, null); if (normalized.status !== "accepted") throw new Error("fixture"); store.publish(token, current, normalized.value);
   const late = open("publication"), text = publicationBody(current); late.client.write(text.slice(0, -1)); await waitFor(() => controller.stats().active === 1);
   deleteRun(current.runId); late.client.end(text.slice(-1)); expect((await late.result).status).toBe(409); expect(getDrizzleDb().$client.query("SELECT id FROM runs WHERE id=?").get(current.runId)).toBeNull();
 });
