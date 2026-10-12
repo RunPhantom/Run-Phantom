@@ -31,7 +31,10 @@ import { traceloopLlmAdapter, traceloopToolAdapter } from "./adapters/traceloop"
 import { openInferenceLlmAdapter, openInferenceToolAdapter } from "./adapters/openinference";
 import { genAiMetadataAdapter, genAiToolAdapter } from "./adapters/gen-ai";
 
+import { captureKindAdapter, captureVisibility, readCaptureReceipt } from "./adapters/capture-visibility";
+
 const ADAPTERS: SpanAdapter[] = [
+  captureKindAdapter,
   aiSdkLlmAdapter,
   livekitLlmAdapter,
   traceloopLlmAdapter,
@@ -48,9 +51,10 @@ const ADAPTERS: SpanAdapter[] = [
 export function normalizeSpan(input: AdapterInput): AdapterMatch {
   for (const a of ADAPTERS) {
     const result = a.apply(input);
-    if (result) return result;
+    if (result) { const capture = captureVisibility(input); return { ...result, ...(capture ? { captureVisibility: capture } : {}) }; }
   }
-  return { normalized: emptyNormalized() };
+  const capture = captureVisibility(input);
+  return { normalized: emptyNormalized(), ...(capture ? { captureVisibility: capture } : {}) };
 }
 
 /**
@@ -59,6 +63,7 @@ export function normalizeSpan(input: AdapterInput): AdapterMatch {
  */
 export function adapterInputFromStoredSpan(row: {
   name: string;
+  id?: string; run_id?: string; otlp_evidence?: string | null;
   span_type: string | null;
   input_payload: string | null;
   output_payload: string | null;
@@ -72,11 +77,13 @@ export function adapterInputFromStoredSpan(row: {
     row.span_type === "LLM_GENERATION" ||
     row.span_type === "TOOL_CALL" ||
     row.span_type === "AGENT_ROOT" ||
+    row.span_type === "RETRIEVAL" || row.span_type === "EMBEDDING" ||
     row.span_type === "TRACE"
       ? row.span_type
       : "INTERNAL";
   return {
     spanName: row.name,
+    traceId: row.run_id, spanId: row.id, otlpEvidence: readCaptureReceipt(row.otlp_evidence),
     attrs,
     spanType,
     inputPayload: row.input_payload ?? undefined,
@@ -92,6 +99,7 @@ export function adapterInputFromStoredSpan(row: {
  */
 export function normalizeStoredSpan(row: {
   name: string;
+  id?: string; run_id?: string; otlp_evidence?: string | null;
   span_type: string | null;
   input_payload: string | null;
   output_payload: string | null;

@@ -44,3 +44,72 @@ test("metadata-only and missing-roster streams never become complete from ended 
     expect(span.captureVisibility.stream.state).not.toBe("completed"); expect(span.status).toBe("OK"); expect(span.outputPayload).toBe(captureOutput);
   }
 });
+
+import { publicCaptureMetadata, CAPTURE_LIMITS, sanitizeCaptureFilter } from "../src/spans/adapters/capture-visibility";
+import { encodeFidelityRequest } from "./fixtures/otlp-evidence";
+import { decodeOtlpProtobuf } from "../src/otlp-protobuf";
+import { filterSecret } from "./fixtures/capture-visibility";
+
+test("independent protobuf and JSON retain the same finite capture views", () => {
+  const source = captureTrace();
+  expect(parseOtlpRequest(decodeOtlpProtobuf(encodeFidelityRequest(source.body as any)))).toEqual(parseOtlpRequest(source.body));
+});
+test("exact metadata projection redacts filter keys before every public carrier and preserves business JSON", () => {
+  const source = captureTrace(), span = parseOtlpRequest(source.body)[0];
+  const raw = { attributes: JSON.stringify({ ...span.attributes, "business.body": JSON.stringify({ api_key: "literal-business-value" }) }), otlp_evidence: JSON.stringify(span.otlpEvidence) };
+  const safe = publicCaptureMetadata(raw);
+  expect(JSON.stringify(safe)).not.toContain(filterSecret); expect(raw.attributes).toContain(filterSecret);
+  expect(JSON.parse(safe.attributes)["business.body"]).toBe(JSON.parse(raw.attributes)["business.body"]);
+  expect(JSON.parse(JSON.parse(safe.attributes)["db.filter"])).toEqual({ api_key: "[REDACTED]", city: "Paris" });
+  expect(publicCaptureMetadata(safe)).toEqual(safe);
+});
+test("filter duplicate aliases and unsupported depth are withheld whole", () => {
+  expect(sanitizeCaptureFilter('{"api_key":"one","api_key":"two"}')).toBe("[UNAVAILABLE]");
+  expect(sanitizeCaptureFilter('{"api_key":"one","\\u0061pi_key":"two"}')).toBe("[UNAVAILABLE]");
+  expect(sanitizeCaptureFilter('{"safe":' + '['.repeat(10) + '0' + ']'.repeat(10) + '}')).toBe("[UNAVAILABLE]");
+  expect(sanitizeCaptureFilter('{"query":"' + "x".repeat(9000) + '"}')).toBe("[TRUNCATED]");
+  expect(sanitizeCaptureFilter('{"nested":[{"authorization":"fixture-private","business":"retained"}]}')).toBe('{"nested":[{"authorization":"[REDACTED]","business":"retained"}]}');
+});
+test("duplicate chunk identity is disclosed while changed or conflicting terminals cannot complete", () => {
+  const source = captureTrace(); source.llm.events.push(chunk(0, "Hello "));
+  let stream = (parseOtlpRequest(source.body)[2] as any).captureVisibility.stream;
+  expect(stream.state).toBe("completed"); expect(stream.duplicateChunkCount).toBe(1); expect(stream.chunks).toHaveLength(2);
+  source.llm.events.push(chunk(0, "Changed")); stream = (parseOtlpRequest(source.body)[2] as any).captureVisibility.stream;
+  expect(stream.state).toBe("incomplete"); expect(stream.reasons).toContain("duplicate-conflict");
+  source.llm.events = [chunk(0, "partial"), terminal("completed", 1), terminal("cancelled")];
+  expect((parseOtlpRequest(source.body)[2] as any).captureVisibility.stream).toMatchObject({ state: "incomplete", reportedTerminal: null });
+});
+test("exporter loss, absent drop counts and receiver truncation defeat completion", () => {
+  for (const dropped of [undefined, 1]) {
+    const source = captureTrace(); (source.llm as any).droppedEventsCount = dropped;
+    expect((parseOtlpRequest(source.body)[2] as any).captureVisibility.stream.state).toBe("incomplete");
+  }
+  const source = captureTrace(); source.llm.events = Array.from({ length: 65 }, (_, index) => chunk(index, "safe")); source.llm.events.push(terminal("completed", 65));
+  const projected = (parseOtlpRequest(source.body)[2] as any).captureVisibility;
+  expect(projected.stream.state).toBe("incomplete"); expect(projected.stream.chunks).toHaveLength(64);
+  expect(Buffer.byteLength(JSON.stringify(projected))).toBeLessThanOrEqual(CAPTURE_LIMITS.bytes);
+});
+test("missing chunks, unsafe numbers, error and unsupported stream events stay explicit", () => {
+  const source = captureTrace(); source.llm.events = [chunk(2, "missing"), terminal("completed", 1)];
+  expect((parseOtlpRequest(source.body)[2] as any).captureVisibility.stream.reasons).toContain("missing-chunk");
+  source.llm.events = [chunk(0, "failed partial"), terminal("error")];
+  expect((parseOtlpRequest(source.body)[2] as any).captureVisibility.stream.state).toBe("error");
+  source.llm.events = [chunk(0, "partial"), terminal("completed", 1), terminal("unrecognized")];
+  expect((parseOtlpRequest(source.body)[2] as any).captureVisibility.stream.reasons).toContain("unsupported-event");
+  source.retrieval.attributes.push(...captureAttributes({ "db.vector.query.top_k": -1 }));
+  expect((parseOtlpRequest(source.body)[0].normalized as any).topK).toBeNull();
+});
+test("oversized and credential chunk text is replaced whole with incomplete capture", () => {
+  for (const text of ["x".repeat(3000), `sk-proj-${"x".repeat(48)}`]) {
+    const source = captureTrace(); source.llm.events = [chunk(0, text), terminal("completed", 1)];
+    const projected = (parseOtlpRequest(source.body)[2] as any).captureVisibility;
+    expect(JSON.stringify(projected)).not.toContain(text); expect(projected.stream.state).toBe("incomplete");
+    expect(projected.stream.chunks[0].text).toMatch(/^\[(TRUNCATED|REDACTED)\]$/);
+  }
+});
+test("explicit zero chunk roster is complete and missing model/dimensions stay unavailable", () => {
+  const source = captureTrace(); source.llm.events = [terminal("completed", 0)];
+  expect((parseOtlpRequest(source.body)[2] as any).captureVisibility.stream).toMatchObject({ state: "completed", declaredChunkCount: 0, chunks: [] });
+  source.embedding.attributes = captureAttributes({ "openinference.span.kind": "EMBEDDING" });
+  expect(parseOtlpRequest(source.body)[1].normalized).toMatchObject({ kind: "embedding", model: null, dimensions: null, inputText: null });
+});

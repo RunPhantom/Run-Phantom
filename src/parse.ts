@@ -1,4 +1,5 @@
 import { normalizeOtelId } from "./ids";
+import { captureKind, type CaptureVisibilityV1 } from "./spans/adapters/capture-visibility";
 import { normalizeSpan } from "./spans/normalize";
 import type { NormalizedSpan } from "./spans/normalized";
 import { captureOtlpEvidence, type OtlpEvidence } from "./spans/otlp-evidence";
@@ -17,6 +18,7 @@ export interface ParsedSpan {
    * fields without re-parsing `input_payload` strings. See `src/spans/`.
    */
   normalized: NormalizedSpan;
+  captureVisibility?: CaptureVisibilityV1;
 }
 
 /**
@@ -94,7 +96,7 @@ function inferSpanType(
   hasToolName = false,
   runPhantomSpanKind?: string,
   attrs: Record<string, string | number | boolean> = {},
-): "LLM_GENERATION" | "TOOL_CALL" | "AGENT_ROOT" | "TRACE" | "INTERNAL" {
+): "LLM_GENERATION" | "TOOL_CALL" | "AGENT_ROOT" | "TRACE" | "INTERNAL" | "RETRIEVAL" | "EMBEDDING" {
   // Prefer an explicit Run Phantom role over operation-name heuristics.
   if (runPhantomSpanKind === "agent_root") return "AGENT_ROOT";
   if (runPhantomSpanKind === "trace") return "TRACE";
@@ -110,12 +112,16 @@ function inferSpanType(
     case "TOOL": return "TOOL_CALL";
     case "AGENT": return "AGENT_ROOT";
     case "CHAIN": return "TRACE";
-    case "EMBEDDING": case "RETRIEVER": case "RERANKER":
+    case "EMBEDDING": return "EMBEDDING";
+    case "RETRIEVER": return "RETRIEVAL";
+    case "RERANKER":
     case "GUARDRAIL": case "EVALUATOR": case "PROMPT": return "INTERNAL";
   }
   if (attrs["gen_ai.operation.name"] === "execute_tool") return "TOOL_CALL";
   if (attrs["gen_ai.operation.name"] === "invoke_agent") return "AGENT_ROOT";
   if (attrs["gen_ai.operation.name"] === "invoke_workflow") return "TRACE";
+  const explicitCapture = captureKind(attrs);
+  if (explicitCapture) return explicitCapture;
   if (isGenAiInferenceSpan(attrs)) return "LLM_GENERATION";
   if (typeof attrs["lk.chat_ctx"] === "string") return "LLM_GENERATION";
   if (typeof operationId === "string") {
@@ -283,7 +289,9 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
         // Adapters know which attributes hold the canonical input/output payload
         // for their SDK and produce a typed `normalized` view in a single pass,
         // so downstream consumers don't need to coalesce or try/catch-and-guess.
+        const otlpEvidence = captureOtlpEvidence(s, rs, ss);
         const match = normalizeSpan({
+          traceId: normalizeOtelId(s.traceId, 16) ?? s.traceId, spanId: normalizeOtelId(s.spanId, 8) ?? s.spanId, otlpEvidence,
           spanName: name,
           attrs: allAttrs,
           spanType,
@@ -354,7 +362,8 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
           outputTokens: typeof outputTokens === "number" ? outputTokens : undefined,
           attributes: allAttrs,
           eventId, eventName, userId, convoId, replayRunId,
-          otlpEvidence: captureOtlpEvidence(s, rs, ss),
+          otlpEvidence,
+          ...(match.captureVisibility ? { captureVisibility: match.captureVisibility } : {}),
           normalized: match.normalized,
         });
       }
