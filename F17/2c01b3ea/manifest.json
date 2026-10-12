@@ -1,0 +1,57 @@
+{
+  "product": "Run Phantom",
+  "maintainer": "Divyam Talwar",
+  "feature": "Captured agent definition versions",
+  "head": "2c01b3eac8984770f07800f9381dc67885acd0a3",
+  "artifactSha256": "a27fc0d332051b42de8f3301923c1c4c28b02be956c32fc603acd01b83921466",
+  "sourceTests": {
+    "backendPass": 937,
+    "backendSkip": 1,
+    "sourceChromiumPass": 142,
+    "sourceChromiumExplicitOptInSkip": 12,
+    "fail": 0,
+    "retry": 0
+  },
+  "copiedTests": {
+    "httpCasesPass": 21,
+    "httpAssertions": 432,
+    "originalFeatureBrowserCasesPass": 10,
+    "commonBrowserCasesPass": 3,
+    "sameDatabaseBoots": 2,
+    "workerPhasePass": 2,
+    "frozenReportPhasePass": 2,
+    "fail": 0,
+    "retry": 0
+  },
+  "scope": "Scoped macOS packaged application; current native Windows/Linux packaging and paid-provider acceptance pending",
+  "images": [
+    {
+      "file": "captured-definitions-desktop.png",
+      "bytes": 132881,
+      "sha256": "ef3fec3dc6a3f9749d3b3804ec0156130ab3e280bde69a85209f8625daaeaf63",
+      "origin": "actual copied macOS application",
+      "fixture": "synthetic safe business data"
+    },
+    {
+      "file": "captured-definitions-320.png",
+      "bytes": 65740,
+      "sha256": "f2cd00c1372ac9ad0e153c92b5ce4f74ccbf16ef32a205060ce68647148962cb",
+      "origin": "actual copied macOS application",
+      "fixture": "synthetic safe business data"
+    },
+    {
+      "file": "comparison-mobile.png",
+      "bytes": 77034,
+      "sha256": "88740215d64376bcd46a591d2f8da2022db84762116a8247eeab7523e819f3e0",
+      "origin": "actual copied macOS application",
+      "fixture": "synthetic safe business data"
+    },
+    {
+      "file": "frozen-output-after-restart.png",
+      "bytes": 100800,
+      "sha256": "a4abe1afce480c92f26965c5cd0a6bee3e4359f975707bf3502db9d8b252c190",
+      "origin": "actual copied macOS application",
+      "fixture": "synthetic safe business data"
+    }
+  ]
+}
