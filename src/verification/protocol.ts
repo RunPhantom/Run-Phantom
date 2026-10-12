@@ -6,8 +6,10 @@ export const SEMANTIC_PROTOCOL_VERSION = 3 as const;
 export const SEMANTIC_CAPABILITY = "semantic-refs" as const;
 export const SOURCE_PROTOCOL_VERSION = 4 as const;
 export const SOURCE_CAPABILITY = "control-source" as const;
+export const TREE_PROTOCOL_VERSION = 5 as const;
+export const TREE_CAPABILITY = "semantic-tree" as const;
 export const SEMANTIC_REF_PATTERN = /^rpref_[0-9a-f]{32}$/;
-export type VerificationCapability = typeof CAUSAL_CAPABILITY | typeof SEMANTIC_CAPABILITY | typeof SOURCE_CAPABILITY;
+export type VerificationCapability = typeof CAUSAL_CAPABILITY | typeof SEMANTIC_CAPABILITY | typeof SOURCE_CAPABILITY | typeof TREE_CAPABILITY;
 
 export type ControlSourceObservation = {
   source: "sdk-reported"; framework: "react"; status: "captured";
@@ -125,6 +127,7 @@ export function relativeTargets(predicate: Predicate): RelativeTarget[] {
   return [...new Map(predicate.predicates.flatMap(relativeTargets).map((target) => [relativeTargetKey(target), target])).values()];
 }
 export type AppCommand =
+  | { type: "semantic-tree" }
   | { type: "snapshot"; selector?: string }
   | { type: "click"; selector: string }
   | { type: "fill"; selector: string; value: string }
@@ -210,6 +213,7 @@ export type BrowserMessage =
   | { type: "hello"; version: typeof CAUSAL_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: Array<typeof CAUSAL_CAPABILITY> }
   | { type: "hello"; version: typeof SEMANTIC_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
   | { type: "hello"; version: typeof SOURCE_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
+  | { type: "hello"; version: typeof TREE_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
   | { type: "event"; event: Omit<RuntimeEvent, "t"> }
   | { type: "result"; id: string; ok: boolean; result?: unknown; error?: string; truncated?: boolean };
 export type DaemonMessage =

@@ -8,10 +8,11 @@ import { parseBrowserMessage, validateOrigin, parseFlowSteps } from "./validatio
 import { sanitizeWithReport } from "./serialization";
 import { isSensitiveKey } from "./redaction";
 import { RingBuffer } from "./ring-buffer";
-import { CAUSAL_CAPABILITY, PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, relativeTargetKey, VERIFICATION_LIMITS as L,
+import { CAUSAL_CAPABILITY, PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, TREE_CAPABILITY, relativeTargetKey, VERIFICATION_LIMITS as L,
   type AppCommand, type Coverage, type RelativeTarget, type RuntimeEvent, type SessionSummary, type VerificationCapability, type RetainedControlSource } from "./protocol";
 import { sanitizeControlSource } from "./build/source";
 import { baselineScopeForTarget, captureBaselineReading, captureCausalAttribution, type BaselineReading, type CausalAttribution } from "./baseline";
+import { parseSemanticTree, sanitizeSemanticTree, treeIncomplete } from "./snapshot-contract";
 
 export class VerificationHttpError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -212,6 +213,12 @@ export class VerificationBridge {
           // Validate before resolving: a malformed causal reply must invalidate the owned turn,
           // not leave its promise detached from the generation being closed.
           if (pending.command.type === "causal-click" && msg.ok) this.captureDispatch(session, pending, !!msg.truncated);
+          // A malformed typed tree must invalidate the still-owned pending promise.
+          const treeResult = pending.command.type === "semantic-tree" && msg.ok ? this.sanitizeReadResult(session, pending.command, msg.result) : undefined;
+          if (treeResult && msg.truncated) {
+            const tree = parseSemanticTree(treeResult.value); treeIncomplete(tree, "transport-budget-limit");
+            treeResult.value = sanitizeSemanticTree(tree, text => ({ value: text, truncated: false })); treeResult.incomplete = true;
+          }
           session.pending = null;
           clearTimeout(pending.timer);
           const semanticAction = pending.command.type === "ref-click" || pending.command.type === "ref-fill";
@@ -220,7 +227,7 @@ export class VerificationBridge {
             pending.resolve({ ok: false, cursor: pending.cursor, error: "Application did not acknowledge the action boundary" });
             return;
           }
-          const cleaned = this.sanitizeReadResult(session, pending.command, msg.result);
+          const cleaned = treeResult ?? (pending.command.type === "semantic-tree" ? { value: undefined, incomplete: false } : this.sanitizeReadResult(session, pending.command, msg.result));
           const result = cleaned.value;
           const truncated = msg.truncated || cleaned.incomplete;
           const value = result && typeof result === "object" && !Array.isArray(result) ? result as Record<string, unknown> : {};
@@ -376,6 +383,7 @@ export class VerificationBridge {
       return Promise.resolve({ ok: false, cursor, unavailable: true,
         error: "Application does not support semantic references; no action was executed" });
     }
+    if (command.type === "semantic-tree" && !session.capabilities.includes(TREE_CAPABILITY)) return Promise.resolve({ ok: false, cursor, unavailable: true, error: "Application does not support semantic tree snapshots; no observation was captured" });
     if (["click", "fill", "causal-click", "ref-click", "ref-fill"].includes(command.type)) { session.lastCausalResult = undefined; session.lastControlSource = undefined; }
     if (command.type === "causal-click" && !session.capabilities.includes(CAUSAL_CAPABILITY)) {
       return Promise.resolve({ ok: false, cursor, unavailable: true,
@@ -446,6 +454,10 @@ export class VerificationBridge {
   }
 
   private sanitizeReadResult(session: VerificationSession, command: AppCommand, raw: unknown): { value: unknown; incomplete: boolean } {
+    if (command.type === "semantic-tree") {
+      const tree = sanitizeSemanticTree(raw, text => { const safe = this.sanitize(session, text); return { value: safe.value, truncated: safe.incomplete }; });
+      return { value: tree, incomplete: tree.availability === "partial" };
+    }
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return this.sanitize(session, raw);
     let incomplete = false;
     const value: Record<string, unknown> = {};
