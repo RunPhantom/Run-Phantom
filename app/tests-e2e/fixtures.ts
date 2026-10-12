@@ -15,7 +15,8 @@ export type RunPhantomHandle = {
 type ManagedRunPhantomHandle = RunPhantomHandle & { runtime: RuntimeProvenance };
 
 export const test = base.extend<{ runPhantom: ManagedRunPhantomHandle; localNetworkOnly: void }>({
-  localNetworkOnly: [async ({ page }, use) => {
+  // Refuse invalid runtime authority before requesting a browser.
+  localNetworkOnly: [async ({ runPhantom: _runPhantom, page }, use) => {
     await page.route("**/*", async (route) => {
       const url = new URL(route.request().url());
       const isLocal = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
