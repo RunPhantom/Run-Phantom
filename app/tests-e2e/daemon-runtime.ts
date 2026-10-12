@@ -72,10 +72,56 @@ export function windowsNativeEnvironment(env: NodeJS.ProcessEnv): NodeJS.Process
   if (!projected.PATH || !projected.SystemRoot) throw refusal("native_environment_required");
   return projected;
 }
-function command(file: string, args: string[], maxBuffer = 64 * 1024): Promise<string> {
+export type NativeCommandFailureRecord = Readonly<{
+  probe: "windows-first-birth-command"; errorCode: "ETIMEDOUT" | "ENOENT" | "EACCES" | "other";
+  status: number | null; signal: "SIGTERM" | "SIGKILL" | "other" | null; killed: boolean | null;
+  wallMs: number | null; stdoutUtf8Bytes: number | null; stderrUtf8Bytes: number | null;
+  phases: readonly ("entered" | "before-query" | "after-query" | "after-serialization")[];
+}>;
+const commandFailures = new WeakMap<Error, NativeCommandFailureRecord>();
+function ownData(value: unknown, key: string): unknown {
+  if (!value || typeof value !== "object") return undefined;
+  try {
+    const field = Object.getOwnPropertyDescriptor(value, key);
+    return field && "value" in field ? field.value : undefined;
+  } catch { return undefined; }
+}
+function callbackUtf8Bytes(value: unknown): number | null {
+  return typeof value === "string" && value.length <= 64 * 1024 ? Buffer.byteLength(value, "utf8") : null;
+}
+export function makeNativeCommandFailure(error: unknown, child: unknown, stdout: unknown, stderr: unknown, elapsed: unknown): Error {
+  const code = ownData(error, "code"), signal = ownData(error, "signal"), killed = ownData(error, "killed"), status = ownData(child, "exitCode");
+  const phases: Array<"entered" | "before-query" | "after-query" | "after-serialization"> = [];
+  const stderrUtf8Bytes = callbackUtf8Bytes(stderr);
+  if (typeof stderr === "string" && stderrUtf8Bytes !== null) {
+    const names = ["entered", "before-query", "after-query", "after-serialization"] as const;
+    for (const line of stderr.split("\n")) {
+      const phase = names.find(name => line === `rp-first:${name}` || line === `rp-first:${name}\r`);
+      if (phase && !phases.includes(phase)) phases.push(phase);
+    }
+  }
+  const failure = refusal("native_observation_failed");
+  commandFailures.set(failure, Object.freeze({ probe: "windows-first-birth-command",
+    errorCode: code === "ETIMEDOUT" || code === "ENOENT" || code === "EACCES" ? code : "other",
+    status: typeof status === "number" && Number.isInteger(status) && status >= -2147483648 && status <= 2147483647 ? status : null,
+    signal: signal === undefined || signal === null ? null : signal === "SIGTERM" || signal === "SIGKILL" ? signal : "other",
+    killed: typeof killed === "boolean" ? killed : null,
+    wallMs: typeof elapsed === "number" && Number.isFinite(elapsed) ? Math.min(2147483647, Math.max(0, Math.round(elapsed))) : null,
+    stdoutUtf8Bytes: callbackUtf8Bytes(stdout), stderrUtf8Bytes, phases: Object.freeze(phases) }));
+  return failure;
+}
+export function nativeCommandFailure(error: unknown): NativeCommandFailureRecord | null {
+  return error && typeof error === "object" ? commandFailures.get(error as Error) ?? null : null;
+}
+function command(file: string, args: string[], maxBuffer = 64 * 1024, firstWindowsBirth = false): Promise<string> {
   const env = process.platform === "win32" ? windowsNativeEnvironment(process.env) : { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, LANG: "C", TZ: "UTC" };
-  return new Promise((resolve, reject) => execFile(file, args, { timeout: 3000, maxBuffer, windowsHide: true, env },
-    (error, stdout) => error ? reject(refusal("native_observation_failed")) : resolve(stdout)));
+  return new Promise((resolve, reject) => {
+    const began = performance.now();
+    const child = execFile(file, args, { timeout: 3000, maxBuffer, windowsHide: true, env },
+      (error, stdout, stderr) => error ? reject(firstWindowsBirth
+        ? makeNativeCommandFailure(error, child, stdout, stderr, performance.now() - began)
+        : refusal("native_observation_failed")) : resolve(stdout));
+  });
 }
 export async function observeNative(pid: number, executable: string, cwd: string, port: number): Promise<ProcessObservation> {
   if (!validWindowsPid(pid) || !Number.isInteger(port) || port < 1 || port > 65535) throw refusal("native_identity_mismatch");
@@ -125,8 +171,8 @@ async function darwinRows(pid: number | "all"): Promise<ProcessRow[]> {
   if (!Array.isArray(rows) || rows.length > 8192 || rows.some(row => !Number.isSafeInteger(row.pid) || row.pid < 1 || row.pid > 2147483647 || !Number.isSafeInteger(row.parent) || row.parent < 0 || row.parent > 2147483647 || !/^[0-9]{1,10}:[0-9]{1,20}:[0-9]{1,6}$/.test(row.identity) || Number(row.identity.split(":")[0]) !== row.pid)) throw refusal("fixture_process_birth");
   return rows;
 }
-async function processIdentity(pid: number): Promise<string | null> {
-  if (process.platform === "win32") return windowsProcessBirth(await command("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", windowsOwnershipQuery(pid)]), pid);
+async function processIdentity(pid: number, firstBirth = false): Promise<string | null> {
+  if (process.platform === "win32") return windowsProcessBirth(await command("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", windowsOwnershipQuery(pid)], 64 * 1024, firstBirth), pid);
   try {
     if (process.platform === "linux") {
       const fields = (await readFile(`/proc/${pid}/stat`, "utf8")).split(")").at(-1)!.trim().split(/\s+/);
@@ -169,7 +215,7 @@ const validWindowsPid = (pid: number) => Number.isInteger(pid) && pid > 0 && pid
 export function windowsOwnershipQuery(pid: number | "all"): string {
   if (pid !== "all" && !validWindowsPid(pid)) throw refusal("fixture_process_pid");
   const filter = pid === "all" ? "" : ` -Filter "ProcessId = ${pid}"`;
-  return `$ErrorActionPreference='Stop';$env:PSModulePath=[System.IO.Path]::Combine($PSHOME,'Modules');$rows=[System.Collections.Generic.List[object]]::new();Get-CimInstance -ClassName Win32_Process -Property ProcessId,ParentProcessId,CreationDate${filter} | ForEach-Object {if($_.ProcessId -gt 0){if($rows.Count -ge 8192){throw 'fixture_process_snapshot_limit'};$birth=$null;if($null -ne $_.CreationDate){$birth=$_.CreationDate.ToUniversalTime().ToString("o")};$rows.Add(@{pid=$_.ProcessId;parent=$_.ParentProcessId;birth=$birth})}};ConvertTo-Json -InputObject @($rows.ToArray()) -Compress`;
+  return `$ErrorActionPreference='Stop';$env:PSModulePath=[System.IO.Path]::Combine($PSHOME,'Modules');[Console]::Error.WriteLine('rp-first:entered');$rows=[System.Collections.Generic.List[object]]::new();[Console]::Error.WriteLine('rp-first:before-query');Get-CimInstance -ClassName Win32_Process -Property ProcessId,ParentProcessId,CreationDate${filter} | ForEach-Object {if($_.ProcessId -gt 0){if($rows.Count -ge 8192){throw 'fixture_process_snapshot_limit'};$birth=$null;if($null -ne $_.CreationDate){$birth=$_.CreationDate.ToUniversalTime().ToString("o")};$rows.Add(@{pid=$_.ProcessId;parent=$_.ParentProcessId;birth=$birth})}};[Console]::Error.WriteLine('rp-first:after-query');ConvertTo-Json -InputObject @($rows.ToArray()) -Compress;[Console]::Error.WriteLine('rp-first:after-serialization');`;
 }
 type Ownership = { root: ChildProcess; pid: number | undefined; identity: Promise<string | null>; descendants: Map<number, string>; pending: Promise<void>; running?: boolean; timer?: ReturnType<typeof setInterval>; failure?: Error };
 const ownership = new WeakMap<OwnedProcess, Ownership>();
@@ -240,7 +286,7 @@ export async function ownedProcessMatches(owned: OwnedProcess): Promise<boolean>
 }
 export function launchOwnedProcess(file: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): OwnedProcess {
   const child = spawn(file, args, { cwd, env, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-  const owned: OwnedProcess = { child, closed: Promise.resolve(), closeObserved: false, error: null, identity: child.pid ? processIdentity(child.pid) : Promise.resolve(null) };
+  const owned: OwnedProcess = { child, closed: Promise.resolve(), closeObserved: false, error: null, identity: child.pid ? processIdentity(child.pid, true) : Promise.resolve(null) };
   const lease: Ownership = { root: child, pid: child.pid, identity: owned.identity, descendants: new Map(), pending: Promise.resolve() }; ownership.set(owned, lease);
   lease.timer = setInterval(() => { void scheduleOwnership(owned, lease); }, 100); lease.timer.unref();
   void scheduleOwnership(owned, lease);

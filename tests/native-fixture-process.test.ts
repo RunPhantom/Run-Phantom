@@ -5,6 +5,7 @@ import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileSha256, launchOwnedProcess, ownedProcessMatches, startManagedDaemon, startFixtureDaemon, startFixtureSupervisor, stopOwnedProcess, windowsNativeEnvironment, windowsOwnershipQuery, windowsProcessBirth } from "../app/tests-e2e/daemon-runtime";
+import * as runtime from "../app/tests-e2e/daemon-runtime";
 
 const root = path.resolve(import.meta.dir, "..");
 const diagnosticSystem = { PATH: "C:\\Windows\\System32", SystemRoot: "C:\\Windows" };
@@ -94,6 +95,8 @@ test("a live registered process acquires an exact native birth before cleanup au
     let identity: string | null = null, acquisitionFailure: unknown;
     try { identity = await owned.identity; } catch (error) { acquisitionFailure = error; }
     if (!identity && process.platform === "win32") {
+      const firstFailure = runtime.nativeCommandFailure(acquisitionFailure);
+      if (firstFailure) console.log(JSON.stringify(firstFailure));
       const script = `$p=Get-CimInstance Win32_Process -Filter "ProcessId = ${owned.child.pid}";if($p){$p.CreationDate.ToUniversalTime().ToString("o")}`;
       for (const mode of ["full", "current-wrapper"] as const) {
         const began = performance.now();

@@ -4,6 +4,7 @@ import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileSha256, outsideCheckout, launchOwnedProcess, ownedProcessMatches, stopOwnedProcess, startManagedDaemon, windowsNativeEnvironment, windowsProcessSnapshot, windowsProcessBirth, windowsOwnershipQuery, type RuntimeProvenance } from "../app/tests-e2e/daemon-runtime";
+import * as runtime from "../app/tests-e2e/daemon-runtime";
 
 const systemEnvironment = { PATH: "C:\\Windows\\System32", SystemRoot: "C:\\Windows", windir: "C:\\Windows", TEMP: "C:\\Temp", TMP: "C:\\Temp",
   USERPROFILE: "C:\\Users\\fixture", LOCALAPPDATA: "C:\\Users\\fixture\\AppData\\Local", ProgramFiles: "C:\\Program Files" };
@@ -177,4 +178,98 @@ test("Windows ownership command discovery uses only the fixed intrinsic built-in
     expect(script.indexOf("Get-CimInstance")).toBeGreaterThan(prefix.length);
     expect(script).not.toMatch(/\$env:(?:APPDATA|ProgramFiles|PSHOME)|Import-Module|CurrentUser|WindowsPowerShell\\Modules/);
   }
+});
+
+const firstBirthMarkers = [
+  "[Console]::Error.WriteLine('rp-first:entered');",
+  "[Console]::Error.WriteLine('rp-first:before-query');",
+  "[Console]::Error.WriteLine('rp-first:after-query');",
+  ";[Console]::Error.WriteLine('rp-first:after-serialization');",
+];
+function originalOwnershipQuery(pid: number | "all"): string {
+  const filter = pid === "all" ? "" : ` -Filter "ProcessId = ${pid}"`;
+  return `$ErrorActionPreference='Stop';$env:PSModulePath=[System.IO.Path]::Combine($PSHOME,'Modules');$rows=[System.Collections.Generic.List[object]]::new();Get-CimInstance -ClassName Win32_Process -Property ProcessId,ParentProcessId,CreationDate${filter} | ForEach-Object {if($_.ProcessId -gt 0){if($rows.Count -ge 8192){throw 'fixture_process_snapshot_limit'};$birth=$null;if($null -ne $_.CreationDate){$birth=$_.CreationDate.ToUniversalTime().ToString("o")};$rows.Add(@{pid=$_.ProcessId;parent=$_.ParentProcessId;birth=$birth})}};ConvertTo-Json -InputObject @($rows.ToArray()) -Compress`;
+}
+test("first Windows birth telemetry markers preserve the entire original selected and snapshot queries", () => {
+  for (const selector of [71, "all"] as const) {
+    const script = windowsOwnershipQuery(selector);
+    for (const marker of firstBirthMarkers) expect(script.split(marker).length).toBe(2);
+    expect(firstBirthMarkers.reduce((text, marker) => text.replace(marker, ""), script)).toBe(originalOwnershipQuery(selector));
+    expect(script.indexOf(firstBirthMarkers[0])).toBeGreaterThan(script.indexOf("$env:PSModulePath="));
+    expect(script.indexOf(firstBirthMarkers[1])).toBeLessThan(script.indexOf("Get-CimInstance"));
+    expect(script.indexOf(firstBirthMarkers[2])).toBeGreaterThan(script.indexOf("$rows.Add("));
+    expect(script.indexOf(firstBirthMarkers[2])).toBeLessThan(script.indexOf("ConvertTo-Json"));
+    expect(script.indexOf(firstBirthMarkers[3])).toBeGreaterThan(script.indexOf("ConvertTo-Json"));
+  }
+});
+test("first Windows birth telemetry retains only a closed immutable record for the particular refusal", () => {
+  const failure = runtime.makeNativeCommandFailure({ code: "ENOENT", signal: "SIGTERM", killed: true,
+    message: "PRIVATE_FIRST_MESSAGE", cmd: "PRIVATE_FIRST_COMMAND", path: "PRIVATE_FIRST_PATH", cause: "PRIVATE_FIRST_CAUSE" },
+  { exitCode: -2 }, "雪", "rp-first:entered\nrp-first:before-query\nPRIVATE_FIRST_STDERR\n", 12.6);
+  expect(failure.message).toBe("native_observation_failed");
+  expect(failure.cause).toBeUndefined();
+  const record = runtime.nativeCommandFailure(failure);
+  expect(record).toEqual({ probe: "windows-first-birth-command", errorCode: "ENOENT", status: -2, signal: "SIGTERM", killed: true,
+    wallMs: 13, stdoutUtf8Bytes: 3, stderrUtf8Bytes: 60, phases: ["entered", "before-query"] });
+  expect(Object.isFrozen(record)).toBe(true);
+  expect(Object.isFrozen(record!.phases)).toBe(true);
+  expect(JSON.stringify(record)).not.toContain("PRIVATE_FIRST");
+  expect(runtime.nativeCommandFailure(new Error("native_observation_failed"))).toBeNull();
+  expect(runtime.nativeCommandFailure({ ...failure })).toBeNull();
+  expect(runtime.nativeCommandFailure(null)).toBeNull();
+});
+test("first Windows birth telemetry does not infer ETIMEDOUT from a killed process or elapsed deadline", () => {
+  for (const [code, expected] of [["ETIMEDOUT", "ETIMEDOUT"], ["EACCES", "EACCES"], ["ENOENT", "ENOENT"],
+    [17, "other"], [undefined, "other"], ["PRIVATE_FIRST_CODE", "other"]] as const) {
+    const failure = runtime.makeNativeCommandFailure({ code, signal: "SIGTERM", killed: true }, { exitCode: null }, "", "", 3001);
+    expect(runtime.nativeCommandFailure(failure)!.errorCode).toBe(expected);
+  }
+  const missing = runtime.nativeCommandFailure(runtime.makeNativeCommandFailure({}, {}, "", "", 1));
+  expect(missing!.signal).toBeNull(); expect(missing!.killed).toBeNull(); expect(missing!.status).toBeNull();
+  const unknown = runtime.nativeCommandFailure(runtime.makeNativeCommandFailure({ signal: "PRIVATE_FIRST_SIGNAL", killed: "yes" },
+    { exitCode: "17" }, "", "", 1));
+  expect(unknown!.signal).toBe("other"); expect(unknown!.killed).toBeNull(); expect(unknown!.status).toBeNull();
+});
+test("first Windows birth telemetry never invokes getters, inherited metadata or scalar coercions", () => {
+  let reads = 0;
+  const error = Object.create({ code: "ENOENT", signal: "SIGTERM", killed: true });
+  for (const key of ["code", "signal", "killed"]) Object.defineProperty(error, key, { get: () => { reads++; return "PRIVATE_FIRST_GETTER"; } });
+  const child = Object.defineProperty({}, "exitCode", { get: () => { reads++; return 17; } });
+  const text = { toString: () => { reads++; return "PRIVATE_FIRST_TEXT"; }, valueOf: () => { reads++; return 12; } };
+  const record = runtime.nativeCommandFailure(runtime.makeNativeCommandFailure(error, child, text, text, text));
+  expect(reads).toBe(0);
+  expect(record).toEqual({ probe: "windows-first-birth-command", errorCode: "other", status: null, signal: null, killed: null,
+    wallMs: null, stdoutUtf8Bytes: null, stderrUtf8Bytes: null, phases: [] });
+  const inherited = runtime.nativeCommandFailure(runtime.makeNativeCommandFailure(Object.create({ code: "EACCES", signal: "SIGTERM", killed: true }),
+    Object.create({ exitCode: 17 }), "", "", 1));
+  expect(inherited!.errorCode).toBe("other"); expect(inherited!.signal).toBeNull(); expect(inherited!.killed).toBeNull(); expect(inherited!.status).toBeNull();
+  const throwing = new Proxy({}, { getOwnPropertyDescriptor: () => { throw new Error("PRIVATE_FIRST_PROXY"); } });
+  expect(runtime.nativeCommandFailure(runtime.makeNativeCommandFailure(throwing, throwing, "", "", 1))!.errorCode).toBe("other");
+});
+test("first Windows birth telemetry bounds clocks and callback text while counting actual UTF8 bytes", () => {
+  for (const [elapsed, expected] of [[12.6, 13], [-1, 0], [Number.MAX_VALUE, 2147483647], [Infinity, null], [NaN, null], ["12", null]] as const) {
+    const record = runtime.nativeCommandFailure(runtime.makeNativeCommandFailure({}, {}, "", "", elapsed));
+    expect(record!.wallMs).toBe(expected);
+  }
+  const bounded = runtime.nativeCommandFailure(runtime.makeNativeCommandFailure({}, {}, "雪🙂", "x".repeat(64 * 1024), 1));
+  expect(bounded!.stdoutUtf8Bytes).toBe(7); expect(bounded!.stderrUtf8Bytes).toBe(64 * 1024);
+  const oversized = runtime.nativeCommandFailure(runtime.makeNativeCommandFailure({}, {}, "x".repeat(64 * 1024 + 1), "x".repeat(64 * 1024 + 1), 1));
+  expect(oversized!.stdoutUtf8Bytes).toBeNull(); expect(oversized!.stderrUtf8Bytes).toBeNull(); expect(oversized!.phases).toEqual([]);
+});
+test("first Windows birth telemetry accepts only complete fixed stderr lines with bounded unique phases", () => {
+  const stderr = "PRIVATE_FIRST rp-first:entered\nrp-first:enteredX\nrp-first:before-query\nrp-first:before-query\n" +
+    "rp-first:after-query\r\nrp-first:after-serialization\nrp-first:entered\nrp-first:unknown\nrp-first:entered\u001b\n";
+  const record = runtime.nativeCommandFailure(runtime.makeNativeCommandFailure({}, {}, "", stderr, 1));
+  expect(record!.phases).toEqual(["before-query", "after-query", "after-serialization", "entered"]);
+  expect(JSON.stringify(record)).not.toContain("PRIVATE_FIRST");
+  expect(record!.phases.length).toBe(4);
+});
+test("first Windows birth telemetry cannot be replaced by a later observation or a counterfeit record", () => {
+  const original = runtime.makeNativeCommandFailure({ code: "ENOENT" }, {}, "", "", 1);
+  const first = runtime.nativeCommandFailure(original);
+  const later = runtime.makeNativeCommandFailure({ code: "EACCES" }, {}, "", "", 2);
+  expect(runtime.nativeCommandFailure(later)!.errorCode).toBe("EACCES");
+  expect(runtime.nativeCommandFailure(original)).toBe(first);
+  expect(first!.errorCode).toBe("ENOENT");
+  expect(runtime.nativeCommandFailure(Object.assign(new Error("native_observation_failed"), { diagnostic: first }))).toBeNull();
 });
