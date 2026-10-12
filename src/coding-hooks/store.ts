@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Database } from "bun:sqlite";
 import type { NormalizedClaudeBatch, NormalizedClaudeEntity } from "./claude";
 import { parseBoundedHookJson } from "./shared";
-import { HookRefusal, hookDigest, isHex, refuse, validateClaudeBatch } from "./protocol";
+import { HookRefusal, hookDigest, isHex, refuse, validateClaudeBatch, validateClaudeRetainedEntity } from "./protocol";
 
 export const STORE_LIMITS = Object.freeze({ installations: 64, sessions: 10000, sessionEntities: 1000, entities: 100000, bytes: 33554432 });
 type StoreLimits = { [Key in keyof typeof STORE_LIMITS]: number };
@@ -11,7 +11,7 @@ export interface InstallationBinding { installationId: string; scope: "global" |
 interface InstallationRow { id: string; generation: string; capture_mode: "metadata" | "full"; state: "active" | "disabled"; source_root_key: string; token_sha256: string; config_sha256: string; data: string | null; }
 export interface HookAdmission { ownerGeneration: string; installationGeneration: string; sourceKey: string; runId: string; rootSpanId: string; captureMode: "metadata" | "full"; transcriptCursor: number; incarnationKey: string | null; prefixBytes: number; prefixSha256: string | null; observedFileBytes: number; binding: InstallationBinding; }
 interface SessionRow { source_key: string; source_root_key: string; run_id: string; root_span_id: string; state: "open" | "closed" | "unknown" | "suppressed"; incarnation_key: string | null; prefix_sha256: string | null; prefix_bytes: number; source_cursor: number; observed_file_bytes: number; data: string | null; }
-interface EntityRow { data: string | null; projection_sha256: string; observation_sha256: string; }
+interface EntityRow { data: string | null; projection_sha256: string; observation_sha256: string; span_id: string; kind: NormalizedClaudeEntity["kind"]; phase: NormalizedClaudeEntity["phase"]; incarnation_key: string | null; source_offset: number | null; }
 const random = () => randomBytes(16).toString("hex");
 const rootKey = (binding: InstallationBinding) => hookDigest(JSON.stringify(["runphantom.claude.root/v1", binding.registeredWorkspace, binding.transcriptRoot, binding.projectDirectory]));
 const terminal = (phase: NormalizedClaudeEntity["phase"]) => ["success", "failure", "interrupted", "complete", "conflict"].includes(phase);
@@ -133,16 +133,18 @@ export class CodingHookStore {
       const now = Date.now(); if (!run) this.db.query("INSERT INTO runs(id,name,started_at,last_updated_at,metadata) VALUES(?,'Claude session',?,?,?)").run(session.run_id, now, now, '{"source":"claude_hook","runtimeVerified":false,"coverage":"partial"}');
       for (const observed of batch.entities) {
         const spanId = observed.kind === "session" ? session.root_span_id : observed.entityKey.slice(0, 16);
-        const priorRow = this.db.query("SELECT projection_sha256,observation_sha256,CASE WHEN length(CAST(data AS BLOB))<=16384 THEN data END data FROM coding_hook_entities WHERE source_key=? AND entity_key=?").get(session.source_key, observed.entityKey) as EntityRow | null;
+        const priorRow = this.db.query("SELECT span_id,kind,phase,incarnation_key,source_offset,projection_sha256,observation_sha256,CASE WHEN length(CAST(data AS BLOB))<=16384 THEN data END data FROM coding_hook_entities WHERE source_key=? AND entity_key=?").get(session.source_key, observed.entityKey) as EntityRow | null;
         const current = this.canonical(session.run_id, spanId);
         if (priorRow ? !current || hookDigest(JSON.stringify(current)) !== priorRow.projection_sha256 : current !== null) refuse("projection_conflict");
         let next = observed;
         if (priorRow) {
           if (!priorRow.data) refuse("corrupt", 503);
-          let prior: NormalizedClaudeEntity; try { prior = JSON.parse(priorRow.data); } catch { refuse("corrupt", 503); }
-          if (prior.entityKey !== observed.entityKey || prior.kind !== observed.kind) refuse("corrupt", 503);
-          const payload = (value: unknown) => value === null || value === undefined ? null : JSON.stringify(value);
-          if (payload(prior.body?.input) !== current!.input_payload || payload(prior.body?.output) !== current!.output_payload || prior.name !== current!.name || prior.model !== current!.model) refuse("corrupt", 503);
+          const prior = validateClaudeRetainedEntity(priorRow.data, admission.sourceKey, session.incarnation_key, session.source_cursor);
+          if (prior.entityKey !== observed.entityKey || prior.kind !== observed.kind || priorRow.span_id !== spanId || priorRow.kind !== prior.kind || priorRow.phase !== prior.phase
+            || priorRow.incarnation_key !== prior.incarnationKey || priorRow.source_offset !== prior.sourceOffset) refuse("corrupt", 503);
+          const parsed = parseBoundedHookJson(current!.attributes, 65536);
+          if (parsed.status !== "accepted" || !parsed.value || typeof parsed.value !== "object" || Array.isArray(parsed.value)
+            || !isHex(parsed.value.retainedEntitySha256, 64) || parsed.value.retainedEntitySha256 !== hookDigest(priorRow.data)) refuse("corrupt", 503);
           if (prior.sourceOffset !== null && observed.sourceOffset !== null) {
             if (prior.incarnationKey !== observed.incarnationKey) refuse("source_changed");
             if (observed.sourceOffset < prior.sourceOffset) continue;
@@ -158,7 +160,7 @@ export class CodingHookStore {
         const projection = { id: spanId, run_id: session.run_id, parent_span_id: next.kind === "session" ? null : session.root_span_id, name: next.name, span_type: next.kind === "tool" ? "tool" : next.kind === "assistant" ? "llm" : "agent",
           status: next.kind === "session" ? "UNSET" : ["failure", "interrupted", "conflict"].includes(next.phase) ? "ERROR" : next.phase === "success" ? "OK" : "UNSET", input_payload: next.body?.input === null || !next.body ? null : JSON.stringify(next.body.input), output_payload: next.body?.output === null || !next.body ? null : JSON.stringify(next.body.output),
           start_time_ms: next.reportedAt === null ? null : Date.parse(next.reportedAt), end_time_ms: null, duration_ms: null, model: next.model, provider: "anthropic", input_tokens: next.usage?.freshInputTokens ?? null, output_tokens: next.usage?.outputTokens ?? null,
-          attributes: JSON.stringify({ source: "claude_hook", producerVerified: false, runtimeVerified: false, coverage: "partial", coverageReasons: next.coverageReasons, reportedPhase: next.phase, reportedDurationMs: next.reportedDurationMs, usage: next.usage, currentCapturePolicy: authority.row.capture_mode, retainedBody: next.body !== null }), otlp_evidence: null };
+          attributes: JSON.stringify({ source: "claude_hook", producerVerified: false, runtimeVerified: false, coverage: "partial", coverageReasons: next.coverageReasons, reportedPhase: next.phase, reportedDurationMs: next.reportedDurationMs, usage: next.usage, currentCapturePolicy: authority.row.capture_mode, retainedBody: next.body !== null, retainedEntitySha256: hookDigest(retained) }), otlp_evidence: null };
         const columns = Object.keys(projection), values = Object.values(projection);
         this.db.query(`INSERT INTO spans(${columns.join(",")}) VALUES(${columns.map(() => "?").join(",")}) ON CONFLICT(run_id,id) DO UPDATE SET ${columns.filter(column => !["id", "run_id"].includes(column)).map(column => `${column}=excluded.${column}`).join(",")}`).run(...values);
         this.db.query("INSERT INTO coding_hook_entities VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_key,entity_key) DO UPDATE SET phase=excluded.phase,incarnation_key=excluded.incarnation_key,source_offset=excluded.source_offset,observation_sha256=excluded.observation_sha256,projection_sha256=excluded.projection_sha256,data=excluded.data,updated_at=excluded.updated_at").run(session.source_key, next.entityKey, spanId, next.kind, next.phase, next.incarnationKey, next.sourceOffset, hookDigest(JSON.stringify(observed)), hookDigest(JSON.stringify(projection)), retained, now);

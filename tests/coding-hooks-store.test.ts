@@ -7,7 +7,7 @@ import { getDrizzleDb, closeDb, deleteRun, insertSpan } from "../src/db";
 import { CodingHookStore, type InstallationBinding } from "../src/coding-hooks/store";
 import { normalizeClaudeHook } from "../src/coding-hooks/claude";
 import { hookFixture, transcriptRecord, transcriptSnapshot } from "./fixtures/coding-hooks-claude";
-import { parseHookAdmission, parseHookPublication, validateClaudeBatch, HOOK_PROTOCOL } from "../src/coding-hooks/protocol";
+import { parseHookAdmission, parseHookPublication, validateClaudeBatch, hookDigest, HOOK_PROTOCOL } from "../src/coding-hooks/protocol";
 
 // Exact root-reviewed SQL in an actual owner SQLite fixture. This is not a product migration.
 let directory: string, store: CodingHookStore, db: ReturnType<typeof getDrizzleDb>["$client"], prior: string | undefined;
@@ -20,7 +20,7 @@ function active(mode: "metadata" | "full" = "metadata") {
   store.commitInstallation(id, receipt.installationGeneration, token, "c".repeat(64), receipt.ownerGeneration); return store.admit(token, sourceIdentity);
 }
 function batch(admission: ReturnType<CodingHookStore["admit"]>, event = "PostToolUse") {
-  const normalized = normalizeClaudeHook(hookFixture(event, { tool_use_id: "tool_exact", tool_name: "Bash", tool_response: "exact business output" }), { sourceKey: admission.sourceKey, captureMode: "full" }, null);
+  const normalized = normalizeClaudeHook(hookFixture(event, { tool_use_id: "tool_exact", tool_name: "Bash", tool_response: "exact business output", ...(event === "PostToolUseFailure" ? { error: "producer failure" } : {}) }), { sourceKey: admission.sourceKey, captureMode: "full" }, null);
   if (normalized.status !== "accepted") throw new Error("fixture admission unavailable"); return normalized.value;
 }
 test("actual canonical publication is idempotent and producer-only with exact ordinary OTLP behavior preserved", () => {
@@ -124,4 +124,65 @@ test("actual second-connection writer lock refuses publication without partial c
   finally { other.exec("ROLLBACK"); other.close(); }
   expect(db.query("SELECT id FROM runs WHERE id=?").get(admission.runId)).toBeNull(); expect(db.query("SELECT entity_key FROM coding_hook_entities").all()).toEqual([]);
   expect(store.publish(token, admission, batch(admission)).status).toBe("accepted");
+});
+
+const canonicalBytes = () => JSON.stringify(db.query("SELECT * FROM spans ORDER BY id").all());
+test.each(["phase", "sourceKind", "sourceOffset", "incarnationKey", "usage", "coverageReasons", "reportedAt", "reportedDurationMs", "bodyError", "model", "name", "runtimeVerified", "bodyOutput", "extraField"])("actual cached %s corruption refuses atomically with canonical witness and columns unchanged", field => {
+  const admission = active("full"), normalized = normalizeClaudeHook(hookFixture("Stop"), { sourceKey: admission.sourceKey, captureMode: "full" }, transcriptSnapshot([transcriptRecord()]));
+  if (normalized.status !== "accepted") throw new Error("fixture"); store.publish(token, admission, normalized.value);
+  const row = db.query("SELECT * FROM coding_hook_entities WHERE source_key=? AND kind='assistant'").get(admission.sourceKey) as { entity_key: string; data: string };
+  const prior = JSON.parse(row.data); const sessionBefore = JSON.stringify(db.query("SELECT * FROM coding_hook_sessions").all()); const before = canonicalBytes(), columnsBefore = { ...row, data: null };
+  const edits: Record<string, unknown> = { phase: "pending", sourceKind: "hook", sourceOffset: prior.sourceOffset + 1, incarnationKey: "f".repeat(64), usage: { ...prior.usage, outputTokens: 123 }, coverageReasons: ["invalid_usage"], reportedAt: "2026-10-12T04:00:00.000Z", reportedDurationMs: 7, bodyError: "forged error", model: "changed-model", name: "changed label", runtimeVerified: true, bodyOutput: "forged output", extraField: true };
+  if (field === "bodyError") prior.body.error = edits[field]; else if (field === "bodyOutput") prior.body.output = edits[field]; else prior[field] = edits[field];
+  db.query("UPDATE coding_hook_entities SET data=? WHERE source_key=? AND entity_key=?").run(JSON.stringify(prior), admission.sourceKey, row.entity_key);
+  const changed = db.query("SELECT * FROM coding_hook_entities WHERE source_key=? AND entity_key=?").get(admission.sourceKey, row.entity_key) as typeof row;
+  expect({ ...changed, data: null }).toEqual(columnsBefore); expect(canonicalBytes()).toBe(before);
+  expect(() => store.publish(token, admission, normalized.value)).toThrow(); expect(canonicalBytes()).toBe(before); expect(JSON.stringify(db.query("SELECT * FROM coding_hook_sessions").all())).toBe(sessionBefore);
+  expect(db.query("SELECT data FROM coding_hook_entities WHERE source_key=? AND entity_key=?").get(admission.sourceKey, row.entity_key)).toEqual({ data: JSON.stringify(prior) });
+});
+test("actual cached success-to-pending tool mutation cannot downgrade the unchanged terminal projection", () => {
+  const admission = active("full"), value = batch(admission); store.publish(token, admission, value);
+  const row = db.query("SELECT * FROM coding_hook_entities WHERE source_key=? AND kind='tool'").get(admission.sourceKey) as { entity_key: string; data: string };
+  const prior = JSON.parse(row.data), before = canonicalBytes(); prior.phase = "pending";
+  db.query("UPDATE coding_hook_entities SET data=? WHERE source_key=? AND entity_key=?").run(JSON.stringify(prior), admission.sourceKey, row.entity_key);
+  const control = db.query("SELECT * FROM coding_hook_entities WHERE source_key=? AND entity_key=?").get(admission.sourceKey, row.entity_key) as typeof row;
+  expect({ ...control, data: null }).toEqual({ ...row, data: null }); expect(canonicalBytes()).toBe(before);
+  expect(() => store.publish(token, admission, batch(admission, "PreToolUse"))).toThrow(); expect(canonicalBytes()).toBe(before);
+});
+test("unchanged retained success stays terminal when a pending observation arrives", () => {
+  const admission = active("full"); store.publish(token, admission, batch(admission)); const before = canonicalBytes();
+  expect(store.publish(token, admission, batch(admission, "PreToolUse")).status).toBe("accepted"); expect(canonicalBytes()).toBe(before);
+});
+
+test.each(["null", "unknown_field", "missing_field"])("bounded retained DTO %s corruption cannot be repaired or overwrite current state", mutation => {
+  const admission = active("full"); store.publish(token, admission, batch(admission)); const before = canonicalBytes(), sessions = JSON.stringify(db.query("SELECT * FROM coding_hook_sessions").all());
+  const row = db.query("SELECT entity_key,data FROM coding_hook_entities WHERE source_key=? AND kind='tool'").get(admission.sourceKey) as { entity_key: string; data: string };
+  const value = JSON.parse(row.data); if (mutation === "unknown_field") value.untrustedExtra = "unknown"; else if (mutation === "missing_field") delete value.runtimeVerified;
+  const data = mutation === "null" ? "null" : JSON.stringify(value); db.query("UPDATE coding_hook_entities SET data=? WHERE source_key=? AND entity_key=?").run(data, admission.sourceKey, row.entity_key);
+  expect(() => store.publish(token, admission, batch(admission))).toThrow(); expect(canonicalBytes()).toBe(before); expect(JSON.stringify(db.query("SELECT * FROM coding_hook_sessions").all())).toBe(sessions);
+});
+test("metadata after full retains prior consented bodies through terminal conflict with a distinct NEXT witness", () => {
+  const admission = active("full"); store.publish(token, admission, batch(admission));
+  const changedToken = "d".repeat(64), receipt = store.prepareInstallation(binding(), changedToken, "c".repeat(64)); store.commitInstallation(id, receipt.installationGeneration, changedToken, "c".repeat(64), receipt.ownerGeneration);
+  const metadata = store.admit(changedToken, sourceIdentity), failed = batch(metadata, "PostToolUseFailure");
+  expect(store.publish(changedToken, metadata, failed).status).toBe("accepted");
+  const row = db.query("SELECT data,observation_sha256 FROM coding_hook_entities WHERE source_key=? AND kind='tool'").get(metadata.sourceKey) as { data: string; observation_sha256: string };
+  expect(JSON.parse(row.data).phase).toBe("conflict"); expect(JSON.parse(row.data).body.output).toBe("exact business output");
+  expect(hookDigest(row.data)).not.toBe(row.observation_sha256); const before = canonicalBytes(); expect(store.publish(changedToken, metadata, failed).status).toBe("accepted"); expect(canonicalBytes()).toBe(before);
+  const pending = batch(metadata, "PreToolUse"); expect(store.publish(changedToken, metadata, pending).status).toBe("accepted"); expect(canonicalBytes()).toBe(before);
+});
+
+test("stored transition columns independently disagreeing with retained JSON refuse exact canonical/session changes", () => {
+  const admission = active("full"); store.publish(token, admission, batch(admission)); const before = canonicalBytes(), sessions = JSON.stringify(db.query("SELECT * FROM coding_hook_sessions").all());
+  db.query("UPDATE coding_hook_entities SET phase='pending' WHERE source_key=? AND kind='tool'").run(admission.sourceKey);
+  expect(() => store.publish(token, admission, batch(admission, "PreToolUse"))).toThrow(); expect(canonicalBytes()).toBe(before); expect(JSON.stringify(db.query("SELECT * FROM coding_hook_sessions").all())).toBe(sessions);
+});
+test("current projection without a retained NEXT witness refuses instead of inferring or repairing cached state", () => {
+  const admission = active("full"); store.publish(token, admission, batch(admission));
+  const span = db.query("SELECT * FROM spans WHERE run_id=? AND span_type='tool'").get(admission.runId) as { id: string; attributes: string };
+  const attributes = JSON.parse(span.attributes); delete attributes.retainedEntitySha256; db.query("UPDATE spans SET attributes=? WHERE run_id=? AND id=?").run(JSON.stringify(attributes), admission.runId, span.id);
+  const current = db.query("SELECT id,run_id,parent_span_id,name,span_type,status,input_payload,output_payload,start_time_ms,end_time_ms,duration_ms,model,provider,input_tokens,output_tokens,attributes,otlp_evidence FROM spans WHERE run_id=? AND id=?").get(admission.runId, span.id);
+  db.query("UPDATE coding_hook_entities SET projection_sha256=? WHERE source_key=? AND kind='tool'").run(hookDigest(JSON.stringify(current)), admission.sourceKey);
+  const before = canonicalBytes(), sessions = JSON.stringify(db.query("SELECT * FROM coding_hook_sessions").all());
+  expect(() => store.publish(token, admission, batch(admission))).toThrow(); expect(canonicalBytes()).toBe(before); expect(JSON.stringify(db.query("SELECT * FROM coding_hook_sessions").all())).toBe(sessions);
 });
