@@ -187,9 +187,26 @@ test("release audit: mobile route headings clear the sidebar trigger", async ({ 
     });
     expect(sidebarToggleBox, `${route.path} sidebar trigger should render`).not.toBeNull();
     expect(routeLabelBox.width, `${route.path} label should render`).toBeGreaterThan(0);
-    expect(routeLabelBox.x, `${route.path} label should clear the sidebar trigger`).toBeGreaterThanOrEqual(
-      sidebarToggleBox!.x + sidebarToggleBox!.width + 4,
-    );
+    const trigger = sidebarToggleBox!;
+    const clear = routeLabelBox.x >= trigger.x + trigger.width + 4 ||
+      routeLabelBox.x + routeLabelBox.width + 4 <= trigger.x ||
+      routeLabelBox.y >= trigger.y + trigger.height + 4 ||
+      routeLabelBox.y + routeLabelBox.height + 4 <= trigger.y;
+    expect(clear, `${route.path} label should clear the sidebar trigger on its actual row`).toBe(true);
+    expect(routeLabelBox.x).toBeGreaterThanOrEqual(0);
+    expect(routeLabelBox.x + routeLabelBox.width).toBeLessThanOrEqual(390);
+    expect(routeLabelBox.y).toBeGreaterThanOrEqual(0);
+    expect(routeLabelBox.y + routeLabelBox.height).toBeLessThanOrEqual(844);
+    for (const [name, locator] of [["label", routeLabel], ["trigger", sidebarToggle]] as const) {
+      const unobscured = await locator.evaluate(element => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const rect = element instanceof HTMLButtonElement ? element.getBoundingClientRect() : range.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+        return hit !== null && (hit === element || element.contains(hit));
+      });
+      expect(unobscured, `${route.path} ${name} should be unobscured and reachable`).toBe(true);
+    }
   }
 });
 
