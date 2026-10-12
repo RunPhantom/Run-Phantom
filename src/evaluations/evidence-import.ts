@@ -75,8 +75,8 @@ export class EvidenceImportService {
   #find(owner: EvidenceOwner, id: string): ImportEntry | undefined {
     return [...this.#entries].find(entry => entry.owner.database === owner.database && canonicalEvidenceJson(entry.owner.scope) === canonicalEvidenceJson(owner.scope) && entry.admission?.job.id === id);
   }
-  #failure(entry: ImportEntry, code: EvidenceImportFailureCode): void {
-    try { if (entry.admission && !entry.admission.reused) entry.owner.store.fail(entry.admission.job.id, entry.admission.publicationToken, code); }
+  #failure(entry: ImportEntry, code: EvidenceImportFailureCode, authority: EvidenceOwner = entry.owner): void {
+    try { if (entry.admission && !entry.admission.reused) authority.store.fail(entry.admission.job.id, entry.admission.publicationToken, code); }
     finally { entry.controller.abort(code); entry.worker?.cancel(); entry.ready?.reject(new EvidenceUploadError(code === "upload_timeout" ? "upload_timeout" : "upload_aborted", 409)); entry.ready = undefined; }
   }
   #release(entry: ImportEntry): void {
@@ -213,9 +213,11 @@ export class EvidenceImportService {
     await this.#stopEntries(entries);
     return removed;
   }
-  async #invalidate(entries: ImportEntry[]): Promise<void> {
+  async #invalidate(entries: ImportEntry[], authority: EvidenceOwner): Promise<void> {
+    if (entries.some(entry => entry.owner.database !== authority.database || canonicalEvidenceJson(entry.owner.scope) !== canonicalEvidenceJson(authority.scope))) throw new EvidenceError("Evidence invalidation scope changed", 409);
+    authority.database.transaction(() => authority.authorize("import", null)).immediate();
     let failure: unknown;
-    for (const entry of entries) { try { this.#failure(entry, "attachment_unavailable"); } catch (error) { failure ??= error; } }
+    for (const entry of entries) { try { this.#failure(entry, "attachment_unavailable", authority); } catch (error) { failure ??= error; } }
     await Promise.all(entries.map(entry => entry.done));
     if (failure) throw failure instanceof Error ? failure : new EvidenceError("Evidence invalidation failed", 409);
   }
@@ -224,14 +226,14 @@ export class EvidenceImportService {
     keys.forEach(key => blocks.add(key)); this.#blocked.set(owner.database, blocks);
     const entries = [...this.#entries].filter(entry => entry.owner.database === owner.database && canonicalEvidenceJson(entry.owner.scope) === canonicalEvidenceJson(owner.scope) &&
       entry.draft && attachments.some(attachment => canonicalEvidenceJson(attachment) === canonicalEvidenceJson(entry.draft!.attachment)));
-    try { await this.#invalidate(entries); }
+    try { await this.#invalidate(entries, owner); }
     finally { keys.forEach(key => blocks.delete(key)); }
   }
   async clear(owner: EvidenceOwner): Promise<void> {
     const blocks = this.#blocked.get(owner.database) ?? new Set<string>(), key = canonicalEvidenceJson(owner.scope);
     blocks.add(key); this.#blocked.set(owner.database, blocks);
     const entries = [...this.#entries].filter(entry => entry.owner.database === owner.database && canonicalEvidenceJson(entry.owner.scope) === canonicalEvidenceJson(owner.scope));
-    try { await this.#invalidate(entries); owner.store.purgeScope(); }
+    try { await this.#invalidate(entries, owner); owner.store.purgeScope(); }
     finally { blocks.delete(key); }
   }
   async shutdown(): Promise<void> {
