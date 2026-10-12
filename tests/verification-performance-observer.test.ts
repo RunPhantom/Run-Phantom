@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { installPerformance } from "../src/verification/browser/observers/performance";
-import { PERFORMANCE_OBSERVERS } from "../src/verification/performance";
+import { PERFORMANCE_OBSERVERS, evaluatePerformancePredicate } from "../src/verification/performance";
 
 // Injected native API faults lock the bounded collector, not native browser measurement truth.
 function harness(run: (h: { deliver: (name: string, entries: object[], dropped?: number) => void; pending: (name: string, entries: object[]) => void; full: () => void; setTime: (n: number) => void }) => void) {
@@ -57,6 +57,22 @@ test("CLS session windows exclude recent input and preserve native precision", (
   ], 0);
   h.setTime(2000); expect(collector.read("capture").metrics.clsMaxSessionScore).toBe(0.300000001);
   collector.disconnect();
+}));
+for (const { name, starts, values, score, limit, inside } of [
+  { name: "gap below 1000ms", starts: [101, 1100.999], values: [0.020000001, 0.5], score: 0.520000001, limit: 0.51, inside: true },
+  { name: "gap exactly 1000ms", starts: [101, 1101], values: [0.020000001, 0.5], score: 0.5, limit: 0.51, inside: false },
+  { name: "gap above 1000ms", starts: [101, 1101.001], values: [0.020000001, 0.5], score: 0.5, limit: 0.51, inside: false },
+  { name: "elapsed below 5000ms", starts: [101, 1001, 1901, 2801, 3701, 4601, 5100.999], values: [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.5], score: 0.62, limit: 0.6, inside: true },
+  { name: "elapsed exactly 5000ms", starts: [101, 1001, 1901, 2801, 3701, 4601, 5101], values: [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.5], score: 0.5, limit: 0.6, inside: false },
+  { name: "elapsed above 5000ms", starts: [101, 1001, 1901, 2801, 3701, 4601, 5101.001], values: [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.5], score: 0.5, limit: 0.6, inside: false },
+]) test(`CLS ${name} preserves session scores and numeric thresholds`, () => harness(h => {
+  const collector = installPerformance("none", s => s); collector.read("begin");
+  h.deliver("layout-shift", starts.map((startTime, i) => ({ startTime, duration: 0, value: values[i], hadRecentInput: false })), 0);
+  h.setTime(6000); const snapshot = collector.read("capture"); collector.disconnect();
+  expect(snapshot.metrics.clsMaxSessionScore).toBe(score);
+  expect(snapshot.coverage["layout-shift"]).toEqual({ state: "observing", observed: starts.length, invalid: 0, omitted: 0, nativeDropped: 0, overflow: false });
+  expect(evaluatePerformancePredicate({ kind: "performance", metric: "clsMaxSessionScore", op: "gte", value: limit }, snapshot, true).status).toBe(inside ? "pass" : "fail");
+  expect(evaluatePerformancePredicate({ kind: "performance", metric: "clsMaxSessionScore", op: "lte", value: limit }, snapshot, true).status).toBe(inside ? "fail" : "pass");
 }));
 test("entry and lifetime budgets survive resets while diagnostic top-N is distinct", () => harness(h => {
   const collector = installPerformance("none", s => s); collector.read("begin");

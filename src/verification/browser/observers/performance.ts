@@ -64,7 +64,7 @@ export function installPerformance(metadata: "none" | "origin-path", scrub: (val
       if (e.hadRecentInput) return;
       const value = number(e.value);
       if (clsSeen && start < clsLast) throw new Error("Unordered native shift population");
-      if (!clsSeen || start - clsLast >= 1000 || start - clsStart > 5000) { clsStart = start; clsScore = value; }
+      if (!clsSeen || start - clsLast >= 1000 || start - clsStart >= 5000) { clsStart = start; clsScore = value; }
       else clsScore += value;
       clsLast = start; clsSeen = true;
       if (!Number.isFinite(clsScore)) { coverage[name].overflow = true; metrics.clsMaxSessionScore = null; return; }

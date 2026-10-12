@@ -2083,7 +2083,7 @@ function installPerformance(metadata, scrub) {
       const value = number(e.value);
       if (clsSeen && start < clsLast)
         throw new Error("Unordered native shift population");
-      if (!clsSeen || start - clsLast >= 1000 || start - clsStart > 5000) {
+      if (!clsSeen || start - clsLast >= 1000 || start - clsStart >= 5000) {
         clsStart = start;
         clsScore = value;
       } else
