@@ -32,7 +32,7 @@ function retained(db: Database) { return JSON.stringify(["runs","spans","evaluat
 function history(db: Database) { return db.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all(); }
 
 test("canonical idx11 preserves approved row semantics with only the authorized named-index amendment and preserves every prior snapshot table", () => {
-  expect(journal.entries.map((row:{idx:number})=>row.idx)).toEqual(Array.from({ length:12 },(_,idx)=>idx));
+  expect(journal.entries.slice(0,12).map((row:{idx:number})=>row.idx)).toEqual(Array.from({ length:12 },(_,idx)=>idx));
   expect(journal.entries[11]).toEqual({ idx:11,version:"6",when:1791766000002,tag:"0011_review_queues",breakpoints:true });
   const sql=readFileSync(path.join(migrations,"0011_review_queues.sql"),"utf8");
   const amended = sql.replaceAll("--> statement-breakpoint\n", "");
@@ -52,13 +52,13 @@ test("actual fresh source migration installs all three review tables and eight n
   const db=getDrizzleDb().$client;
   expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'review_%' ORDER BY name").all()).toEqual(["review_queue_items","review_queue_promotions","review_queues"].map(name=>({ name })));
   expect(db.query("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'review_%' ORDER BY name").all()).toHaveLength(8);
-  expect(history(db)).toHaveLength(12); expect(history(db).at(-1)).toEqual({ hash:createHash("sha256").update(readFileSync(path.join(migrations,"0011_review_queues.sql"))).digest("hex"),created_at:1791766000002 });
+  expect(history(db)).toHaveLength(journal.entries.length); expect(history(db)[11]).toEqual({ hash:createHash("sha256").update(readFileSync(path.join(migrations,"0011_review_queues.sql"))).digest("hex"),created_at:1791766000002 });
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]); expect(db.query("SELECT * FROM coding_hook_owner").all()).toEqual([]);
 });
 test("actual prefix10 upgrade preserves prior source, frozen dataset, experiment and schema bytes across reopen", () => {
   const old=new Database(process.env.RUNPHANTOM_DB_PATH!); apply(old,prefix(10)); seed(old);
   const original=retained(old), receipts=history(old),objects=old.query("SELECT type,name,sql FROM sqlite_master ORDER BY name").all() as Array<{ name:string }>;
-  old.close(true); let db=getDrizzleDb().$client; expect(retained(db)).toBe(original); expect(history(db).slice(0,11)).toEqual(receipts); expect(history(db)).toHaveLength(12);
+  old.close(true); let db=getDrizzleDb().$client; expect(retained(db)).toBe(original); expect(history(db).slice(0,11)).toEqual(receipts); expect(history(db)).toHaveLength(journal.entries.length);
   const names=new Set(objects.map(row=>row.name)); expect(db.query("SELECT type,name,sql FROM sqlite_master ORDER BY name").all().filter(row=>names.has((row as {name:string}).name))).toEqual(objects);
   const queue=createReviewQueue({ name:"Migrated curation" }),item=insertReviewItem(queue.id,{ runId:"retained-source" }); expect(item.source.output).toBe("Frozen output β\\t");
   const frozen=db.query("SELECT source_json,source_hash,draft_json,revision,ordinal FROM review_queue_items").all(),allHistory=history(db); closeDb();db=getDrizzleDb().$client;
@@ -69,7 +69,7 @@ test("a late idx11 SQL failure rolls back every new object and receipt before cl
   const before=retained(db),receipts=history(db),objects=db.query("SELECT type,name,sql FROM sqlite_master ORDER BY name").all();
   const broken=prefix(11,"broken"),file=path.join(broken,"0011_review_queues.sql"); writeFileSync(file,readFileSync(file,"utf8")+"\n--> statement-breakpoint\nSELECT * FROM intentional_f29_missing_table;\n");
   try { expect(()=>apply(db,broken)).toThrow(); expect(retained(db)).toBe(before); expect(history(db)).toEqual(receipts); expect(db.query("SELECT type,name,sql FROM sqlite_master ORDER BY name").all()).toEqual(objects); } finally { db.close(true); }
-  const repaired=getDrizzleDb().$client;expect(retained(repaired)).toBe(before);expect(history(repaired)).toHaveLength(12);expect(repaired.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  const repaired=getDrizzleDb().$client;expect(retained(repaired)).toBe(before);expect(history(repaired)).toHaveLength(journal.entries.length);expect(repaired.query("PRAGMA foreign_key_check").all()).toEqual([]);
 });
 test("actual source upgrade and frozen review intake survive a genuine second Bun process without reseeding", () => {
   const old=new Database(process.env.RUNPHANTOM_DB_PATH!);apply(old,prefix(10));seed(old);const original=retained(old);old.close(true);
@@ -77,12 +77,12 @@ test("actual source upgrade and frozen review intake survive a genuine second Bu
   const script=path.join(directory,"source-reopen.ts");
   writeFileSync(script,imports+`const db=getDrizzleDb().$client; if(process.argv[2]==="write"){const queue=createReviewQueue({name:"Process curation"});insertReviewItem(queue.id,{runId:"retained-source"});}console.log(JSON.stringify({pid:process.pid,history:db.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all(),items:db.query("SELECT * FROM review_queue_items ORDER BY id").all(),queues:db.query("SELECT * FROM review_queues ORDER BY id").all(),foreignKeys:db.query("PRAGMA foreign_key_check").all()}));closeDb();`);
   const invoke=(action:string)=>{ const result=Bun.spawnSync([process.execPath,script,action],{ cwd:directory,env:{ ...process.env,OPENAI_API_KEY:"",ANTHROPIC_API_KEY:"",RUNPHANTOM_CLAUDE_CLI_CHAT:"0" },timeout:10000 });expect(result.exitCode).toBe(0);return JSON.parse(new TextDecoder().decode(result.stdout)); };
-  const first=invoke("write"),second=invoke("read");expect(first.pid).not.toBe(second.pid);expect(first.pid).not.toBe(process.pid);expect(second.history).toHaveLength(12);expect(second.history).toEqual(first.history);expect(second.items).toEqual(first.items);expect(second.items).toHaveLength(1);expect(second.queues).toEqual(first.queues);expect(second.foreignKeys).toEqual([]);
+  const first=invoke("write"),second=invoke("read");expect(first.pid).not.toBe(second.pid);expect(first.pid).not.toBe(process.pid);expect(second.history).toHaveLength(journal.entries.length);expect(second.history).toEqual(first.history);expect(second.items).toEqual(first.items);expect(second.items).toHaveLength(1);expect(second.queues).toEqual(first.queues);expect(second.foreignKeys).toEqual([]);
   expect(retained(getDrizzleDb().$client)).toBe(original);
 });
 test("the existing clear transaction deletes actual queue rows and cascades their frozen sources", () => {
   const db=getDrizzleDb().$client;seed(db);const queue=createReviewQueue({ name:"Clear source owner" });insertReviewItem(queue.id,{ runId:"retained-source" });
-  clearAll();expect(db.query("SELECT * FROM review_queues").all()).toEqual([]);expect(db.query("SELECT * FROM review_queue_items").all()).toEqual([]);expect(db.query("SELECT * FROM review_queue_promotions").all()).toEqual([]);expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);expect(history(db)).toHaveLength(12);
+  clearAll();expect(db.query("SELECT * FROM review_queues").all()).toEqual([]);expect(db.query("SELECT * FROM review_queue_items").all()).toEqual([]);expect(db.query("SELECT * FROM review_queue_promotions").all()).toEqual([]);expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);expect(history(db)).toHaveLength(journal.entries.length);
 });
 const queueUniqueIndexes = [
   { table: "review_queue_items", name: "review_queue_items_ordinal_unique", columns: ["queue_id", "ordinal"] },
@@ -101,7 +101,8 @@ test("actual queue unique indexes use the exact snapshot names, column order and
 });
 test("real next Drizzle generation can drop and recreate each canonical queue unique index", async () => {
   const db = getDrizzleDb().$client;
-  const snapshot = JSON.parse(readFileSync(path.join(migrations, "meta/0011_snapshot.json"), "utf8"));
+  const latest = journal.entries.at(-1);
+  const snapshot = JSON.parse(readFileSync(path.join(migrations, `meta/${String(latest.idx).padStart(4, "0")}_snapshot.json`), "utf8"));
   const generated = await generateSQLiteDrizzleJson(typedSchema, snapshot.id);
   expect(await generateSQLiteMigration(snapshot, generated)).toEqual([]);
   const changed = structuredClone(snapshot);

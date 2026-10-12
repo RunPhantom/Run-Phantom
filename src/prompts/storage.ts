@@ -15,9 +15,9 @@ CREATE TABLE prompt_heads (
   create_request_digest TEXT NOT NULL CHECK(length(create_request_digest)=64),
   created_at INTEGER NOT NULL CHECK(created_at>=0),
   updated_at INTEGER NOT NULL CHECK(updated_at>=created_at),
-  PRIMARY KEY(scope_key,id),
-  UNIQUE(scope_key,create_operation_key)
+  PRIMARY KEY(scope_key,id)
 );
+CREATE UNIQUE INDEX prompt_heads_create_operation_unique ON prompt_heads(scope_key,create_operation_key);
 CREATE INDEX prompt_heads_scope ON prompt_heads(scope_key,deleted,updated_at DESC,id DESC);
 CREATE TABLE prompt_revisions (
   scope_key TEXT NOT NULL,
@@ -32,8 +32,8 @@ CREATE TABLE prompt_revisions (
   request_digest TEXT NOT NULL CHECK(length(request_digest)=64),
   created_at INTEGER NOT NULL CHECK(created_at>=0),
   PRIMARY KEY(scope_key,id,revision),
-  UNIQUE(scope_key,operation_key),
   FOREIGN KEY(scope_key,id) REFERENCES prompt_heads(scope_key,id) ON DELETE CASCADE
 );
+CREATE UNIQUE INDEX prompt_revisions_operation_unique ON prompt_revisions(scope_key,operation_key);
 CREATE TRIGGER prompt_revision_immutable BEFORE UPDATE ON prompt_revisions BEGIN SELECT RAISE(ABORT,'Prompt revisions are immutable'); END;
 `;

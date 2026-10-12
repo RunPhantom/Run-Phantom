@@ -49,9 +49,10 @@ and `{ "variables": { "name": "literal value" } }`, or export it with GET plus
 is refused instead of selecting another revision.
 
 The local workspace and its bounded router use the existing selected local
-SQLite owner. In this branch the local server mount and canonical migration
-registration remain pending the coordinator's migration sequence. The local UI
-reports an unavailable registry until that installation is complete. Team schema
-version 3 installs the same two additive content tables, one prompt scope-control
-table and immutable-update trigger through a preservation upgrade from the
+SQLite owner. Canonical migration 12 installs two content tables, one prompt
+scope-control table and the immutable-update trigger after the existing migration
+prefix. Daemon startup initializes the fixed local control only after migration
+and the existing evidence scope. The router runs behind the local access guards
+and acquires its bounded body before the daemon's general JSON parser. Team schema
+version 3 installs the identical suffix through a preservation upgrade from the
 supported version 2 database.

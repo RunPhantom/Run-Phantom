@@ -120,8 +120,8 @@ type SchemaObject = { name: string; type: string; sql: string };
 const normalizedSql = (sql: string) => sql.replace(/\s+/g, " ").trim().replace(/;$/, "");
 function expectedSchema(sql: string): Map<string, SchemaObject> {
   const objects = new Map<string, SchemaObject>();
-  for (const match of sql.matchAll(/CREATE (TABLE|INDEX) (\w+) [\s\S]*?;/g)) {
-    objects.set(match[2], { name: match[2], type: match[1].toLowerCase(), sql: normalizedSql(match[0]) });
+  for (const match of sql.matchAll(/CREATE (TABLE|(?:UNIQUE )?INDEX) (\w+) [\s\S]*?;/g)) {
+    objects.set(match[2], { name: match[2], type: match[1] === "TABLE" ? "table" : "index", sql: normalizedSql(match[0]) });
   }
   for (const match of sql.matchAll(/CREATE TRIGGER (\w+) [\s\S]*?\bEND;/g)) {
     objects.set(match[1], { name: match[1], type: "trigger", sql: normalizedSql(match[0]) });

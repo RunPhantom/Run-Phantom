@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { randomUUID, createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createLocalPromptRegistry, PromptRegistry } from "../src/prompts/registry";
@@ -17,7 +17,6 @@ function initialize(database: Database) {
   database.exec("PRAGMA legacy_alter_table=ON; PRAGMA foreign_keys=OFF");
   migrate(drizzle(database), { migrationsFolder: `${import.meta.dir}/../drizzle` });
   database.exec("PRAGMA foreign_keys=ON; PRAGMA legacy_alter_table=OFF");
-  database.exec(readFileSync(`${import.meta.dir}/fixtures/prompt-registry-schema.sql`, "utf8"));
   database.exec("INSERT INTO evaluation_evidence_scopes VALUES('local:local',1,1); INSERT INTO prompt_scope_controls VALUES('local:local',1)");
 }
 beforeEach(() => {

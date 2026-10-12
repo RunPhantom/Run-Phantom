@@ -14,6 +14,7 @@ import migration0008Path from "../../drizzle/0008_otlp_evidence.sql" with { type
 import migration0009Path from "../../drizzle/0009_finding_comparisons.sql" with { type: "file" };
 import migration0010Path from "../../drizzle/0010_coding_hooks.sql" with { type: "file" };
 import migration0011Path from "../../drizzle/0011_review_queues.sql" with { type: "file" };
+import migration0012Path from "../../drizzle/0012_prompt_registry.sql" with { type: "file" };
 
 export const embeddedMigrationJournal = {
   "version": "7",
@@ -102,6 +103,13 @@ export const embeddedMigrationJournal = {
       "when": 1791766000002,
       "tag": "0011_review_queues",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1791766000003,
+      "tag": "0012_prompt_registry",
+      "breakpoints": true
     }
   ]
 } as const;
@@ -154,5 +162,9 @@ export const embeddedMigrationFiles = [
   {
     relativePath: "0011_review_queues.sql",
     sourcePath: migration0011Path,
+  },
+  {
+    relativePath: "0012_prompt_registry.sql",
+    sourcePath: migration0012Path,
   },
 ] as const;
