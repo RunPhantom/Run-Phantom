@@ -64,6 +64,20 @@ test("actual daemon applies strict review parsing before its global 50MiB parser
   expect((await post('name=text', { "Content-Type": "text/plain" })).status).toBe(400);
   const listed = await call(); expect(listed.status).toBe(200); expect(listed.value).toEqual([]); expect(listed.response.headers.get("cache-control")).toBe("no-store");
 });
+test.each([
+  { name: "charset", headers: { "Content-Type": "application/json; charset=iso-8859-1" } },
+  { name: "content encoding", headers: { "Content-Type": "application/json", "Content-Encoding": "unrecognized" } },
+])("actual daemon refuses unsupported $name with sanitized415 and no retention", async ({ headers }) => {
+  const db = getDrizzleDb().$client;
+  const original = JSON.stringify([db.query("SELECT * FROM runs ORDER BY id").all(), db.query("SELECT * FROM spans ORDER BY run_id,id").all()]);
+  const response = await fetch(`${base}/api/review-queues`, { method: "POST", headers, body: '{"name":"REFUSED_BODY_F29_TRANSPORT_SENTINEL"}' });
+  expect(response.status).toBe(415);
+  expect(await response.json()).toEqual({ error: { code: "unsupported_media_type", message: "Unsupported review request charset or content encoding" } });
+  expect(response.headers.get("cache-control")).toBe("no-store"); expect(response.headers.get("content-type")).toContain("application/json");
+  expect(JSON.stringify([db.query("SELECT * FROM runs ORDER BY id").all(), db.query("SELECT * FROM spans ORDER BY run_id,id").all()])).toBe(original);
+  for (const table of ["review_queues", "review_queue_items", "review_queue_promotions"]) expect(db.query(`SELECT COUNT(*) AS n FROM ${table}`).get()).toEqual({ n: 0 });
+  expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+});
 test("actual daemon refuses deleted incarnation CAS after fresh intake", async () => {
   const { queue, item } = await captured();
   expect((await call(`/${queue.id}/items/${item.id}`, "DELETE", { expectedRevision: item.revision })).status).toBe(204);
