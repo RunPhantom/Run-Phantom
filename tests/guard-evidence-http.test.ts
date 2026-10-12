@@ -169,3 +169,47 @@ test("non-object legacy attributes normalize safely while real LLM/tool sources 
   expect((await read(`/api/saved-runs/cache/${guardTraceId}`)).spans[0]).toMatchObject({ input_payload: business.input_payload, output_payload: business.output_payload,
     status: business.status, guardEvidence: { decisions: [] } });
 });
+
+const validChatItems = [
+  { type: "message", role: "system", content: "Original system instruction" },
+  { type: "message", role: "user", content: "Original message" },
+  { type: "function_call", name: "source-tool", arguments: '{"count":0}', call_id: "source-call" },
+  { type: "function_call_output", output: '{"isError":false}', call_id: "source-call" },
+];
+for (const [name, chat, valid, captured] of [
+  ["null-array", "[null]", false, false],
+  ["object-null", '{"items":[null]}', false, false],
+  ["scalar", "42", false, false],
+  ["malformed", "{", false, false],
+  ["primitive-items", '[null,false,42,"literal",[]]', false, false],
+  ["valid-array", JSON.stringify(validChatItems), true, false],
+  ["mixed-object", JSON.stringify({ items: [null, false, 42, "literal", [], ...validChatItems] }), true, false],
+  ["mixed-captured", JSON.stringify([null, ...validChatItems, []]), true, true],
+] as const) test(`decoded chat ${name} keeps cache, detail and portable source available without trusting invalid messages`, async () => {
+  expect((await post("/v1/traces", guardRequest())).status).toBe(200);
+  const original = await read(`/api/runs/detail/${guardTraceId}`), source = original.spans[0];
+  expect((await fetch(`${url}/api/clear`, { method: "POST" })).status).toBe(200);
+  const row = { ...source, span_type: "LLM_GENERATION", attributes: JSON.stringify({ "lk.chat_ctx": chat }),
+    otlp_evidence: captured ? source.otlp_evidence : null, normalized: { guardEvidence: { explanation: guardSecrets.npm } } };
+  const body = { run: original.run, spans: [row] }, data = JSON.stringify(body);
+  const put = await post(`/api/saved-runs/cache/${guardTraceId}`, body, "PUT"), putBody = await put.json();
+  const db = new Database(dbPath); db.query("INSERT OR REPLACE INTO saved_run_cache(id,data) VALUES (?,?)").run(guardTraceId, data); db.close();
+  const cacheResponse = await fetch(`${url}/api/saved-runs/cache/${guardTraceId}`), cache = await cacheResponse.json();
+  const detailResponse = await fetch(`${url}/api/runs/detail/${guardTraceId}`), detail = await detailResponse.json();
+  const exportResponse = await fetch(`${url}/api/runs/${guardTraceId}/export`), exported = await exportResponse.json();
+  const check = new Database(dbPath, { readonly: true }), after = (check.query("SELECT data FROM saved_run_cache WHERE id=?").get(guardTraceId) as any).data; check.close();
+  record(`guard-chat-${name}.json`, { request: body, statuses: { put: put.status, cache: cacheResponse.status, detail: detailResponse.status, export: exportResponse.status },
+    putBody, cache, detail, exported, privateBefore: data, privateAfter: after });
+  expect([put.status, cacheResponse.status, detailResponse.status, exportResponse.status]).toEqual([200, 200, 200, 200]);
+  expect(after).toBe(data); noSecrets(cache); noSecrets(detail); noSecrets(exported);
+  for (const actual of [cache.spans[0], detail.spans[0], exported.spans[0]]) expect(actual).toMatchObject({ id: row.id, run_id: row.run_id,
+    attributes: row.attributes, input_payload: row.input_payload, output_payload: row.output_payload, status: row.status, otlp_evidence: row.otlp_evidence });
+  expect(cache.spans[0]).toEqual(detail.spans[0]);
+  if (valid) {
+    expect(cache.spans[0].normalized).toMatchObject({ kind: "llm", userMessage: "Original message", systemPrompt: "Original system instruction",
+      messages: [{ role: "user", content: "Original message" }, { role: "assistant" }, { role: "tool", content: '{"isError":false}', toolCallId: "source-call" }] });
+    expect(cache.spans[0].normalized.messages).toHaveLength(3);
+  } else expect(cache.spans[0].normalized).toEqual({ kind: "other" });
+  expect(cache.spans[0].guardEvidence).toEqual(deriveCapturedGuardEvidence(row.otlp_evidence));
+  expect(exported.spans[0].normalized).toBeUndefined(); expect(exported.spans[0].guardEvidence).toBeUndefined();
+});
