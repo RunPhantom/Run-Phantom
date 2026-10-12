@@ -34,12 +34,12 @@ function ConfirmationDialog({ value, close }: { value: Confirmation | null; clos
 export function ReviewQueues({ initialQueueId = "", initialItemId = "", onRetainedChange }: { initialQueueId?: string; initialItemId?: string; onRetainedChange?: (value: { retained: number; inFlight: number }) => void }) {
   const [queues, setQueues] = useState<Array<ReviewQueue & { counts: ReviewCounts }>>([]), [selected, setSelected] = useState(initialQueueId), [name, setName] = useState("");
   const [schema, setSchema] = useState<ReviewSchema>(defaultQueueSchema), [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState("");
-  const dirty = useRef(0), [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  const dirty = useRef(0), [workspaceBusy, setWorkspaceBusy] = useState(false), [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const refresh = useCallback(async () => { const values = await api.queues(); setQueues(values); }, []);
   useEffect(() => { let active = true; api.queues().then(values => { if (active) setQueues(values); }).catch(failure => { if (active) setError(errorText(failure)); }).finally(() => { if (active) setLoading(false); }); return () => { active = false; }; }, []);
   const queue = queues.find(value => value.id === selected);
   const reportDirty = useCallback((count: number, inFlight: number) => { dirty.current = count; onRetainedChange?.({ retained: count, inFlight }); }, [onRetainedChange]);
-  const selectQueue = (id: string) => { if (dirty.current) { setError("Your drafts are retained. Save, retry or discard them before switching queues."); return; } setError(""); setSelected(id); };
+  const selectQueue = (id: string) => { if (workspaceBusy || dirty.current) { setError("Your drafts are retained. Save, retry or discard them before switching queues."); return; } setError(""); setSelected(id); };
   return <main className="mx-auto w-full max-w-[1440px] space-y-6 p-4 text-[color:var(--rp-ink)] sm:p-6 lg:p-8">
     <header className="flex flex-wrap items-start justify-between gap-4">
     <div>
@@ -47,38 +47,38 @@ export function ReviewQueues({ initialQueueId = "", initialItemId = "", onRetain
     <h1 className="font-[family-name:var(--font-display)] text-[28px] font-semibold leading-9 text-[color:var(--rp-ink-strong)]">Review queues</h1>
     <p className="mt-2 max-w-2xl text-sm leading-6 text-[color:var(--rp-ink-soft)]">Review frozen trace responses, edit structured targets, and add approved examples to a dataset.</p>
     </div>
-    <Button variant="outline" className="min-h-11" disabled={loading || busy} onClick={() => void refresh().catch(failure => setError(errorText(failure)))}>Refresh queues</Button>
+    <Button variant="outline" className="min-h-11" disabled={loading || busy || workspaceBusy} onClick={() => void refresh().catch(failure => setError(errorText(failure)))}>Refresh queues</Button>
     </header>
     {error && <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
     <section className={panel} aria-label="Queue selection">
     <div className="grid items-end gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
     <Field label="Review queue">
-    <Select className="min-h-11" value={selected} disabled={loading} onChange={event => selectQueue(event.target.value)}>
+    <Select className="min-h-11" value={selected} disabled={loading || workspaceBusy} onChange={event => selectQueue(event.target.value)}>
     <option value="">Choose a queue</option>{queues.map(value => <option key={value.id} value={value.id}>{value.name} · {value.counts.total} items</option>)}</Select>
     </Field>
-    <form className="flex items-end gap-2" onSubmit={async event => { event.preventDefault(); if (dirty.current) { setError("Save or discard retained drafts before creating a queue."); return; } setBusy(true); setError(""); try { const made = await api.create(name, schema); await refresh(); setSelected(made.id); setName(""); } catch (failure) { setError(errorText(failure)); } finally { setBusy(false); } }}>
+    <form className="flex items-end gap-2" onSubmit={async event => { event.preventDefault(); if (workspaceBusy || dirty.current) { setError("Save or discard retained drafts before creating a queue."); return; } setBusy(true); setError(""); try { const made = await api.create(name, schema); await refresh(); setSelected(made.id); setName(""); } catch (failure) { setError(errorText(failure)); } finally { setBusy(false); } }}>
     <div className="min-w-0 flex-1">
     <Field label="New queue name">
     <Input className="min-h-11" maxLength={128} value={name} onChange={event => setName(event.target.value)} />
     </Field>
     </div>
-    <Button className="min-h-11" disabled={busy || !name.trim()}>Create queue</Button>
+    <Button className="min-h-11" disabled={busy || workspaceBusy || !name.trim()}>Create queue</Button>
     </form>
     </div>
     <div className="mt-4">
     <QueueSchemaEditor schema={schema} onChange={setSchema} />
     </div>{loading && <p className="mt-3 text-sm" role="status">Loading queues…</p>}{!loading && !queues.length && <p className="mt-3 text-sm text-[color:var(--rp-ink-soft)]">No review queues yet. Create a queue, then add a captured run.</p>}{selected && !queue && !loading && <p className="mt-3 text-sm" role="alert">This queue is unavailable or was deleted. Refresh queues to continue.</p>}</section>
-    {queue && <QueueWorkspace key={queue.id} queue={queue} initialItemId={queue.id === initialQueueId ? initialItemId : ""} onDirty={reportDirty} onChanged={refresh} onConfirm={setConfirmation} />}
+    {queue && <QueueWorkspace key={queue.id} queue={queue} initialItemId={queue.id === initialQueueId ? initialItemId : ""} onDirty={reportDirty} onBusy={setWorkspaceBusy} onChanged={refresh} onConfirm={setConfirmation} />}
     {queue && <section className={`${panel} space-y-3`} aria-label="Review retention">
     <h2 className="text-sm font-semibold">Stored locally until you delete it</h2>
     <p className="text-xs leading-5 text-[color:var(--rp-ink-soft)]">Review queues retain safe source snapshots and drafts on this device. Limits: 100 queues, 10,000 items per queue, 50,000 items total and 256 MiB of logical source, draft, schema and receipt content. Retention stops at the limit; it does not silently evict drafts. Deleting a source run removes its queued items. Promoted dataset revisions keep their existing frozen examples.</p>
-    <Button variant="outline" className="min-h-11" onClick={() => setConfirmation({ title: "Delete this review queue?", description: "The queue, all retained drafts and source snapshots, and its promotion receipts will be deleted. Existing dataset revisions remain.", action: async () => { if (dirty.current) throw new Error("Save or discard retained drafts before deleting this queue."); await api.deleteQueue(queue.id); setSelected(""); await refresh(); } })}>Delete queue</Button>
+    <Button variant="outline" className="min-h-11" disabled={workspaceBusy} onClick={() => setConfirmation({ title: "Delete this review queue?", description: "The queue, all retained drafts and source snapshots, and its promotion receipts will be deleted. Existing dataset revisions remain.", action: async () => { if (workspaceBusy || dirty.current) throw new Error("Save or discard retained drafts before deleting this queue."); await api.deleteQueue(queue.id); setSelected(""); await refresh(); } })}>Delete queue</Button>
     </section>}
     <ConfirmationDialog value={confirmation} close={() => setConfirmation(null)} />
   </main>;
 }
 
-function QueueWorkspace({ queue, initialItemId, onDirty, onChanged, onConfirm }: { queue: ReviewQueue; initialItemId: string; onDirty: (count: number, inFlight: number) => void; onChanged: () => Promise<void>; onConfirm: (value: Confirmation) => void }) {
+function QueueWorkspace({ queue, initialItemId, onDirty, onBusy, onChanged, onConfirm }: { queue: ReviewQueue; initialItemId: string; onDirty: (count: number, inFlight: number) => void; onBusy: (value: boolean) => void; onChanged: () => Promise<void>; onConfirm: (value: Confirmation) => void }) {
   const [pages, setPages] = useState<Array<{ cursor: ReviewCursor; data: ReviewPage }>>([]), [cursor, setCursor] = useState<ReviewCursor>({ limit: 50 });
   const [history, setHistory] = useState<ReviewCursor[]>([]), [windowItems, setWindow] = useState<ReviewItem[]>([]), [centerId, setCenter] = useState(initialItemId);
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState(""), [refreshTick, setRefreshTick] = useState(0);
@@ -88,12 +88,22 @@ function QueueWorkspace({ queue, initialItemId, onDirty, onChanged, onConfirm }:
   const drafts = useRef<ReviewDrafts | null>(null);
   if (!drafts.current) drafts.current = new ReviewDrafts(api, 600, stored => { setWindow(prior => prior.map(item => item.id === stored.id ? stored : item)); setRefreshTick(tick => tick + 1); });
   const state = drafts.current;
-  useEffect(() => state.subscribe(() => { forceRender(tick => tick + 1); onDirty(state.dirtyCount, [...state.entries.values()].filter(value => value.busy || value.approving).length); }), [state, onDirty]);
+  useEffect(() => { onBusy(busy); return () => onBusy(false); }, [busy, onBusy]);
+  useEffect(() => { const report = () => { forceRender(tick => tick + 1); onDirty(state.dirtyCount, Math.max(busy ? 1 : 0, [...state.entries.values()].filter(value => value.busy || value.approving).length)); }; report(); return state.subscribe(report); }, [state, onDirty, busy]);
   useEffect(() => { const unload = (event: BeforeUnloadEvent) => { if (state.dirtyCount) { event.preventDefault(); event.returnValue = ""; } }; window.addEventListener("beforeunload", unload); return () => { window.removeEventListener("beforeunload", unload); state.dispose(); onDirty(0, 0); }; }, [state, onDirty]);
   useEffect(() => { let active = true; setLoading(true); api.page(queue.id, cursor).then(data => { if (!active) return; setPages(prior => [...prior.filter(page => JSON.stringify(page.cursor) !== JSON.stringify(cursor)), { cursor, data }].slice(-2)); }).catch(failure => { if (active) setError(errorText(failure)); }).finally(() => { if (active) setLoading(false); }); return () => { active = false; }; }, [queue.id, cursor, refreshTick]);
   useEffect(() => { let active = true; Promise.all([searchRuns({ limit: 50 }), evaluationsApi.datasets()]).then(([result, available]) => { if (!active) return; setRuns(result.runs.slice(0,50).map(run => ({ id: run.id, name: run.name ?? run.id }))); setDatasets(available.slice(0,50)); }).catch(failure => { if (active) setError(errorText(failure)); }); return () => { active = false; }; }, []);
   useEffect(() => { let active = true; setSpans([]); setSpanId(""); if (runId) evaluationsApi.responseSpans(runId).then(result => { if (active) setSpans(result.spans); }).catch(failure => { if (active) setError(errorText(failure)); }); return () => { active = false; }; }, [runId]);
-  const loadWindow = useCallback(async (id: string) => { const token = ++windowRequest.current; setCenter(id); const values = await api.window(queue.id, id); if (token !== windowRequest.current) return; values.forEach(item => state.hydrate(item)); setWindow(values); setCenter(id); }, [queue.id, state]);
+  const loadWindow = useCallback(async (id: string) => {
+    const token = ++windowRequest.current; setCenter(id);
+    try {
+      const values = await api.window(queue.id, id); if (token !== windowRequest.current) return;
+      values.forEach(item => state.hydrate(item)); setWindow(values); setCenter(id); return values.find(item => item.id === id);
+    } catch (failure) {
+      if (token === windowRequest.current && failure instanceof ReviewRequestError && failure.status === 404) { setWindow([]); setCenter(""); }
+      throw failure;
+    }
+  }, [queue.id, state]);
   useEffect(() => { if (initialItemId) void loadWindow(initialItemId).catch(failure => setError(errorText(failure))); }, [initialItemId, loadWindow]);
   const page = pages.find(value => JSON.stringify(value.cursor) === JSON.stringify(cursor))?.data;
   const item = windowItems.find(value => value.id === centerId), pending = item ? state.entries.get(item.id) : undefined, draft = pending?.draft ?? item?.draft;
@@ -103,7 +113,7 @@ function QueueWorkspace({ queue, initialItemId, onDirty, onChanged, onConfirm }:
   useEffect(() => { const shortcut = (event: KeyboardEvent) => { if (!allowsReviewShortcut(event) || busy) return; if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); void step(event.key === "ArrowLeft" ? -1 : 1).catch(failure => setError(errorText(failure))); } else if (event.key === "Enter" && item?.state === "draft" && !pending?.conflict) { event.preventDefault(); void approve(); } }; window.addEventListener("keydown", shortcut); return () => window.removeEventListener("keydown", shortcut); }, [busy, item, pending?.conflict, step, approve]);
   const edit = (next: ReviewDraft) => { if (!item) return; try { state.edit(item, next); setError(""); } catch (failure) { setError(errorText(failure)); } };
   const updateSelection = (id: string, revision: number, checked: boolean) => { if (pendingPromotion.current) { setError("Retry the pending promotion before changing its selection."); return; } if (checked && !selection.has(id) && selection.size >= 50) { setError("Select up to 50 approved items."); return; } setSelection(prior => { const next = new Map(prior); if (checked) next.set(id, revision); else next.delete(id); return next; }); };
-  const choose = async (id: string) => { setError(""); try { await loadWindow(id); } catch (failure) { setError(errorText(failure)); } };
+  const choose = async (id: string) => { if (busy) return; setError(""); try { await loadWindow(id); } catch (failure) { setError(errorText(failure)); } };
   const disabled = busy || !!pending?.approving || item?.state !== "draft";
   return <div className="space-y-5">
     <section className={panel} aria-label="Add captured source">
@@ -129,13 +139,13 @@ function QueueWorkspace({ queue, initialItemId, onDirty, onChanged, onConfirm }:
     <p role="status" aria-live="polite" className="text-sm text-[color:var(--rp-ink-soft)]">{state.dirtyCount ? `${state.dirtyCount} drafts retained on this page${pending?.busy ? " · saving…" : ""}` : notice || "All acknowledged edits saved"}</p>
     {!!state.entries.size && <section aria-label="Retained drafts" className={`${panel} space-y-3`}>
     <h2 className="text-sm font-semibold">Retained drafts</h2>{[...state.entries].map(([id, value]) => <div key={id} className="flex flex-wrap items-center gap-2 text-xs">
-    <Button variant="ghost" className="min-h-11" onClick={() => void choose(id)}>{value.draft.name}</Button>
-    <span role={value.error ? "alert" : undefined}>{value.error || (value.busy ? "Saving…" : "Awaiting save")}</span>{value.error && !value.conflict && <Button className="min-h-11" variant="outline" disabled={value.busy} onClick={() => void perform(async () => { await state.retry(id); if (state.entries.get(id)?.error) throw new Error(state.entries.get(id)!.error!); await loadWindow(id); })}>Retry save</Button>}{value.conflict && <Button className="min-h-11" variant="outline" disabled={value.busy} onClick={() => void perform(async () => { const latest = (await api.window(queue.id,id)).find(row => row.id === id); if (!latest) throw new Error("The source item was deleted. Discard its retained draft to continue."); state.reapply(id,latest); await state.save(id); if (state.entries.get(id)?.error) throw new Error(state.entries.get(id)!.error!); await loadWindow(id); })}>Reapply to latest revision</Button>}<Button className="min-h-11" variant="ghost" disabled={value.busy} onClick={() => onConfirm({ title: "Discard this retained draft?", description: "Your unsaved changes will be removed. The last acknowledged server revision remains.", action: async () => { state.discard(id); await loadWindow(id); } })}>Discard draft</Button>
+    <Button variant="ghost" className="min-h-11" disabled={busy} onClick={() => void choose(id)}>{value.draft.name}</Button>
+    <span role={value.error ? "alert" : undefined}>{value.error || (value.busy ? "Saving…" : "Awaiting save")}</span>{value.error && !value.conflict && <Button className="min-h-11" variant="outline" disabled={busy || value.busy} onClick={() => void perform(async () => { await state.retry(id); if (state.entries.get(id)?.error) throw new Error(state.entries.get(id)!.error!); await loadWindow(id); })}>Retry save</Button>}{value.conflict && <Button className="min-h-11" variant="outline" disabled={busy || value.busy} onClick={() => void perform(async () => { const latest = await loadWindow(id); if (!latest) throw new Error("The source item was deleted. Discard its retained draft to continue."); state.reapply(id,latest); await state.save(id); if (state.entries.get(id)?.error) throw new Error(state.entries.get(id)!.error!); await loadWindow(id); })}>Reapply to latest revision</Button>}<Button className="min-h-11" variant="ghost" disabled={busy || value.busy} onClick={() => onConfirm({ title: "Discard this retained draft?", description: "Your unsaved changes will be removed. The last acknowledged server revision remains.", action: async () => { state.discard(id); await loadWindow(id); } })}>Discard draft</Button>
     </div>)}</section>}
     <div className="grid items-start gap-5 lg:grid-cols-[260px_minmax(0,1fr)]">
       <section aria-label="Queue items" className={panel}>
     <h2 className={heading}>{queue.name}</h2>{page && <p className="mt-2 text-xs leading-5 text-[color:var(--rp-ink-soft)]">{page.counts.total} items · {page.counts.draft} drafts · {page.counts.approved} approved · {page.counts.promoted} promoted</p>}{loading && <p role="status" className="mt-4 text-sm">Loading items…</p>}{page && !page.items.length && <p className="mt-4 text-sm text-[color:var(--rp-ink-soft)]">This page has no items. Add a captured source to start reviewing.</p>}<ol className="mt-4 space-y-2">{page?.items.map(row => <li key={row.id} className={`flex items-start gap-2 rounded-md border ${centerId === row.id ? "border-[color:var(--rp-accent)] bg-[color:var(--rp-surface-selected)]" : "border-[color:var(--rp-border)]"}`}>
-        {row.state === "approved" && <input className="ml-2 mt-4 size-4" type="checkbox" aria-label={`Select ${row.name} for promotion`} checked={selection.has(row.id)} onChange={event => updateSelection(row.id,row.revision,event.target.checked)} />}<button type="button" aria-current={centerId === row.id ? "true" : undefined} className="min-h-11 min-w-0 flex-1 rounded-md p-3 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-accent)]" onClick={() => void choose(row.id)}>
+        {row.state === "approved" && <input className="ml-2 mt-4 size-4" type="checkbox" aria-label={`Select ${row.name} for promotion`} checked={selection.has(row.id)} onChange={event => updateSelection(row.id,row.revision,event.target.checked)} />}<button type="button" disabled={busy} aria-current={centerId === row.id ? "true" : undefined} className="min-h-11 min-w-0 flex-1 rounded-md p-3 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-accent)]" onClick={() => void choose(row.id)}>
     <span className="block break-words font-medium">{row.name}</span>
     <span className="mt-1 block text-xs text-[color:var(--rp-ink-soft)]">{row.state === "approved" ? "Local review approved" : row.state === "promoted" ? "Added to dataset" : "Draft"} · revision {row.revision}{state.entries.has(row.id) ? " · draft retained" : ""}</span>
     </button>
@@ -183,7 +193,7 @@ function QueueWorkspace({ queue, initialItemId, onDirty, onChanged, onConfirm }:
     <div className="flex flex-wrap gap-2">{item.state === "draft" ? <>
     <Button variant="outline" className="min-h-11" disabled={busy || !!pending?.busy || !!pending?.error || !pending} onClick={() => void perform(async () => { await state.save(item.id); if (state.entries.get(item.id)?.error) throw new Error(state.entries.get(item.id)!.error!); })}>Save draft</Button>
     <Button className="min-h-11" disabled={busy || !!pending?.error} onClick={() => void approve()}>Approve local review</Button>
-    </> : item.state === "approved" ? <Button variant="outline" className="min-h-11" disabled={busy} onClick={() => void perform(async () => { const result = await state.reopen(item); setWindow(prior => prior.map(value => value.id === result.id ? result : value)); setSelection(prior => { const next = new Map(prior); next.delete(item.id); return next; }); setRefreshTick(tick => tick + 1); await onChanged(); })}>Reopen review</Button> : <p className="text-xs">This item is terminal. Its dataset example is frozen.</p>}<Button variant="ghost" className="min-h-11" disabled={busy || !!pending} onClick={() => onConfirm({ title: "Delete this review item?", description: "Its retained source and review draft will be deleted. Existing promoted dataset examples remain.", action: async () => { await api.deleteItem(queue.id,item.id,item.revision); setWindow([]); setCenter(""); setSelection(prior => { const next = new Map(prior); next.delete(item.id); return next; }); setRefreshTick(tick => tick + 1); await onChanged(); } })}>Delete item</Button>
+    </> : item.state === "approved" ? <Button variant="outline" className="min-h-11" disabled={busy} onClick={() => void perform(async () => { const result = await state.reopen(item); setWindow(prior => prior.map(value => value.id === result.id ? result : value)); setSelection(prior => { const next = new Map(prior); next.delete(item.id); return next; }); setRefreshTick(tick => tick + 1); await onChanged(); })}>Reopen review</Button> : <p className="text-xs">This item is terminal. Its dataset example is frozen.</p>}<Button variant="ghost" className="min-h-11" disabled={busy || !!pending} onClick={() => { const { id, revision } = item; onConfirm({ title: "Delete this review item?", description: "Its retained source and review draft will be deleted. Existing promoted dataset examples remain.", action: async () => { await api.deleteItem(queue.id,id,revision); setWindow([]); setCenter(""); setSelection(prior => { const next = new Map(prior); next.delete(id); return next; }); setRefreshTick(tick => tick + 1); await onChanged(); } }); }}>Delete item</Button>
     </div>
     </section>
     </div>

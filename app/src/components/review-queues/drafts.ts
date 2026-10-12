@@ -1,12 +1,16 @@
 import { REVIEW_LIMITS as L, type ReviewDraft, type ReviewItem, type ReviewMutation } from "../../../../src/review-queues/protocol";
 import { ReviewRequestError, type ReviewQueuesClient } from "./client";
+interface ReviewAcknowledgment {
+  id: string; queueId: string; revision: number; state: ReviewItem["state"];
+}
 export interface PendingDraft {
-  server: ReviewItem; draft: ReviewDraft; generation: number; savedGeneration: number;
+  server: ReviewAcknowledgment; draft: ReviewDraft; generation: number; savedGeneration: number;
   busy: boolean; approving: boolean; error: string | null; conflict: boolean;
   timer?: ReturnType<typeof setTimeout>; flight?: Promise<void>;
   retry?: { kind: "save" | "approve" | "reopen"; mutation: ReviewMutation; generation: number };
 }
 const clone = (draft: ReviewDraft): ReviewDraft => ({ ...draft, tags: [...draft.tags], target: { ...draft.target } });
+const acknowledgment = (item: ReviewItem): ReviewAcknowledgment => ({ id: item.id, queueId: item.queueId, revision: item.revision, state: item.state });
 export class ReviewDrafts {
   readonly entries = new Map<string, PendingDraft>();
   private listeners = new Set<() => void>();
@@ -22,19 +26,20 @@ export class ReviewDrafts {
     return undefined;
   }
   edit(item: ReviewItem, draft: ReviewDraft): void {
-    let entry = this.entries.get(item.id);
+    const id = item.id;
+    let entry = this.entries.get(id);
     if (!entry) {
       if (this.entries.size >= L.MAX_DIRTY_DRAFTS) throw new Error("16 drafts are retained. Save, retry or discard a draft before editing another item.");
-      entry = { server: item, draft: clone(item.draft), generation: 0, savedGeneration: 0, busy: false, approving: false, error: null, conflict: false };
-      this.entries.set(item.id, entry);
+      entry = { server: acknowledgment(item), draft: clone(item.draft), generation: 0, savedGeneration: 0, busy: false, approving: false, error: null, conflict: false };
+      this.entries.set(id, entry);
     }
     if (entry.approving || entry.server.state !== "draft") throw new Error("Reopen the local review before editing this item.");
     if (entry.error && !entry.conflict && !entry.retry) entry.error = null;
     entry.draft = clone(draft); entry.generation++; clearTimeout(entry.timer);
-    if (!entry.error) entry.timer = setTimeout(() => { void this.save(item.id); }, this.debounceMs);
+    if (!entry.error) entry.timer = setTimeout(() => { void this.save(id); }, this.debounceMs);
     this.changed();
   }
-  private async send(id: string, kind: "save" | "approve" | "reopen", reuse = false): Promise<void> {
+  private async send(id: string, kind: "save" | "approve" | "reopen", reuse = false): Promise<ReviewItem | undefined> {
     const entry = this.entries.get(id); if (!entry) return;
     while (entry.flight) await entry.flight;
     if (this.entries.get(id) !== entry || (kind === "save" && !reuse && entry.generation === entry.savedGeneration)) return;
@@ -42,10 +47,13 @@ export class ReviewDrafts {
     clearTimeout(entry.timer);
     const captured = reuse && entry.retry ? entry.retry : { kind, generation: entry.generation, mutation: { expectedRevision: entry.server.revision, mutationId: crypto.randomUUID(), ...(kind === "reopen" ? {} : { draft: clone(entry.draft) }) } };
     entry.busy = true; entry.error = null; entry.retry = captured;
+    // Full responses belong to the display window, never to a retained draft or its flight.
+    let acknowledged: ReviewItem | undefined;
     entry.flight = (async () => {
       try {
         const result = await this.api.mutate(entry.server.queueId, id, captured.kind, captured.mutation);
-        entry.server = result; this.onStored(result); entry.savedGeneration = captured.generation; entry.retry = undefined; entry.conflict = false;
+        entry.server = acknowledgment(result); this.onStored(result); entry.savedGeneration = captured.generation; entry.retry = undefined; entry.conflict = false;
+        if (captured.kind !== "save") acknowledged = result;
         if (entry.generation === captured.generation) entry.draft = clone(result.draft);
       } catch (error) {
         entry.conflict = error instanceof ReviewRequestError && error.status === 409;
@@ -56,7 +64,8 @@ export class ReviewDrafts {
           try {
             const current = (await this.api.window(entry.server.queueId, id)).find(item => item.id === id);
             if (current?.lastMutationId === captured.mutation.mutationId && current.revision === captured.mutation.expectedRevision + 1) {
-              entry.server = current; this.onStored(current); entry.savedGeneration = captured.generation;
+              entry.server = acknowledgment(current); this.onStored(current); entry.savedGeneration = captured.generation;
+              if (captured.kind !== "save") acknowledged = current;
               entry.retry = undefined; entry.error = null;
               if (entry.generation === captured.generation) entry.draft = clone(current.draft);
             } else if (current && current.revision !== captured.mutation.expectedRevision) {
@@ -69,30 +78,38 @@ export class ReviewDrafts {
     this.changed(); await entry.flight;
     if (!entry.error && !entry.approving && entry.generation !== entry.savedGeneration) await this.send(id, "save");
     else if (!entry.error && !entry.approving && entry.generation === entry.savedGeneration) { this.entries.delete(id); this.changed(); }
+    return acknowledged;
   }
   async save(id: string): Promise<void> { await this.send(id, "save"); }
   async retry(id: string): Promise<void> { await this.send(id, "save", true); }
-  async approve(item: ReviewItem): Promise<ReviewItem> {
+  approve(item: ReviewItem): Promise<ReviewItem> {
     let entry = this.entries.get(item.id);
     if (!entry) {
-      if (this.entries.size >= L.MAX_DIRTY_DRAFTS) throw new Error("Save or discard a retained draft before approving another item.");
-      entry = { server: item, draft: clone(item.draft), generation: 0, savedGeneration: 0, busy: false, approving: false, error: null, conflict: false }; this.entries.set(item.id, entry);
+      if (this.entries.size >= L.MAX_DIRTY_DRAFTS) return Promise.reject(new Error("Save or discard a retained draft before approving another item."));
+      entry = { server: acknowledgment(item), draft: clone(item.draft), generation: 0, savedGeneration: 0, busy: false, approving: false, error: null, conflict: false }; this.entries.set(item.id, entry);
     }
     clearTimeout(entry.timer); entry.approving = true; this.changed();
-    try { if (entry.flight) await entry.flight; await this.send(item.id, "approve"); if (entry.error) throw new Error(entry.error); return entry.server; }
-    finally { entry.approving = false; if (!entry.error) this.entries.delete(item.id); this.changed(); }
+    return this.finishReview(item.id, entry, "approve");
   }
-  async reopen(item: ReviewItem): Promise<ReviewItem> {
-    if (this.entries.size >= L.MAX_DIRTY_DRAFTS && !this.entries.has(item.id)) throw new Error("Save or discard a retained draft before reopening.");
-    this.entries.set(item.id, { server: item, draft: clone(item.draft), generation: 0, savedGeneration: 0, busy: false, approving: true, error: null, conflict: false });
+  reopen(item: ReviewItem): Promise<ReviewItem> {
+    if (this.entries.size >= L.MAX_DIRTY_DRAFTS && !this.entries.has(item.id)) return Promise.reject(new Error("Save or discard a retained draft before reopening."));
+    this.entries.set(item.id, { server: acknowledgment(item), draft: clone(item.draft), generation: 0, savedGeneration: 0, busy: false, approving: true, error: null, conflict: false });
     const entry = this.entries.get(item.id)!;
-    await this.send(item.id, "reopen"); entry.approving = false; this.changed(); if (entry.error) throw new Error(entry.error);
-    this.entries.delete(item.id); this.changed(); return entry.server;
+    return this.finishReview(item.id, entry, "reopen");
+  }
+  private async finishReview(id: string, entry: PendingDraft, kind: "approve" | "reopen"): Promise<ReviewItem> {
+    try {
+      if (entry.flight) await entry.flight;
+      const result = await this.send(id, kind);
+      if (entry.error) throw new Error(entry.error);
+      if (!result) { entry.error = "The stored review acknowledgment is unavailable. Your draft is retained."; throw new Error(entry.error); }
+      return result;
+    } finally { entry.approving = false; if (!entry.error) this.entries.delete(id); this.changed(); }
   }
   reapply(id: string, latest: ReviewItem): void {
     const entry = this.entries.get(id); if (!entry || entry.busy) return;
     if (latest.state !== "draft") throw new Error("The latest item is approved or promoted. Reopen it before reapplying this draft.");
-    entry.server = latest; entry.error = null; entry.conflict = false; entry.retry = undefined; entry.generation++; this.changed();
+    entry.server = acknowledgment(latest); entry.error = null; entry.conflict = false; entry.retry = undefined; entry.generation++; this.changed();
   }
   discard(id: string): void { const entry = this.entries.get(id); if (entry?.busy) throw new Error("Wait for the save acknowledgment before discarding."); clearTimeout(entry?.timer); this.entries.delete(id); this.changed(); }
   dispose(): void { for (const entry of this.entries.values()) clearTimeout(entry.timer); }
