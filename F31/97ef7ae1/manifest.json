@@ -1,0 +1,34 @@
+{
+  "product": "Run Phantom",
+  "maintainer": "Divyam Talwar",
+  "sourceHead": "97ef7ae1d184d38ca57da302cb5418624f897d11",
+  "scope": "Feature-specific compiled macOS screenshots; native Windows/Linux and paid-provider/global acceptance remain pending",
+  "screenshots": [
+    {
+      "file": "mobile-captured-input-output.png",
+      "sha256": "9fcaadb332ca0feb5f7a6d3c16ccd6e57b9010e0088265ac942994109b5e1d14",
+      "bytes": 47505,
+      "capture": "Actual copied native macOS application, synthetic fixtures, independently verified output"
+    },
+    {
+      "file": "project-scoped-typed-search.png",
+      "sha256": "90dbf6d28b4c0fafaa089c8bab7e2c5e70894c73d442d83c2f7d79625ba613fb",
+      "bytes": 83903,
+      "capture": "Actual copied native macOS application, synthetic fixtures, independently verified output"
+    },
+    {
+      "file": "revoked-project-access.png",
+      "sha256": "3d246ca27ba6ea335c240b1bda02c4d447951496346ac9e893f16404dddecd96",
+      "bytes": 20261,
+      "capture": "Actual copied native macOS application, synthetic fixtures, independently verified output"
+    },
+    {
+      "file": "saved-search-output-after-restart.png",
+      "sha256": "eb91574062e1c872ea70f41570669816c1ad4fb1400cedf32d59e2cb1467ec81",
+      "bytes": 87196,
+      "capture": "Actual copied native macOS application, synthetic fixtures, independently verified output"
+    }
+  ],
+  "imageBytesUnchanged": true,
+  "noProviderCalls": true
+}

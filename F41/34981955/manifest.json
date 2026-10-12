@@ -1,0 +1,34 @@
+{
+  "product": "Run Phantom",
+  "maintainer": "Divyam Talwar",
+  "sourceHead": "34981955670d3f211755c90bf8468e2cc9593dc9",
+  "scope": "Feature-specific compiled macOS screenshots; native Windows/Linux and paid-provider/global acceptance remain pending",
+  "screenshots": [
+    {
+      "file": "desktop-keyboard-composer.png",
+      "sha256": "c28127c2f0c6a308601b273fcf8619803156db5b06cec6a107504c70befd5bd6",
+      "bytes": 106962,
+      "capture": "Actual copied native macOS application, synthetic fixtures, independently verified output"
+    },
+    {
+      "file": "mobile-keyboard-composer.png",
+      "sha256": "7ecd1667164814b53a4db269f0537304fbd4badf2731d92a63542aa08aa73c1d",
+      "bytes": 18783,
+      "capture": "Actual copied native macOS application, synthetic fixtures, independently verified output"
+    },
+    {
+      "file": "recovered-selected-output.png",
+      "sha256": "683394b28314ef1cefc45d8b85acde82f4fd718754ea827eab48055ee5f65b8f",
+      "bytes": 100219,
+      "capture": "Actual copied native macOS application, synthetic fixtures, independently verified output"
+    },
+    {
+      "file": "persisted-output-after-two-restarts.png",
+      "sha256": "ecc52f0cc5be9fcab1fa2038884a1c41ae558ca59cec11eb774f8dc628665d2b",
+      "bytes": 101515,
+      "capture": "Actual copied native macOS application, synthetic fixtures, independently verified output"
+    }
+  ],
+  "imageBytesUnchanged": true,
+  "noProviderCalls": true
+}
