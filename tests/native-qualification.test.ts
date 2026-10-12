@@ -3,7 +3,61 @@ import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileSha256, outsideCheckout, launchOwnedProcess, ownedProcessMatches, stopOwnedProcess, startManagedDaemon, type RuntimeProvenance } from "../app/tests-e2e/daemon-runtime";
+import { fileSha256, outsideCheckout, launchOwnedProcess, ownedProcessMatches, stopOwnedProcess, startManagedDaemon, windowsNativeEnvironment, windowsProcessSnapshot, windowsProcessBirth, type RuntimeProvenance } from "../app/tests-e2e/daemon-runtime";
+
+const systemEnvironment = { PATH: "C:\\Windows\\System32", SystemRoot: "C:\\Windows", windir: "C:\\Windows", TEMP: "C:\\Temp", TMP: "C:\\Temp",
+  USERPROFILE: "C:\\Users\\fixture", LOCALAPPDATA: "C:\\Users\\fixture\\AppData\\Local", ProgramFiles: "C:\\Program Files" };
+const birthStamp = "2026-10-12T02:05:11.1234567Z";
+
+test("Windows native command projection retains only finite system locations and fixed locale", () => {
+  let unknownReads = 0;
+  const input = { ...systemEnvironment, ANTHROPIC_API_KEY: "fixture-secret", OPENAI_API_KEY: "fixture-secret", RUNPHANTOM_PORT: "1",
+    PSModulePath: "untrusted-module", PSExecutionPolicyPreference: "Bypass", LANG: "other", TZ: "other" };
+  Object.defineProperty(input, "UNKNOWN_OPTION", { enumerable: true, get: () => { unknownReads++; return "unknown"; } });
+  expect(windowsNativeEnvironment(input)).toEqual({ ...systemEnvironment, LANG: "C", TZ: "UTC" });
+  expect(unknownReads).toBe(0);
+});
+
+test("Windows system projection canonicalizes ASCII names and refuses conflicting aliases", () => {
+  expect(windowsNativeEnvironment({ path: systemEnvironment.PATH, SYSTEMROOT: systemEnvironment.SystemRoot, localappdata: systemEnvironment.LOCALAPPDATA }))
+    .toEqual({ PATH: systemEnvironment.PATH, SystemRoot: systemEnvironment.SystemRoot, LOCALAPPDATA: systemEnvironment.LOCALAPPDATA, LANG: "C", TZ: "UTC" });
+  expect(windowsNativeEnvironment({ ...systemEnvironment, Path: systemEnvironment.PATH })).toEqual({ ...systemEnvironment, LANG: "C", TZ: "UTC" });
+  expect(() => windowsNativeEnvironment({ ...systemEnvironment, Path: "different" })).toThrow("native_environment_conflict");
+  expect(() => windowsNativeEnvironment({ ...systemEnvironment, SYSTEMROOT: "different" })).toThrow("native_environment_conflict");
+});
+
+test("Windows operational fields cannot come from Unicode aliases, prototypes or accessors", () => {
+  expect(() => windowsNativeEnvironment({ "ſystemRoot": systemEnvironment.SystemRoot, PATH: systemEnvironment.PATH })).toThrow("native_environment_required");
+  expect(() => windowsNativeEnvironment({ "ＰＡＴＨ": systemEnvironment.PATH, SystemRoot: systemEnvironment.SystemRoot })).toThrow("native_environment_required");
+  expect(() => windowsNativeEnvironment(Object.create(systemEnvironment) as NodeJS.ProcessEnv)).toThrow("native_environment_required");
+  let reads = 0;
+  const accessor = Object.defineProperty({ ...systemEnvironment }, "LOCALAPPDATA", { get: () => { reads++; return "getter"; } });
+  expect(() => windowsNativeEnvironment(accessor)).toThrow("native_environment_invalid"); expect(reads).toBe(0);
+  expect(() => windowsNativeEnvironment({ ...systemEnvironment, TEMP: 42 } as unknown as NodeJS.ProcessEnv)).toThrow("native_environment_invalid");
+  expect(() => windowsNativeEnvironment({ ...systemEnvironment, TEMP: "C:\\Temp\0other" })).toThrow("native_environment_invalid");
+});
+
+test("Windows snapshots retain exact UTC births while unavailable births cannot become authority", () => {
+  const raw = JSON.stringify([{ pid: 71, parent: 12, birth: birthStamp }, { pid: 72, parent: 71, birth: null }]);
+  expect(windowsProcessSnapshot(raw)).toEqual([{ pid: 71, parent: 12, identity: `71:${birthStamp}` }, { pid: 72, parent: 71, identity: "" }]);
+  expect(windowsProcessBirth(JSON.stringify([{ pid: 71, parent: 12, birth: birthStamp }]), 71)).toBe(`71:${birthStamp}`);
+  expect(windowsProcessBirth("[]", 71)).toBeNull();
+  expect(() => windowsProcessBirth(JSON.stringify([{ pid: 72, parent: 71, birth: null }]), 72)).toThrow("fixture_process_birth");
+  expect(() => windowsProcessBirth(raw, 71)).toThrow("fixture_process_birth");
+  expect(() => windowsProcessBirth(JSON.stringify([{ pid: 72, parent: 12, birth: birthStamp }]), 71)).toThrow("fixture_process_birth");
+});
+
+test("Windows acquisition refuses corrupt, duplicate and unbounded snapshots before adoption", () => {
+  const valid = { pid: 71, parent: 12, birth: birthStamp };
+  for (const invalid of ["not-json", "{}", "[null]", JSON.stringify([{ ...valid, pid: 0 }]), JSON.stringify([{ ...valid, pid: 1.5 }]),
+    JSON.stringify([{ ...valid, parent: -1 }]), JSON.stringify([{ ...valid, parent: 4294967296 }]), JSON.stringify([{ ...valid, birth: "missing" }]),
+    JSON.stringify([{ ...valid, birth: "2026-02-30T02:05:11.1234567Z" }]), JSON.stringify([{ ...valid, extra: true }]), JSON.stringify([valid, valid])]) {
+    expect(() => windowsProcessSnapshot(invalid)).toThrow("fixture_process_birth");
+  }
+  expect(() => windowsProcessSnapshot(" ".repeat(512 * 1024 + 1))).toThrow("fixture_process_snapshot_limit");
+  expect(() => windowsProcessSnapshot(JSON.stringify(Array.from({ length: 8193 }, (_, i) => ({ ...valid, pid: i + 1 }))))).toThrow("fixture_process_snapshot_limit");
+  for (const pid of [0, -1, 1.5, Infinity, 4294967296]) expect(() => windowsProcessBirth("[]", pid)).toThrow("fixture_process_pid");
+});
 
 test("qualification refuses missing artifacts, mismatched native digests and ambiguous arguments before creating receipts", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "runphantom-qualifier-negative-"));

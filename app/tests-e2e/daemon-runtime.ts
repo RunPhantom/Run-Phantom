@@ -57,8 +57,24 @@ async function checkedArtifact(selection: Extract<RuntimeSelection, { mode: "ins
   if (await fileSha256(artifact) !== selection.sha256) throw refusal("native_digest_mismatch");
   return artifact;
 }
+export function windowsNativeEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (!env || typeof env !== "object" || Array.isArray(env)) throw refusal("native_environment_invalid");
+  const allowed = new Map(["PATH", "SystemRoot", "windir", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "ProgramFiles"].map(key => [key.toLowerCase(), key]));
+  const projected: NodeJS.ProcessEnv = { LANG: "C", TZ: "UTC" };
+  for (const [key, field] of Object.entries(Object.getOwnPropertyDescriptors(env))) {
+    // Windows names are ASCII case-insensitive; Unicode lookalikes never supply an operational field.
+    const canonical = [...key].every(character => character.charCodeAt(0) <= 0x7f) ? allowed.get(key.toLowerCase()) : undefined;
+    if (!canonical) continue;
+    if (!("value" in field) || typeof field.value !== "string" || !field.value || field.value.length > 32767 || field.value.includes("\0")) throw refusal("native_environment_invalid");
+    if (projected[canonical] !== undefined && projected[canonical] !== field.value) throw refusal("native_environment_conflict");
+    projected[canonical] = field.value;
+  }
+  if (!projected.PATH || !projected.SystemRoot) throw refusal("native_environment_required");
+  return projected;
+}
 function command(file: string, args: string[], maxBuffer = 64 * 1024): Promise<string> {
-  return new Promise((resolve, reject) => execFile(file, args, { timeout: 3000, maxBuffer, windowsHide: true, env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, LANG: "C", TZ: "UTC" } },
+  const env = process.platform === "win32" ? windowsNativeEnvironment(process.env) : { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, LANG: "C", TZ: "UTC" };
+  return new Promise((resolve, reject) => execFile(file, args, { timeout: 3000, maxBuffer, windowsHide: true, env },
     (error, stdout) => error ? reject(refusal("native_observation_failed")) : resolve(stdout)));
 }
 export async function observeNative(pid: number, executable: string, cwd: string, port: number): Promise<ProcessObservation> {
@@ -124,6 +140,35 @@ async function processIdentity(pid: number): Promise<string | null> {
   } catch { return null; }
 }
 type ProcessRow = { pid: number; parent: number; identity: string };
+export function windowsProcessSnapshot(raw: string): ProcessRow[] {
+  if (typeof raw !== "string" || Buffer.byteLength(raw, "utf8") > 512 * 1024) throw refusal("fixture_process_snapshot_limit");
+  let rows: unknown;
+  try { rows = JSON.parse(raw); } catch { throw refusal("fixture_process_birth"); }
+  if (!Array.isArray(rows)) throw refusal("fixture_process_birth");
+  if (rows.length > 8192) throw refusal("fixture_process_snapshot_limit");
+  const seen = new Set<number>();
+  return rows.map((row: unknown) => {
+    if (!row || typeof row !== "object" || Object.keys(row).sort().join(",") !== "birth,parent,pid") throw refusal("fixture_process_birth");
+    const { pid, parent, birth } = row as { pid: number; parent: number; birth: unknown };
+    if (!validWindowsPid(pid) || !Number.isInteger(parent) || parent < 0 || parent > 0xffffffff || seen.has(pid)) throw refusal("fixture_process_birth");
+    seen.add(pid);
+    if (birth !== null) {
+      if (typeof birth !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z$/.test(birth)) throw refusal("fixture_process_birth");
+      const milliseconds = `${birth.slice(0, 23)}Z`, parsed = Date.parse(milliseconds);
+      if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== milliseconds) throw refusal("fixture_process_birth");
+    }
+    return { pid, parent, identity: birth === null ? "" : `${pid}:${birth}` };
+  });
+}
+export function windowsProcessBirth(raw: string, pid: number): string | null {
+  if (!validWindowsPid(pid)) throw refusal("fixture_process_pid");
+  if (typeof raw !== "string" || Buffer.byteLength(raw, "utf8") > 64 * 1024) throw refusal("fixture_process_snapshot_limit");
+  const rows = windowsProcessSnapshot(raw);
+  if (!rows.length) return null;
+  if (rows.length !== 1 || rows[0].pid !== pid || !rows[0].identity) throw refusal("fixture_process_birth");
+  return rows[0].identity;
+}
+const validWindowsPid = (pid: number) => Number.isInteger(pid) && pid > 0 && pid <= 0xffffffff;
 type Ownership = { root: ChildProcess; pid: number | undefined; identity: Promise<string | null>; descendants: Map<number, string>; pending: Promise<void>; running?: boolean; timer?: ReturnType<typeof setInterval>; failure?: Error };
 const ownership = new WeakMap<OwnedProcess, Ownership>();
 const MAX_DESCENDANTS = 64;
