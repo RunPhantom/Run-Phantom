@@ -43,7 +43,9 @@ export async function prepareEvidenceUpload(drafts: readonly EvidenceFileDraft[]
     bytes.push(buffer);
     sources.push({ sourceId: draft.sourceId, kind: kinds[draft.dialect], dialect: draft.dialect, shardId: draft.shardId.trim() || null, artifactSha256: digest, byteLength: buffer.byteLength });
   }
-  const request: EvidenceImportRequest = { ...capabilities.reader, operationKey: options.operationKey, attachment: options.attachment, inventory: options.inventory, retention: options.retention, target: null, sources };
+  const request: EvidenceImportRequest = { ...capabilities.reader, operationKey: options.operationKey, attachment: options.attachment,
+    inventory: options.inventory ? { id: options.inventory.id, revision: options.inventory.revision } : null,
+    retention: options.retention, target: null, sources };
   const metadata = new TextEncoder().encode(JSON.stringify({ version: 1, request }));
   if (metadata.byteLength > Math.min(64 * 1024, capabilities.transport.maxHeaderBytes)) throw new Error("Report metadata exceeds 64 KiB.");
   const prefix = new ArrayBuffer(4); new DataView(prefix).setUint32(0, metadata.byteLength, false);

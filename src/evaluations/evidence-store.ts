@@ -360,9 +360,15 @@ export class EvidenceStore {
     });
   }
   exportRaw(id: string, revision: number, sourceId: string): Uint8Array {
+    return this.#readRaw(id, revision, sourceId, "raw_export");
+  }
+  readRawForReparse(id: string, revision: number, sourceId: string): Uint8Array {
+    return this.#readRaw(id, revision, sourceId, "import");
+  }
+  #readRaw(id: string, revision: number, sourceId: string, capability: "raw_export" | "import"): Uint8Array {
     id = evidenceText(id, "set ID"); revision = evidenceInteger(revision, "set revision", Number.MAX_SAFE_INTEGER, 1); sourceId = evidenceText(sourceId, "source ID");
     return this.#transaction(() => {
-      this.#authorize("raw_export", null); const set = this.#set(id, revision); this.#authorize("raw_export", set.attachment); this.#generation();
+      this.#authorize(capability, null); const set = this.#set(id, revision); this.#authorize(capability, set.attachment); this.#generation();
       const source = set.sources.find(source => source.sourceId === sourceId);
       const blob = source && this.#get<{ bytes: Uint8Array | null; byte_length: number }>(`SELECT
         CASE WHEN typeof(bytes)='blob' AND length(bytes)<=? AND length(bytes)=? THEN bytes ELSE NULL END AS bytes,
