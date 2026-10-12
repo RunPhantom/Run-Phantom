@@ -130,7 +130,7 @@ const v1Schema = expectedSchema(TEAM_V1_SQL);
 const v2Schema = expectedSchema(`${TEAM_V1_SQL}\n${TEAM_EVIDENCE_SQL}`);
 function knownTeamSchema(db: Database, version: number): void {
   const expected = version === 1 ? v1Schema : v2Schema;
-  const actual = db.query("SELECT name,type,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").all() as SchemaObject[];
+  const actual = db.query("SELECT name,type,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'").all() as SchemaObject[];
   if (actual.length !== expected.size || actual.some(row => {
     const object = expected.get(row.name);
     return !object || row.type !== object.type || typeof row.sql !== "string" || normalizedSql(row.sql) !== object.sql;
@@ -145,7 +145,7 @@ export function initializeTeamSchema(db: Database): void {
     const version = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
     if (![0, 1, TEAM_SCHEMA_VERSION].includes(version)) throw new TeamError("conflict", "Unsupported team database version");
     if (version === 0) {
-      const objects = db.query("SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").all();
+      const objects = db.query("SELECT name FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'").all();
       if (objects.length) throw new TeamError("conflict", "The selected database is not an initialized team database");
     } else knownTeamSchema(db, version);
     if (version === TEAM_SCHEMA_VERSION) return;

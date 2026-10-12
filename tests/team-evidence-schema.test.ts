@@ -17,7 +17,7 @@ function connection(path = ":memory:") {
 }
 const oldSql = readFileSync(join(import.meta.dir, "fixtures/team-schema-v1.sql"), "utf8");
 function snapshot(db: Database) {
-  const names = (db.query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as Array<{ name: string }>).map(row => row.name);
+  const names = (db.query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*' ORDER BY name").all() as Array<{ name: string }>).map(row => row.name);
   return Object.fromEntries(names.map(name => [name, db.query(`SELECT * FROM "${name}" ORDER BY rowid`).all()]));
 }
 function scope(db: Database, id: string) {
@@ -121,3 +121,18 @@ test("an altered v2 schema refuses reopening without changing the saved generati
   expect(db.query("SELECT * FROM sqlite_master ORDER BY name").all()).toEqual(schema);
   expect(scope(db, "saved")).toEqual({ scope_key: "project:saved", generation: 3, active: 1 });
 });
+
+for (const version of [0, 1, 2]) {
+  test(`a legal sqliteX table is an unknown user object at version ${version}, not a reserved SQLite table`, () => {
+    const db = connection();
+    if (version === 1) db.exec(oldSql);
+    else if (version === 2) initializeTeamSchema(db);
+    db.exec("CREATE TABLE sqliteXprotected(value TEXT); INSERT INTO sqliteXprotected VALUES('original captured payload')");
+    const before = snapshot(db), schema = db.query("SELECT * FROM sqlite_master ORDER BY name").all();
+    expect(() => initializeTeamSchema(db)).toThrow(TeamError);
+    expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: version });
+    expect(snapshot(db)).toEqual(before);
+    expect(db.query("SELECT * FROM sqlite_master ORDER BY name").all()).toEqual(schema);
+    expect(db.query("SELECT value FROM sqliteXprotected").get()).toEqual({ value: "original captured payload" });
+  });
+}
