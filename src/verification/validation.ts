@@ -1,5 +1,5 @@
 import {
-  PROTOCOL_VERSION, CAUSAL_PROTOCOL_VERSION, CAUSAL_CAPABILITY, SEMANTIC_PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_PROTOCOL_VERSION, SOURCE_CAPABILITY, SEMANTIC_REF_PATTERN, normalizeSemanticText, relativeTargetKey, relativeTargets, VERIFICATION_LIMITS as L,
+  PROTOCOL_VERSION, CAUSAL_PROTOCOL_VERSION, CAUSAL_CAPABILITY, SEMANTIC_PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_PROTOCOL_VERSION, SOURCE_CAPABILITY, TREE_PROTOCOL_VERSION, TREE_CAPABILITY, SEMANTIC_REF_PATTERN, normalizeSemanticText, relativeTargetKey, relativeTargets, VERIFICATION_LIMITS as L,
   type AppCommand, type BrowserMessage, type Coverage, type FlowStep, type Predicate, type RelativeTarget, type SemanticQuery, type VerificationCapability,
 } from "./protocol";
 import { isSensitiveKey } from "./redaction";
@@ -110,6 +110,9 @@ export function parseCommand(value: unknown): AppCommand {
     case "semantic-snapshot":
       keys(obj, ["type"], "semantic snapshot command");
       return { type: "semantic-snapshot" };
+    case "semantic-tree":
+      keys(obj, ["type"], "semantic tree command");
+      return { type: "semantic-tree" };
     case "ref-click": case "ref-fill": {
       keys(obj, obj.type === "ref-fill" ? ["type", "ref", "value"] : ["type", "ref"], "live reference command");
       const ref = text(obj.ref, "live reference", 38);
@@ -263,7 +266,7 @@ export function parseFlowSteps(value: unknown): FlowStep[] {
     const predicate = parsePredicate(obj.predicate);
     assertSafePredicate(predicate);
     const command = Object.hasOwn(obj, "command") ? parseCommand(obj.command) : undefined;
-    if (command && ["find", "semantic-snapshot", "ref-click", "ref-fill"].includes(command.type)) invalid("semantic discovery and live references cannot be saved in flows; refresh them in the current session");
+    if (command && ["find", "semantic-snapshot", "semantic-tree", "ref-click", "ref-fill"].includes(command.type)) invalid("semantic discovery and live references cannot be saved in flows; refresh them in the current session");
     const targets = relativeTargets(predicate);
     if (targets.length && command?.type !== "click" && command?.type !== "causal-click") invalid("saved relative checks require an explicit click action");
     if (targets.length && command?.type === "causal-click"
@@ -356,6 +359,12 @@ export function parseBrowserMessage(value: unknown): BrowserMessage {
   const obj = record(value, "browser message");
   switch (obj.type) {
     case "hello": {
+      if (obj.version === TREE_PROTOCOL_VERSION) {
+        keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello message");
+        if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 4 || !obj.capabilities.includes(TREE_CAPABILITY)
+          || new Set(obj.capabilities).size !== obj.capabilities.length || obj.capabilities.some(entry => ![CAUSAL_CAPABILITY, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, TREE_CAPABILITY].includes(entry))) invalid("unsupported or duplicate tree capabilities");
+        return { type: "hello", version: TREE_PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
+      }
       if (obj.version === SOURCE_PROTOCOL_VERSION) {
         keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello");
         if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 3 || !obj.capabilities.includes(SOURCE_CAPABILITY)

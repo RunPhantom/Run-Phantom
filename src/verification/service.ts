@@ -7,6 +7,7 @@ import { boundReportContext } from "./report-context";
 import { relativeTargets, relativeTargetKey, VERIFICATION_LIMITS as L, type Predicate,
   type Verdict, type VerificationReport, type VerificationCheckContext, type RetainedControlSource } from "./protocol";
 import { baselineScopeForTarget, type BaselineReading } from "./baseline";
+import { saveCapturedSnapshot } from "./snapshot-store";
 
 export interface VerificationServiceOptions extends VerificationBridgeOptions { checkTimeoutMs?: number }
 
@@ -26,6 +27,17 @@ export class VerificationService {
     return this.lock(session, async () => {
       const { unavailable: _unavailable, ...result } = await this.bridge.command(session, command);
       return result;
+    });
+  }
+
+  captureSnapshot(id: string, name: unknown) {
+    const session = this.bridge.get(id);
+    return this.lock(session, async () => {
+      const socket = session.ws; const generation = session.generation;
+      if (!socket) throw new VerificationHttpError(409, "Connect the application before capturing a snapshot");
+      const result = await this.bridge.command(session, { type: "semantic-tree" });
+      if (!result.ok || this.bridge.sessions.get(id) !== session || !session.ws || session.ws !== socket || session.generation !== generation) throw new VerificationHttpError(409, result.error ?? "Application connection changed during snapshot capture");
+      return saveCapturedSnapshot({ sessionId: session.id, runId: session.runId, origin: session.origin, name: this.bridge.sanitize(session, name).value, tree: result.result, connectionGeneration: generation, capturedAt: Date.now() });
     });
   }
 

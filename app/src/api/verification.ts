@@ -1,5 +1,6 @@
 import { apiJson, jsonInit } from "./request";
 import type { AppCommand, FlowStep, Observation, Predicate, SessionSummary, VerificationFlow, VerificationReport } from "../../../src/verification/protocol";
+import type { PortableSnapshots, SavedSemanticSnapshot, SnapshotDiffResult } from "../../../src/verification/snapshot-contract";
 
 export type { AppCommand, FlowStep, Observation, Predicate, RuntimeEvent, SessionSummary, VerificationFlow, VerificationReport, VerificationReportContext, VerificationStatus } from "../../../src/verification/protocol";
 export type CreatedSession = SessionSummary & { token: string; sdkUrl: string; wsUrl: string };
@@ -19,4 +20,10 @@ export const verificationApi = {
   saveFlow: (name: string, origin: string, steps: FlowStep[]) => apiJson<VerificationFlow>(`${root}/flows`, jsonInit("POST", { name, origin, steps })),
   runFlow: (id: string, sessionId: string) => apiJson<VerificationReport>(`${root}/flows/${encodeURIComponent(id)}/run`, jsonInit("POST", { sessionId })),
   deleteFlow: (id: string) => apiJson<{ ok: true }>(`${root}/flows/${encodeURIComponent(id)}`, jsonInit("DELETE")),
+  snapshots: (runId?: string) => apiJson<SavedSemanticSnapshot[]>(`${root}/snapshots${runId ? `?runId=${encodeURIComponent(runId)}` : ""}`),
+  captureSnapshot: (id: string, name: string) => apiJson<SavedSemanticSnapshot>(`${sessionPath(id)}/snapshots`, jsonInit("POST", { name })),
+  compareSnapshots: (beforeId: string, afterId: string) => apiJson<SnapshotDiffResult>(`${root}/snapshot-diff`, jsonInit("POST", { beforeId, afterId })),
+  deleteSnapshot: (id: string) => apiJson<{ ok: true }>(`${root}/snapshots/${encodeURIComponent(id)}`, jsonInit("DELETE")),
+  exportSnapshots: (ids: string[]) => apiJson<PortableSnapshots>(`${root}/snapshots/export`, jsonInit("POST", { ids })),
+  importSnapshots: (artifact: unknown, runId?: string) => apiJson<SavedSemanticSnapshot[]>(`${root}/snapshots/import`, jsonInit("POST", { artifact, ...(runId ? { runId } : {}) })),
 };

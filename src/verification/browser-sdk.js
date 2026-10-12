@@ -6,6 +6,8 @@ var SEMANTIC_PROTOCOL_VERSION = 3;
 var SEMANTIC_CAPABILITY = "semantic-refs";
 var SOURCE_PROTOCOL_VERSION = 4;
 var SOURCE_CAPABILITY = "control-source";
+var TREE_PROTOCOL_VERSION = 5;
+var TREE_CAPABILITY = "semantic-tree";
 var SEMANTIC_REF_PATTERN = /^rpref_[0-9a-f]{32}$/;
 function normalizeSemanticText(text) {
   return text.normalize("NFC").replace(/\s+/gu, " ").trim();
@@ -579,6 +581,9 @@ function parseCommand(value) {
     case "semantic-snapshot":
       keys(obj, ["type"], "semantic snapshot command");
       return { type: "semantic-snapshot" };
+    case "semantic-tree":
+      keys(obj, ["type"], "semantic tree command");
+      return { type: "semantic-tree" };
     case "ref-click":
     case "ref-fill": {
       keys(obj, obj.type === "ref-fill" ? ["type", "ref", "value"] : ["type", "ref"], "live reference command");
@@ -1135,11 +1140,12 @@ function unread(coverage, element, reason) {
   else
     coverage.unreadOverflow = true;
 }
-function collectSemanticElements(document2) {
+function collectSemanticElements(document2, treeCapture = false) {
   const coverage = { scope: "visible-observable-dom", complete: true, visitedNodes: 0, openShadowRoots: 0, sameOriginFrames: 0, inaccessibleFrames: 0, closedShadowRoots: "unobservable", hiddenSubtrees: 0, privateSubtrees: 0, truncated: false, reasons: [], unread: [] };
   const collected = [];
   const readings = new Map;
-  const stack = [{ node: document2, depth: 0, inherited: true, entered: false, next: null, extras: [], extra: 0 }];
+  const regions = [{ kind: "document", parentRegion: null, host: null }];
+  const stack = [{ node: document2, depth: 0, region: 0, inherited: true, entered: false, next: null, extras: [], extra: 0 }];
   while (stack.length) {
     const frame = stack[stack.length - 1];
     if (!frame.entered) {
@@ -1183,7 +1189,7 @@ function collectSemanticElements(document2) {
           stack.pop();
           continue;
         }
-        const own = { element, depth: frame.depth, visible: true, text: { value: "", truncated: false } };
+        const own = { element, depth: frame.depth, visible: true, text: { value: "", truncated: false }, parent: frame.parent, region: frame.region, boundaryHost: !!element.shadowRoot || isFrame(element) };
         frame.own = own;
         collected.push(own);
         readings.set(element, own.text);
@@ -1191,8 +1197,18 @@ function collectSemanticElements(document2) {
           const alt = attribute(element, "alt");
           appendText(own.text, alt.value, alt.truncated);
         }
+        const extra2 = (node, kind) => {
+          if (treeCapture && regions.length >= 32) {
+            unread(coverage, element, "tree-region-limit");
+            return;
+          }
+          const region = treeCapture ? regions.length : frame.region;
+          if (treeCapture)
+            regions.push({ kind, parentRegion: frame.region, host: element });
+          frame.extras.push({ node, region });
+        };
         if (element.shadowRoot) {
-          frame.extras.push(element.shadowRoot);
+          extra2(element.shadowRoot, "open-shadow");
           coverage.openShadowRoots++;
         }
         if (isFrame(element)) {
@@ -1201,7 +1217,7 @@ function collectSemanticElements(document2) {
             child = element.contentDocument;
           } catch {}
           if (child?.documentElement && child.defaultView?.frameElement === element) {
-            frame.extras.push(child);
+            extra2(child, "same-origin-frame");
             coverage.sameOriginFrames++;
           } else {
             coverage.inaccessibleFrames++;
@@ -1218,12 +1234,12 @@ function collectSemanticElements(document2) {
     const next = frame.next;
     if (next) {
       frame.next = next.nextSibling;
-      stack.push({ node: next, depth: frame.depth + 1, inherited: frame.inherited, entered: false, next: null, extras: [], extra: 0, parent: frame.own ?? frame.parent });
+      stack.push({ node: next, depth: frame.depth + 1, region: frame.region, inherited: frame.inherited, entered: false, next: null, extras: [], extra: 0, parent: frame.own ?? frame.parent });
       continue;
     }
     const extra = frame.extras[frame.extra++];
     if (extra) {
-      stack.push({ node: extra, depth: frame.depth + 1, inherited: frame.inherited, entered: false, next: null, extras: [], extra: 0, parent: frame.own ?? frame.parent });
+      stack.push({ node: extra.node, depth: frame.depth + 1, region: extra.region, inherited: frame.inherited, entered: false, next: null, extras: [], extra: 0, ...treeCapture ? {} : { parent: frame.own ?? frame.parent } });
       continue;
     }
     if (frame.own && frame.parent)
@@ -1274,7 +1290,7 @@ function collectSemanticElements(document2) {
     const nameTruncated = name.length > SEMANTIC_LIMITS.text || aria.truncated || linked.truncated || labelText.truncated || title.truncated || placeholder.truncated || alt.truncated || contentRoles.has(role) && entry.text.truncated || testIdAttribute.truncated;
     if (nameTruncated)
       unread(coverage, element, "name-limit");
-    if (!role && !name && !testId)
+    if (!role && !name && !testId && !(treeCapture && entry.boundaryHost))
       return [];
     return [{
       element,
@@ -1285,10 +1301,11 @@ function collectSemanticElements(document2) {
       testId: testId.slice(0, SEMANTIC_LIMITS.text),
       nameTruncated,
       disabled: element.matches(":disabled") || element.getAttribute("aria-disabled") === "true",
-      readonly: (isInput(element) || isTextArea(element)) && element.readOnly
+      readonly: (isInput(element) || isTextArea(element)) && element.readOnly,
+      ...treeCapture ? { tree: { region: entry.region, boundaryHost: entry.boundaryHost } } : {}
     }];
   });
-  return { elements, coverage };
+  return { elements, coverage, ...treeCapture ? { tree: { ancestry: new Map(collected.map((entry) => [entry.element, { parent: entry.parent?.element ?? null, region: entry.region }])), regions } } : {} };
 }
 function matchesSemanticQuery(element, query) {
   const match = (value, wanted) => query.kind === "test-id" || query.exact !== false ? normalizeSemanticText(value) === normalizeSemanticText(wanted) : normalizeSemanticText(value).includes(normalizeSemanticText(wanted));
@@ -1829,9 +1846,327 @@ function identifyReactControl(el, repoRoot) {
   }
 }
 
+// src/verification/snapshot-contract.ts
+var SNAPSHOT_LIMITS = { nodes: 100, regions: 32, text: 240, depth: 64, treeBytes: 16 * 1024, payloadBytes: 32 * 1024, records: 100, transferEntries: 2, transferBytes: 96 * 1024 };
+
+class SnapshotInputError extends Error {
+  status;
+  constructor(message, status = 400) {
+    super(message);
+    this.status = status;
+  }
+}
+var encoder2 = new TextEncoder;
+var coverageReasons = new Set(["node-limit", "depth-limit", "visibility-unavailable", "inaccessible-frame", "role-limit", "name-limit", "tree-node-limit", "tree-region-limit", "tree-byte-limit", "transport-budget-limit", "parentage-unavailable", "summary-truncated-or-redacted"]);
+function jsonBytes(value) {
+  return encoder2.encode(JSON.stringify(value)).byteLength;
+}
+function closedRecord(value, allowed, required = allowed) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new SnapshotInputError("Expected a closed snapshot object");
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null)
+    throw new SnapshotInputError("Snapshot prototypes are forbidden");
+  const out = {};
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string" || !allowed.includes(key))
+      throw new SnapshotInputError("Unknown snapshot field");
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !("value" in descriptor))
+      throw new SnapshotInputError("Snapshot accessors are forbidden");
+    out[key] = descriptor.value;
+  }
+  if (required.some((key) => !Object.prototype.hasOwnProperty.call(out, key)))
+    throw new SnapshotInputError("Missing snapshot field");
+  return out;
+}
+function snapshotText(value, max = SNAPSHOT_LIMITS.text) {
+  if (typeof value !== "string" || value.length > max || /\0|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value))
+    throw new SnapshotInputError("Invalid snapshot text");
+  return value;
+}
+function snapshotInteger(value, max = Number.MAX_SAFE_INTEGER) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > max)
+    throw new SnapshotInputError("Invalid snapshot integer");
+  return value;
+}
+function bool2(value) {
+  if (typeof value !== "boolean")
+    throw new SnapshotInputError("Invalid snapshot boolean");
+  return value;
+}
+function snapshotArray(value, max) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype)
+    throw new SnapshotInputError("Expected a snapshot array");
+  const length = snapshotInteger(Object.getOwnPropertyDescriptor(value, "length")?.value, max);
+  if (Reflect.ownKeys(value).length !== length + 1)
+    throw new SnapshotInputError("Sparse or extended snapshot array");
+  const out = [];
+  for (let i = 0;i < length; i++) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(i));
+    if (!descriptor || !("value" in descriptor))
+      throw new SnapshotInputError("Snapshot array accessors are forbidden");
+    out.push(descriptor.value);
+  }
+  return out;
+}
+function coverage(value) {
+  const keys2 = ["scope", "complete", "visitedNodes", "openShadowRoots", "sameOriginFrames", "inaccessibleFrames", "closedShadowRoots", "hiddenSubtrees", "privateSubtrees", "truncated", "reasons", "unread"];
+  const raw = closedRecord(value, [...keys2, "unreadOverflow"], keys2);
+  if (raw.scope !== "visible-observable-dom" || raw.closedShadowRoots !== "unobservable" || raw.unreadOverflow !== undefined && raw.unreadOverflow !== true)
+    throw new SnapshotInputError("Invalid snapshot coverage");
+  const reason = (value2) => {
+    const text2 = snapshotText(value2, 128);
+    if (!coverageReasons.has(text2))
+      throw new SnapshotInputError("Unknown tree coverage reason");
+    return text2;
+  };
+  return { scope: "visible-observable-dom", complete: bool2(raw.complete), visitedNodes: snapshotInteger(raw.visitedNodes, 1e4), openShadowRoots: snapshotInteger(raw.openShadowRoots, 1e4), sameOriginFrames: snapshotInteger(raw.sameOriginFrames, 1e4), inaccessibleFrames: snapshotInteger(raw.inaccessibleFrames, 1e4), closedShadowRoots: "unobservable", hiddenSubtrees: snapshotInteger(raw.hiddenSubtrees, 1e4), privateSubtrees: snapshotInteger(raw.privateSubtrees, 1e4), truncated: bool2(raw.truncated), reasons: snapshotArray(raw.reasons, 16).map(reason), unread: snapshotArray(raw.unread, 16).map((item) => {
+    const entry = closedRecord(item, ["tag", "reason"]);
+    return { tag: snapshotText(entry.tag), reason: reason(entry.reason) };
+  }), ...raw.unreadOverflow ? { unreadOverflow: true } : {} };
+}
+function parseSemanticTree(value) {
+  const raw = closedRecord(value, ["formatVersion", "source", "nameModel", "documentGeneration", "availability", "nodes", "regions", "coverage"]);
+  if (raw.formatVersion !== 1 || raw.source !== "sdk-reported" || raw.nameModel !== "partial-aria" || raw.availability !== "complete" && raw.availability !== "partial")
+    throw new SnapshotInputError("Unsupported semantic tree format");
+  const documentGeneration = snapshotText(raw.documentGeneration, 32);
+  if (!/^[a-f0-9]{32}$/.test(documentGeneration))
+    throw new SnapshotInputError("Invalid document generation");
+  const nodes = snapshotArray(raw.nodes, SNAPSHOT_LIMITS.nodes).map((value2, index) => {
+    const keys2 = ["kind", "region", "parent", "tag", "role", "name", "label", "testId", "disabled", "readonly"];
+    const node = closedRecord(value2, [...keys2, "partial"], keys2);
+    if (node.kind !== "semantic" && node.kind !== "boundary-host" || node.partial !== undefined && node.partial !== true)
+      throw new SnapshotInputError("Invalid tree node");
+    const parent = closedRecord(node.parent, ["kind", "index", "reason"], ["kind"]);
+    let parsedParent;
+    if (parent.kind === "root" && Object.keys(parent).length === 1)
+      parsedParent = { kind: "root" };
+    else if (parent.kind === "node" && Object.keys(parent).length === 2 && Object.prototype.hasOwnProperty.call(parent, "index")) {
+      const parentIndex = snapshotInteger(parent.index, 99);
+      if (parentIndex >= index)
+        throw new SnapshotInputError("Tree parents must precede children");
+      parsedParent = { kind: "node", index: parentIndex };
+    } else if (parent.kind === "unavailable" && Object.keys(parent).length === 2 && (parent.reason === "ancestor-not-retained" || parent.reason === "boundary-unavailable"))
+      parsedParent = { kind: "unavailable", reason: parent.reason };
+    else
+      throw new SnapshotInputError("Invalid tree parent");
+    return { kind: node.kind, region: snapshotInteger(node.region, 31), parent: parsedParent, tag: snapshotText(node.tag), role: snapshotText(node.role), name: snapshotText(node.name), label: snapshotText(node.label), testId: snapshotText(node.testId), disabled: bool2(node.disabled), readonly: bool2(node.readonly), ...node.partial ? { partial: true } : {} };
+  });
+  const regions = snapshotArray(raw.regions, SNAPSHOT_LIMITS.regions).map((value2, index) => {
+    const region = closedRecord(value2, ["kind", "parentRegion", "hostIndex", "parentage"], ["kind", "parentRegion", "hostIndex"]);
+    if (index === 0 && region.kind === "document" && region.parentRegion === null && region.hostIndex === null && Object.keys(region).length === 3)
+      return { kind: "document", parentRegion: null, hostIndex: null };
+    if (!index || region.kind !== "open-shadow" && region.kind !== "same-origin-frame" || region.parentage !== "known" && region.parentage !== "unavailable")
+      throw new SnapshotInputError("Invalid tree region");
+    const parentRegion = snapshotInteger(region.parentRegion, 31);
+    if (parentRegion >= index)
+      throw new SnapshotInputError("Region parents must precede children");
+    const hostIndex = region.hostIndex === null ? null : snapshotInteger(region.hostIndex, 99);
+    if (hostIndex === null ? region.parentage !== "unavailable" : !nodes[hostIndex] || nodes[hostIndex].region !== parentRegion || nodes[hostIndex].kind !== "boundary-host")
+      throw new SnapshotInputError("Invalid boundary ownership");
+    const firstChild = nodes.findIndex((node) => node.region === index);
+    if (hostIndex !== null && firstChild !== -1 && hostIndex >= firstChild)
+      throw new SnapshotInputError("Boundary hosts must precede descendants");
+    return { kind: region.kind, parentRegion, hostIndex, parentage: region.parentage };
+  });
+  if (!regions.length)
+    throw new SnapshotInputError("A document region is required");
+  for (const node of nodes) {
+    if (!regions[node.region])
+      throw new SnapshotInputError("Unknown tree region");
+    let parent = node.parent;
+    let depth = 0;
+    let regionIndex = node.region;
+    for (;; ) {
+      while (parent.kind === "node") {
+        if (++depth > SNAPSHOT_LIMITS.depth || nodes[parent.index].region !== regionIndex)
+          throw new SnapshotInputError("Invalid tree ancestor chain");
+        parent = nodes[parent.index].parent;
+      }
+      const region = regions[regionIndex];
+      if (parent.kind === "unavailable" || region.kind === "document" || region.hostIndex === null)
+        break;
+      if (++depth > SNAPSHOT_LIMITS.depth)
+        throw new SnapshotInputError("Tree boundary depth exceeds its bound");
+      const host = nodes[region.hostIndex];
+      parent = host.parent;
+      regionIndex = region.parentRegion;
+    }
+  }
+  const result2 = { formatVersion: 1, source: "sdk-reported", nameModel: "partial-aria", documentGeneration, availability: raw.availability, nodes, regions, coverage: coverage(raw.coverage) };
+  const partial = nodes.some((node) => node.partial || node.parent.kind === "unavailable") || regions.some((region) => region.kind !== "document" && region.parentage === "unavailable") || !result2.coverage.complete || result2.coverage.truncated;
+  if (partial && result2.availability !== "partial" || result2.availability === "partial" && result2.coverage.complete || result2.availability === "complete" && (!result2.coverage.complete || result2.coverage.truncated))
+    throw new SnapshotInputError("Inconsistent snapshot availability");
+  if (jsonBytes(result2) > SNAPSHOT_LIMITS.treeBytes)
+    throw new SnapshotInputError("Semantic tree exceeds its byte budget", 413);
+  return result2;
+}
+function treeIncomplete(tree, reason) {
+  tree.availability = "partial";
+  tree.coverage.complete = false;
+  tree.coverage.truncated = true;
+  if (!tree.coverage.reasons.includes(reason)) {
+    if (tree.coverage.reasons.length < 16)
+      tree.coverage.reasons.push(reason);
+    else
+      tree.coverage.unreadOverflow = true;
+  }
+}
+function treeFitsTransport(tree) {
+  const probe = { ...tree, availability: "partial", coverage: { ...tree.coverage, complete: false, truncated: true, reasons: [...tree.coverage.reasons.filter((reason) => reason !== "transport-budget-limit").slice(0, 15), "transport-budget-limit"] } };
+  return jsonBytes(probe) <= SNAPSHOT_LIMITS.treeBytes && !sanitizeWithReport(probe).truncation;
+}
+function sanitizeSemanticTree(value, sanitize2) {
+  const tree = parseSemanticTree(value);
+  const safeText = (text2, max) => {
+    const safe = sanitize2(text2);
+    const output = typeof safe.value === "string" ? safe.value : "";
+    const clipped = output.slice(0, max).replace(/[\uD800-\uDBFF]$/u, "");
+    return { value: clipped, partial: safe.truncated || clipped !== text2 };
+  };
+  for (const node of tree.nodes) {
+    for (const field of ["tag", "role", "name", "label", "testId"]) {
+      const safe = safeText(node[field], SNAPSHOT_LIMITS.text);
+      node[field] = safe.value;
+      if (safe.partial) {
+        node.partial = true;
+        treeIncomplete(tree, "summary-truncated-or-redacted");
+      }
+    }
+  }
+  tree.coverage.unread = tree.coverage.unread.map((entry) => {
+    const safe = safeText(entry.tag, SNAPSHOT_LIMITS.text);
+    if (safe.partial)
+      treeIncomplete(tree, "summary-truncated-or-redacted");
+    return { ...entry, tag: safe.value };
+  });
+  while (!treeFitsTransport(tree)) {
+    treeIncomplete(tree, "transport-budget-limit");
+    if (tree.nodes.length)
+      tree.nodes.pop();
+    else if (tree.coverage.unread.length) {
+      tree.coverage.unread.pop();
+      tree.coverage.unreadOverflow = true;
+    } else if (tree.coverage.reasons.length > 1)
+      tree.coverage.reasons.shift();
+    else
+      throw new SnapshotInputError("Semantic tree metadata exceeds transport capacity", 413);
+    while (tree.regions.length > 1) {
+      const index = tree.regions.length - 1;
+      if (tree.nodes.some((node) => node.region === index) || tree.regions.some((region) => region.kind !== "document" && region.parentRegion === index))
+        break;
+      tree.regions.pop();
+    }
+  }
+  return parseSemanticTree(tree);
+}
+
+// src/verification/browser/dom/tree.ts
+function snapshotSemanticTree(document2, documentGeneration, sanitize2) {
+  const collection = collectSemanticElements(document2, true);
+  const tree = { formatVersion: 1, source: "sdk-reported", nameModel: "partial-aria", documentGeneration, availability: collection.coverage.complete ? "complete" : "partial", nodes: [], regions: [{ kind: "document", parentRegion: null, hostIndex: null }], coverage: collection.coverage };
+  tree.coverage.unread = tree.coverage.unread.map((entry) => {
+    const safe = sanitize2(entry.tag);
+    const value = typeof safe.value === "string" ? safe.value : "";
+    const tag = value.slice(0, SNAPSHOT_LIMITS.text).replace(/[\uD800-\uDBFF]$/u, "");
+    if (safe.truncated || tag !== entry.tag)
+      treeIncomplete(tree, "summary-truncated-or-redacted");
+    return { ...entry, tag };
+  });
+  const metadata = collection.tree;
+  const retained = new Map;
+  const regionIds = new Map([[0, 0]]);
+  for (const entry of collection.elements) {
+    if (tree.nodes.length >= SNAPSHOT_LIMITS.nodes) {
+      treeIncomplete(tree, "tree-node-limit");
+      break;
+    }
+    const regionIndex = entry.tree.region;
+    let region = regionIds.get(regionIndex);
+    if (region === undefined) {
+      const source = metadata.regions[regionIndex];
+      const parentRegion = regionIds.get(source.parentRegion);
+      const hostIndex = source.host ? retained.get(source.host) : undefined;
+      if (parentRegion === undefined || hostIndex === undefined) {
+        treeIncomplete(tree, "parentage-unavailable");
+        continue;
+      }
+      region = tree.regions.length;
+      tree.regions.push({ kind: source.kind, parentRegion, hostIndex, parentage: "known" });
+      regionIds.set(regionIndex, region);
+    }
+    let parent = { kind: "root" };
+    let ancestor = metadata.ancestry.get(entry.element)?.parent ?? null;
+    let depth = 0;
+    while (ancestor) {
+      if (++depth > SNAPSHOT_LIMITS.depth) {
+        parent = { kind: "unavailable", reason: "ancestor-not-retained" };
+        break;
+      }
+      const info = metadata.ancestry.get(ancestor);
+      if (!info || info.region !== regionIndex) {
+        parent = { kind: "unavailable", reason: "boundary-unavailable" };
+        break;
+      }
+      const index = retained.get(ancestor);
+      if (index !== undefined) {
+        parent = { kind: "node", index };
+        break;
+      }
+      ancestor = info.parent;
+    }
+    if (parent.kind === "unavailable")
+      treeIncomplete(tree, "parentage-unavailable");
+    let partial = entry.nameTruncated;
+    const text2 = (value) => {
+      const safe = sanitize2(value);
+      const result3 = typeof safe.value === "string" ? safe.value : "";
+      const clipped = result3.slice(0, SNAPSHOT_LIMITS.text).replace(/[\uD800-\uDBFF]$/u, "");
+      partial ||= safe.truncated || clipped !== value;
+      return clipped;
+    };
+    const node = { kind: entry.tree.boundaryHost ? "boundary-host" : "semantic", region, parent, tag: text2(entry.element.localName), role: text2(entry.role), name: text2(entry.name), label: text2(entry.label), testId: text2(entry.testId), disabled: entry.disabled, readonly: entry.readonly };
+    if (partial)
+      treeIncomplete(tree, "summary-truncated-or-redacted");
+    tree.nodes.push({ ...node, ...partial ? { partial: true } : {} });
+    if (!treeFitsTransport(tree)) {
+      tree.nodes.pop();
+      treeIncomplete(tree, "transport-budget-limit");
+      if (!tree.nodes.some((node2) => node2.region === region) && region !== 0) {
+        tree.regions.pop();
+        regionIds.delete(regionIndex);
+      }
+      break;
+    }
+    retained.set(entry.element, tree.nodes.length - 1);
+  }
+  for (let index = 1;index < metadata.regions.length; index++) {
+    if (regionIds.has(index))
+      continue;
+    const source = metadata.regions[index];
+    const parentRegion = regionIds.get(source.parentRegion);
+    const hostIndex = source.host ? retained.get(source.host) : undefined;
+    if (parentRegion === undefined || hostIndex === undefined) {
+      treeIncomplete(tree, "parentage-unavailable");
+      continue;
+    }
+    const region = tree.regions.length;
+    tree.regions.push({ kind: source.kind, parentRegion, hostIndex, parentage: "known" });
+    if (!treeFitsTransport(tree)) {
+      tree.regions.pop();
+      treeIncomplete(tree, "transport-budget-limit");
+      break;
+    }
+    regionIds.set(index, region);
+  }
+  const result2 = sanitizeSemanticTree(tree, sanitize2);
+  return { result: result2, ...result2.availability === "partial" ? { truncated: true } : {} };
+}
+
 // src/verification/browser/index.ts
 var ACTIVE_RUNTIME = Symbol.for("runphantom.verification.active");
-var encoder2 = new TextEncoder;
+var encoder3 = new TextEncoder;
 function nameValid(value) {
   return typeof value === "string" && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
 }
@@ -1865,7 +2200,7 @@ function connect(options) {
   }
   const stores = new Map;
   const teardown = [];
-  const coverage = { network: false, console: false, route: false, dom: true, state: true, signal: true };
+  const coverage2 = { network: false, console: false, route: false, dom: true, state: true, signal: true };
   const secrets = new Set([options.token]);
   const secretSpellings = new Set([options.token]);
   const rememberSpelling = (value) => {
@@ -1903,7 +2238,7 @@ function connect(options) {
     if (!active || socket.readyState !== WebSocket.OPEN)
       return false;
     const text2 = JSON.stringify(message);
-    if (encoder2.encode(text2).byteLength > VERIFICATION_LIMITS.MAX_FRAME_BYTES)
+    if (encoder3.encode(text2).byteLength > VERIFICATION_LIMITS.MAX_FRAME_BYTES)
       return false;
     socket.send(text2);
     return true;
@@ -1936,7 +2271,7 @@ function connect(options) {
     try {
       const safe = prepareEvent(type, data);
       const event = { type, data: safe.value, ...actionId ? { actionId } : {}, ...safe.truncated || truncated ? { truncated: true } : {} };
-      const bytes = encoder2.encode(JSON.stringify(event)).byteLength;
+      const bytes = encoder3.encode(JSON.stringify(event)).byteLength;
       if (bytes > VERIFICATION_LIMITS.MAX_EVENT_BYTES) {
         disconnect();
         return;
@@ -1981,9 +2316,9 @@ function connect(options) {
   const install = (name, callback) => {
     try {
       teardown.push(callback());
-      coverage[name] = true;
+      coverage2[name] = true;
     } catch {
-      coverage[name] = false;
+      coverage2[name] = false;
     }
   };
   const onOpen = () => {
@@ -1994,10 +2329,10 @@ function connect(options) {
     install("route", () => installRoute(emit));
     observeSafely(() => send({
       type: "hello",
-      version: sourceEnabled ? SOURCE_PROTOCOL_VERSION : SEMANTIC_PROTOCOL_VERSION,
+      version: options.semanticSnapshots !== false ? TREE_PROTOCOL_VERSION : sourceEnabled ? SOURCE_PROTOCOL_VERSION : SEMANTIC_PROTOCOL_VERSION,
       token: options.token,
-      coverage,
-      capabilities: [...options.causalReadings === false ? [] : [CAUSAL_CAPABILITY], ...options.semanticRefs === false ? [] : [SEMANTIC_CAPABILITY], ...sourceEnabled ? [SOURCE_CAPABILITY] : []]
+      coverage: coverage2,
+      capabilities: [...options.causalReadings === false ? [] : [CAUSAL_CAPABILITY], ...options.semanticRefs === false ? [] : [SEMANTIC_CAPABILITY], ...sourceEnabled ? [SOURCE_CAPABILITY] : [], ...options.semanticSnapshots === false ? [] : [TREE_CAPABILITY]]
     }), disconnect);
   };
   const actionReading = (id, phase, target) => {
@@ -2071,6 +2406,10 @@ function connect(options) {
         output = runDomCommand({ type: "click", selector: command.selector }, prepare, sourceEnabled ? boundary : undefined);
         for (const target of command.targets)
           actionReading(id, "after", target);
+      } else if (command.type === "semantic-tree") {
+        if (options.semanticSnapshots === false)
+          throw new Error("Semantic tree snapshots are not enabled for this runtime");
+        output = snapshotSemanticTree(refs.document, refs.documentGeneration, prepare);
       } else if (command.type === "find" || command.type === "semantic-snapshot" || command.type === "ref-click" || command.type === "ref-fill") {
         if (options.semanticRefs === false)
           throw new Error("Semantic references are not enabled for this runtime");
@@ -2087,7 +2426,7 @@ function connect(options) {
   };
   const onMessage = (event) => {
     try {
-      if (typeof event.data !== "string" || encoder2.encode(event.data).byteLength > VERIFICATION_LIMITS.MAX_FRAME_BYTES) {
+      if (typeof event.data !== "string" || encoder3.encode(event.data).byteLength > VERIFICATION_LIMITS.MAX_FRAME_BYTES) {
         disconnect();
         return;
       }

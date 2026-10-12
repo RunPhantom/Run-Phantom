@@ -23,6 +23,7 @@ const commandSchema = {
     { type: "object", required: ["type", "selector", "targets"], properties: { type: { const: "causal-click" }, selector: text, targets: { type: "array", minItems: 1, maxItems: 20, items: { $ref: "#/$defs/target" } } }, additionalProperties: false },
     { type: "object", required: ["type", "query"], properties: { type: { const: "find" }, query: { $ref: "#/$defs/query" } }, additionalProperties: false },
     { type: "object", required: ["type"], properties: { type: { const: "semantic-snapshot" } }, additionalProperties: false },
+    { type: "object", required: ["type"], properties: { type: { const: "semantic-tree" } }, additionalProperties: false },
     { type: "object", required: ["type", "ref"], properties: { type: { const: "ref-click" }, ref: refText }, additionalProperties: false },
     { type: "object", required: ["type", "ref", "value"], properties: { type: { const: "ref-fill" }, ref: refText, value: { type: "string" } }, additionalProperties: false },
   ],
@@ -55,7 +56,7 @@ export const VERIFICATION_TOOLS: Tool[] = [
   },
   {
     name: "app_act",
-    description: "Issue an explicit app command. Find by literal role/name/label/test-id or take a semantic-snapshot, then use an exact live ref-click/ref-fill. Semantic commands require negotiated semantic-refs; refs expire after 60 seconds and never survive document replacement or disconnect. Names approximate part of ARIA; bounded results declare observable scope and incomplete coverage. Ambiguous discovery never selects a unique ref. Semantic refs and all filled values are live-only. Existing snapshot/click/fill/state and opt-in causal-click remain supported. Causal-click captures declared synchronous readings. Source is SDK-reported, not trusted browser execution. Capture the returned cursor and use app_assert for supported checks.",
+    description: "Issue an explicit app command. Find by literal role/name/label/test-id or take a semantic-snapshot, then use an exact live ref-click/ref-fill. Semantic references require semantic-refs; refs expire after 60 seconds and never survive document replacement or disconnect. semantic-tree requires the separately negotiated tree capability and returns a bounded projected observation without issuing handles or saving a verdict. Names approximate part of ARIA; bounded results declare observable scope and incomplete coverage. Ambiguous discovery never selects a unique ref. Semantic refs and all filled values are live-only. Existing snapshot/click/fill/state and opt-in causal-click remain supported. Causal-click captures declared synchronous readings. Source is SDK-reported, not trusted browser execution. Capture the returned cursor and use app_assert for supported checks.",
     inputSchema: { type: "object", required: ["sessionId", "command"], properties: { sessionId: text, command: { $ref: "#/$defs/command" } }, $defs: definitions, additionalProperties: false },
   },
   {

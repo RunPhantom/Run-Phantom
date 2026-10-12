@@ -6,6 +6,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Inspection } from "../components/verification/Inspection";
 import { SemanticInspector } from "../components/verification/SemanticInspector";
+import { SnapshotDiff } from "../components/verification/SnapshotDiff";
 import { ReportContext } from "../components/verification/ReportContext";
 import { buildPredicate, describePredicate, emptyCheck, Field, PredicateEditor, Select, type CheckDraft } from "../components/verification/PredicateEditor";
 import { verificationApi, type AppCommand, type CommandResult, type CreatedSession, type FlowStep, type Predicate, type RuntimeEvent, type VerificationReport, type VerificationStatus } from "../api/verification";
@@ -260,6 +261,7 @@ export function VerificationPage() {
       </section>
     </div>}
 
+    <SnapshotDiff sessionId={session?.id} connected={connected} capable={(observation.data?.session.capabilities ?? session?.capabilities)?.includes("semantic-tree") ?? false} disabled={!!busy} runId={linkedRunId || undefined} />
     <section aria-labelledby="flows-heading" className="space-y-3 border-t pt-5" style={{ borderColor: C.border }}>
       <h2 id="flows-heading" className="text-sm font-semibold" style={{ color: C.fg3 }}>Saved flows</h2>
       {flows.isLoading ? <p role="status" className="text-xs">Loading saved flows…</p> : !flows.data?.length ? <p className="text-xs" style={{ color: C.fg1 }}>No saved flows. Add an expected outcome to a flow draft above to reuse it.</p> : <ul className="divide-y divide-[color:var(--rp-border)]">{flows.data.map(flow => <li key={flow.id} className="flex flex-wrap items-center justify-between gap-3 py-3"><div className="min-w-0 space-y-1"><h3 className="break-words text-sm font-medium">{flow.name}</h3><p className="break-words text-[11px]" style={{ color: C.fg1 }}>{flow.origin} · {flow.steps.length} {flow.steps.length === 1 ? "step" : "steps"}</p>{session && session.origin !== flow.origin && <p className="text-[11px]" style={{ color: C.orange }}>Select a connected session at this origin to replay.</p>}</div><div className="flex gap-2"><Button variant="outline" disabled={!!busy || !connected || !session || session.origin !== flow.origin} aria-label={`Replay ${flow.name}`} onClick={() => void perform("Replaying flow…", async () => { const report = await verificationApi.runFlow(flow.id, session!.id); await refresh(); setNotice(`${flow.name}: ${report.status}. ${report.reason}`); })}><Play aria-hidden="true" />Replay</Button><Button variant="ghost" disabled={!!busy} aria-label={`Delete ${flow.name}`} onClick={() => void perform("Deleting flow…", async () => { await verificationApi.deleteFlow(flow.id); await refresh(); setNotice("Flow deleted. Its previous reports remain available."); })}>Delete</Button></div></li>)}</ul>}
