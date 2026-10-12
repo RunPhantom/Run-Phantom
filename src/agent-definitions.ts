@@ -3,7 +3,7 @@ import { hasDuplicateJsonKeys } from "./json-keys";
 import { parseJsonEvidence } from "./evaluations/json-evidence";
 import { isSensitiveKey } from "./verification/redaction";
 import { redactText } from "./verification/serialization";
-import { validateOtlpEvidence, type OtlpEvidence } from "./spans/otlp-evidence";
+import { OTLP_EVIDENCE_LIMITS, validateOtlpEvidence, type EvidenceAttribute, type EvidenceValue, type OtlpEvidence } from "./spans/otlp-evidence";
 import { AGENT_DEFINITION_CAPTURE_KEY as KEY, AGENT_DEFINITION_FORMAT as FORMAT, AGENT_DEFINITION_LIMITS as L, DEFINITION_COMPONENTS,
   type CapturedAgentDefinition, type CapturedAgentDefinitions, type DefinitionAvailability, type DefinitionCaptureSpan, type DefinitionComponent, type DefinitionComponentEvidence } from "./agent-definitions-protocol";
 
@@ -15,6 +15,47 @@ const own = (value: unknown, key: string): unknown => {
   const d = Object.getOwnPropertyDescriptor(value, key); return d && "value" in d ? d.value : undefined;
 };
 
+/** Public views retain F10's ordered receipt and loss contract while withholding private definition content. */
+export function withholdAgentDefinitionCapture<T extends { attributes?: unknown; otlp_evidence?: unknown }>(span: T): T {
+  const fail = (): never => { throw new TypeError("Public definition capture is unavailable"); };
+  // Decode possible escaped ASCII keys without changing unrelated legacy blobs.
+  const mayContainKey = (raw: string) => raw.includes(KEY) || raw.includes("\\u")
+    && raw.replace(/\\u([\da-f]{4})/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16))).includes(KEY);
+  let attributes = span.attributes, receipt = span.otlp_evidence;
+  if (typeof attributes === "string" && mayContainKey(attributes)) {
+    if (attributes.length > 10 * 1024 * 1024 || size(attributes) > 10 * 1024 * 1024) fail();
+    let parsed: unknown; try { parsed = JSON.parse(attributes); } catch { fail(); }
+    if (object(parsed) && Object.hasOwn(parsed, KEY) && parsed[KEY] !== "[REDACTED]") attributes = JSON.stringify({ ...parsed, [KEY]: "[REDACTED]" });
+  }
+  if (typeof receipt === "string" && mayContainKey(receipt)) {
+    if (receipt.length > OTLP_EVIDENCE_LIMITS.bytes || size(receipt) > OTLP_EVIDENCE_LIMITS.bytes) fail();
+    let parsed: OtlpEvidence; try { parsed = JSON.parse(receipt); validateOtlpEvidence(parsed); } catch { fail(); }
+    let withheld = 0;
+    const value = (entry: EvidenceValue) => {
+      if ("kvlistValue" in entry) visit(entry.kvlistValue.values);
+      else if ("arrayValue" in entry) for (const child of entry.arrayValue.values) value(child);
+    };
+    const visit = (entries: EvidenceAttribute[]) => {
+      for (const entry of entries) {
+        if (entry.key === KEY) {
+          if (!("stringValue" in entry.value) || entry.value.stringValue !== "[REDACTED]") {
+            entry.value = { stringValue: "[REDACTED]" }; withheld++;
+          }
+        } else value(entry.value);
+      }
+    };
+    for (const source of [parsed!, parsed!.resource, parsed!.scope, ...parsed!.events, ...parsed!.links]) if (source) visit(source.attributes);
+    if (withheld) {
+      if (parsed!.capture.redactedValues > 0xffffffff - withheld) fail();
+      parsed!.capture.redactedValues += withheld;
+      // The fixed marker can expand a short captured value; retain the original
+      // closed receipt validator and byte ceiling after projection too.
+      try { validateOtlpEvidence(parsed!); } catch { fail(); }
+      receipt = JSON.stringify(parsed!);
+    }
+  }
+  return attributes === span.attributes && receipt === span.otlp_evidence ? span : { ...span, ...(span.attributes !== undefined ? { attributes } : {}), ...(span.otlp_evidence !== undefined ? { otlp_evidence: receipt } : {}) };
+}
 class Unavailable extends Error { constructor(readonly status: DefinitionAvailability) { super(status); } }
 function object(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value));

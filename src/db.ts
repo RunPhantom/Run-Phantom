@@ -12,6 +12,7 @@ import * as schema from "./db/schema";
 import { embeddedMigrationFiles, embeddedMigrationJournal } from "./db/migration-assets";
 import { SOURCE_MIGRATIONS_DIR } from "./source-paths";
 import { IS_PACKAGED_RUNTIME, VERSION } from "./version";
+import { withholdAgentDefinitionCapture } from "./agent-definitions";
 
 const RUNPHANTOM_DB_PATH_ENV_VAR = "RUNPHANTOM_DB_PATH";
 
@@ -1875,7 +1876,7 @@ export function searchRun(runId: string, opts: SearchRunOpts): { matches: Search
         ["span_attributes", "attributes"],
       ] as const) {
         if (!scopes.has(scope)) continue;
-        const text = (r as any)[col] ?? "";
+        const text = (col === "attributes" ? withholdAgentDefinitionCapture({ attributes: r.attributes }).attributes : r[col]) ?? "";
         if (!text) continue;
         for (const [s, e] of matcher(text)) {
           matches.push({
