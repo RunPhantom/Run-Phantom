@@ -11,13 +11,14 @@ import { HOOK_PROTOCOL } from "../src/coding-hooks/protocol";
 import { normalizeClaudeHook } from "../src/coding-hooks/claude";
 import { hookFixture } from "./fixtures/coding-hooks-claude";
 
+// The exact SQL component fixture supplies a trusted test-only owner guard; product startup uses the kernel lease.
 let directory: string, prior: string | undefined, server: Server, controller: CodingHookController, store: CodingHookStore, port: number;
 const token = "a".repeat(64), id = "a".repeat(32), identity = "b".repeat(64);
 const admit = (token: string, identity: string) => store.admit(token, identity, claimsForRegistration(store.authenticate(token).binding));
 const clients = new Set<ClientRequest>();
 beforeEach(async () => {
   closeDb(); prior = process.env.RUNPHANTOM_DB_PATH; directory = mkdtempSync(path.join(tmpdir(), "runphantom-f11-http-")); process.env.RUNPHANTOM_DB_PATH = path.join(directory, "owner.sqlite");
-  const db = getDrizzleDb().$client; db.exec(readFileSync(path.join(import.meta.dir, "fixtures/coding-hooks-bootstrap.sql"), "utf8")); store = new CodingHookStore(db); store.beginOwner();
+  const db = getDrizzleDb().$client; db.exec(readFileSync(path.join(import.meta.dir, "fixtures/coding-hooks-bootstrap.sql"), "utf8")); store = new CodingHookStore(db, {}, () => true); store.beginOwner();
   const installed = store.prepareInstallation({ installationId: id, captureMode: "full", scope: "local", workspace: directory, registeredWorkspace: directory, transcriptRoot: path.join(directory, "projects"), projectDirectory: path.join(directory, "projects/project"), homeDirectory: directory, settingsPath: path.join(directory, ".claude/settings.local.json"), executable: process.execPath }, token, "c".repeat(64)); store.commitInstallation(id, installed.installationGeneration, token, "c".repeat(64), installed.ownerGeneration);
   controller = new CodingHookController(store); server = createServer((request, response) => { void controller.handle(request, response); });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve)); const address = server.address(); if (!address || typeof address === "string") throw new Error("fixture listener"); port = address.port;

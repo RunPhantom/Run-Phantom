@@ -8,14 +8,15 @@ import { claimsForRegistration } from "../src/coding-hooks/catalog";
 import { CodingHookStore, type InstallationBinding } from "../src/coding-hooks/store";
 import { normalizeClaudeHook } from "../src/coding-hooks/claude";
 import { hookFixture, transcriptRecord, transcriptSnapshot } from "./fixtures/coding-hooks-claude";
-import { parseHookAdmission, parseHookPublication, validateClaudeBatch, hookDigest, HOOK_PROTOCOL } from "../src/coding-hooks/protocol";
+import { parseHookAdmission, parseHookPublication, validateClaudeBatch, hookDigest, HOOK_PROTOCOL, HookRefusal } from "../src/coding-hooks/protocol";
 
 // Exact root-reviewed SQL in an actual owner SQLite fixture. This is not a product migration.
+// The exact SQL component fixture supplies a trusted test-only owner guard; product startup uses the kernel lease.
 let directory: string, store: CodingHookStore, db: ReturnType<typeof getDrizzleDb>["$client"], prior: string | undefined;
 const admit = (token: string, identity: string) => store.admit(token, identity, claimsForRegistration(store.authenticate(token).binding));
 const token = "a".repeat(64), id = "a".repeat(32), sourceIdentity = "b".repeat(64);
 const binding = (mode: "metadata" | "full" = "metadata", installationId = id): InstallationBinding => ({ installationId, scope: "local", captureMode: mode, workspace: "/private/project", registeredWorkspace: "/private/project", transcriptRoot: "/private/projects", projectDirectory: "/private/projects/project", homeDirectory: "/private/home", settingsPath: "/private/project/.claude/settings.local.json", executable: "/private/bin/runphantom" });
-beforeEach(() => { closeDb(); prior = process.env.RUNPHANTOM_DB_PATH; directory = mkdtempSync(path.join(tmpdir(), "runphantom-f11-store-")); process.env.RUNPHANTOM_DB_PATH = path.join(directory, "owner.sqlite"); db = getDrizzleDb().$client; db.exec(readFileSync(path.join(import.meta.dir, "fixtures/coding-hooks-bootstrap.sql"), "utf8")); store = new CodingHookStore(db); store.beginOwner(); });
+beforeEach(() => { closeDb(); prior = process.env.RUNPHANTOM_DB_PATH; directory = mkdtempSync(path.join(tmpdir(), "runphantom-f11-store-")); process.env.RUNPHANTOM_DB_PATH = path.join(directory, "owner.sqlite"); db = getDrizzleDb().$client; db.exec(readFileSync(path.join(import.meta.dir, "fixtures/coding-hooks-bootstrap.sql"), "utf8")); store = new CodingHookStore(db, {}, () => true); store.beginOwner(); });
 afterEach(() => { closeDb(); if (prior === undefined) delete process.env.RUNPHANTOM_DB_PATH; else process.env.RUNPHANTOM_DB_PATH = prior; rmSync(directory, { recursive: true, force: true }); });
 function active(mode: "metadata" | "full" = "metadata") {
   const receipt = store.prepareInstallation(binding(mode), token, "c".repeat(64));
@@ -75,17 +76,23 @@ test("global target and local full authority over the same registered project de
 });
 test("owner recovery rotates only the generation and resumes source identity in the actual reopened file", () => {
   const before = active("full"), epoch = (db.query("SELECT source_epoch FROM coding_hook_owner").get() as { source_epoch: string }).source_epoch;
-  closeDb(); db = getDrizzleDb().$client; store = new CodingHookStore(db); store.beginOwner(); const after = admit(token, sourceIdentity);
+  closeDb(); db = getDrizzleDb().$client; store = new CodingHookStore(db, {}, () => true); store.beginOwner(); const after = admit(token, sourceIdentity);
   expect(after.ownerGeneration).not.toBe(before.ownerGeneration); expect(after.sourceKey).toBe(before.sourceKey);
   expect((db.query("SELECT source_epoch FROM coding_hook_owner").get() as { source_epoch: string }).source_epoch).toBe(epoch);
   expect(() => store.publish(token, before, batch(before))).toThrow(); expect(store.publish(token, after, batch(after)).status).toBe("accepted");
 });
 test("row and encoded-state quota refusals roll back session/entity/canonical creation", () => {
-  active(); const oneSession = new CodingHookStore(db, { sessions: 1 }); expect(() => oneSession.admit(token, "c".repeat(64))).toThrow();
+  active(); const oneSession = new CodingHookStore(db, { sessions: 1 }, () => true);
+  const tables = ["coding_hook_owner", "coding_hook_installations", "coding_hook_sessions", "coding_hook_entities", "runs", "spans"];
+  const snapshot = () => JSON.stringify(tables.map(table => db.query(`SELECT * FROM ${table} ORDER BY rowid`).all()));
+  const before = snapshot(); let refusal: unknown;
+  try { oneSession.admit(token, "c".repeat(64), claimsForRegistration(store.authenticate(token).binding)); } catch (error) { refusal = error; }
+  expect(refusal).toBeInstanceOf(HookRefusal); expect((refusal as HookRefusal).reason).toBe("quota"); expect((refusal as HookRefusal).status).toBe(507);
+  expect(snapshot()).toBe(before);
   expect((db.query("SELECT count(*) count FROM coding_hook_sessions").get() as { count: number }).count).toBe(1);
-  const admission = admit(token, sourceIdentity), oneEntity = new CodingHookStore(db, { sessionEntities: 1 }); expect(() => oneEntity.publish(token, admission, batch(admission))).toThrow();
+  const admission = admit(token, sourceIdentity), oneEntity = new CodingHookStore(db, { sessionEntities: 1 }, () => true); expect(() => oneEntity.publish(token, admission, batch(admission))).toThrow();
   expect(db.query("SELECT id FROM runs WHERE id=?").get(admission.runId)).toBeNull(); expect((db.query("SELECT count(*) count FROM coding_hook_entities").get() as { count: number }).count).toBe(0);
-  const boundedBytes = new CodingHookStore(db, { bytes: 2000 }); expect(() => boundedBytes.publish(token, admission, batch(admission))).toThrow(); expect(db.query("SELECT id FROM runs WHERE id=?").get(admission.runId)).toBeNull();
+  const boundedBytes = new CodingHookStore(db, { bytes: 2000 }, () => true); expect(() => boundedBytes.publish(token, admission, batch(admission))).toThrow(); expect(db.query("SELECT id FROM runs WHERE id=?").get(admission.runId)).toBeNull();
 });
 test("growing same-incarnation records correct usage once, while older and replaced snapshots cannot erase it", () => {
   const admission = active("full"), first = transcriptSnapshot([transcriptRecord()]);

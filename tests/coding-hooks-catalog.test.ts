@@ -14,6 +14,7 @@ import { normalizeClaudeHook } from "../src/coding-hooks/claude";
 import { hookFixture, transcriptRecord, transcriptSnapshot } from "./fixtures/coding-hooks-claude";
 
 interface Registration { registrationId: string; registeredWorkspace: string; transcriptRoot: string; projectDirectory: string; homeDirectory: string; }
+// The exact SQL component fixture supplies a trusted test-only owner guard; product startup uses the kernel lease.
 let directory: string, prior: string | undefined, store: CodingHookStore, manager: ClaudeHookManagement, binding: InstallationBinding, registrations: Registration[];
 const identity = "b".repeat(64);
 const claims = (registration: Registration) => ({ workspaceClaim: hookDigest(JSON.stringify(["runphantom.claude.workspace-claim/v1", registration.registeredWorkspace])), projectClaim: hookDigest(JSON.stringify(["runphantom.claude.project-claim/v1", registration.projectDirectory])) });
@@ -23,7 +24,7 @@ const token = (id = binding.installationId) => readClaudeCapability(path.join(di
 beforeEach(() => {
   closeDb(); prior = process.env.RUNPHANTOM_DB_PATH; directory = realpathSync(mkdtempSync(path.join(tmpdir(), "runphantom-f11-catalog-")));
   for (const name of ["workspace-one/.claude", "workspace-two/.claude", "projects/one", "projects/two", "home/.claude"]) mkdirSync(path.join(directory, name), { recursive: true });
-  process.env.RUNPHANTOM_DB_PATH = path.join(directory, "owner.sqlite"); const db = getDrizzleDb().$client; db.exec(readFileSync(path.join(import.meta.dir, "fixtures/coding-hooks-bootstrap.sql"), "utf8")); store = new CodingHookStore(db); store.beginOwner(); manager = new ClaudeHookManagement(store);
+  process.env.RUNPHANTOM_DB_PATH = path.join(directory, "owner.sqlite"); const db = getDrizzleDb().$client; db.exec(readFileSync(path.join(import.meta.dir, "fixtures/coding-hooks-bootstrap.sql"), "utf8")); store = new CodingHookStore(db, {}, () => true); store.beginOwner(); manager = new ClaudeHookManagement(store);
   registrations = ["one", "two"].map(name => { const registeredWorkspace = path.join(directory, "workspace-" + name), transcriptRoot = path.join(directory, "projects"), projectDirectory = path.join(transcriptRoot, name); return { registrationId: hookDigest(JSON.stringify(["runphantom.claude.root/v1", registeredWorkspace, transcriptRoot, projectDirectory])), registeredWorkspace, transcriptRoot, projectDirectory, homeDirectory: path.join(directory, "home") }; });
   const settingsPath = path.join(directory, "home/.claude/settings.json"), first = registrations[0]; binding = { installationId: installationIdForSettings("global", settingsPath), scope: "global", captureMode: "metadata", workspace: null, registeredWorkspace: first.registeredWorkspace, transcriptRoot: first.transcriptRoot, projectDirectory: first.projectDirectory, homeDirectory: first.homeDirectory, settingsPath, executable: process.execPath };
 });
@@ -78,7 +79,7 @@ test("complete encoded catalog row and aggregate disabled/local occurrences enfo
   await install(binding, registrations); const before = JSON.stringify(store.db.query("SELECT * FROM coding_hook_installations").all()), tokenBefore = await token();
   const oversized = Array.from({ length: 40 }, (_, index) => { const registeredWorkspace = path.join(directory, "quota-workspace-" + index), projectDirectory = path.join(binding.transcriptRoot, "quota-project-" + index); return { ...registrations[0], registeredWorkspace, projectDirectory, registrationId: hookDigest(JSON.stringify(["runphantom.claude.root/v1", registeredWorkspace, binding.transcriptRoot, projectDirectory])) }; });
   expect(() => store.prepareInstallation(binding, "d".repeat(64), "c".repeat(64), [registrations[0], ...oversized])).toThrow(); expect(JSON.stringify(store.db.query("SELECT * FROM coding_hook_installations").all())).toBe(before);
-  const low = new CodingHookStore(store.db, { registrations: 2 }), local = { ...binding, installationId: "d".repeat(32), scope: "local" as const, workspace: binding.registeredWorkspace, settingsPath: path.join(binding.registeredWorkspace, ".claude/settings.local.json") }; expect(() => low.prepareInstallation(local, "d".repeat(64), "c".repeat(64))).toThrow(); expect(() => admit(tokenBefore, registrations[1])).not.toThrow();
+  const low = new CodingHookStore(store.db, { registrations: 2 }, () => true), local = { ...binding, installationId: "d".repeat(32), scope: "local" as const, workspace: binding.registeredWorkspace, settingsPath: path.join(binding.registeredWorkspace, ".claude/settings.local.json") }; expect(() => low.prepareInstallation(local, "d".repeat(64), "c".repeat(64))).toThrow(); expect(() => admit(tokenBefore, registrations[1])).not.toThrow();
   store.disableInstallation(binding.installationId); expect(() => low.prepareInstallation(local, "d".repeat(64), "c".repeat(64))).toThrow(); expect(store.db.query("SELECT id FROM coding_hook_installations").all()).toHaveLength(1);
 });
 test("catalog filesystem failure preserves malformed settings and leaves changed authority disabled", async () => {

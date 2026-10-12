@@ -106,3 +106,15 @@ including external writer contention, current-policy redaction, quota rollback,
 tombstone refusal, paused-body owner changes and settings failure reconciliation.
 Application startup ownership, migration integration, callback transport, installed global
 metadata coverage and real installed session acceptance remain pending.
+The owned lifetime coordination component binds one exclusive listener on
+127.0.0.1 at a deterministic port in 40000–49999 derived from the canonical
+actual SQLite path. It holds that listener for the owner lifetime and closes
+incoming connections without returning data. An occupied port or hash collision
+refuses ownership; it never tries another port or consults PID/health hints.
+Startup must supply the migrated actual SQLite connection to the coordinator,
+which acquires the lease before rotating the owner generation. A released lease
+also fences installation commits and capture transactions. An ordinary store
+constructed without a live owner guard stays inactive; test-only SQL fixtures
+explicitly supply their own guard. Central startup/routes are still inactive.
+Shutdown must drain the controller and close the database before releasing the
+lease; the lease helper alone does not coordinate those application resources.

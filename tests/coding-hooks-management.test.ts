@@ -9,12 +9,13 @@ import { acquireRegisteredClaudeTranscript, ClaudeHookManagement, installationId
 import { hookFixture } from "./fixtures/coding-hooks-claude";
 import { parseClaudeHookInput } from "../src/coding-hooks/shared";
 
+// The exact SQL component fixture supplies a trusted test-only owner guard; product startup uses the kernel lease.
 let directory: string, prior: string | undefined, store: CodingHookStore, manager: ClaudeHookManagement, binding: InstallationBinding, capability: string;
 beforeEach(() => {
   closeDb(); prior = process.env.RUNPHANTOM_DB_PATH; directory = realpathSync(mkdtempSync(path.join(tmpdir(), "runphantom-f11-management-")));
   for (const relative of ["workspace/.claude", "projects/project", "projects/other", "home"]) mkdirSync(path.join(directory, relative), { recursive: true });
   process.env.RUNPHANTOM_DB_PATH = path.join(directory, "owner.sqlite"); const db = getDrizzleDb().$client;
-  db.exec(readFileSync(path.join(import.meta.dir, "fixtures/coding-hooks-bootstrap.sql"), "utf8")); store = new CodingHookStore(db); store.beginOwner(); manager = new ClaudeHookManagement(store);
+  db.exec(readFileSync(path.join(import.meta.dir, "fixtures/coding-hooks-bootstrap.sql"), "utf8")); store = new CodingHookStore(db, {}, () => true); store.beginOwner(); manager = new ClaudeHookManagement(store);
   const workspace = path.join(directory, "workspace"), settingsPath = path.join(workspace, ".claude/settings.local.json");
   binding = { installationId: installationIdForSettings("local", settingsPath), scope: "local", captureMode: "metadata", workspace, registeredWorkspace: workspace, transcriptRoot: path.join(directory, "projects"), projectDirectory: path.join(directory, "projects/project"), homeDirectory: path.join(directory, "home"), settingsPath, executable: process.execPath };
   capability = path.join(directory, "coding-hooks/claude", binding.installationId + ".json");

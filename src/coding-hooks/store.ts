@@ -34,17 +34,19 @@ export function validateInstallationBinding(binding: InstallationBinding): Insta
 /** Uses the injected owner connection; never creates schema or selects a profile/database. */
 export class CodingHookStore {
   private readonly limits: StoreLimits;
-  constructor(readonly db: Database, limits: Partial<StoreLimits> = {}) {
+  constructor(readonly db: Database, limits: Partial<StoreLimits> = {}, private readonly ownerActive: () => boolean = () => false) {
     this.limits = { ...STORE_LIMITS, ...limits };
     for (const key of Object.keys(STORE_LIMITS) as (keyof typeof STORE_LIMITS)[]) if (!Number.isSafeInteger(this.limits[key]) || this.limits[key] < 1 || this.limits[key] > STORE_LIMITS[key]) refuse("malformed", 400);
   }
   private transaction<T>(work: () => T): T { try { return this.db.transaction(work).immediate(); } catch (error) { if (error instanceof HookRefusal) throw error; refuse("unavailable", 503); } }
-  beginOwner(): void { this.transaction(() => { this.db.query("INSERT INTO coding_hook_owner VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,updated_at=excluded.updated_at").run(random(), random(), Date.now()); this.checkQuota(); }); }
+  beginOwner(): void { this.transaction(() => { this.requireOwner(); this.db.query("INSERT INTO coding_hook_owner VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,updated_at=excluded.updated_at").run(random(), random(), Date.now()); this.checkQuota(); }); }
   rotateOwner(): void { this.transaction(() => { this.owner(); this.db.query("UPDATE coding_hook_owner SET generation=?,updated_at=? WHERE id=1").run(random(), Date.now()); }); }
   private owner(): { generation: string; source_epoch: string } {
+    this.requireOwner();
     const row = this.db.query("SELECT CASE WHEN length(generation)=32 THEN generation END generation,CASE WHEN length(source_epoch)=32 THEN source_epoch END source_epoch FROM coding_hook_owner WHERE id=1").get() as { generation: string; source_epoch: string } | null;
     if (!row || !isHex(row.generation, 32) || !isHex(row.source_epoch, 32)) refuse("inactive", 503); return row;
   }
+  private requireOwner(): void { if (!this.ownerActive()) refuse("inactive", 503); }
   private installation(id: string): InstallationRow | null {
     if (!isHex(id, 32)) refuse("malformed", 400);
     return this.db.query("SELECT id,generation,capture_mode,state,source_root_key,token_sha256,config_sha256,CASE WHEN length(CAST(data AS BLOB))<=16384 THEN data END data FROM coding_hook_installations WHERE id=?").get(id) as InstallationRow | null;
