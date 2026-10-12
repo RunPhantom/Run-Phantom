@@ -9,6 +9,7 @@ import { randomUUID } from "crypto";
 import { normalizeOtelId } from "./ids";
 import { searchRuns, RunSearchError } from "./run-search";
 import { getRunComparison, RunComparisonError } from "./run-comparison";
+import { withholdAgentDefinitionCapture } from "./agent-definitions";
 import { parseOtlpRequest } from "./parse";
 import { decodeOtlpProtobuf } from "./otlp-protobuf";
 import {
@@ -17,6 +18,7 @@ import {
   getRuns,
   getDrizzleDb,
   getRunWithSpans,
+  SpanSearchLimitError,
   getRunsByConvoId,
   clearAll,
   upsertLiveEvent,
@@ -1423,7 +1425,7 @@ export async function createServer(port: number) {
     if (!row) { res.status(404).json({ error: "Span not found" }); return; }
     const { input_head, output_head, input_chars, output_chars, ...rest } = row;
     res.json({
-      ...rest,
+      ...withholdAgentDefinitionCapture(rest),
       input_chars,
       output_chars,
       input_preview: input_chars > 80 ? input_head.slice(0, 80) + "…" : input_head,
@@ -1491,6 +1493,7 @@ export async function createServer(port: number) {
   // through get_span_payload.
   const MAX_DETAIL_ATTR_CHARS = 2_000;
   function compactSpanForDetail(span: any): any {
+    span = withholdAgentDefinitionCapture(span);
     if (typeof span?.attributes !== "string" || span.attributes.length <= MAX_DETAIL_ATTR_CHARS) return span;
     let parsed: Record<string, unknown>;
     try {
@@ -1517,7 +1520,7 @@ export async function createServer(port: number) {
       // Fall back to saved run cache
       const cached = getCachedRun(id);
       if (cached) {
-        try { const data = JSON.parse(cached); if (data.run) { res.json(data); return; } } catch {}
+        try { const data = JSON.parse(cached); if (data.run) { res.json({ ...data, spans: Array.isArray(data.spans) ? data.spans.map(withholdAgentDefinitionCapture) : data.spans }); return; } } catch {}
       }
       if (!run) { res.status(404).json({ error: "Not found" }); return; }
     }
@@ -1604,7 +1607,7 @@ export async function createServer(port: number) {
       opts.max_matches = n;
     }
     try { res.json(searchRun(req.params.id, opts)); }
-    catch (err: any) { res.status(400).json({ error: err.message }); }
+    catch (err: any) { res.status(err instanceof SpanSearchLimitError ? err.status : 400).json({ error: err.message }); }
   });
   app.get("/api/runs/:id/events", (req, res) => {
     const opts: any = {};

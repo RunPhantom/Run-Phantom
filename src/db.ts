@@ -12,6 +12,8 @@ import * as schema from "./db/schema";
 import { embeddedMigrationFiles, embeddedMigrationJournal } from "./db/migration-assets";
 import { SOURCE_MIGRATIONS_DIR } from "./source-paths";
 import { IS_PACKAGED_RUNTIME, VERSION } from "./version";
+import { withholdAgentDefinitionCapture } from "./agent-definitions";
+import { OTLP_EVIDENCE_LIMITS } from "./spans/otlp-evidence";
 
 const RUNPHANTOM_DB_PATH_ENV_VAR = "RUNPHANTOM_DB_PATH";
 
@@ -1798,6 +1800,13 @@ function quantifierAt(pattern: string, i: number): { unbounded: boolean; length:
 // Bounds the joined live-event transcript a single search will assemble. A long
 // streaming run can hold far more text than any one search needs to scan.
 const LIVE_EVENT_SEARCH_CHAR_CAP = 2_000_000;
+const SPAN_SEARCH_ROW_CAP = 2_000;
+const SPAN_SEARCH_BYTE_CAP = 16 * 1024 * 1024;
+
+export class SpanSearchLimitError extends Error {
+  readonly status = 413;
+  constructor() { super("Selected spans exceed search evidence limits (2,000 rows and 16 MiB acquired text)."); }
+}
 
 export function searchRun(runId: string, opts: SearchRunOpts): { matches: SearchMatch[]; truncated: boolean } {
   const ctx = Math.max(0, Math.min(400, opts.context_chars ?? 80));
@@ -1862,11 +1871,22 @@ export function searchRun(runId: string, opts: SearchRunOpts): { matches: Search
   }
 
   if (scopes.has("span_input") || scopes.has("span_output") || scopes.has("span_attributes")) {
-    const rows = rawQuery(`
-      SELECT id, name, input_payload, output_payload, attributes
-      FROM spans WHERE ${spanWhere.join(" AND ")}
-      ORDER BY start_time_ms ASC
-    `).all(...spanParams) as any[];
+    const columns = [["span_input", "input_payload"], ["span_output", "output_payload"], ["span_attributes", "attributes"]]
+      .filter(([scope]) => scopes.has(scope)).map(([, column]) => column);
+    const fields = ["id", "name", ...columns];
+    const receipt = `CASE WHEN length(CAST(otlp_evidence AS BLOB)) <= ${OTLP_EVIDENCE_LIMITS.bytes} THEN otlp_evidence ELSE NULL END`;
+    const acquired = [...fields, ...(scopes.has("span_attributes") ? [receipt] : [])];
+    const bytes = acquired.map(field => `COALESCE(length(CAST((${field}) AS BLOB)), 0)`).join(" + ");
+    const where = spanWhere.join(" AND ");
+    const rows = runInTransaction(() => {
+      const admission = rawQuery(`SELECT count(*) AS count, COALESCE(SUM(${bytes}), 0) AS bytes FROM spans WHERE ${where}`).get(...spanParams) as { count: number; bytes: number };
+      if (!Number.isSafeInteger(admission.count) || !Number.isSafeInteger(admission.bytes)
+        || admission.count > SPAN_SEARCH_ROW_CAP || admission.bytes > SPAN_SEARCH_BYTE_CAP) throw new SpanSearchLimitError();
+      // The admitted typed companion and requested scopes use this same row
+      // population; no raw parallel fetch or prefix can authorize projection.
+      return rawQuery(`SELECT ${fields.join(", ")}${scopes.has("span_attributes") ? `, ${receipt} AS otlp_evidence` : ""}
+        FROM spans WHERE ${where} ORDER BY start_time_ms ASC`).all(...spanParams) as any[];
+    });
 
     outer: for (const r of rows) {
       for (const [scope, col] of [
@@ -1875,7 +1895,16 @@ export function searchRun(runId: string, opts: SearchRunOpts): { matches: Search
         ["span_attributes", "attributes"],
       ] as const) {
         if (!scopes.has(scope)) continue;
-        const text = (r as any)[col] ?? "";
+        let text = r[col] ?? "";
+        if (col === "attributes") {
+          try { text = withholdAgentDefinitionCapture({ attributes: r.attributes, otlp_evidence: r.otlp_evidence }).attributes ?? ""; }
+          catch {
+            // An invalid/unprojectable typed companion proves no composite
+            // authority. Withhold relevant carriers before matching, never
+            // recover a raw companion or search a guessed safe prefix.
+            text = withholdAgentDefinitionCapture({ attributes: r.attributes, otlp_evidence: null }).attributes ?? "";
+          }
+        }
         if (!text) continue;
         for (const [s, e] of matcher(text)) {
           matches.push({
