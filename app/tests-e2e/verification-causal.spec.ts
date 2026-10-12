@@ -94,6 +94,7 @@ test.describe("causal action verification through the real SDK", () => {
       await testInfo.attach("causal-desktop-already-true-report", { path: path.join(output, "causal-desktop-already-true-report.png"), contentType: "image/png" });
       await page.setViewportSize({ width: 390, height: 844 });
       await page.getByRole("heading", { name: "Verification reports", exact: true }).scrollIntoViewIfNeeded();
+      await already.getByLabel("Action transition readings").scrollIntoViewIfNeeded();
       await expect(already.getByLabel("Action transition readings")).toBeInViewport();
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
       await page.screenshot({ path: path.join(output, "causal-mobile.png"), fullPage: true });
