@@ -1,9 +1,10 @@
 import {
-  PROTOCOL_VERSION, CAUSAL_PROTOCOL_VERSION, CAUSAL_CAPABILITY, SEMANTIC_PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SEMANTIC_REF_PATTERN, normalizeSemanticText, relativeTargetKey, relativeTargets, VERIFICATION_LIMITS as L,
+  PROTOCOL_VERSION, CAUSAL_PROTOCOL_VERSION, CAUSAL_CAPABILITY, SEMANTIC_PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_PROTOCOL_VERSION, SOURCE_CAPABILITY, SEMANTIC_REF_PATTERN, normalizeSemanticText, relativeTargetKey, relativeTargets, VERIFICATION_LIMITS as L,
   type AppCommand, type BrowserMessage, type Coverage, type FlowStep, type Predicate, type RelativeTarget, type SemanticQuery, type VerificationCapability,
 } from "./protocol";
 import { isSensitiveKey } from "./redaction";
 import { sanitizeWithReport } from "./serialization";
+import { parseControlSourceObservation } from "./build/source";
 
 export class VerificationInputError extends Error {
   readonly status = 400;
@@ -294,6 +295,7 @@ const eventFields: Record<string, string[]> = {
   state: ["store", "value"], dom: ["selector", "count"],
   "observer.error": ["observer", "message"], "capture.loss": ["reason"], "action.boundary": [],
   "action.reading": ["phase", "target", "value", "available"],
+  "action.source": ["observation"],
 };
 function parseEvent(raw: unknown): Extract<BrowserMessage, { type: "event" }>["event"] {
   const obj = record(raw, "event");
@@ -331,7 +333,11 @@ function parseEvent(raw: unknown): Extract<BrowserMessage, { type: "event" }>["e
     if (!["network", "console", "dom", "state", "signal", "route"].includes(String(data.observer))) invalid("unsupported observer");
     text(data.message, "observer error", L.MAX_TEXT_LENGTH, true);
   } else if (type === "capture.loss") text(data.reason, "capture loss reason", L.MAX_TEXT_LENGTH);
-  else if (type === "action.reading") {
+  else if (type === "action.source") {
+    if (Object.hasOwn(obj, "truncated")) invalid("source context cannot claim a truncated pointer");
+    try { data.observation = parseControlSourceObservation(data.observation); }
+    catch { invalid("invalid control source context"); }
+  } else if (type === "action.reading") {
     if (data.phase !== "before" && data.phase !== "after") invalid("unsupported action reading phase");
     data.target = parseRelativeTarget(data.target);
     const available = bool(data.available, "reading available");
@@ -339,7 +345,7 @@ function parseEvent(raw: unknown): Extract<BrowserMessage, { type: "event" }>["e
     if (!available && Object.hasOwn(data, "value")) invalid("unavailable action readings cannot claim a value");
   }
   const actionId = optionalString(obj, "actionId", L.MAX_NAME_LENGTH);
-  if (["action.boundary", "action.reading"].includes(type) && actionId === undefined) invalid("action capture requires actionId");
+  if (["action.boundary", "action.reading", "action.source"].includes(type) && actionId === undefined) invalid("action capture requires actionId");
   size(obj, L.MAX_EVENT_BYTES, "event");
   return { type, data, ...(actionId === undefined ? {} : { actionId }),
     ...(Object.hasOwn(obj, "truncated") ? { truncated: bool(obj.truncated, "truncated") } : {}) };
@@ -350,6 +356,12 @@ export function parseBrowserMessage(value: unknown): BrowserMessage {
   const obj = record(value, "browser message");
   switch (obj.type) {
     case "hello": {
+      if (obj.version === SOURCE_PROTOCOL_VERSION) {
+        keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello");
+        if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 3 || !obj.capabilities.includes(SOURCE_CAPABILITY)
+          || new Set(obj.capabilities).size !== obj.capabilities.length || obj.capabilities.some(entry => ![CAUSAL_CAPABILITY, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY].includes(entry))) invalid("unsupported or duplicate source capabilities");
+        return { type: "hello", version: SOURCE_PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
+      }
       if (obj.version === PROTOCOL_VERSION) {
         keys(obj, ["type", "version", "token", "coverage"], "hello");
         return { type: "hello", version: PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage) };

@@ -2,6 +2,7 @@ import type { Predicate, VerificationReportContext } from "./protocol";
 import { VERIFICATION_LIMITS as L } from "./protocol";
 import { parseFlowSteps, parseRelativeTarget } from "./validation";
 import { sanitizeWithReport } from "./serialization";
+import { boundControlSource } from "./build/source";
 
 interface Sanitized { value: unknown; redacted: boolean; truncated: boolean }
 type Scrub = (value: unknown) => Sanitized;
@@ -49,10 +50,13 @@ export function boundReportContext(input: VerificationReportContext, scrub: Scru
   for (const check of input.checks.slice(0, L.MAX_STEPS)) {
     const reason = String(clean(check.reason));
     if (reason.length > L.MAX_REASON_LENGTH) context.truncated = true;
+    const controlSource = check.controlSource ? boundControlSource(check.controlSource, value => String(clean(value))) : undefined;
+    if (check.controlSource && !controlSource) context.truncated = true;
+    if (controlSource?.observation.status === "unavailable" && controlSource.observation.reason === "redacted") context.redacted = true;
     const retained = { step: check.step, predicate: predicate(check.predicate), status: check.status,
       reason: reason.slice(0, L.MAX_REASON_LENGTH), since: check.since, through: check.through,
       generation: check.generation, coverage: { ...check.coverage }, complete: check.complete,
-      dropped: check.dropped, settled: check.settled };
+      dropped: check.dropped, settled: check.settled, ...(controlSource ? { controlSource } : {}) };
     if (check.causal) {
       let unavailable = check.causal.attribution !== "captured";
       const readings: NonNullable<typeof check.causal>["readings"] = [];

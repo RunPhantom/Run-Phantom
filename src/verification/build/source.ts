@@ -1,4 +1,4 @@
-import type { ControlSourceObservation } from "../protocol";
+import type { ControlSourceObservation, RetainedControlSource } from "../protocol";
 import { sanitizeWithReport } from "../serialization";
 
 export const SOURCE_ATTRIBUTE = "data-runphantom-source";
@@ -71,4 +71,27 @@ export function sanitizeControlSource(raw: unknown, scrub?: (value: string) => s
     const { component: _component, ...rest } = source;
     return parseControlSourceObservation({ ...rest, ...(component && !component.redacted && !component.truncation && component.value === source.component ? { component: component.value } : {}) });
   } catch { return sourceUnavailable("unsafe-source"); }
+}
+
+/** Durable metadata keeps its daemon-owned correlation and repeats the privacy floor. */
+export function boundControlSource(raw: unknown, scrub?: (value: string) => string): RetainedControlSource | undefined {
+  try {
+    if (!raw || typeof raw !== "object" || ![null, Object.prototype].includes(Object.getPrototypeOf(raw))) return undefined;
+    const allowed = ["actionId", "commandCursor", "cursor", "generation", "capture", "observation"];
+    const fields = Reflect.ownKeys(raw);
+    if (fields.length !== allowed.length) return undefined;
+    const values: Record<string, unknown> = {};
+    for (const key of fields) {
+      const descriptor = Object.getOwnPropertyDescriptor(raw, key);
+      if (typeof key !== "string" || !allowed.includes(key) || !descriptor || !("value" in descriptor)) return undefined;
+      values[key] = descriptor.value;
+    }
+    const positive = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+    if (values.capture !== "before-dispatch" || typeof values.actionId !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(values.actionId)
+      || !positive(values.commandCursor) || !positive(values.cursor) || values.cursor <= values.commandCursor || !positive(values.generation)) return undefined;
+    if (scrub && scrub(values.actionId) !== values.actionId) return undefined;
+    parseControlSourceObservation(values.observation);
+    return { actionId: values.actionId, commandCursor: values.commandCursor, cursor: values.cursor, generation: values.generation,
+      capture: "before-dispatch", observation: sanitizeControlSource(values.observation, scrub) };
+  } catch { return undefined; }
 }
