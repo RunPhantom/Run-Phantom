@@ -66,7 +66,10 @@ export function adapterInputFromStoredSpan(row: {
 }): AdapterInput {
   let attrs: Record<string, string | number | boolean> = {};
   if (row.attributes) {
-    try { attrs = JSON.parse(row.attributes); } catch { /* leave empty */ }
+    try {
+      const parsed = JSON.parse(row.attributes);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) attrs = parsed;
+    } catch { /* leave empty */ }
   }
   const spanType =
     row.span_type === "LLM_GENERATION" ||

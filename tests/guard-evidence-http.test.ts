@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { deriveCapturedGuardEvidence } from "../src/guard-evidence";
+import { normalizeStoredSpan } from "../src/spans/normalize";
 import { guardEvent, guardHarmless, guardOutput, guardRequest, guardSecrets, guardSpanId, guardTraceId } from "./fixtures/guard-evidence";
 import { encodeFidelityRequest } from "./fixtures/otlp-evidence";
 
@@ -108,4 +109,63 @@ test("portable import ignores supplied derived guard authority and rejects a cre
   receipt.events[0].attributes[5].value.stringValue = guardSecrets.pem; unsafe.spans[0].otlp_evidence = JSON.stringify(receipt);
   expect((await post("/api/import-run", unsafe)).status).toBe(400);
   expect(await read(`/api/runs/${guardTraceId}/export`)).toEqual(original);
+});
+
+test("legacy invalid source carriers retain export refusal without changing the private cache or canonical payloads", async () => {
+  expect((await post("/v1/traces", guardRequest())).status).toBe(200);
+  const original = await read(`/api/runs/detail/${guardTraceId}`), source = original.spans[0], receipt = source.otlp_evidence as string;
+  const variants = [receipt.replace('"schemaVersion":1', '"schemaVersion":1,"schemaVersion":1'),
+    receipt.replace('"schemaVersion":1', '"schemaVersion":1,"schema\\u0056ersion":1'),
+    receipt.replace('"doubleValue":0', '"doubleValue":9007199254740993'),
+    { invalid: true }, " ".repeat(262145), "{invalid"];
+  expect((await fetch(`${url}/api/clear`, { method: "POST" })).status).toBe(200);
+  for (const [index, raw] of variants.entries()) {
+    const cached = structuredClone(original); cached.spans[0].otlp_evidence = raw;
+    const data = JSON.stringify(cached), db = new Database(dbPath);
+    db.query("INSERT OR REPLACE INTO saved_run_cache(id,data) VALUES (?,?)").run(guardTraceId, data); db.close();
+    const actual = await read(`/api/saved-runs/cache/${guardTraceId}`), fallback = await read(`/api/runs/detail/${guardTraceId}`);
+    expect(actual.spans[0]).toMatchObject({ input_payload: source.input_payload, output_payload: source.output_payload, status: source.status,
+      otlp_evidence: null, guardEvidence: { execution: "unknown", decisions: [] } });
+    expect(fallback.spans[0]).toEqual(actual.spans[0]);
+    const exported = await fetch(`${url}/api/runs/${guardTraceId}/export`), exportBody = await exported.json();
+    const check = new Database(dbPath, { readonly: true }), after = (check.query("SELECT data FROM saved_run_cache WHERE id=?").get(guardTraceId) as any).data; check.close();
+    record(`guard-cache-invalid-${index}.json`, { raw, cache: actual, detail: fallback, exportStatus: exported.status, exportBody, privateBefore: data, privateAfter: after });
+    expect(exported.status).toBe(413); noSecrets(exportBody); expect(after).toBe(data);
+  }
+  const portable = { format: "runphantom-trace/v2", run: original.run, spans: [{ ...source, otlp_evidence: variants[0] }], liveEvents: [], annotations: [] };
+  expect((await post("/api/import-run", portable)).status).toBe(400);
+});
+
+test("non-object legacy attributes normalize safely while real LLM/tool sources and business bodies retain their values", async () => {
+  expect((await post("/v1/traces", guardRequest())).status).toBe(200);
+  const original = await read(`/api/runs/detail/${guardTraceId}`), source = original.spans[0];
+  expect((await fetch(`${url}/api/clear`, { method: "POST" })).status).toBe(200);
+  for (const attributes of ["null", "[]", "42", '"plain text"', "{"]) {
+    const row = { ...source, attributes, otlp_evidence: null, normalized: { guardEvidence: { explanation: guardSecrets.npm } } }, body = { run: original.run, spans: [row] };
+    expect((await post(`/api/saved-runs/cache/${guardTraceId}`, body, "PUT")).status).toBe(200);
+    const cache = await read(`/api/saved-runs/cache/${guardTraceId}`); noSecrets(cache);
+    expect(cache.spans[0]).toMatchObject({ attributes, input_payload: source.input_payload, output_payload: source.output_payload, status: source.status,
+      normalized: { kind: "other" }, guardEvidence: { decisions: [] } });
+    const data = JSON.stringify(body), db = new Database(dbPath); db.query("UPDATE saved_run_cache SET data=? WHERE id=?").run(data, guardTraceId); db.close();
+    const actual = await read(`/api/saved-runs/cache/${guardTraceId}`), fallback = await read(`/api/runs/detail/${guardTraceId}`);
+    expect(actual.spans[0]).toEqual(cache.spans[0]); expect(fallback.spans[0]).toEqual(cache.spans[0]);
+    const exported = await read(`/api/runs/${guardTraceId}/export`);
+    record(`guard-cache-attributes-${Buffer.from(attributes).toString("hex")}.json`, { request: body, cache, legacyCache: actual, detail: fallback, exported });
+    expect(exported.spans[0]).toMatchObject({ attributes, input_payload: source.input_payload, output_payload: source.output_payload, status: source.status, otlp_evidence: null });
+    expect(exported.spans[0].normalized).toBeUndefined(); expect(exported.spans[0].guardEvidence).toBeUndefined();
+  }
+  for (const row of [{ ...source, span_type: "LLM_GENERATION", attributes: JSON.stringify({ "ai.prompt": "Original real prompt", "ai.response.model": "source-model" }) },
+    { ...source, span_type: "TOOL_CALL", attributes: JSON.stringify({ "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "source-tool",
+      "gen_ai.tool.call.arguments": '{"count":0}', "gen_ai.tool.call.result": '{"isError":false}', "otel.status.code": 1 }) }]) {
+    expect((await post(`/api/saved-runs/cache/${guardTraceId}`, { run: original.run, spans: [{ ...row, normalized: { guardEvidence: guardSecrets.password } }] }, "PUT")).status).toBe(200);
+    const actual = (await read(`/api/saved-runs/cache/${guardTraceId}`)).spans[0]; noSecrets(actual);
+    expect(actual.normalized).toEqual(normalizeStoredSpan(row).normalized);
+    expect(actual.normalized.kind).toBe(row.span_type === "LLM_GENERATION" ? "llm" : "tool");
+    expect(actual).toMatchObject({ input_payload: source.input_payload, output_payload: source.output_payload, status: source.status, id: source.id });
+  }
+  const business = { ...source, otlp_evidence: null, input_payload: JSON.stringify({ guardEvidence: { explanation: guardSecrets.password }, code: "npm_literal_small" }),
+    output_payload: JSON.stringify({ guard_decisions: { action: "allow" }, password: guardSecrets.password }) };
+  expect((await post(`/api/saved-runs/cache/${guardTraceId}`, { run: original.run, spans: [business] }, "PUT")).status).toBe(200);
+  expect((await read(`/api/saved-runs/cache/${guardTraceId}`)).spans[0]).toMatchObject({ input_payload: business.input_payload, output_payload: business.output_payload,
+    status: business.status, guardEvidence: { decisions: [] } });
 });

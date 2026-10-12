@@ -3,6 +3,8 @@ import { importAnnotations, parseImportedAnnotations, MAX_IMPORTED_ANNOTATIONS, 
 import { OTLP_EVIDENCE_LIMITS, validateOtlpEvidence } from "./spans/otlp-evidence";
 import { withholdAgentDefinitionCapture } from "./agent-definitions";
 import { guardSpanForExport } from "./guard-evidence";
+import { parseJsonEvidence } from "./evaluations/json-evidence";
+import { hasDuplicateJsonKeys } from "./json-keys";
 
 export const TRACE_FORMAT = "runphantom-trace/v1";
 export const TRACE_EVIDENCE_FORMAT = "runphantom-trace/v2";
@@ -183,7 +185,11 @@ function parseTrace(value: unknown) {
       if (!has(span, "otlp_evidence")) invalid(`spans[${index}].otlp_evidence is required in v2`);
       if (span.otlp_evidence !== null) {
         if (typeof span.otlp_evidence !== "string" || Buffer.byteLength(span.otlp_evidence) > OTLP_EVIDENCE_LIMITS.bytes) invalid(`spans[${index}].otlp_evidence exceeds bounded evidence limits`);
-        try { validateOtlpEvidence(JSON.parse(span.otlp_evidence as string)); }
+        try {
+          const receipt = parseJsonEvidence(span.otlp_evidence);
+          if (hasDuplicateJsonKeys(span.otlp_evidence)) throw new TypeError("ambiguous receipt");
+          validateOtlpEvidence(receipt);
+        }
         catch { invalid(`spans[${index}].otlp_evidence is invalid or contains credentials`); }
       }
     } else if (span.otlp_evidence !== undefined && span.otlp_evidence !== null) invalid("OTLP evidence requires runphantom-trace/v2");
