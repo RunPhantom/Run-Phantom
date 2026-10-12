@@ -6,7 +6,17 @@ import path from "node:path";
 import { fileSha256, launchOwnedProcess, startManagedDaemon, stopOwnedProcess } from "../app/tests-e2e/daemon-runtime";
 
 const root = path.resolve(import.meta.dir, "..");
+const probeBirth = (pid: number) => {
+  const result = process.platform === "win32" ? spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `$p=Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}";if($p){$p.CreationDate.ToUniversalTime().ToString("o")}`], { encoding: "utf8", timeout: 3000 }) :
+    spawnSync("ps", ["-p", String(pid), "-o", "lstart=,command="], { encoding: "utf8", timeout: 3000 });
+  return result.stdout?.trim() ?? "";
+};
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+function terminateRecorded(pid: number, identity: string, birth: (pid: number) => string): void {
+  if (!alive(pid)) return;
+  if (!identity || birth(pid) !== identity) throw new Error("probe_child_identity_changed");
+  process.kill(pid, "SIGKILL");
+}
 async function expectFailure(operation: Promise<unknown>, code: string): Promise<void> {
   let error: unknown;
   try { await operation; } catch (failure) { error = failure; }
@@ -65,8 +75,10 @@ test("forced teardown closes a real owned descendant tree", async () => {
   const childScript = 'process.on("SIGTERM",()=>{});console.log("child:"+process.pid);setInterval(()=>{},1000);';
   const parentScript = `require("node:child_process").spawn(process.execPath,["-e",${JSON.stringify(childScript)}],{stdio:["ignore","inherit","inherit"]});process.on("SIGTERM",()=>{});setInterval(()=>{},1000);`;
   const owned = launchOwnedProcess(process.execPath, ["-e", parentScript], root, process.env);
+  let childPid = 0, childBirth = "";
+  const birth = probeBirth;
   try {
-    const childPid = await new Promise<number>((resolve, reject) => {
+    childPid = await new Promise<number>((resolve, reject) => {
       let text = "";
       const timer = setTimeout(() => reject(new Error("descendant_not_ready")), 5000);
       owned.child.stdout!.on("data", data => {
@@ -74,10 +86,14 @@ test("forced teardown closes a real owned descendant tree", async () => {
         if (match) { clearTimeout(timer); resolve(Number(match[1])); }
       });
     });
+    childBirth = birth(childPid); console.log(JSON.stringify({ probe: "surviving-parent", parentPid: owned.child.pid, childPid, childBirth }));
     expect(alive(childPid)).toBe(true);
     const stopped = await stopOwnedProcess(owned);
     expect(stopped.closeObserved).toBe(true); expect(alive(owned.child.pid!)).toBe(false); expect(alive(childPid)).toBe(false);
-  } finally { await stopOwnedProcess(owned); }
+  } finally {
+    if (childPid) terminateRecorded(childPid, childBirth, birth);
+    await stopOwnedProcess(owned);
+  }
 }, 12_000);
 
 test("lost process identity refuses escalation and retains the live process until ownership is restored", async () => {
@@ -99,7 +115,7 @@ test.skipIf(process.platform === "win32")("an exited parent cannot abandon its r
   const owned = launchOwnedProcess(process.execPath, ["-e", parentScript], root, process.env);
   const unrelated = launchOwnedProcess(process.execPath, ["-e", 'console.log("ready");setInterval(()=>{},1000)'], root, process.env);
   let childPid = 0, childBirth = "";
-  const birth = (pid: number) => spawnSync("ps", ["-p", String(pid), "-o", "lstart=,command="], { encoding: "utf8", timeout: 3000 }).stdout.trim();
+  const birth = probeBirth;
   try {
     await ready(unrelated);
     childPid = await new Promise<number>((resolve, reject) => {
@@ -116,9 +132,16 @@ test.skipIf(process.platform === "win32")("an exited parent cannot abandon its r
     console.log(JSON.stringify({ probe: "exited-parent", parentPid: owned.child.pid, childPid, childBirth, failure: failure instanceof Error ? failure.message : null, childAlive: alive(childPid), closeObserved: owned.closeObserved }));
     expect(failure).toBeUndefined(); expect(alive(childPid)).toBe(false); expect(owned.closeObserved).toBe(true); expect(alive(unrelated.child.pid!)).toBe(true);
   } finally {
-    if (childPid && alive(childPid)) { if (birth(childPid) !== childBirth) throw new Error("probe_child_identity_changed"); process.kill(childPid, "SIGKILL"); }
+    if (childPid) terminateRecorded(childPid, childBirth, birth);
     if (alive(owned.child.pid!)) await stopOwnedProcess(owned);
     await Promise.race([owned.closed, Bun.sleep(3000).then(() => { throw new Error("probe_pipe_not_closed"); })]);
     await stopOwnedProcess(unrelated); await rm(directory, { recursive: true, force: true });
   }
 }, 15_000);
+
+
+test("a counterfeit owned handle cannot terminate a genuine live process", async () => {
+  const owned = launchOwnedProcess(process.execPath, ["-e", 'console.log("ready");setInterval(()=>{},1000)'], root, process.env);
+  try { await ready(owned); await expectFailure(stopOwnedProcess({ ...owned }), "fixture_process_unknown_owner"); expect(alive(owned.child.pid!)).toBe(true); }
+  finally { await stopOwnedProcess(owned); }
+});

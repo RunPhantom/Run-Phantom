@@ -56,8 +56,8 @@ async function checkedArtifact(selection: Extract<RuntimeSelection, { mode: "ins
   if (await fileSha256(artifact) !== selection.sha256) throw refusal("native_digest_mismatch");
   return artifact;
 }
-function command(file: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => execFile(file, args, { timeout: 3000, maxBuffer: 64 * 1024, windowsHide: true },
+function command(file: string, args: string[], maxBuffer = 64 * 1024): Promise<string> {
+  return new Promise((resolve, reject) => execFile(file, args, { timeout: 3000, maxBuffer, windowsHide: true },
     (error, stdout) => error ? reject(refusal("native_observation_failed")) : resolve(stdout)));
 }
 export async function observeNative(pid: number, executable: string, cwd: string, port: number): Promise<ProcessObservation> {
@@ -108,23 +108,71 @@ async function processIdentity(pid: number): Promise<string | null> {
     return stamp ? `${pid}:${stamp}` : null;
   } catch { return null; }
 }
-async function groupIdentities(pid: number): Promise<Map<number, string>> {
-  const output = await command("ps", ["-axo", "pid=,pgid=,lstart="]);
-  const result = new Map<number, string>();
-  for (const line of output.split("\n")) {
-    const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/.exec(line);
-    if (match && Number(match[2]) === pid) result.set(Number(match[1]), match[3]);
+type ProcessRow = { pid: number; parent: number; identity: string };
+type Ownership = { root: ChildProcess; pid: number | undefined; identity: Promise<string | null>; descendants: Map<number, string>; pending: Promise<void>; running?: boolean; timer?: ReturnType<typeof setInterval>; failure?: Error };
+const ownership = new WeakMap<OwnedProcess, Ownership>();
+const MAX_DESCENDANTS = 64;
+async function processRows(): Promise<ProcessRow[]> {
+  if (process.platform === "win32") {
+    const script = '@(Get-CimInstance Win32_Process | ForEach-Object { @{pid=$_.ProcessId;parent=$_.ParentProcessId;birth=$_.CreationDate.ToUniversalTime().ToString("o")} })|ConvertTo-Json -Compress';
+    const rows = JSON.parse(await command("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], 512 * 1024)) as { pid: number; parent: number; birth: string }[];
+    if (!Array.isArray(rows) || rows.length > 8192) throw refusal("fixture_process_snapshot_limit");
+    return rows.map(row => ({ pid: row.pid, parent: row.parent, identity: `${row.pid}:${row.birth}` }));
   }
-  return result;
+  const output = await command("ps", ["-axo", process.platform === "linux" ? "pid=,ppid=" : "pid=,ppid=,lstart=,command="], 512 * 1024);
+  const lines = output.trim().split("\n");
+  if (lines.length > 8192) throw refusal("fixture_process_snapshot_limit");
+  return lines.flatMap(line => {
+    const match = /^\s*(\d+)\s+(\d+)(?:\s+(.+))?$/.exec(line);
+    return match ? [{ pid: Number(match[1]), parent: Number(match[2]), identity: match[3] ? `${match[1]}:${match[3].trim()}` : "" }] : [];
+  });
 }
-async function stillOwned(owned: OwnedProcess): Promise<boolean> {
-  const expected = await owned.identity, pid = owned.child.pid;
-  return !!expected && !!pid && expected === await processIdentity(pid);
+async function linuxRow(row: ProcessRow): Promise<ProcessRow | null> {
+  try {
+    const fields = (await readFile(`/proc/${row.pid}/stat`, "utf8")).split(")").at(-1)!.trim().split(/\s+/);
+    return { pid: row.pid, parent: Number(fields[1]), identity: `${row.pid}:${fields[19]}` };
+  } catch { return null; }
+}
+async function refreshOwnership(owned: OwnedProcess, lease: Ownership): Promise<void> {
+  const expected = await lease.identity, pid = lease.pid;
+  if (!expected || !pid) return;
+  const rows = await processRows();
+  const byPid = new Map(rows.map(row => [row.pid, row]));
+  const liveRow = async (id: number) => {
+    const row = byPid.get(id);
+    return row && process.platform === "linux" ? await linuxRow(row) : row;
+  };
+  const anchors = new Set<number>();
+  const root = await liveRow(pid);
+  if (root?.identity === expected) anchors.add(pid);
+  for (const [member, identity] of lease.descendants) if ((await liveRow(member))?.identity === identity) anchors.add(member);
+  // Adopt only edges in a bounded OS snapshot whose parent still has its recorded birth.
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const candidate of rows) {
+      if (!anchors.has(candidate.parent) || anchors.has(candidate.pid)) continue;
+      const row = await liveRow(candidate.pid), parent = await liveRow(candidate.parent);
+      const parentIdentity = candidate.parent === pid ? expected : lease.descendants.get(candidate.parent);
+      if (!row || row.parent !== candidate.parent || parent?.identity !== parentIdentity) continue;
+      if (lease.descendants.has(row.pid) && lease.descendants.get(row.pid) !== row.identity) throw refusal("fixture_process_identity_lost");
+      if (lease.descendants.size >= MAX_DESCENDANTS) throw refusal("fixture_process_descendant_limit");
+      lease.descendants.set(row.pid, row.identity); anchors.add(row.pid); changed = true;
+    }
+  }
+}
+function scheduleOwnership(owned: OwnedProcess, lease: Ownership): Promise<void> {
+  if (lease.running) return lease.pending;
+  lease.running = true;
+  lease.pending = refreshOwnership(owned, lease).catch(error => { lease.failure = error instanceof Error ? error : refusal("fixture_process_snapshot_failed"); }).finally(() => { lease.running = false; });
+  return lease.pending;
 }
 export function launchOwnedProcess(file: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): OwnedProcess {
   const child = spawn(file, args, { cwd, env, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   const owned: OwnedProcess = { child, closed: Promise.resolve(), closeObserved: false, error: null, identity: child.pid ? processIdentity(child.pid) : Promise.resolve(null) };
-  owned.closed = new Promise(resolve => child.once("close", () => { owned.closeObserved = true; resolve(); }));
+  const lease: Ownership = { root: child, pid: child.pid, identity: owned.identity, descendants: new Map(), pending: Promise.resolve() }; ownership.set(owned, lease);
+  lease.timer = setInterval(() => { void scheduleOwnership(owned, lease); }, 100); lease.timer.unref();
+  void scheduleOwnership(owned, lease);
+  owned.closed = new Promise(resolve => child.once("close", () => { owned.closeObserved = true; clearInterval(lease.timer); resolve(); }));
   child.once("error", error => { owned.error = error; });
   return owned;
 }
@@ -134,39 +182,48 @@ async function closedWithin(owned: OwnedProcess, ms: number): Promise<boolean> {
   finally { clearTimeout(timer); }
 }
 export async function stopOwnedProcess(owned: OwnedProcess): Promise<{ pid: number | null; closeObserved: true; forced: boolean; identity: string | null }> {
-  const pid = owned.child.pid; let forced = false;
-  let originalGroup = new Map<number, string>();
-  if (!owned.closeObserved && pid) {
-    if (!await stillOwned(owned)) {
-      if (!await closedWithin(owned, 2500)) throw refusal("fixture_process_identity_lost");
-    } else if (process.platform === "win32") {
-      forced = true;
-      await command("taskkill.exe", ["/PID", String(pid), "/T", "/F"]).catch(error => { if (!owned.closeObserved) throw error; });
-    } else {
-      originalGroup = await groupIdentities(pid);
-      try { process.kill(-pid, "SIGTERM"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+  const lease = ownership.get(owned); if (!lease) throw refusal("fixture_process_unknown_owner");
+  if (owned.child !== lease.root || owned.child.pid !== lease.pid || await owned.identity !== await lease.identity) throw refusal("fixture_process_identity_lost");
+  clearInterval(lease.timer); await lease.pending; await scheduleOwnership(owned, lease);
+  if (lease.failure) throw lease.failure;
+  const pid = owned.child.pid, expected = await owned.identity; let forced = false;
+  const rootIdentity = pid ? await processIdentity(pid) : null;
+  if (rootIdentity && rootIdentity !== expected) throw refusal("fixture_process_identity_lost");
+  const recorded = new Map(lease.descendants); if (pid && expected) recorded.set(pid, expected);
+  const signalOwned = async (signal: "SIGTERM" | "SIGKILL") => {
+    let found = false;
+    for (const [member, identity] of recorded) {
+      const current = await processIdentity(member);
+      if (!current) continue;
+      if (current !== identity) throw refusal("fixture_process_identity_lost");
+      found = true;
+      if (process.platform === "win32") {
+        forced = true; await command("taskkill.exe", ["/PID", String(member), "/F"]).catch(async error => { if (await processIdentity(member)) throw error; });
+      } else {
+        try { process.kill(member, signal); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+      }
     }
-  }
+    return found;
+  };
+  await signalOwned("SIGTERM");
   if (!await closedWithin(owned, 2500)) {
     forced = true;
-    if (!await stillOwned(owned)) throw refusal("fixture_process_identity_lost");
-    if (pid && process.platform !== "win32") { try { process.kill(-pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } }
-    else owned.child.kill("SIGKILL");
+    if (!await signalOwned("SIGKILL")) throw refusal("fixture_process_identity_lost");
     if (!await closedWithin(owned, 2500)) throw refusal("fixture_process_not_closed");
   }
-  if (pid && process.platform !== "win32") {
-    // A surviving original member reserves the detached group identity after its parent exits.
-    const deadline = Date.now() + 2000;
-    for (;;) {
-      const current = await groupIdentities(pid);
-      if (!current.size) break;
-      if (![...current].some(([member, stamp]) => originalGroup.get(member) === stamp)) throw refusal("fixture_process_group_identity_lost");
-      try { process.kill(-pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
-      if (Date.now() >= deadline) throw refusal("fixture_process_group_not_reaped");
-      await sleep(25);
-    }
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    const remaining = await Promise.all([...recorded].map(async ([member, identity]) => {
+      const current = await processIdentity(member);
+      if (current && current !== identity) throw refusal("fixture_process_identity_lost");
+      return !!current;
+    }));
+    if (!remaining.some(Boolean)) break;
+    forced = true; await signalOwned("SIGKILL");
+    if (Date.now() >= deadline) throw refusal("fixture_process_descendants_not_reaped");
+    await sleep(25);
   }
-  return { pid: pid ?? null, closeObserved: true, forced, identity: await owned.identity };
+  return { pid: pid ?? null, closeObserved: true, forced, identity: expected };
 }
 async function reservePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
