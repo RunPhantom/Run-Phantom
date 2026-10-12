@@ -54,7 +54,7 @@ describe("team runtime authority boundary", () => {
 
   test("bootstrap refusal precedes reader imports without enabling a pre-guard transpiler cache", () => {
     for (const relative of ["src/index.ts", "src/evaluations/evidence-worker.ts", "src/evaluations/evidence-worker-environment.ts"]) {
-      expect(statSync(path.join(root, relative)).size).toBeLessThanOrEqual(4096);
+      expect(statSync(path.join(root, relative)).size).toBeLessThan(4096);
     }
     const file = path.join(root, "src/evaluations/evidence-worker.ts"), source = readFileSync(file, "utf8");
     const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
