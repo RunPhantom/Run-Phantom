@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/pro
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileSha256, launchOwnedProcess, ownedProcessMatches, startManagedDaemon, startFixtureDaemon, startFixtureSupervisor, stopOwnedProcess } from "../app/tests-e2e/daemon-runtime";
+import { fileSha256, launchOwnedProcess, ownedProcessMatches, startManagedDaemon, startFixtureDaemon, startFixtureSupervisor, stopOwnedProcess, windowsNativeEnvironment, windowsOwnershipQuery, windowsProcessBirth } from "../app/tests-e2e/daemon-runtime";
 
 const root = path.resolve(import.meta.dir, "..");
 const probeBirth = (pid: number) => {
@@ -51,6 +51,31 @@ test("a live registered process acquires an exact native birth before cleanup au
           status: result.status, signal: result.signal, errorCode: (result.error as NodeJS.ErrnoException | undefined)?.code ?? null,
           hasBirth: !!result.stdout?.trim(), wallMs: Math.round(performance.now() - began) }));
       }
+      // Diagnose the actual finite environment/query separately from the historical four-field probe.
+      for (const mode of ["finite-eight-exact-query", "finite-eight-explicit-cim"] as const) {
+        const query = windowsOwnershipQuery(owned.child.pid!);
+        const moduleImport = mode === "finite-eight-explicit-cim"
+          ? "[Console]::Error.WriteLine('rp-stage:before-import');Import-Module -Name ([System.IO.Path]::Combine($PSHOME,'Modules','CimCmdlets','CimCmdlets.psd1')) -ErrorAction Stop;[Console]::Error.WriteLine('rp-stage:after-import');"
+          : "";
+        const diagnostic = "$ErrorActionPreference='Stop';try{[Console]::Error.WriteLine('rp-stage:entered');" + moduleImport +
+          "[Console]::Error.WriteLine('rp-stage:before-query');" + query +
+          ";[Console]::Error.WriteLine('rp-stage:after-query')}catch{[Console]::Error.WriteLine('rp-error:'+$_.Exception.GetType().Name);exit 1}";
+        const began = performance.now();
+        const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", diagnostic], {
+          encoding: "utf8", timeout: 3000, maxBuffer: 64 * 1024, windowsHide: true,
+          env: windowsNativeEnvironment(process.env),
+        });
+        let hasBirth = false;
+        if (result.status === 0) {
+          try { hasBirth = windowsProcessBirth(result.stdout, owned.child.pid!) !== null; } catch { /* Diagnostics never provide ownership authority. */ }
+        }
+        const stderr = typeof result.stderr === "string" ? result.stderr : "";
+        const stages = [...stderr.matchAll(/\brp-stage:(entered|before-import|after-import|before-query|after-query)\b/g)].map(match => match[1]);
+        const errorClasses = [...stderr.matchAll(/\brp-error:([A-Za-z]{1,80})\b/g)].map(match => match[1]);
+        console.log(JSON.stringify({ probe: "windows-exact-ownership-query", mode, pid: owned.child.pid,
+          status: result.status, signal: result.signal, errorCode: (result.error as NodeJS.ErrnoException | undefined)?.code ?? null,
+          hasBirth, stages, errorClasses, stderrBytes: Buffer.byteLength(stderr), wallMs: Math.round(performance.now() - began) }));
+      }
     }
     expect(acquisitionFailure).toBeUndefined();
     expect(identity).not.toBeNull();
@@ -66,7 +91,7 @@ test("a live registered process acquires an exact native birth before cleanup au
       await Promise.race([owned.closed, Bun.sleep(3000).then(() => { throw new Error("probe_pipe_not_closed"); })]);
     } else await stopOwnedProcess(owned);
   }
-}, 15_000);
+}, 25_000);
 
 test("a native digest mismatch and a script artifact refuse before a daemon or private store exists", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "runphantom-native-refusal-"));
