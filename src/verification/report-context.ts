@@ -3,6 +3,7 @@ import { VERIFICATION_LIMITS as L } from "./protocol";
 import { parseFlowSteps, parseRelativeTarget } from "./validation";
 import { sanitizeWithReport } from "./serialization";
 import { boundControlSource } from "./build/source";
+import { parsePerformanceSnapshot, scrubPerformanceMetadata } from "./performance";
 
 interface Sanitized { value: unknown; redacted: boolean; truncated: boolean }
 type Scrub = (value: unknown) => Sanitized;
@@ -35,6 +36,7 @@ export function boundReportContext(input: VerificationReportContext, scrub: Scru
       return "[REDACTED]";
     }
     switch (parsed.kind) {
+      case "performance": return { ...parsed };
       case "console": return { kind: parsed.kind, level: parsed.level, absent: parsed.absent };
       case "network": return { kind: parsed.kind, urlContains: clean(parsed.urlContains),
         ...(parsed.method === undefined ? {} : { method: clean(parsed.method) }),
@@ -53,11 +55,16 @@ export function boundReportContext(input: VerificationReportContext, scrub: Scru
     const controlSource = check.controlSource ? boundControlSource(check.controlSource, value => String(clean(value))) : undefined;
     if (check.controlSource && !controlSource || check.controlSourceOmitted === "context-limit") context.truncated = true;
     if (controlSource?.observation.status === "unavailable" && controlSource.observation.reason === "redacted") context.redacted = true;
-    const retained = { step: check.step, predicate: predicate(check.predicate), status: check.status,
+    const retained: VerificationReportContext["checks"][number] = { step: check.step, predicate: predicate(check.predicate), status: check.status,
       reason: reason.slice(0, L.MAX_REASON_LENGTH), since: check.since, through: check.through,
       generation: check.generation, coverage: { ...check.coverage }, complete: check.complete,
       dropped: check.dropped, settled: check.settled, ...(controlSource ? { controlSource } : {}),
       ...(!controlSource && check.controlSourceOmitted === "context-limit" ? { controlSourceOmitted: "context-limit" as const } : {}) };
+    if (check.performance) {
+      try { retained.performance = { generation: check.performance.generation, cursor: check.performance.cursor,
+        snapshot: scrubPerformanceMetadata(check.performance.snapshot, value => clean(value)) }; }
+      catch { retained.performanceOmitted = "invalid-stored-evidence"; context.truncated = true; }
+    } else if (check.performanceOmitted) retained.performanceOmitted = check.performanceOmitted;
     if (check.causal) {
       let unavailable = check.causal.attribution !== "captured";
       const readings: NonNullable<typeof check.causal>["readings"] = [];
@@ -88,6 +95,11 @@ export function boundReportContext(input: VerificationReportContext, scrub: Scru
   }
   // Preserve every executed check's outcome/window even when large expected values do not fit.
   while (Buffer.byteLength(JSON.stringify(context)) > L.MAX_CONTEXT_BYTES) {
+    const performance = context.checks.filter(check => check.performance).sort((a, b) =>
+      Buffer.byteLength(JSON.stringify(b.performance)) - Buffer.byteLength(JSON.stringify(a.performance)));
+    if (performance.length) {
+      delete performance[0].performance; performance[0].performanceOmitted = "context-limit"; context.truncated = true; continue;
+    }
     // Optional location context must yield before existing expectations or captured readings.
     // The next loop measures the omission marker and truncated flag as part of the same budget.
     const sources = context.checks.filter(check => check.controlSource).sort((a, b) =>
@@ -129,6 +141,21 @@ export function boundReportContext(input: VerificationReportContext, scrub: Scru
       continue;
     }
     throw new Error("Saved verification context exceeds its required outcome budget");
+  }
+  return context;
+}
+
+/** Reopened optional native evidence is validated; it is never current-session evidence. */
+export function revalidatePerformanceContext(context: VerificationReportContext): VerificationReportContext {
+  if (!context || !Array.isArray(context.checks)) return context;
+  for (const check of context.checks.slice(0, L.MAX_STEPS)) {
+    if (!check || typeof check !== "object" || !Object.hasOwn(check, "performance")) continue;
+    try {
+      const retained = check.performance;
+      if (!retained || Object.keys(retained).length !== 3 || !Number.isSafeInteger(retained.generation) || retained.generation < 0 || !Number.isSafeInteger(retained.cursor) || retained.cursor < 0
+        || retained.generation !== check.generation || retained.cursor < check.since || retained.cursor > check.through) throw new Error("Unmatched stored native window");
+      check.performance = { generation: retained.generation, cursor: retained.cursor, snapshot: parsePerformanceSnapshot(retained.snapshot) };
+    } catch { delete check.performance; check.performanceOmitted = "invalid-stored-evidence"; context.truncated = true; }
   }
   return context;
 }
