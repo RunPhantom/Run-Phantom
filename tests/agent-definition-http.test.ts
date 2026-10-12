@@ -126,7 +126,7 @@ test.each(["detail", "span", "export", "search"])("actual nested typed definitio
   }
 });
 
-test("actual receiver-reported attribute loss withholds an uncertain flattened carrier without changing output", async () => {
+test("actual SDK-reported attribute loss withholds an uncertain flattened carrier without changing output", async () => {
   const capture = definitionTrace(96), marker = "Private nested lossy capture";
   const span = capture.body.resourceSpans[0].scopeSpans[0].spans[0]; span.droppedAttributesCount = 1;
   span.attributes.push({ key: "ordinary.envelope", value: { kvlistValue: { values: [{ key: definitionKey, value: { stringValue: marker } }] } } } as any);

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { APIRequestContext } from "@playwright/test";
 import { test, expect } from "./fixtures";
-import { agentDefinition, definitionTrace, definitionInput, definitionOutput } from "../../tests/fixtures/agent-definitions";
+import { agentDefinition, definitionTrace, definitionInput, definitionOutput, definitionKey } from "../../tests/fixtures/agent-definitions";
 import type { RunComparison } from "../../src/run-comparison-protocol";
 
 async function capturedPair(request: APIRequestContext, base: string, partial = false) {
@@ -106,4 +106,37 @@ test("actual partial capture cannot show a complete definition version or hide u
   const record = definitions.locator('[data-definition-side="candidate"] [data-definition-record]'); await record.locator("summary").click();
   await expect(record).toContainText("Partial capture"); await expect(record.locator('[data-definition-hash="version"]')).toHaveText("Unavailable"); await expect(record).toContainText("Capture redacted");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); await record.locator("summary").scrollIntoViewIfNeeded(); await page.screenshot({ path: testInfo.outputPath("definition-partial-mobile.png"), fullPage: true });
+});
+
+
+test("actual nested definition stays private in expanded source details while safe business output survives reload", async ({ page, request, runPhantom }, testInfo) => {
+  const capture = definitionTrace(1773), privatePrompt = "F17 synthetic nested private UI instruction", business = "F17 safe business carrier unchanged";
+  const stringBusiness = JSON.stringify({ [definitionKey]: "Ordinary typed business string stays exact" });
+  capture.body.resourceSpans[0].scopeSpans[0].spans[0].attributes.push({ key: "ai.settings.fixture", value: { kvlistValue: { values: [
+    { key: "business", value: { stringValue: business } },
+    { key: definitionKey, value: { stringValue: JSON.stringify(agentDefinition(privatePrompt)) } },
+  ] } } } as any, { key: "ordinary.string", value: { stringValue: stringBusiness } });
+  expect((await request.post(runPhantom.url + "/v1/traces", { data: capture.body })).status()).toBe(200);
+  for (const route of [`/api/runs/detail/${capture.id}`, `/api/runs/${capture.id}/export`]) {
+    const response = await request.get(runPhantom.url + route); expect(response.status()).toBe(200); const observed = await response.json();
+    expect(JSON.stringify(observed)).not.toContain(privatePrompt); const span = observed.spans[0], flat = JSON.parse(span.attributes);
+    expect(JSON.parse(flat["ai.settings.fixture"])).toEqual({ business, [definitionKey]: "[REDACTED]" });
+    expect(flat["ordinary.string"]).toBe(stringBusiness); expect(span.input_payload).toBe(definitionInput); expect(span.output_payload).toBe(definitionOutput);
+  }
+  const searched = await request.get(`${runPhantom.url}/api/runs/${capture.id}/search?scope=span_attributes&pattern=${encodeURIComponent(privatePrompt)}`);
+  expect(searched.status()).toBe(200); expect((await searched.json()).matches).toEqual([]);
+  const raw = await request.post(runPhantom.url + "/api/traces/query", { data: { sql: `SELECT attributes,otlp_evidence FROM spans WHERE run_id='${capture.id}'` } });
+  expect(raw.status()).toBe(200); expect(JSON.stringify(await raw.json())).toContain(privatePrompt);
+  await page.goto(`${runPhantom.url}/runs/${capture.id}/span/${capture.spanId}`);
+  for (const reload of [false, true]) {
+    if (reload) await page.reload();
+    await expect(page.locator(`[data-span-row="${capture.spanId}"]`)).toBeVisible();
+    const options = page.getByRole("button", { name: /Provider Options \(Local-fixture\)/ }); await expect(options).toBeVisible(); await options.click();
+    await expect(page.getByText(JSON.stringify(business), { exact: true })).toBeVisible(); await expect(page.getByText(JSON.stringify("[REDACTED]"), { exact: true })).toBeVisible();
+    await expect(page.getByText(definitionInput, { exact: true }).first()).toBeVisible(); await expect(page.getByText(definitionOutput, { exact: true }).first()).toBeVisible();
+    expect(await page.locator("body").textContent()).not.toContain(privatePrompt);
+  }
+  await page.screenshot({ path: testInfo.outputPath("definition-nested-public-details.png"), fullPage: true });
+  await testInfo.attach("actual-nested-public-ui.json", { body: JSON.stringify({ source: "Actual JSON OTLP ingress, source daemon and Chromium UI", publicProjectionWithheld: true,
+    privateDiagnosticRetention: true, genuineTypedBusinessStringExact: true, originalInputOutputEqual: true, expandedSafeSiblingVisibleAfterReload: true }), contentType: "application/json" });
 });
