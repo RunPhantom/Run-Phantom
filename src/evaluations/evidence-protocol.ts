@@ -173,6 +173,12 @@ export interface EvidenceSetView {
   sources: { sourceId: string; rawAvailable: boolean; normalizedAvailable: boolean; normalized: NormalizedEvidenceSource | null }[];
 }
 export type EvidenceJobStatus = "queued" | "running" | "completed" | "cancelled" | "failed";
+/** Owner-selected codes only: request content and worker diagnostics never become durable failure text. */
+export const EVIDENCE_IMPORT_FAILURE_CODES = ["upload_aborted", "upload_timeout", "source_integrity", "worker_unavailable",
+  "worker_failed", "worker_protocol", "worker_timeout", "import_timeout", "queue_full", "shutdown", "attachment_unavailable"] as const;
+export type EvidenceImportFailureCode = typeof EVIDENCE_IMPORT_FAILURE_CODES[number];
+export type EvidenceJobFailureCode = EvidenceImportFailureCode | "deadline_exceeded" | "restart_interrupted" |
+  "scope_invalidated" | "revision_conflict" | "retention_changed" | "cancelled";
 export interface EvidenceJob {
   id: string;
   scopeGeneration: number;
@@ -181,7 +187,7 @@ export interface EvidenceJob {
   admittedAt: number;
   deadlineAt: number;
   setId: string | null;
-  failureCode: "deadline_exceeded" | "restart_interrupted" | "scope_invalidated" | "revision_conflict" | "retention_changed" | "cancelled" | null;
+  failureCode: EvidenceJobFailureCode | null;
 }
 export interface EvidencePublicationSource { sourceId: string; raw: Uint8Array; normalized: unknown }
 export class EvidenceError extends Error {

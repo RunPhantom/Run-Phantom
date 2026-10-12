@@ -12,6 +12,8 @@ import * as schema from "./db/schema";
 import { embeddedMigrationFiles, embeddedMigrationJournal } from "./db/migration-assets";
 import { SOURCE_MIGRATIONS_DIR } from "./source-paths";
 import { IS_PACKAGED_RUNTIME, VERSION } from "./version";
+import { activeLocalEvidenceAttachmentIds } from "./evaluations/evidence-inventory";
+import { EvidenceError } from "./evaluations/evidence-protocol";
 
 const RUNPHANTOM_DB_PATH_ENV_VAR = "RUNPHANTOM_DB_PATH";
 
@@ -614,7 +616,11 @@ export function countReplaysBySource(sourceRunId: string): number {
 }
 
 export function deleteRun(runId: string) {
-  getDrizzleDb().transaction((tx) => {
+  const db = getDrizzleDb();
+  db.transaction((tx) => {
+    const runImports = activeLocalEvidenceAttachmentIds(db.$client, "run"), inspections = activeLocalEvidenceAttachmentIds(db.$client, "inspection"), checks = activeLocalEvidenceAttachmentIds(db.$client, "check");
+    const capturedChecks = tx.select({ id: schema.verification_reports.id }).from(schema.verification_reports).where(eq(schema.verification_reports.run_id, runId)).all();
+    if (runImports.has(runId) || inspections.has(runId) || capturedChecks.some(check => checks.has(check.id))) throw new EvidenceError("Run deletion is blocked by an active evidence import; cancel it first", 409);
     tx.delete(schema.spans).where(eq(schema.spans.run_id, runId)).run();
     tx.delete(schema.live_events).where(eq(schema.live_events.trace_id, runId)).run();
     // Annotations are not FK-cascaded, so leaving them behind orphans every note
