@@ -151,6 +151,7 @@ export interface InviteAccept { token: string; email: string; password: string }
 export interface KeyCreate { label: string; expiresInDays?: number }
 
 export interface RunFilters {
+  filter?: import("../search-filter").SearchFilter | string;
   q?: string; // Literal payload/metadata text; no SQL/wildcard language.
   status?: RunStatus; // Omit for all.
   model?: string; // Exact model match on a span.

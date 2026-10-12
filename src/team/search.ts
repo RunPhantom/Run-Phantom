@@ -3,6 +3,7 @@ import { TeamError, type TeamErrorCode } from "./errors";
 import { TEAM_LIMITS as L, type PageQuery, type RunFilters } from "./protocol";
 import { bytes, digest, pageInput } from "./store-utils";
 import { teamSearchWorker, type TeamSearchResult, type TeamSearchWork } from "./search-worker";
+import { compileSearchFilter, parseSearchFilter } from "../search-filter";
 
 let activeWorkers = 0;
 export function teamSearchActiveWorkers(): number { return activeWorkers; }
@@ -24,15 +25,27 @@ function normalizedFilters(query: RunFilters): RunFilters {
     filters[key] = query[key];
   }
   if (filters.from !== undefined && filters.to !== undefined && filters.from >= filters.to) throw new TeamError("invalid_request", "Invalid search time window");
+  if (query.filter !== undefined) {
+    try {
+      const typed = parseSearchFilter(query.filter);
+      filters.filter = parseSearchFilter({ version: 1, all: [...typed.all,
+        ...(filters.model ? [{ field: "model", op: "eq", value: filters.model }] : []),
+        ...(filters.provider ? [{ field: "provider", op: "eq", value: filters.provider }] : []),
+        ...(filters.status ? [{ field: "status", op: "eq", value: filters.status }] : []),
+      ] });
+      delete filters.model; delete filters.provider; delete filters.status;
+    } catch { throw new TeamError("invalid_request", "Typed filters contain an invalid field, operator or value"); }
+  }
   return filters;
 }
 
 export async function searchTeamRuns(dbPath: string, projectId: string, query: PageQuery & RunFilters = {}, signal?: AbortSignal): Promise<TeamSearchResult> {
-  const filters = normalizedFilters(query), paging = pageInput(query, digest(JSON.stringify([projectId, "runs", filters])));
+  const filters = normalizedFilters(query), paging = pageInput(query, digest(JSON.stringify([dbPath, projectId, "runs", filters])));
   if (signal?.aborted) throw new TeamError("query_timeout", "Search was cancelled", undefined, 1);
   if (activeWorkers >= L.QUERY_CONCURRENCY) throw new TeamError("busy", "Search capacity is busy; retry shortly", undefined, 1);
   const started = Date.now(), cancellation = new SharedArrayBuffer(4);
-  const workerData: TeamSearchWork = { dbPath, projectId, filters, paging, started, deadline: started + L.QUERY_DEADLINE_MS, maxBytes: L.SEARCH_BYTES, projectBytes: L.PROJECT_BYTES, projectRuns: L.PROJECT_RUNS, projectSpans: L.PROJECT_SPANS, cancellation };
+  const typed = filters.filter === undefined ? undefined : compileSearchFilter(parseSearchFilter(filters.filter), "team");
+  const workerData: TeamSearchWork = { dbPath, projectId, filters, typed, paging, started, deadline: started + L.QUERY_DEADLINE_MS, maxBytes: L.SEARCH_BYTES, projectBytes: L.PROJECT_BYTES, projectRuns: L.PROJECT_RUNS, projectSpans: L.PROJECT_SPANS, cancellation };
   activeWorkers++;
   let worker: Worker;
   try { worker = new Worker(`(${teamSearchWorker.toString()})()`, { eval: true, workerData }); }

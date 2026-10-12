@@ -31,8 +31,8 @@ function pageQuery(req: Request, extras: string[] = []): PageQuery & Record<stri
       if (!value || !Number.isFinite(Number(value)) || Math.abs(Number(value)) > Number.MAX_SAFE_INTEGER) throw new TeamError("invalid_request", "Date filter is invalid");
       out[key] = Number(value);
     } else {
-      const max = key === "cursor" ? L.CURSOR_BYTES : L.FILTER_BYTES;
-      if (Buffer.byteLength(value) > max || hasControlCharacters(value) || key !== "cursor" && Array.from(value).length > L.FILTER_CHARACTERS) throw new TeamError("invalid_request", "Query value exceeds its bounds");
+      const max = key === "cursor" ? L.CURSOR_BYTES : key === "filter" ? 8192 : L.FILTER_BYTES;
+      if (Buffer.byteLength(value) > max || hasControlCharacters(value) || key !== "cursor" && key !== "filter" && Array.from(value).length > L.FILTER_CHARACTERS) throw new TeamError("invalid_request", "Query value exceeds its bounds");
       out[key] = value;
     }
   }
@@ -173,7 +173,7 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
       let allowed: string[] = [];
       if (req.method === "GET") {
         if (route === "/api/team/projects" || /\/(members|invites|keys|runs|notes|audit|checks)$/.test(route) || route.endsWith("/runs/:runId")) allowed = ["limit", "cursor"];
-        if (route.endsWith("/runs")) allowed.push("q", "status", "model", "provider", "from", "to");
+        if (route.endsWith("/runs")) allowed.push("q", "status", "model", "provider", "from", "to", "filter");
         if (route.endsWith("/metrics")) allowed = ["window"];
       }
       const seen = new Set<string>();
@@ -219,7 +219,7 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
   app.get(`${p}/keys`, wrap((req, res) => send(res, store.listKeys(scope(req, "admin"), pageQuery(req)))));
   app.post(`${p}/keys`, wrap(async (req, res) => { const ctx = scope(req, "admin"), body = fields(await jsonBody(req), ["label", "expiresInDays"]); send(res, store.createKey(ctx, body as unknown as KeyCreate), 201); }));
   app.delete(`${p}/keys/:keyId`, wrap((req, res) => { store.revokeKey(scope(req, "admin"), req.params.keyId); res.sendStatus(204); }));
-  app.get(`${p}/runs`, wrap(async (req, res) => { const ctx = scope(req), result = await store.searchRuns(ctx, pageQuery(req, ["q", "status", "model", "provider", "from", "to"]) as PageQuery & RunFilters, states.get(req)!.signal); store.projectScope(authenticate(req).context, req.params.projectId); send(res, result, 200, L.SEARCH_BYTES); }));
+  app.get(`${p}/runs`, wrap(async (req, res) => { const ctx = scope(req), result = await store.searchRuns(ctx, pageQuery(req, ["q", "status", "model", "provider", "from", "to", "filter"]) as PageQuery & RunFilters, states.get(req)!.signal); store.projectScope(authenticate(req).context, req.params.projectId); send(res, result, 200, L.SEARCH_BYTES); }));
   app.get(`${p}/runs/:runId`, wrap((req, res) => send(res, store.getRun(scope(req), req.params.runId, pageQuery(req)))));
   app.delete(`${p}/runs/:runId`, wrap((req, res) => { store.deleteRun(scope(req, "admin"), req.params.runId); res.sendStatus(204); }));
   app.get(`${p}/runs/:runId/spans/:spanId`, wrap((req, res) => send(res, store.getSpan(scope(req), req.params.runId, req.params.spanId))));
