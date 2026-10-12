@@ -16,6 +16,7 @@ import { withholdAgentDefinitionCapture } from "./agent-definitions";
 import { OTLP_EVIDENCE_LIMITS } from "./spans/otlp-evidence";
 import { activeLocalEvidenceAttachmentIds } from "./evaluations/evidence-inventory";
 import { EvidenceError } from "./evaluations/evidence-protocol";
+import { bridgeLegacyFindingMigration } from "./db/legacy-finding-migration";
 
 const RUNPHANTOM_DB_PATH_ENV_VAR = "RUNPHANTOM_DB_PATH";
 
@@ -78,9 +79,10 @@ export function getDrizzleDb(): RunPhantomDb {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   _dbPath = dbPath;
   _sqliteDb = new Database(dbPath, { create: true });
-  _sqliteDb.exec("PRAGMA journal_mode = WAL");
   _drizzleDb = drizzle(_sqliteDb, { schema });
   try {
+    _sqliteDb.exec("PRAGMA busy_timeout = 1000");
+    _sqliteDb.exec("PRAGMA journal_mode = WAL");
     // Both pragmas are required for the table rebuild in
     // 0003_span_identity_per_run.sql, which creates `__new_spans`, drops
     // `spans`, then renames. They must be set on the connection: drizzle runs
@@ -100,9 +102,14 @@ export function getDrizzleDb(): RunPhantomDb {
     // enforcement off while a referenced table is dropped and recreated.
     _sqliteDb.exec("PRAGMA legacy_alter_table = ON");
     _sqliteDb.exec("PRAGMA foreign_keys = OFF");
-    migrate(_drizzleDb, { migrationsFolder: resolveMigrationsFolder() });
+    const migrationsFolder = resolveMigrationsFolder();
+    // SQLite's immediate transaction coordinates the finite legacy backfill;
+    // all startup work stays synchronous, before feature stores or listeners.
+    const validateLegacyUpgrade = bridgeLegacyFindingMigration(_sqliteDb, migrationsFolder);
+    migrate(_drizzleDb, { migrationsFolder });
     _sqliteDb.exec("PRAGMA foreign_keys = ON");
     _sqliteDb.exec("PRAGMA legacy_alter_table = OFF");
+    validateLegacyUpgrade?.();
   } catch (err) {
     closeDb();
     throw new Error(

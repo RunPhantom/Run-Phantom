@@ -45,4 +45,3 @@ export interface FindingComparisonPage {
   comparison: Omit<FindingComparisonRecord, "difference"> & { difference: Omit<FindingDifference, "occurrences"> };
   page: { offset: number; limit: number; total: number; items: (FindingDelta & { baseline: FindingOccurrence | null; candidate: FindingOccurrence | null })[] };
 }
-
