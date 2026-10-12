@@ -1,6 +1,7 @@
 import { parseJsonEvidence } from "./evaluations/json-evidence";
 import { REPORTED_COST_ALIASES } from "./evaluations/snapshot";
 import { hasDuplicateJsonKeys } from "./json-keys";
+import { unsupportedTagCarrierSql } from "./captured-tags";
 import { SEARCH_FILTER_LIMITS, SEARCH_FILTER_FIELDS, type SearchFilterField, type SearchFilterOperator, type SearchFilterClause, type SearchFilter } from "./search-protocol";
 export { SEARCH_FILTER_LIMITS, SEARCH_FILTER_FIELDS } from "./search-protocol";
 export type { SearchFilterField, SearchFilterOperator, SearchFilterClause, SearchFilter } from "./search-protocol";
@@ -75,7 +76,7 @@ export function capturedTagsSql(scope: "local" | "team"): string {
   // SQLite length counts code points; typed values are bounded in UTF16 units.
   const characters = `(WITH RECURSIVE chars(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM chars WHERE i<length(member.value)) SELECT SUM(CASE WHEN unicode(substr(member.value,i,1))>65535 THEN 2 ELSE 1 END) FROM chars)`;
   const control = `(WITH RECURSIVE chars(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM chars WHERE i<length(member.value)) SELECT 1 FROM chars WHERE unicode(substr(member.value,i,1))<32 OR unicode(substr(member.value,i,1))=127)`;
-  return `(CASE WHEN json_type(${attrs},'$.tags')='array' THEN CASE WHEN json_array_length(${candidate})<=${SEARCH_FILTER_LIMITS.tags} AND NOT EXISTS (SELECT 1 FROM json_each(${candidate}) member WHERE CASE WHEN member.type<>'text' OR member.value='' OR length(member.value)>${SEARCH_FILTER_LIMITS.valueChars} OR length(CAST(member.value AS BLOB))>${SEARCH_FILTER_LIMITS.valueBytes} OR instr(member.value,char(0))>0 THEN 1 ELSE ${characters}>${SEARCH_FILTER_LIMITS.valueChars} OR EXISTS ${control} END) THEN ${candidate} END END)`;
+  return `(CASE WHEN json_type(${attrs},'$.tags')='array' THEN CASE WHEN json_array_length(${candidate})<=${SEARCH_FILTER_LIMITS.tags} AND NOT EXISTS (SELECT 1 FROM json_each(${candidate}) member GROUP BY member.value HAVING COUNT(*)>1) AND NOT EXISTS (SELECT 1 FROM json_each(${candidate}) member WHERE CASE WHEN member.type<>'text' OR member.value='' OR length(member.value)>${SEARCH_FILTER_LIMITS.valueChars} OR length(CAST(member.value AS BLOB))>${SEARCH_FILTER_LIMITS.valueBytes} OR instr(member.value,char(0))>0 THEN 1 ELSE ${characters}>${SEARCH_FILTER_LIMITS.valueChars} OR EXISTS ${control} OR ${unsupportedTagCarrierSql("member.value")} END) THEN ${candidate} END END)`;
 }
 
 /** Caller-owned aliases are fixed. User values can enter only bound parameters. */

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { compileSearchFilter, parseSearchFilter, SEARCH_FILTER_LIMITS } from "../src/search-filter";
+import { capturedTagsSql, compileSearchFilter, parseSearchFilter, SEARCH_FILTER_LIMITS } from "../src/search-filter";
 
 const ast = (field: string, op: string, value: unknown) => ({ version: 1, all: [{ field, op, value }] });
 
@@ -96,6 +96,22 @@ describe("closed typed investigation filters", () => {
         const compiled = compileSearchFilter(parseSearchFilter(ast(field, op, value)), "local");
         expect(db.query(`SELECT r.id FROM runs r WHERE ${compiled.sql}`).all(...compiled.params)).toEqual([]);
       }
+    } finally { db.close(); }
+  });
+
+  test("legacy unsafe or partial populations never supply membership or suggestions", () => {
+    const db = new Database(":memory:");
+    try {
+      db.exec("CREATE TABLE spans(attributes TEXT)");
+      const statement = db.query(`SELECT ${capturedTagsSql("local")} tags FROM spans s`);
+      for (const member of ["[REDACTED]", "[UNAVAILABLE]", "[TRUNCATED]", "[UNSERIALIZABLE]", "sk-proj-" + "A".repeat(20), "safe"]) {
+        db.exec("DELETE FROM spans");
+        db.query("INSERT INTO spans VALUES(?)").run(JSON.stringify({ tags: ["safe", member] }));
+        expect((statement.get() as { tags: string | null }).tags).toBeNull();
+      }
+      db.exec("DELETE FROM spans");
+      db.query("INSERT INTO spans VALUES(?)").run(JSON.stringify({ tags: ["東京%_🌈", "quoted'value"] }));
+      expect((statement.get() as { tags: string }).tags).toBe(JSON.stringify(["東京%_🌈", "quoted'value"]));
     } finally { db.close(); }
   });
 });
