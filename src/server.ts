@@ -9,6 +9,8 @@ import { randomUUID } from "crypto";
 import { normalizeOtelId } from "./ids";
 import { searchRuns, RunSearchError } from "./run-search";
 import { getRunComparison, RunComparisonError } from "./run-comparison";
+import { publicCaptureMetadata } from "./spans/adapters/capture-visibility";
+import { normalizeStoredSpan } from "./spans/normalize";
 import { withholdAgentDefinitionCapture } from "./agent-definitions";
 import { parseOtlpRequest } from "./parse";
 import { decodeOtlpProtobuf } from "./otlp-protobuf";
@@ -1423,9 +1425,10 @@ export async function createServer(port: number) {
     const runId = typeof req.query.run_id === "string" && req.query.run_id ? req.query.run_id : undefined;
     const row = getSpanMeta(req.params.id, runId) as any;
     if (!row) { res.status(404).json({ error: "Span not found" }); return; }
-    const { input_head, output_head, input_chars, output_chars, ...rest } = row;
+    const { input_head, output_head, input_chars, output_chars, otlp_evidence, ...rest } = row;
     res.json({
-      ...withholdAgentDefinitionCapture(rest),
+      ...publicCaptureMetadata(withholdAgentDefinitionCapture(rest)),
+      captureVisibility: normalizeStoredSpan({ ...rest, otlp_evidence, input_payload: null, output_payload: null }).captureVisibility,
       input_chars,
       output_chars,
       input_preview: input_chars > 80 ? input_head.slice(0, 80) + "…" : input_head,
@@ -1493,7 +1496,7 @@ export async function createServer(port: number) {
   // through get_span_payload.
   const MAX_DETAIL_ATTR_CHARS = 2_000;
   function compactSpanForDetail(span: any): any {
-    span = withholdAgentDefinitionCapture(span);
+    span = publicCaptureMetadata(withholdAgentDefinitionCapture(span));
     if (typeof span?.attributes !== "string" || span.attributes.length <= MAX_DETAIL_ATTR_CHARS) return span;
     let parsed: Record<string, unknown>;
     try {
@@ -1520,7 +1523,7 @@ export async function createServer(port: number) {
       // Fall back to saved run cache
       const cached = getCachedRun(id);
       if (cached) {
-        try { const data = JSON.parse(cached); if (data.run) { res.json({ ...data, spans: Array.isArray(data.spans) ? data.spans.map(withholdAgentDefinitionCapture) : data.spans }); return; } } catch {}
+        try { const data = JSON.parse(cached); if (data.run) { res.json({ ...data, spans: Array.isArray(data.spans) ? data.spans.map((span: any) => publicCaptureMetadata(withholdAgentDefinitionCapture(span))) : data.spans }); return; } } catch {}
       }
       if (!run) { res.status(404).json({ error: "Not found" }); return; }
     }
@@ -2275,7 +2278,9 @@ export async function createServer(port: number) {
     const id = (req.params as unknown as string[])[0];
     const data = getCachedRun(id);
     if (!data) { res.status(404).json({ error: "Not cached" }); return; }
-    res.json(JSON.parse(data));
+    const cached = JSON.parse(data);
+    res.json({ ...cached, spans: Array.isArray(cached.spans)
+      ? cached.spans.map((span: any) => publicCaptureMetadata(withholdAgentDefinitionCapture(span))) : cached.spans });
   });
   app.delete(/^\/api\/saved-runs\/cache\/(.+)$/, (req, res) => {
     const id = (req.params as unknown as string[])[0];

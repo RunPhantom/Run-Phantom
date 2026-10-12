@@ -805,8 +805,10 @@ function attachNormalized<T extends {
   input_payload: string | null;
   output_payload: string | null;
   attributes: string | null;
+  id?: string; run_id?: string; otlp_evidence?: string | null;
 }>(span: T): T & { normalized: NormalizedSpan } {
-  return { ...span, normalized: normalizeStoredSpan(span).normalized };
+  const match = normalizeStoredSpan(span);
+  return { ...span, normalized: match.normalized, ...(match.captureVisibility ? { captureVisibility: match.captureVisibility } : {}) };
 }
 
 export function getRunWithSpans(runId: string) {
@@ -915,6 +917,7 @@ export function getSpanMeta(spanId: string, runId?: string): SpanMetaRow | null 
       model: schema.spans.model,
       provider: schema.spans.provider,
       attributes: schema.spans.attributes,
+      otlp_evidence: schema.spans.otlp_evidence,
       input_head: drizzleSql<string>`SUBSTR(COALESCE(${schema.spans.input_payload}, ''), 1, 81)`,
       input_chars: drizzleSql<number>`LENGTH(COALESCE(${schema.spans.input_payload}, ''))`,
       output_head: drizzleSql<string>`SUBSTR(COALESCE(${schema.spans.output_payload}, ''), 1, 81)`,
