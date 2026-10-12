@@ -1,0 +1,13 @@
+# Reported completion evidence
+
+Run Phantom's optional completion observer helps a reader locate corresponding evidence. It is disabled by default. Enabling the browser preference permits an explicit **Inspect and retain observation** action for a selected local attachment and evidence revision. Existing captured output and machine evaluation results remain immutable.
+
+The observer stores the exact operator-supplied summary, detector version, bounded observations, source hashes and character/UTF-8 byte ranges under the existing evidence owner. A later detector creates a separate immutable report. Disabling stops analysis and clears the current draft/view; deliberately opened historical reports remain read-only. No command, URL, image, provider or test is invoked from summary or report content.
+
+Persistent summaries are limited to 16 KiB of full UTF-8 text. At most 32 observations and 512-byte excerpts are retained. Longer free-text previews disclose partial coverage; persistent creation refuses oversize source rather than keeping a clipped original. Retained canonical payloads are limited to 64 KiB, with a 512 KiB and 100-record local scope quota. History pages contain at most 20 metadata records. Source report bytes are referenced by immutable IDs and are never copied into observer payloads.
+
+Quoted, negated, conditional, code, question and task statements remain ambiguous. Unlinked positive prose is unsupported. A manual current-source link can show available evidence or an unauthenticated reported outcome; it does not prove execution, authenticate the producer, establish full coverage or turn missing reports into a pass. Detector coverage includes unobserved text. The permanent adversarial fixture suite establishes its declared cases, without a general precision claim for unrestricted prose.
+
+Every creation, read, history page and export rechecks current local attachment authority through the same injected connection. Creation requires the current source revision and separate existing import authority. Historical reads preserve their original source revision and detector meaning. Normalized-content removal deletes corresponding observer payloads and leaves bounded metadata tombstones; scope clear/revocation removes metadata and payloads. Logical removal of live records does not erase old external downloads or backups.
+
+The UI renders literal strings, keeps remote images and HTML inert, cancels requests on disable/reset/attachment or retention changes, and fences late bodies by generation. Public observer states are neutral: evidence available/missing, scope mismatch, ambiguous text, unlinked prose and reported outcome. The observer has no release or merge authority.

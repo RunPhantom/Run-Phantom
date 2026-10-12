@@ -1644,6 +1644,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
           userMessage: lastUserMessage,
         } : undefined}
       />
+      <div className="px-4 py-2 text-xs"><Link className="text-[color:var(--rp-focus)] underline underline-offset-2" to={`/evaluations?view=evidence&anchorKind=run&anchorId=${encodeURIComponent(runId)}`}>Reported completion evidence</Link></div>
       <TraceAnnotations
         annotations={annotationsApi.annotations}
         freshIds={annotationsApi.freshIds}
