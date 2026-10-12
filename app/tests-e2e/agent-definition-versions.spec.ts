@@ -140,3 +140,34 @@ test("actual nested definition stays private in expanded source details while sa
   await testInfo.attach("actual-nested-public-ui.json", { body: JSON.stringify({ source: "Actual JSON OTLP ingress, source daemon and Chromium UI", publicProjectionWithheld: true,
     privateDiagnosticRetention: true, genuineTypedBusinessStringExact: true, originalInputOutputEqual: true, expandedSafeSiblingVisibleAfterReload: true }), contentType: "application/json" });
 });
+
+
+test("actual escaped portable carrier is visibly unavailable after reload with original private capture retained", async ({ page, request, runPhantom }, testInfo) => {
+  const capture = definitionTrace(1774), marker = "F17 tracked escaped private UI instruction", safe = "Safe business outside the uncertain carrier";
+  const span = capture.body.resourceSpans[0].scopeSpans[0].spans[0]; span.attributes = span.attributes.filter(entry => entry.key !== definitionKey);
+  span.attributes.push({ key: "ai.settings.fixture", value: { kvlistValue: { values: [
+    { key: "business", value: { stringValue: "Safe original carrier sibling" } }, { key: definitionKey, value: { stringValue: marker } },
+  ] } } } as any, { key: "ai.settings.safe", value: { stringValue: safe } });
+  expect((await request.post(runPhantom.url + "/v1/traces", { data: capture.body })).status()).toBe(200);
+  const exported = await request.get(`${runPhantom.url}/api/runs/${capture.id}/export`); expect(exported.status()).toBe(200); const portable = await exported.json();
+  const raw = await request.post(runPhantom.url + "/api/traces/query", { data: { sql: `SELECT attributes,otlp_evidence FROM spans WHERE run_id='${capture.id}'` } }); expect(raw.status()).toBe(200); const source = (await raw.json()).rows[0], attributes = JSON.parse(source.attributes);
+  attributes["ai.settings.fixture"] = attributes["ai.settings.fixture"].replace(definitionKey, "\\u0072\\u0075nphantom.agent.definition"); expect(JSON.parse(attributes["ai.settings.fixture"])[definitionKey]).toBe(marker);
+  portable.run.id = "f17-tracked-escaped-ui"; for (const row of portable.spans) { row.run_id = portable.run.id; row.attributes = JSON.stringify(attributes); row.otlp_evidence = source.otlp_evidence; }
+  expect((await request.post(runPhantom.url + "/api/import-run", { data: portable })).status()).toBe(200);
+  await page.goto(`${runPhantom.url}/runs/${portable.run.id}/span/${capture.spanId}`);
+  for (const reload of [false, true]) {
+    if (reload) await page.reload();
+    await expect(page.locator(`[data-span-row="${capture.spanId}"]`)).toBeVisible(); await page.getByRole("button", { name: /Provider Options \(Local-fixture\)/ }).click();
+    await expect(page.getByText(JSON.stringify(safe), { exact: true })).toBeVisible(); await expect(page.getByText(definitionInput, { exact: true }).first()).toBeVisible(); await expect(page.getByText(definitionOutput, { exact: true }).first()).toBeVisible();
+    const body = await page.locator("body").textContent(); await testInfo.attach(`actual-escaped-ui-${reload ? "reload" : "initial"}.json`, { body: JSON.stringify({ actualOtlpAndPortableImport: true, privateVisible: body!.includes(marker), safeBusinessVisible: body!.includes(safe), originalInputOutputEqual: body!.includes(definitionInput) && body!.includes(definitionOutput) }), contentType: "application/json" });
+    await page.screenshot({ path: testInfo.outputPath(`definition-escaped-${reload ? "reload" : "initial"}.png`), fullPage: true });
+    expect(body).not.toContain(marker); await expect(page.getByText(JSON.stringify("[UNAVAILABLE]"), { exact: true })).toBeVisible();
+  }
+  for (const route of [`/api/runs/detail/${portable.run.id}`, `/api/runs/${portable.run.id}/export`]) {
+    const response = await request.get(runPhantom.url + route); expect(response.status()).toBe(200); const body = await response.json(); expect(JSON.stringify(body)).not.toContain(marker);
+    expect(JSON.parse(body.spans[0].attributes)["ai.settings.fixture"]).toBe("[UNAVAILABLE]"); expect(body.spans[0].output_payload).toBe(definitionOutput);
+  }
+  const searched = await request.get(`${runPhantom.url}/api/runs/${portable.run.id}/search?scope=span_attributes&pattern=${encodeURIComponent(marker)}`); expect(searched.status()).toBe(200); expect((await searched.json()).matches).toEqual([]);
+  const retained = await request.post(runPhantom.url + "/api/traces/query", { data: { sql: `SELECT attributes,otlp_evidence FROM spans WHERE run_id='${portable.run.id}'` } }); expect(retained.status()).toBe(200);
+  expect((await retained.json()).rows[0]).toEqual({ attributes: JSON.stringify(attributes), otlp_evidence: source.otlp_evidence });
+});

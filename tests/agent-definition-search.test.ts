@@ -81,3 +81,38 @@ describe("bounded same-population typed search companion", () => {
     expect(() => searchRun("search", { pattern: "Business", scope: ["span_input"] })).toThrow("search evidence limits");
   });
 });
+
+
+test.each(["valid", "missing", "malformed", "oversized", "loss", "duplicate"])("escaped private carrier with %s companion is unavailable before ordinary search matching and snippets", kind => {
+  const capture = definitionTrace(98), marker = "Escaped private search instruction";
+  const span = capture.body.resourceSpans[0].scopeSpans[0].spans[0]; span.attributes = span.attributes.filter(entry => entry.key !== definitionKey);
+  span.attributes.push({ key: "ordinary.envelope", value: { kvlistValue: { values: [
+    { key: "business", value: { stringValue: "Safe carrier sibling" } }, { key: definitionKey, value: { stringValue: marker } },
+  ] } } } as any);
+  const parsed = parseOtlpRequest(capture.body)[0], typed = parsed.otlpEvidence;
+  parsed.attributes["ordinary.envelope"] = String(parsed.attributes["ordinary.envelope"]).replace(definitionKey, "\\u0072\\u0075nphantom.agent.definition");
+  if (kind === "loss") typed.capture.droppedAttributes = 1;
+  if (kind === "duplicate") typed.attributes.push(structuredClone(typed.attributes.at(-1)!));
+  let receipt: string | null = JSON.stringify(typed);
+  if (kind === "missing") receipt = null;
+  if (kind === "malformed") receipt = receipt.slice(0, -1);
+  if (kind === "oversized") receipt += " ".repeat(256 * 1024);
+  getDrizzleDb().$client.query("INSERT INTO spans(run_id,id,name,attributes,otlp_evidence) VALUES('search','root','Business name',?,?)").run(JSON.stringify(parsed.attributes), receipt);
+  expect(searchRun("search", { pattern: marker, scope: ["span_attributes"] }).matches).toEqual([]);
+  const safe = searchRun("search", { pattern: "span unchanged", scope: ["span_attributes"], context_chars: 400 }); expect(safe.matches).toHaveLength(1); expect(JSON.stringify(safe)).not.toContain(marker);
+  const carrier = searchRun("search", { pattern: "ordinary.envelope", scope: ["span_attributes"], context_chars: 400 }); expect(carrier.matches).toHaveLength(1); expect(carrier.matches[0].snippet).toContain("[UNAVAILABLE]");
+  expect(searchRun("search", { pattern: "[UNAVAILABLE]", scope: ["span_attributes"] }).matches).toEqual([]);
+});
+
+
+test("Unicode-encoded outer backslashes cannot bypass missing-companion search withholding", () => {
+  const capture = definitionTrace(100), marker = "Private unicode-backslash carrier instruction";
+  const span = capture.body.resourceSpans[0].scopeSpans[0].spans[0]; span.attributes = span.attributes.filter(entry => entry.key !== definitionKey);
+  span.attributes.push({ key: "ordinary.envelope", value: { kvlistValue: { values: [{ key: definitionKey, value: { stringValue: marker } }] } } } as any);
+  const parsed = parseOtlpRequest(capture.body)[0]; parsed.attributes["ordinary.envelope"] = String(parsed.attributes["ordinary.envelope"]).replace(definitionKey, "\\u0072\\u0075nphantom.agent.definition");
+  const plainOuter = JSON.stringify(parsed.attributes), encodedOuter = plainOuter.replaceAll("\\\\u", "\\u005cu");
+  expect(JSON.parse(encodedOuter)).toEqual(JSON.parse(plainOuter)); expect(JSON.parse(JSON.parse(encodedOuter)["ordinary.envelope"])[definitionKey]).toBe(marker);
+  getDrizzleDb().$client.query("INSERT INTO spans(run_id,id,name,attributes,otlp_evidence) VALUES('search','root','Business name',?,NULL)").run(encodedOuter);
+  expect(searchRun("search", { pattern: marker, scope: ["span_attributes"] }).matches).toEqual([]);
+  const carrier = searchRun("search", { pattern: "ordinary.envelope", scope: ["span_attributes"], context_chars: 400 }); expect(carrier.matches).toHaveLength(1); expect(carrier.matches[0].snippet).toContain("[UNAVAILABLE]");
+});

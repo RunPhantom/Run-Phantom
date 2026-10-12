@@ -242,3 +242,32 @@ test("public withheld definition transfer into a fresh independent profile canno
     proof("http-fresh-profile-portability.json", { source: "actual source OTLP/export plus independent empty-profile daemon/import/detail/compare", sourcePid: daemon.pid, destinationPid: destination.proc.pid, distinctPid: daemon.pid !== destination.proc.pid, publicFileDigest: sha(portable), importedStoredDigest: sha(importedPrivate), originalComplete: true, importedComplete: projected.complete, importedHash: projected.sha256, inputOutputEqual: true });
   } finally { await stop(destination.proc); }
 });
+
+
+test("actual escaped portable composite is unavailable across all public routes and preserves private row bytes", async () => {
+  const capture = definitionTrace(99), marker = "F17 escaped portable private instruction";
+  const span = capture.body.resourceSpans[0].scopeSpans[0].spans[0]; span.attributes = span.attributes.filter(entry => entry.key !== definitionKey);
+  span.attributes.push({ key: "ordinary.envelope", value: { kvlistValue: { values: [
+    { key: "business", value: { stringValue: "Safe unchanged carrier sibling" } }, { key: definitionKey, value: { stringValue: marker } },
+  ] } } } as any);
+  await ingest(capture); const portable = await json(`/api/runs/${capture.id}/export`);
+  const raw = await request("/api/traces/query", { sql: `SELECT attributes,otlp_evidence FROM spans WHERE run_id='${capture.id}'` }); expect(raw.status).toBe(200);
+  const source = (await raw.json()).rows[0], attributes = JSON.parse(source.attributes);
+  attributes["ordinary.envelope"] = attributes["ordinary.envelope"].replace(definitionKey, "\\u0072\\u0075nphantom.agent.definition");
+  expect(JSON.parse(attributes["ordinary.envelope"])[definitionKey]).toBe(marker);
+  portable.run.id = "f17-escaped-portable"; for (const row of portable.spans) { row.run_id = portable.run.id; row.attributes = JSON.stringify(attributes); row.otlp_evidence = source.otlp_evidence; }
+  expect((await request("/api/import-run", portable)).status).toBe(200);
+  const sql = `SELECT rowid AS identity,attributes,otlp_evidence FROM spans WHERE run_id='${portable.run.id}'`;
+  const before = await request("/api/traces/query", { sql }); expect(before.status).toBe(200); const original = (await before.json()).rows[0];
+  const observed = [];
+  for (const route of [`/api/runs/detail/${portable.run.id}`, `/api/spans/${capture.spanId}?run_id=${portable.run.id}`, `/api/runs/${portable.run.id}/export`, `/api/runs/${portable.run.id}/search?scope=span_attributes&pattern=${encodeURIComponent(marker)}`]) {
+    const response = await request(route), body = await response.json(); observed.push({ route, status: response.status, containsPrivate: JSON.stringify(body).includes(marker) });
+    if (Array.isArray(body.spans)) { expect(JSON.parse(body.spans[0].attributes)["ordinary.envelope"]).toBe("[UNAVAILABLE]"); expect(body.spans[0].input_payload).toBe(definitionInput); expect(body.spans[0].output_payload).toBe(definitionOutput); }
+  }
+  proof("http-escaped-portable-boundary.json", { source: "Actual JSON OTLP, admitted v2 portable import, public HTTP and privileged private SQL", observed });
+  expect(observed.every(value => value.status === 200 && !value.containsPrivate)).toBe(true);
+  expect((await json(`/api/runs/${portable.run.id}/search?scope=span_attributes&pattern=${encodeURIComponent("span unchanged")}`)).matches).toHaveLength(1);
+  expect((await request("/api/import-run", portable)).status).toBe(200);
+  const after = await request("/api/traces/query", { sql }); expect(after.status).toBe(200); expect((await after.json()).rows[0]).toEqual(original);
+  expect(original.attributes).toContain(marker); expect(original.otlp_evidence).toBe(source.otlp_evidence);
+});

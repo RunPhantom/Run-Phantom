@@ -59,3 +59,43 @@ describe("source-authoritative public nested definition projection", () => {
     expect(envelope[KEY + ".suffix"]).toBe("Business alias unchanged"); expect(envelope[KEY]).toBe("[REDACTED]");
   });
 });
+
+
+function withoutDirectDefinition(source = captured()) {
+  const attributes = flat(source), receipt = JSON.parse(source.otlp_evidence);
+  delete attributes[KEY]; receipt.attributes = receipt.attributes.filter((entry: { key: string }) => entry.key !== KEY);
+  return { attributes: JSON.stringify(attributes), otlp_evidence: JSON.stringify(receipt) };
+}
+
+describe("escaped source-authoritative private carrier admission", () => {
+  test.each(["\\u0072\\u0075nphantom.agent.definition", [...KEY].map(char => "\\u" + char.charCodeAt(0).toString(16).padStart(4, "0")).join("")])("escaped key spelling %s cannot bypass exact source correspondence", spelling => {
+    const source = withoutDirectDefinition(), attributes = flat(source);
+    attributes["ordinary.envelope"] = attributes["ordinary.envelope"].replace(KEY, spelling);
+    expect(JSON.parse(attributes["ordinary.envelope"])[KEY]).toBe(privateValue);
+    source.attributes = JSON.stringify(attributes); const original = structuredClone(source);
+    const projected = withholdAgentDefinitionCapture(source);
+    expect(flat(projected)["ordinary.envelope"]).toBe("[UNAVAILABLE]"); expect(flat(projected)["ordinary.span"]).toBe("span unchanged");
+    expect(JSON.stringify(projected)).not.toContain(privateValue); expect(source).toEqual(original);
+    expect(JSON.parse(projected.otlp_evidence).capture.redactedValues).toBe(1); expect(withholdAgentDefinitionCapture(projected)).toBe(projected);
+  });
+  test("validated semantic source carrier forces admission even when the flat value has no reserved key text", () => {
+    const source = withoutDirectDefinition(), attributes = flat(source);
+    attributes["ordinary.envelope"] = "Changed lexical carrier " + privateValue; source.attributes = JSON.stringify(attributes);
+    expect(flat(withholdAgentDefinitionCapture(source))["ordinary.envelope"]).toBe("[UNAVAILABLE]");
+  });
+  test("outer escaped carrier names retain exact typed-source correspondence and unrelated Unicode values", () => {
+    const source = withoutDirectDefinition(); source.attributes = source.attributes.replace('"ordinary.envelope"', '"\\u006frdinary.envelope"');
+    const projected = withholdAgentDefinitionCapture(source), envelope = JSON.parse(flat(projected)["ordinary.envelope"]);
+    expect(envelope).toEqual({ "ordinary.sibling": "Business value unchanged", [KEY]: "[REDACTED]" });
+  });
+  test("a genuine matching escaped JSON-looking typed string remains exact without business JSON interpretation", () => {
+    const business = JSON.stringify({ [KEY]: "Ordinary Unicode business é 🦊" }).replace(KEY, "\\u0072\\u0075nphantom.agent.definition");
+    const source = withoutDirectDefinition(captured({ stringValue: business }));
+    expect(withholdAgentDefinitionCapture(source)).toBe(source); expect(flat(source)["ordinary.envelope"]).toBe(business);
+  });
+  test("escaped nested arrays retain their safe unrelated source fields while lexical mismatch remains unavailable", () => {
+    const source = withoutDirectDefinition(captured({ arrayValue: { values: [{ stringValue: "Safe material first" }, composite()] } })), attributes = flat(source);
+    attributes["ordinary.envelope"] = attributes["ordinary.envelope"].replace(KEY, "\\u0072\\u0075nphantom.agent.definition"); source.attributes = JSON.stringify(attributes);
+    expect(flat(withholdAgentDefinitionCapture(source))["ordinary.envelope"]).toBe("[UNAVAILABLE]"); expect(flat(withholdAgentDefinitionCapture(source))["ordinary.resource"]).toBe("resource unchanged");
+  });
+});

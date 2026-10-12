@@ -18,27 +18,59 @@ const own = (value: unknown, key: string): unknown => {
 /** Public views retain F10's ordered receipt and loss contract while withholding private definition content. */
 export function withholdAgentDefinitionCapture<T extends { attributes?: unknown; otlp_evidence?: unknown }>(span: T): T {
   const fail = (): never => { throw new TypeError("Public definition capture is unavailable"); };
-  // Decode possible escaped ASCII keys without changing unrelated legacy blobs.
-  const mayContainKey = (raw: string) => raw.includes(KEY) || raw.includes("\\u")
-    && raw.replace(/\\u([\da-f]{4})/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16))).includes(KEY);
+  // A carrier has an extra JSON string layer. Scan escape runs once with a
+  // fixed-size window; this detects candidates and never authorizes projection.
+  const mayContainKey = (raw: string): boolean => {
+    if (raw.includes(KEY)) return true;
+    if (!raw.includes("\\u")) return false;
+    let window = "", escaped = "", at = 0;
+    const candidate = (char: string): boolean => {
+      if (escaped) {
+        escaped += char;
+        if ((escaped.length === 2 && char !== "u") || (escaped.length > 2 && !/^[\da-f]$/i.test(char))) {
+          escaped = char === "\\" ? "\\" : ""; window = ""; return false;
+        }
+        if (escaped.length < 6) return false;
+        char = String.fromCharCode(parseInt(escaped.slice(2), 16)); escaped = "";
+      } else if (char === "\\") { escaped = char; return false; }
+      window = (window + char).slice(-KEY.length);
+      return window === KEY;
+    };
+    while (at < raw.length) {
+      let char = raw[at++];
+      if (char === "\\") {
+        while (raw[at] === "\\") at++;
+        const hex = raw.slice(at + 1, at + 5);
+        if (raw[at] !== "u" || !/^[\da-f]{4}$/i.test(hex)) { window = ""; escaped = ""; continue; }
+        char = String.fromCharCode(parseInt(hex, 16)); at += 5;
+      }
+      if (candidate(char)) return true;
+    }
+    return false;
+  };
   let attributes = span.attributes, receipt = span.otlp_evidence;
   const relevantFlat = typeof attributes === "string" && mayContainKey(attributes);
-  let flat: Record<string, unknown> | undefined, flatAmbiguous = false;
-  if (typeof attributes === "string" && relevantFlat) {
-    if (attributes.length > 10 * 1024 * 1024 || size(attributes) > 10 * 1024 * 1024) fail();
-    let parsed: unknown; try { parsed = JSON.parse(attributes); } catch { fail(); }
-    if (object(parsed)) { flat = parsed; flatAmbiguous = hasDuplicateJsonKeys(attributes); }
-  }
   let typed: OtlpEvidence | undefined;
   if (typeof receipt === "string" && (relevantFlat || mayContainKey(receipt))) {
     if (receipt.length > OTLP_EVIDENCE_LIMITS.bytes || size(receipt) > OTLP_EVIDENCE_LIMITS.bytes) fail();
     let parsed: OtlpEvidence; try { parsed = JSON.parse(receipt); validateOtlpEvidence(parsed); } catch { fail(); }
     typed = parsed!;
   }
+  const nestedDefinition = (value: EvidenceValue): boolean => "kvlistValue" in value
+    ? value.kvlistValue.values.some(entry => entry.key === KEY || nestedDefinition(entry.value))
+    : "arrayValue" in value && value.arrayValue.values.some(nestedDefinition);
+  const sources = typed ? [typed.resource, typed.scope, typed].filter(source => source !== null) : [];
+  const carriers = new Set(sources.flatMap(source => source!.attributes.filter(entry => nestedDefinition(entry.value)).map(entry => entry.key)));
+  let flat: Record<string, unknown> | undefined, flatAmbiguous = false;
+  if (typeof attributes === "string" && (relevantFlat || carriers.size > 0)) {
+    if (attributes.length > 10 * 1024 * 1024 || size(attributes) > 10 * 1024 * 1024) fail();
+    let parsed: unknown; try { parsed = JSON.parse(attributes); } catch { fail(); }
+    if (object(parsed)) { flat = parsed; flatAmbiguous = hasDuplicateJsonKeys(attributes); }
+  }
   if (flat) {
     let changed = false;
     const replace = (key: string, value: unknown) => { if (flat![key] !== value) { flat![key] = value; changed = true; } };
-    // Only ordered typed composites authorize decoding a flattened companion.
+    // Only ordered typed composites authorize projecting a flat companion.
     // A genuine stringValue, even one that looks like JSON, remains a string.
     const flatten = (value: EvidenceValue, project: boolean): unknown => {
       if ("stringValue" in value) return value.stringValue;
@@ -54,12 +86,11 @@ export function withholdAgentDefinitionCapture<T extends { attributes?: unknown;
       }
       return result;
     };
-    const sources = typed ? [typed.resource, typed.scope, typed].filter(source => source !== null) : [];
     const lossy = typed && (Object.entries(typed.capture).some(([key, value]) => key !== "redactedValues" && typeof value === "number" && value > 0)
       || sources.some(source => (source!.droppedAttributesCount ?? 0) > 0));
     for (const [key, value] of Object.entries(flat)) {
       if (key === KEY) { replace(key, "[REDACTED]"); continue; }
-      if (!mayContainKey(typeof value === "string" ? value : JSON.stringify(value))) continue;
+      if (!carriers.has(key) && !mayContainKey(typeof value === "string" ? value : JSON.stringify(value))) continue;
       const observations = sources.flatMap(source => source!.attributes.filter(entry => entry.key === key));
       if (flatAmbiguous || observations.length !== 1) { replace(key, "[UNAVAILABLE]"); continue; }
       const observed = observations[0].value;
