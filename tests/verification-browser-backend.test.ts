@@ -6,11 +6,35 @@ import { browserDaemon, isReaped } from "./helpers/trusted-browser-daemon";
 import { trustedBrowserFixture } from "./helpers/trusted-browser-fixture";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { gzipSync } from "node:zlib";
+import { BROWSER_LIMITS } from "../src/verification/browser-contract";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { runMcpServer } from "../src/mcp/index";
 
 describe("registered trusted browser API", () => {
+  test("every browser control route retains the preregistered JSON byte limit before allocation", async () => {
+    const profile = mkdtempSync(path.join(tmpdir(), "rp-browser-http-budget-")); const daemon = await browserDaemon(profile);
+    try {
+      const exact = JSON.stringify({ padding: "x".repeat(BROWSER_LIMITS.FRAME_BYTES - Buffer.byteLength(JSON.stringify({ padding: "" }))) });
+      expect(Buffer.byteLength(exact)).toBe(BROWSER_LIMITS.FRAME_BYTES);
+      const boundary = await fetch(`${daemon.url}/api/verification/browser/sessions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: exact });
+      expect(boundary.status).toBe(400); expect(await boundary.json()).toEqual({ error: "Unexpected browser field" });
+      const oversized = JSON.stringify({ padding: "猫".repeat(Math.ceil(BROWSER_LIMITS.FRAME_BYTES / 3)) });
+      expect(oversized.length).toBeLessThan(BROWSER_LIMITS.FRAME_BYTES); expect(Buffer.byteLength(oversized)).toBeGreaterThan(BROWSER_LIMITS.FRAME_BYTES);
+      const paths = ["/sessions", "/attached-pages", ...["select", "action", "check", "capture", "close", "cancel"].map(operation => `/sessions/${"a".repeat(32)}/${operation}`)];
+      for (const route of paths) for (const encoding of ["plain", "chunked", "gzip"]) {
+        const bytes = Buffer.from(oversized);
+        const body = encoding === "gzip" ? gzipSync(bytes) : encoding === "chunked" ? new ReadableStream({ start(controller) { for (let offset = 0; offset < bytes.length; offset += 1024) controller.enqueue(bytes.subarray(offset, offset + 1024)); controller.close(); } }) : oversized;
+        const response = await fetch(`${daemon.url}/api/verification/browser${route}`, { method: "POST", headers: { "Content-Type": "application/json", ...(encoding === "gzip" ? { "Content-Encoding": "gzip" } : {}) }, body });
+        expect(response.status).toBe(413); expect(await response.json()).toEqual({ error: "request body too large" });
+      }
+      const nonJson = await fetch(`${daemon.url}/api/verification/browser/sessions`, { method: "POST", headers: { "Content-Type": "text/plain" }, body: oversized });
+      expect(nonJson.status).toBe(400); expect(await nonJson.json()).toEqual({ error: "This API accepts JSON request bodies only" });
+      expect((await daemon.api("/browser/sessions")).body).toEqual([]);
+      expect((await daemon.api("/sessions", { origin: "http://localhost:8765" })).status).toBe(201);
+    } finally { await daemon.stop(); expect(isReaped(daemon.proc)).toBe(true); rmSync(profile, { recursive: true, force: true }); }
+  }, 25000);
   test("absent runtime is explicit and original SDK creation remains available", async () => {
     const profile = mkdtempSync(path.join(tmpdir(), "rp-browser-http-absent-")); const daemon = await browserDaemon(profile);
     try {
@@ -38,6 +62,36 @@ describe("registered trusted browser API", () => {
 });
 
 describe.skipIf(!process.env.RUNPHANTOM_TEST_BROWSER_MODULE)("actual source daemon browser outcomes", () => {
+  test("registered MCP dispatch reaches native input and the declared outcome without exposing live artifact authority", async () => {
+    const profile = mkdtempSync(path.join(tmpdir(), "rp-browser-mcp-native-")), fixture = trustedBrowserFixture();
+    const daemon = await browserDaemon(profile, { RUNPHANTOM_BROWSER_MODULE: process.env.RUNPHANTOM_TEST_BROWSER_MODULE! });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const mcp = await runMcpServer({ url: daemon.url, transport: serverTransport }), client = new Client({ name: "registered-native-browser", version: "1" });
+    try {
+      await client.connect(clientTransport);
+      const call = async (name: string, args: Record<string, unknown>) => {
+        const result = await client.callTool({ name, arguments: args });
+        expect(result.isError).not.toBe(true);
+        const content = result.content as Array<{ type: string; text?: string }>;
+        expect(content).toHaveLength(1); expect(content[0].type).toBe("text");
+        return JSON.parse(content[0].text!) as Record<string, any>;
+      };
+      const opened = await call("browser_session", { operation: "open", engine: "chromium", url: fixture.origin });
+      expect(opened.state).toBe("ready"); expect(opened.networkProfile).toBe("bounded-http-v1"); expect(opened.compatibility.qualification).toBe("initial-only");
+      const result = await call("browser_input", { sessionId: opened.id, generation: opened.generation,
+        action: { type: "click", target: { kind: "css", selector: "#pay" } }, predicate: { kind: "allOf", predicates: [{ kind: "network", urlContains: "/accepted", status: 202 }, { kind: "element", selector: "#paid", state: "present" }] } });
+      expect(result.report.status).toBe("pass"); expect(result.action.dispatch).toBe("completed"); expect(result.action.inputMode).toBe("trusted-browser");
+      expect(fixture.events.filter(event => event.type === "click")).toEqual([{ type: "click", trusted: true }]);
+      expect(fixture.events.find(event => event.type === "output")).toEqual({ type: "output", trusted: true, value: "Payment accepted" });
+      const observed = await call("browser_observe", { sessionId: opened.id }); expect(observed.session.id).toBe(opened.id); expect(observed.complete).toBe(true);
+      const artifact = await call("browser_artifact", { operation: "capture", sessionId: opened.id, generation: opened.generation });
+      expect(artifact.kind).toBe("screenshot"); expect(artifact.raw).toBe(false); expect(artifact.sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(artifact).not.toHaveProperty("file"); expect(artifact).not.toHaveProperty("sessionId"); expect(artifact).not.toHaveProperty("token"); expect(JSON.stringify(artifact)).not.toContain(profile);
+      const closed = await call("browser_session", { operation: "close", sessionId: opened.id, generation: opened.generation }); expect(closed.session.state).toBe("closed");
+      const sdk = await daemon.api("/sessions", { origin: fixture.origin }); expect(sdk.status).toBe(201);
+      expect((await daemon.api("/reports")).body.find((report: { id: string }) => report.id === result.report.id).status).toBe("pass");
+    } finally { await client.close(); await mcp.close(); await daemon.stop(); expect(isReaped(daemon.proc)).toBe(true); await fixture.close(); rmSync(profile, { recursive: true, force: true }); }
+  }, 30000);
   test("daemon shutdown fences every live generation before any real browser teardown await", async () => {
     const profile = mkdtempSync(path.join(tmpdir(), "rp-browser-http-shutdown-")), fixture = trustedBrowserFixture();
     const runtime = path.join(profile, "controlled-runtime"); mkdirSync(runtime); const pidFile = path.join(profile, "owned-browser-pids");
