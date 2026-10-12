@@ -1,6 +1,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { callVerificationTool, VERIFICATION_TOOLS } from "./verification-tools";
 import { callEvaluationTool, EVALUATION_TOOLS } from "./evaluation-tools";
+import { parseSearchFilter, SearchFilterError } from "../search-filter";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -25,6 +26,21 @@ const TOOLS = [
         status: { type: "string", enum: ["all", "running", "completed", "failed"] },
         model: { type: "string", maxLength: 256 },
         provider: { type: "string", maxLength: 256 },
+        filter: {
+          type: "object", additionalProperties: false, required: ["version", "all"],
+          properties: {
+            version: { type: "integer", const: 1 },
+            all: { type: "array", maxItems: 12, items: {
+              type: "object", additionalProperties: false, required: ["field", "op", "value"],
+              properties: {
+                field: { type: "string", enum: ["status", "model", "provider", "duration_ms", "captured_cost_usd", "tag"] },
+                op: { type: "string", enum: ["eq", "ne", "lt", "lte", "gt", "gte"] },
+                value: { type: ["string", "number"] },
+              },
+            } },
+          },
+          description: "Bounded captured predicates. All span conditions, including legacy model/provider, match one span; unavailable metrics and tags never prove zero or absence.",
+        },
         limit: { type: "integer", minimum: 1, maximum: 100, description: "Page size, default 50." },
         cursor: { type: "string", maxLength: 4096, description: "Opaque nextCursor from the preceding page." },
       },
@@ -333,6 +349,10 @@ export function registerTraceReadTools(
     switch (name) {
       case "search_runs": {
         const params = new URLSearchParams();
+        if (args.filter !== undefined) {
+          try { params.set("filter", JSON.stringify(parseSearchFilter(args.filter))); }
+          catch (error) { if (error instanceof SearchFilterError) throw new McpError(ErrorCode.InvalidParams, error.message); throw error; }
+        }
         for (const key of ["q", "status", "model", "provider", "cursor"] as const) {
           if (args[key] === undefined) continue;
           if (typeof args[key] !== "string") throw new McpError(ErrorCode.InvalidParams, `${key} must be a string`);
