@@ -10,7 +10,6 @@ import { createLocalOriginGuard } from "../src/local-origin-guard";
 import { createReviewQueueRouter } from "../src/review-queues/router";
 import * as queueStore from "../src/review-queues/store";
 import * as datasets from "../src/evaluations/store";
-import { REVIEW_QUEUE_FIXTURE_DDL } from "./review-queue-fixture-ddl";
 import { REVIEW_LIMITS } from "../src/review-queues/protocol";
 import { canonicalReviewJson, reviewHash, reviewItemId } from "../src/review-queues/validation";
 import type { ReviewItem, ReviewQueue, PromotionReceipt } from "../src/review-queues/protocol";
@@ -19,7 +18,7 @@ let directory: string, oldDb: string | undefined, server: http.Server, base: str
 beforeAll(async () => {
   directory = mkdtempSync(path.join(tmpdir(), "rq-component-unactivated-")); oldDb = process.env.RUNPHANTOM_DB_PATH;
   closeDb(); process.env.RUNPHANTOM_DB_PATH = path.join(directory, "fixture.db");
-  getDrizzleDb().$client.exec(REVIEW_QUEUE_FIXTURE_DDL);
+  getDrizzleDb();
   const app = express(); server = http.createServer(app);
   app.use("/api", createLocalOriginGuard({ daemonPort: () => (server.address() as { port: number }).port }));
   app.use((req, res, next) => {
@@ -32,7 +31,7 @@ beforeAll(async () => {
   server.listen(0, "127.0.0.1"); await once(server, "listening");
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/review-queues`;
 });
-beforeEach(() => { getDrizzleDb().$client.exec("DELETE FROM review_queues"); clearAll(); });
+beforeEach(() => { clearAll(); });
 afterAll(async () => {
   await new Promise<void>(resolve => server.close(() => resolve())); closeDb();
   if (oldDb === undefined) delete process.env.RUNPHANTOM_DB_PATH; else process.env.RUNPHANTOM_DB_PATH = oldDb;

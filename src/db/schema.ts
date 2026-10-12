@@ -410,3 +410,71 @@ export const coding_hook_entities = sqliteTable("coding_hook_entities", {
   check("coding_hook_entities_updated_at", sql`${table.updated_at} >= 0`),
   check("coding_hook_entities_ordinal_incarnation", sql`(${table.source_offset} IS NULL AND ${table.incarnation_key} IS NULL) OR (${table.source_offset} IS NOT NULL AND ${table.incarnation_key} IS NOT NULL)`),
 ]);
+
+export const review_queues = sqliteTable("review_queues", {
+  id: text("id").primaryKey().notNull(), name: text("name").notNull(),
+  schema_json: text("schema_json").notNull(), schema_hash: text("schema_hash").notNull(),
+  next_ordinal: integer("next_ordinal").notNull().default(1), created_at: integer("created_at").notNull(),
+}, t => [
+  check("review_queues_id", sql`length(${t.id}) BETWEEN 1 AND 128`),
+  check("review_queues_name", sql`length(${t.name}) BETWEEN 1 AND 128`),
+  check("review_queues_schema_bytes", sql`length(CAST(${t.schema_json} AS BLOB)) <= 8192`),
+  check("review_queues_schema_hash", sql`length(${t.schema_hash}) = 64`),
+  check("review_queues_next_ordinal", sql`${t.next_ordinal} >= 1`),
+  check("review_queues_created_at", sql`${t.created_at} >= 0`),
+  index("review_queues_created").on(t.created_at, t.id),
+]);
+
+export const review_queue_items = sqliteTable("review_queue_items", {
+  id: text("id").primaryKey().notNull(),
+  queue_id: text("queue_id").notNull().references(() => review_queues.id, { onDelete: "cascade" }),
+  ordinal: integer("ordinal").notNull(),
+  source_run_id: text("source_run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  source_span_key: text("source_span_key").notNull(), source_json: text("source_json").notNull(), source_hash: text("source_hash").notNull(),
+  draft_json: text("draft_json").notNull(), draft_hash: text("draft_hash").notNull(),
+  revision: integer("revision").notNull().default(1), state: text("state", { enum: ["draft", "approved", "promoted"] }).notNull().default("draft"),
+  approved_hash: text("approved_hash"), approved_at: integer("approved_at"), review_source: text("review_source"),
+  last_mutation_id: text("last_mutation_id"), last_mutation_hash: text("last_mutation_hash"),
+  promoted_dataset_id: text("promoted_dataset_id"), promoted_dataset_version: integer("promoted_dataset_version"), promoted_case_id: text("promoted_case_id"),
+  created_at: integer("created_at").notNull(), updated_at: integer("updated_at").notNull(),
+}, t => [
+  check("review_queue_items_id", sql`length(${t.id}) = 64`),
+  check("review_queue_items_ordinal", sql`${t.ordinal} >= 1`),
+  check("review_queue_items_source_key", sql`length(${t.source_span_key}) <= 128`),
+  check("review_queue_items_source_bytes", sql`length(CAST(${t.source_json} AS BLOB)) <= 49152`),
+  check("review_queue_items_source_hash", sql`length(${t.source_hash}) = 64`),
+  check("review_queue_items_draft_bytes", sql`length(CAST(${t.draft_json} AS BLOB)) <= 32768`),
+  check("review_queue_items_draft_hash", sql`length(${t.draft_hash}) = 64`),
+  check("review_queue_items_revision", sql`${t.revision} >= 1`),
+  check("review_queue_items_state", sql`${t.state} IN ('draft','approved','promoted')`),
+  check("review_queue_items_approved_hash", sql`${t.approved_hash} IS NULL OR length(${t.approved_hash}) = 64`),
+  check("review_queue_items_approved_at", sql`${t.approved_at} IS NULL OR ${t.approved_at} >= 0`),
+  check("review_queue_items_review_source", sql`${t.review_source} IS NULL OR ${t.review_source} = 'localOperator'`),
+  check("review_queue_items_mutation_id", sql`${t.last_mutation_id} IS NULL OR length(${t.last_mutation_id}) BETWEEN 1 AND 128`),
+  check("review_queue_items_mutation_hash", sql`${t.last_mutation_hash} IS NULL OR length(${t.last_mutation_hash}) = 64`),
+  check("review_queue_items_dataset_version", sql`${t.promoted_dataset_version} IS NULL OR ${t.promoted_dataset_version} >= 1`),
+  check("review_queue_items_created_at", sql`${t.created_at} >= 0`), check("review_queue_items_updated_at", sql`${t.updated_at} >= 0`),
+  check("review_queue_items_approval", sql`(${t.state} = 'draft' AND ${t.approved_hash} IS NULL AND ${t.approved_at} IS NULL AND ${t.review_source} IS NULL) OR (${t.state} IN ('approved','promoted') AND ${t.approved_hash} IS NOT NULL AND ${t.approved_at} IS NOT NULL AND ${t.review_source} = 'localOperator')`),
+  check("review_queue_items_promotion", sql`(${t.state} != 'promoted' AND ${t.promoted_dataset_id} IS NULL AND ${t.promoted_dataset_version} IS NULL AND ${t.promoted_case_id} IS NULL) OR (${t.state} = 'promoted' AND ${t.promoted_dataset_id} IS NOT NULL AND ${t.promoted_dataset_version} IS NOT NULL AND ${t.promoted_case_id} IS NOT NULL)`),
+  unique("review_queue_items_ordinal_unique").on(t.queue_id, t.ordinal), unique("review_queue_items_source_unique").on(t.queue_id, t.source_run_id, t.source_span_key),
+  index("review_queue_items_window").on(t.queue_id, t.ordinal, t.id), index("review_queue_items_state").on(t.queue_id, t.state, t.ordinal, t.id), index("review_queue_items_source").on(t.source_run_id),
+]);
+
+export const review_queue_promotions = sqliteTable("review_queue_promotions", {
+  id: text("id").primaryKey().notNull(),
+  queue_id: text("queue_id").notNull().references(() => review_queues.id, { onDelete: "cascade" }),
+  idempotency_key: text("idempotency_key").notNull(), request_hash: text("request_hash").notNull(), request_json: text("request_json").notNull(),
+  dataset_id: text("dataset_id").notNull(), dataset_version: integer("dataset_version").notNull(), dataset_hash: text("dataset_hash").notNull(),
+  result_json: text("result_json").notNull(), created_at: integer("created_at").notNull(),
+}, t => [
+  check("review_queue_promotions_id", sql`length(${t.id}) = 64`),
+  check("review_queue_promotions_key", sql`length(${t.idempotency_key}) BETWEEN 1 AND 128`),
+  check("review_queue_promotions_request_hash", sql`length(${t.request_hash}) = 64`),
+  check("review_queue_promotions_request_bytes", sql`length(CAST(${t.request_json} AS BLOB)) <= 16384`),
+  check("review_queue_promotions_version", sql`${t.dataset_version} >= 1`),
+  check("review_queue_promotions_dataset_hash", sql`length(${t.dataset_hash}) = 64`),
+  check("review_queue_promotions_result_bytes", sql`length(CAST(${t.result_json} AS BLOB)) <= 16384`),
+  check("review_queue_promotions_created_at", sql`${t.created_at} >= 0`),
+  unique("review_queue_promotions_key_unique").on(t.queue_id, t.idempotency_key), index("review_queue_promotions_dataset").on(t.dataset_id, t.dataset_version),
+  foreignKey({ columns: [t.dataset_id, t.dataset_version], foreignColumns: [evaluation_revisions.dataset_id, evaluation_revisions.version] }).onDelete("cascade"),
+]);

@@ -7,7 +7,6 @@ import { once } from "node:events";
 import express from "express";
 import { closeDb, getDrizzleDb, deleteRun } from "../src/db";
 import { createReviewQueueRouter } from "../src/review-queues/router";
-import { REVIEW_QUEUE_FIXTURE_DDL } from "./review-queue-fixture-ddl";
 import { ReviewDrafts } from "../app/src/components/review-queues/drafts";
 import { ReviewRequestError } from "../app/src/components/review-queues/client";
 import type { ReviewDraft, ReviewItem, ReviewMutation, ReviewQueue } from "../src/review-queues/protocol";
@@ -15,7 +14,7 @@ import type { ReviewDraft, ReviewItem, ReviewMutation, ReviewQueue } from "../sr
 let directory: string, priorDb: string | undefined, server: http.Server, base: string;
 beforeAll(async () => {
   directory = mkdtempSync(path.join(tmpdir(), "rq-retention-unactivated-")); priorDb = process.env.RUNPHANTOM_DB_PATH;
-  closeDb(); process.env.RUNPHANTOM_DB_PATH = path.join(directory, "fixture.db"); getDrizzleDb().$client.exec(REVIEW_QUEUE_FIXTURE_DDL);
+  closeDb(); process.env.RUNPHANTOM_DB_PATH = path.join(directory, "fixture.db"); getDrizzleDb();
   const app = express(); app.use("/api/review-queues",createReviewQueueRouter()); server = http.createServer(app);
   server.listen(0,"127.0.0.1"); await once(server,"listening"); base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/review-queues`;
 });

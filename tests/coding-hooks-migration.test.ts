@@ -21,7 +21,7 @@ test("actual fresh source migrations install the four hook tables and both tombs
   expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'coding_hook_%' ORDER BY name").all()).toEqual(["coding_hook_entities", "coding_hook_installations", "coding_hook_owner", "coding_hook_sessions"].map(name => ({ name })));
   expect(db.query("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'coding_hook_%' ORDER BY name").all()).toEqual([{ name: "coding_hook_run_delete" }, { name: "coding_hook_span_delete" }]);
   expect(db.query("SELECT * FROM coding_hook_owner").all()).toEqual([]);
-  expect(db.query("SELECT count(*) count FROM __drizzle_migrations").get()).toEqual({ count: 11 });
+  expect(db.query("SELECT count(*) count FROM __drizzle_migrations").get()).toEqual({ count: journal.entries.length });
 });
 test("actual canonical idx9 upgrade preserves original payloads/history and reopens with stable idx10 objects", () => {
   const old = new Database(process.env.RUNPHANTOM_DB_PATH!); apply(old, prefix(9));
@@ -29,7 +29,7 @@ test("actual canonical idx9 upgrade preserves original payloads/history and reop
   old.exec("INSERT INTO evaluation_experiments VALUES('frozen','completed','token',1,'{\"machine\":\"unchanged\"}','{\"verdict\":\"FAIL\"}',1,2)");
   const snapshot = (db: Database) => JSON.stringify(["runs", "spans", "evaluation_experiments"].map(table => db.query(`SELECT * FROM ${table}`).all()));
   const before = snapshot(old), oldHistory = old.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all(); old.close(true);
-  const db = getDrizzleDb().$client; expect(snapshot(db)).toBe(before); const history = db.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all(); expect(history.slice(0, 10)).toEqual(oldHistory); expect(history).toHaveLength(11);
+  const db = getDrizzleDb().$client; expect(snapshot(db)).toBe(before); const history = db.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all(); expect(history.slice(0, 10)).toEqual(oldHistory); expect(history).toHaveLength(journal.entries.length);
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]); const objects = db.query("SELECT type,name,sql FROM sqlite_master WHERE name LIKE 'coding_hook_%' OR name='idx_coding_hook_sessions_run' ORDER BY name").all(); closeDb();
   const reopened = getDrizzleDb().$client; expect(snapshot(reopened)).toBe(before); expect(reopened.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all()).toEqual(history); expect(reopened.query("SELECT type,name,sql FROM sqlite_master WHERE name LIKE 'coding_hook_%' OR name='idx_coding_hook_sessions_run' ORDER BY name").all()).toEqual(objects);
 });
@@ -37,7 +37,7 @@ test("idx10 failure rolls back all new objects and its journal receipt on an act
   const db = new Database(process.env.RUNPHANTOM_DB_PATH!); apply(db, prefix(9)); const history = db.query("SELECT * FROM __drizzle_migrations").all(), objects = db.query("SELECT type,name,sql FROM sqlite_master ORDER BY name").all();
   const broken = prefix(10, "broken"), file = path.join(broken, "0010_coding_hooks.sql"); writeFileSync(file, readFileSync(file, "utf8") + "\n--> statement-breakpoint\nSELECT * FROM intentional_f11_missing_table;\n");
   try { expect(() => apply(db, broken)).toThrow(); expect(db.query("SELECT * FROM __drizzle_migrations").all()).toEqual(history); expect(db.query("SELECT type,name,sql FROM sqlite_master ORDER BY name").all()).toEqual(objects); } finally { db.close(true); }
-  expect(getDrizzleDb().$client.query("SELECT count(*) count FROM __drizzle_migrations").get()).toEqual({ count: 11 });
+  expect(getDrizzleDb().$client.query("SELECT count(*) count FROM __drizzle_migrations").get()).toEqual({ count: journal.entries.length });
 });
 test("exact idx10 constraints, unique identities and both suppression triggers survive actual reopen", () => {
   let db = getDrizzleDb().$client; db.query("INSERT INTO coding_hook_owner VALUES(1,?,?,1)").run("a".repeat(32), "b".repeat(32));

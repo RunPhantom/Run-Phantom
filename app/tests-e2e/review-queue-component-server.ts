@@ -11,10 +11,9 @@ import { createReviewQueueRouter } from "../../src/review-queues/router";
 import { createEvaluationRouter } from "../../src/evaluations/router";
 import { EvaluationService } from "../../src/evaluations/service";
 import { createDataset } from "../../src/evaluations/store";
-import { REVIEW_QUEUE_FIXTURE_DDL } from "../../tests/review-queue-fixture-ddl";
 const directory = mkdtempSync(path.join(tmpdir(), "rq-browser-unactivated-"));
 process.env.RUNPHANTOM_DB_PATH = path.join(directory, "fixture.db");
-const db = getDrizzleDb().$client; db.exec(REVIEW_QUEUE_FIXTURE_DDL);
+const db = getDrizzleDb().$client;
 for (const id of ["source-a", "source-b"]) {
   db.query("INSERT INTO runs(id,name,started_at,last_updated_at) VALUES(?,?,1,2)").run(id, id === "source-a" ? "Checkout response" : "Refund response");
   db.query("INSERT INTO spans(run_id,id,name,span_type,status,input_payload,output_payload,attributes,start_time_ms,end_time_ms) VALUES(?,'response','Agent response','AGENT_ROOT','OK',?,?,'{}',1,2)").run(id, `Input for ${id}`, id === "source-a" ? '{"status":"paid","score":3,"ok":true}' : '{"status":"refunded","score":4,"ok":false}');
