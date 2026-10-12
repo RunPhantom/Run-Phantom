@@ -1,6 +1,7 @@
 import { parseJsonEvidence } from "./evaluations/json-evidence";
 import { hasDuplicateJsonKeys } from "./json-keys";
 import { validateOtlpEvidence, type EvidenceValue, type OtlpEvidence } from "./spans/otlp-evidence";
+import { normalizeStoredSpan } from "./spans/normalize";
 import { defaultIsSensitiveKey } from "./verification/redaction";
 import { redactText } from "./verification/serialization";
 import { GUARD_EVIDENCE_LIMITS as L, type CapturedGuardDecision, type CapturedGuardEvidence, type GuardAction,
@@ -128,10 +129,15 @@ function fromReceipt(receipt: OtlpEvidence): CapturedGuardEvidence {
 // Cached rows are client-supplied. Fresh DTOs remove cached guard authority and
 // extra fields, while retaining the original replay payload/status columns.
 const PUBLIC_SPAN_FIELDS = ["id", "run_id", "parent_span_id", "name", "span_type", "status", "input_payload", "output_payload",
-  "start_time_ms", "end_time_ms", "duration_ms", "model", "provider", "input_tokens", "output_tokens", "attributes", "otlp_evidence", "normalized"] as const;
+  "start_time_ms", "end_time_ms", "duration_ms", "model", "provider", "input_tokens", "output_tokens", "attributes", "otlp_evidence"] as const;
 export function projectCapturedGuardSpan(span: unknown): Record<string, unknown> & { guardEvidence: CapturedGuardEvidence } {
   const out: Record<string, unknown> = {};
   for (const field of PUBLIC_SPAN_FIELDS) { const value = own(span, field); if (value !== undefined) out[field] = value; }
+  if (typeof out.name === "string") {
+    const text = (field: string) => typeof out[field] === "string" ? out[field] as string : null;
+    out.normalized = normalizeStoredSpan({ name: out.name, span_type: text("span_type"), input_payload: text("input_payload"),
+      output_payload: text("output_payload"), attributes: text("attributes") }).normalized;
+  }
   const raw = own(span, "otlp_evidence"), parsed = readReceipt(raw);
   if (raw !== undefined && !parsed.receipt) out.otlp_evidence = null;
   return { ...out, guardEvidence: parsed.receipt ? fromReceipt(parsed.receipt) : empty(parsed.reason!) };
@@ -140,13 +146,13 @@ export function projectCapturedGuardSpan(span: unknown): Record<string, unknown>
 /** Persist source columns only, quarantining invalid carriers without retaining their text. */
 export function guardSpanForPersistence(span: unknown): Record<string, unknown> {
   const projected = projectCapturedGuardSpan(span);
-  const { guardEvidence: _derived, ...out } = projected;
+  const { guardEvidence: _derived, normalized: _normalized, ...out } = projected;
   if (own(span, "otlp_evidence") != null && out.otlp_evidence === null) out.otlp_evidence = "[UNAVAILABLE]";
   return out;
 }
 
 /** Portable files carry the validated source; derived decisions are rebuilt on read. */
 export function guardSpanForExport(span: unknown): Record<string, unknown> {
-  const { guardEvidence: _derived, ...out } = projectCapturedGuardSpan(span);
+  const { guardEvidence: _derived, normalized: _normalized, ...out } = projectCapturedGuardSpan(span);
   return out;
 }

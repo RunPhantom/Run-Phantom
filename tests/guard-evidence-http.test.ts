@@ -35,7 +35,9 @@ async function stop() {
 const post = (route: string, body: unknown, method = "POST") => fetch(`${url}${route}`, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 async function read(route: string) { const response = await fetch(`${url}${route}`); expect(response.status).toBe(200); return response.json() as Promise<any>; }
 function noSecrets(value: unknown) { const text = JSON.stringify(value); for (const secret of Object.values(guardSecrets)) expect(text).not.toContain(secret); }
-function record(name: string, data: unknown) { if (process.env.F36_EVIDENCE_PATH) writeFileSync(path.join(process.env.F36_EVIDENCE_PATH, name), JSON.stringify(data, null, 2) + "\n"); }
+function record(name: string, data: unknown) {
+  if (process.env.F36_EVIDENCE_PATH) writeFileSync(path.join(process.env.F36_EVIDENCE_PATH, name), JSON.stringify(data, null, 2) + "\n", { flag: "wx" });
+}
 beforeAll(start, 15_000);
 beforeEach(async () => { expect((await fetch(`${url}/api/clear`, { method: "POST" })).status).toBe(200); await fetch(`${url}/api/saved-runs/cache/${guardTraceId}`, { method: "DELETE" }); });
 afterAll(async () => { await stop(); rmSync(directory, { recursive: true, force: true }); });
@@ -74,11 +76,14 @@ test("cache input and legacy cache rereads strip contradictory decisions and wit
   const detail = await read(`/api/runs/detail/${guardTraceId}`), expected = detail.spans[0].guardEvidence;
   const spoofed = structuredClone(detail);
   Object.assign(spoofed.spans[0], { guardEvidence: { advisory: false, execution: "verified", decisions: [{ action: "allow", explanation: guardSecrets.password }] },
-    guard_decisions: guardSecrets.npm, secret_extra: guardSecrets.hf });
+    guard_decisions: guardSecrets.npm, secret_extra: guardSecrets.hf,
+    normalized: { kind: "other", guardEvidence: { explanation: guardSecrets.password } } });
   expect((await post(`/api/saved-runs/cache/${guardTraceId}`, spoofed, "PUT")).status).toBe(200);
   const cached = await read(`/api/saved-runs/cache/${guardTraceId}`); noSecrets(cached); expect(cached.spans[0].guardEvidence).toEqual(expected);
+  expect(cached.spans[0].normalized).toEqual({ kind: "other" });
   const db = new Database(dbPath); const stored = db.query("SELECT data FROM saved_run_cache WHERE id=?").get(guardTraceId) as any; noSecrets(stored);
   const unsafe = structuredClone(spoofed), receipt = JSON.parse(unsafe.spans[0].otlp_evidence);
+  unsafe.guardEvidence = { decisions: [{ explanation: guardSecrets.npm }] };
   receipt.events[0].attributes[5].value.stringValue = `password=${guardSecrets.password}`;
   unsafe.spans[0].otlp_evidence = JSON.stringify(receipt);
   db.query("UPDATE saved_run_cache SET data=? WHERE id=?").run(JSON.stringify(unsafe), guardTraceId); db.close();

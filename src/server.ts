@@ -1521,7 +1521,7 @@ export async function createServer(port: number) {
       // Fall back to saved run cache
       const cached = getCachedRun(id);
       if (cached) {
-        try { const data = JSON.parse(cached); if (data.run) { res.json({ ...data, spans: Array.isArray(data.spans) ? data.spans.map((span: any) => projectCapturedGuardSpan(withholdAgentDefinitionCapture(span))) : data.spans }); return; } } catch {}
+        try { const data = JSON.parse(cached); if (data.run) { res.json(publicCachedRun(data)); return; } } catch {}
       }
       if (!run) { res.status(404).json({ error: "Not found" }); return; }
     }
@@ -2267,6 +2267,10 @@ export async function createServer(port: number) {
   });
 
   // Saved run cache — persists across clears
+  function publicCachedRun(data: any) {
+    return { run: data.run, spans: Array.isArray(data.spans) ? data.spans.map((span: any) => projectCapturedGuardSpan(withholdAgentDefinitionCapture(span))) : [],
+      liveEvents: Array.isArray(data.liveEvents) ? data.liveEvents : [], subAgents: Array.isArray(data.subAgents) ? data.subAgents : [] };
+  }
   app.put(/^\/api\/saved-runs\/cache\/(.+)$/, (req, res) => {
     const id = (req.params as unknown as string[])[0];
     const data = req.body;
@@ -2282,7 +2286,7 @@ export async function createServer(port: number) {
     const data = getCachedRun(id);
     if (!data) { res.status(404).json({ error: "Not cached" }); return; }
     const cached = JSON.parse(data);
-    res.json({ ...cached, spans: Array.isArray(cached.spans) ? cached.spans.map((span: any) => projectCapturedGuardSpan(withholdAgentDefinitionCapture(span))) : cached.spans });
+    res.json(publicCachedRun(cached));
   });
   app.delete(/^\/api\/saved-runs\/cache\/(.+)$/, (req, res) => {
     const id = (req.params as unknown as string[])[0];
