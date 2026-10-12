@@ -60,8 +60,12 @@ export function observeOtlpTagSource(text: string): OtlpTagSourceEvidence {
       while (whitespace(text[next])) next++;
       if (text[next] === ":" && frame?.object) {
         let key = "";
-        if (index - start <= L.keyUnits) {
-          try { key = JSON.parse(text.slice(start, index + 1)) as string; } catch { return incomplete(); }
+        // A UTF16 unit can occupy six raw JSON characters; quotes are excluded.
+        if (index - start - 1 <= L.keyUnits * 6) {
+          try {
+            const decoded = JSON.parse(text.slice(start, index + 1)) as string;
+            if (decoded.length <= L.keyUnits) key = decoded;
+          } catch { return incomplete(); }
         }
         frame.key = key;
         if (frame.context === "attribute" || frame.context === "carrier") {
@@ -79,7 +83,7 @@ export function observeOtlpTagSource(text: string): OtlpTagSourceEvidence {
             frame.seen |= 1 << bit;
           }
         }
-      } else if (frame?.context === "attribute" && frame.key === "key" && index - start <= L.keyUnits) {
+      } else if (frame?.context === "attribute" && frame.key === "key" && index - start - 1 <= L.keyUnits * 6) {
         try { frame.attribute!.tags ||= JSON.parse(text.slice(start, index + 1)) === "tags"; } catch { return incomplete(); }
       }
     } else if (character !== ":") {

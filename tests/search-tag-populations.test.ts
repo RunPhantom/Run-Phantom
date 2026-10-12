@@ -16,6 +16,45 @@ async function local(use:(url:string)=>Promise<void>){
  finally{server?.closeAllConnections();if(server?.listening)await new Promise<void>((resolve,reject)=>server.close((e:any)=>e?reject(e instanceof Error?e:new Error(String(e))):resolve()));closeDb();keys.forEach((k,i)=>{if(old[i]===undefined)delete process.env[k];else process.env[k]=old[i];});rmSync(dir,{recursive:true,force:true});console.log(JSON.stringify({reviewProfileRemoved:dir}));}
 }
 async function matches(url:string,path:string,headers:Record<string,string>,op:string,value:string){const response=await fetch(url+path+"?"+new URLSearchParams({filter:ast(op,value)}).toString(),{headers});expect(response.status).toBe(200);const page:any=await response.json();return (page.runs??page.items).map((r:any)=>r.runId??r.id).sort();}
+const escapedKey=(key:string)=>key.split("").map(unit=>"\\u"+unit.charCodeAt(0).toString(16).padStart(4,"0")).join("");
+function rawEscapedDrop(id:string,aliasFirst:boolean){
+ const source=JSON.parse(body("json",false).toString()),span=source.resourceSpans[0].scopeSpans[0].spans[0];
+ span.traceId=id.repeat(32);span.droppedAttributesCount=0;span.attributes[0].value.arrayValue.values[0].stringValue="source-only";
+ span.attributes.push({key:"input.value",value:{stringValue:"Exact escaped-key input"}},{key:"output.value",value:{stringValue:"Exact escaped-key output"}});
+ const declarations=aliasFirst?'"'+escapedKey("droppedAttributesCount")+'":1,"droppedAttributesCount":0':'"droppedAttributesCount":1,"'+escapedKey("droppedAttributesCount")+'":0';
+ return JSON.stringify(source).replace('"droppedAttributesCount":0',declarations);
+}
+test("actual local trace aliases exclude escaped original loss populations without changing business payloads",async()=>{
+ await local(async url=>{
+  expect((await fetch(url+"/v1/traces",{method:"POST",headers:{"content-type":"application/json"},body:body("json",false)})).status).toBe(200);
+  const aliases=["/v1/traces","/v1/otel/v1/traces","/otel/v1/traces"];
+  for(const [index,alias]of aliases.entries())for(const aliasFirst of [false,true]){
+   const id=String(index*2+Number(aliasFirst)+1),raw=rawEscapedDrop(id,aliasFirst);
+   expect((await fetch(url+alias,{method:"POST",headers:{"content-type":"application/json"},body:raw})).status).toBe(200);
+   const row=getDrizzleDb().$client.query("SELECT attributes,input_payload,output_payload FROM spans WHERE run_id=?").get(id.repeat(32)) as {attributes:string;input_payload:string;output_payload:string};
+   expect(row.input_payload).toBe("Exact escaped-key input");expect(row.output_payload).toBe("Exact escaped-key output");expect(JSON.parse(row.attributes).tags).toBe("[UNAVAILABLE]");
+  }
+  for(const path of ["/api/runs/search","/api/runs/search-hits"]){expect(await matches(url,path,{},"eq","source-only")).toEqual([]);expect(await matches(url,path,{},"ne","missing")).toEqual(["8".repeat(32)]);expect(await matches(url,path,{},"eq","safe-valid")).toEqual(["8".repeat(32)]);}
+  const suggestions=await fetch(url+"/api/runs/search-suggestions?field=tag");expect(suggestions.status).toBe(200);expect((await suggestions.json()).values).toEqual(["safe-valid"]);
+ });
+},20000);
+
+test("actual authenticated Team identity and gzip retain escaped source ambiguity in both orders",async()=>{
+ const team=await startTeamFixture("escaped-tag-loss");
+ try{
+  const setup=await fetch(team.url+"/api/team/setup",{method:"POST",headers:{Origin:team.url,"content-type":"application/json"},body:JSON.stringify({setupCode:team.setupCode,email:"escaped-tag-loss@example.test",password:"Synthetic escaped tag loss passphrase"})});expect(setup.status).toBe(201);
+  const account=await setup.json(),cookie=setup.headers.get("set-cookie")!.split(";")[0],mutation={Cookie:cookie,Origin:team.url,"X-RunPhantom-CSRF":account.csrfToken,"content-type":"application/json"};
+  const created=await fetch(team.url+"/api/team/projects",{method:"POST",headers:mutation,body:JSON.stringify({name:"Escaped original loss"})});expect(created.status).toBe(201);const project=await created.json();
+  const keyed=await fetch(`${team.url}/api/team/projects/${project.id}/keys`,{method:"POST",headers:mutation,body:JSON.stringify({label:"Synthetic escaped source"})});expect(keyed.status).toBe(201);const key=await keyed.json();
+  expect((await fetch(team.url+"/api/team/ingest/v1/traces",{method:"POST",headers:{Authorization:`Bearer ${key.token}`,"content-type":"application/json"},body:body("json",false)})).status).toBe(200);
+  for(const encoding of ["identity","gzip"])for(const aliasFirst of [false,true]){
+   const raw=Buffer.from(rawEscapedDrop(encoding==="identity"?(aliasFirst?"2":"1"):(aliasFirst?"4":"3"),aliasFirst)),before=Buffer.from(raw);
+   expect((await fetch(team.url+"/api/team/ingest/v1/traces",{method:"POST",headers:{Authorization:`Bearer ${key.token}`,"content-type":"application/json","content-encoding":encoding},body:encoding==="gzip"?gzipSync(raw):raw})).status).toBe(200);expect(raw.equals(before)).toBe(true);
+  }
+  for(const path of [`/api/team/projects/${project.id}/runs`,`/api/team/projects/${project.id}/search-hits`]){expect(await matches(team.url,path,{Cookie:cookie},"eq","source-only")).toEqual([]);expect(await matches(team.url,path,{Cookie:cookie},"ne","missing")).toEqual(["8".repeat(32)]);expect(await matches(team.url,path,{Cookie:cookie},"eq","safe-valid")).toEqual(["8".repeat(32)]);}
+  const suggestions=await fetch(`${team.url}/api/team/projects/${project.id}/search-suggestions?field=tag`,{headers:{Cookie:cookie}});expect(suggestions.status).toBe(200);expect((await suggestions.json()).values).toEqual(["safe-valid"]);
+ }finally{await team.close();}
+},30000);
 test("actual portable import and search resources do not derive membership or absence from unavailable populations",async()=>{
  const observations:any[]=[];
  await local(async url=>{
