@@ -75,6 +75,8 @@ test("typed original source populations stay unavailable through the actual desk
   await expect(page.locator("[data-span-hit]")).toContainText("Exact verified input");await expect(page.locator("[data-span-hit]")).toContainText("Exact verified output");
   await page.reload();await expect(page.locator("[data-span-hit]")).toHaveCount(1);
   mkdirSync(evidence,{recursive:true});await page.screenshot({path:path.join(evidence,"desktop-complete-tag-populations.png"),fullPage:true});
-  await page.setViewportSize({width:390,height:844});await expect(page.locator("[data-span-hit]")).toHaveCount(1);
+  await page.setViewportSize({width:390,height:844});await page.getByRole("button",{name:"Back to search",exact:true}).click();
+  await expect(page.locator("[data-span-hit]")).toHaveCount(1);await expect(page.locator("[data-span-hit]")).toBeVisible();
+  await page.getByRole("button",{name:"Advanced filters",exact:true}).click();await expect(page.getByRole("button",{name:"Remove Tag is not missing",exact:true})).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);await page.screenshot({path:path.join(evidence,"mobile-complete-tag-populations.png"),fullPage:true});
 });
