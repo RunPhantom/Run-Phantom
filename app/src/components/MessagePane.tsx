@@ -706,7 +706,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
       aria-label="Coding-agent debug chat"
       className={`${isOverlay
         ? "fixed inset-y-3 right-3 z-40 rounded-2xl border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] shadow-[0_24px_64px_var(--rp-ink-a22)]"
-        : "relative h-screen border-l border-[color:var(--rp-border)] bg-[color:var(--rp-surface)]"
+        : "relative h-full border-l border-[color:var(--rp-border)] bg-[color:var(--rp-surface)]"
       } flex origin-right flex-col overflow-hidden`}
       style={{
         width: paneWidth,
@@ -992,7 +992,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
 
 function FloatingAskButton({ provider, onOpen }: { provider: AgentProviderId; onOpen: () => void }) {
   return (
-    <div className="rp-clipped-ring group fixed bottom-0 right-0 z-40">
+    <div data-debug-launcher className="rp-clipped-ring group fixed bottom-0 right-0 z-40">
       <div className="pointer-events-none absolute -top-14 right-16 grid h-12 w-12 scale-75 place-items-center rounded-full border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] opacity-0 shadow-[0_16px_40px_var(--rp-ink-a18),0_8px_26px_var(--rp-ink-a20)] transition-[opacity,transform] duration-300 motion-reduce:transition-none group-hover:-translate-y-2 group-hover:-rotate-6 group-hover:scale-100 group-hover:opacity-100 [&>img]:brightness-0">
         <ProviderMark provider="claude" open={true} />
       </div>

@@ -307,6 +307,7 @@ and verification requirements.
 | [Replay setup](./skills/setup-agent-replay/SKILL.md) | Project-owned replay endpoints and configuration. |
 | [Application verification](./src/verification/README.md) | Connected browser sessions, outcomes, and saved flows. |
 | [Regression evaluations](./src/evaluations/README.md) | Datasets, frozen evidence, grading, reports, and repeated trials. |
+| [Captured definition versions](./src/agent-definitions.md) | Exact prompt/configuration hashes, partial capture, private projections and frozen report provenance. |
 | [Shared team service](./src/team/README.md) | Accounts, project roles, ingestion, deployment, and operational limits. |
 | [Environment reference](./.env.example) | Local configuration and optional provider features. |
 | [Research and source audit](./RESEARCH.md) | Inspected architecture references and the limits of the comparison evidence. |

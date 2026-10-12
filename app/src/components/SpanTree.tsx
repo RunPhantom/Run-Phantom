@@ -1,3 +1,4 @@
+import { CaptureVisibilityDetails } from "./CaptureVisibilityDetails";
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { ArrowLeft } from "lucide-react";
 import { setMeridian, clearMeridian } from "../utils/meridian";
@@ -54,10 +55,13 @@ const TYPE_LABEL: Record<string, { color: string; label: string }> = {
   TRACE: { color: C.purple, label: "TRACE" },
   TOOL_CALL: { color: C.orange, label: "TOOL" },
   LLM_GENERATION: { color: C.cyan, label: "LLM" },
+  RETRIEVAL: { color: C.purple, label: "RETRIEVAL" },
+  EMBEDDING: { color: C.accent, label: "EMBEDDING" },
   INTERNAL: { color: C.fg0, label: "SPAN" },
 };
 
 function typeInfo(span: Span) {
+  if (span.span_type === "RETRIEVAL" || span.span_type === "EMBEDDING") return TYPE_LABEL[span.span_type];
   if (span.span_type === "TRACE") return TYPE_LABEL.TRACE;
   if (span.span_type === "TOOL_CALL") return TYPE_LABEL.TOOL_CALL;
   if (span.span_type?.includes("LLM")) return TYPE_LABEL.LLM_GENERATION;
@@ -250,6 +254,8 @@ function SpanDetail({ span }: { span: Span }) {
           return <CollapsibleSection title={title} preview={preview} data={configObj} maxExpand={10} />;
         } catch { return null; }
       })()}
+
+      <CaptureVisibilityDetails span={span} />
 
       {span.input_payload && (
         <div>
