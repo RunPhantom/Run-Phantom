@@ -45,14 +45,13 @@ export function computeScoreAggregates(observations: readonly unknown[], binCoun
   }
   const sorted = [...values].sort((a, b) => a - b);
   const min = sorted[0], max = sorted[sorted.length - 1];
+  const edges = [...new Set(Array.from({ length: binCount + 1 }, (_, i) => interpolate(min, max, i / binCount)))];
   const histogram: ScoreAggregates["histogram"] = min === max
     ? [{ lower: min, upper: max, upperInclusive: true, count: values.length }]
-    : Array.from({ length: binCount }, (_, i) => ({ lower: interpolate(min, max, i / binCount), upper: interpolate(min, max, (i + 1) / binCount), upperInclusive: i === binCount - 1, count: 0 }));
+    : edges.slice(0, -1).map((lower, i) => ({ lower, upper: edges[i + 1], upperInclusive: i === edges.length - 2, count: 0 }));
   if (min !== max) {
-    const width = max - min;
     for (const value of values) {
-      const fraction = Number.isFinite(width) ? (value - min) / width : (value / 2 - min / 2) / (max / 2 - min / 2);
-      histogram[Math.min(binCount - 1, Math.max(0, Math.floor(fraction * binCount)))].count++;
+      histogram.find(bin => value >= bin.lower && (value < bin.upper || bin.upperInclusive && value <= bin.upper))!.count++;
     }
   }
   return { population, sum, mean, min, max, median: quantile(sorted, 0.5), p90: quantile(sorted, 0.9), p95: quantile(sorted, 0.95), p99: quantile(sorted, 0.99), sumUnavailable: sum === null ? "overflow" : null, histogram };

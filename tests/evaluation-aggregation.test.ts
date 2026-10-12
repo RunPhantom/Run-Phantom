@@ -59,4 +59,15 @@ describe("finite evaluation populations", () => {
     expect(() => computeScoreAggregates(extra)).toThrow("unsupported");
     expect(computeScoreAggregates(Array(8000).fill(0)).population).toEqual({ total: 8000, finite: 8000, excluded: 0, zero: 8000 });
   });
+  test("histogram counts obey their advertised boundaries for adjacent representable values", () => {
+    for (const values of [[0, Number.MIN_VALUE], [1, 1 + Number.EPSILON], [-Number.MIN_VALUE, 0, Number.MIN_VALUE]]) {
+      for (const bins of [2, 10, 20]) {
+        const result = computeScoreAggregates(values, bins);
+        for (const bin of result.histogram) {
+          expect(bin.count).toBe(values.filter(value => value >= bin.lower && (value < bin.upper || bin.upperInclusive && value <= bin.upper)).length);
+        }
+        expect(result.histogram.reduce((sum, bin) => sum + bin.count, 0)).toBe(values.length);
+      }
+    }
+  });
 });
