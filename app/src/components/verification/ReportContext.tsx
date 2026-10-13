@@ -148,7 +148,7 @@ function ChangeReview({ report }: { report: VerificationReport }) {
       <ul className="space-y-2" aria-label="Changed file metadata">{result.changes.map((row, index) => <li key={index} className="break-words rounded border p-2"><code className="break-all">{row.previousPath ? `${row.previousPath} → ` : ""}{row.path}</code><p>Index {row.index}; worktree {row.worktree}; {row.binary === true ? "binary" : row.binary === false ? `+${row.added} / −${row.deleted}` : "counts unavailable"}{row.bytes === undefined ? "" : `; ${row.bytes} bytes`}. Contents unavailable.</p></li>)}</ul>
       <h4 className="font-semibold">Advisory related tests</h4>
       {!result.relatedTests.length && <p>No filename match was retained. This does not establish test coverage.</p>}
-      <ul className="space-y-1">{result.relatedTests.map(hint => <li className="break-all" key={hint.path}><code>{hint.path}</code> · Filename match; not executed</li>)}</ul>
+      <ul className="space-y-1">{result.relatedTests.map(hint => <li className="break-words" key={hint.path}><code className="break-all">{hint.path}</code> · Filename match; not executed</li>)}</ul>
       <ul className="list-disc space-y-1 pl-5">{result.suggestions.map(hint => <li key={hint.kind}>{hint.text}</li>)}</ul>
       <h4 className="font-semibold">Measured failure handoff</h4><p>{result.handoff.reproductionNote}</p>
       {(result.handoff.redacted || result.handoff.truncated) && <p>Some retained details were redacted or omitted. {result.handoff.checksOmitted} checks omitted.</p>}
