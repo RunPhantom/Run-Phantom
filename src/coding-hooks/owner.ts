@@ -5,6 +5,7 @@ import path from "node:path";
 import type { Database } from "bun:sqlite";
 import { CodingHookStore } from "./store";
 
+export type OwnerLeaseNamespace = "coding-hooks" | "prompt-comparisons";
 export const OWNER_LEASE_LIMITS = Object.freeze({ firstPort: 40000, ports: 10000, acquireMs: 500, releaseMs: 500 });
 export class CodingHookOwnerRefusal extends Error { constructor(readonly reason: "invalid_owner_path" | "occupied" | "deadline" | "aborted" | "unavailable") { super(reason); } }
 export interface CodingHookOwnerLease { readonly databasePath: string; readonly port: number; readonly birth: string; isActive(): boolean; release(): Promise<void>; }
@@ -19,12 +20,14 @@ function ownerPath(value: string): { file: string; stat: Stats; parent: Stats } 
 }
 const same = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
 /** A collision refuses ownership; this port is never a discovery or HTTP endpoint. */
-export function codingHookOwnerPort(databasePath: string): number {
+export function codingHookOwnerPort(databasePath: string, namespace: OwnerLeaseNamespace = "coding-hooks"): number {
+  if (namespace !== "coding-hooks" && namespace !== "prompt-comparisons") throw new CodingHookOwnerRefusal("invalid_owner_path");
   const { file } = ownerPath(databasePath);
-  return OWNER_LEASE_LIMITS.firstPort + createHash("sha256").update("runphantom.coding-hook-owner/v1\0" + file).digest().readUInt32BE(0) % OWNER_LEASE_LIMITS.ports;
+  const domain = namespace === "coding-hooks" ? "runphantom.coding-hook-owner/v1\0" : "runphantom.prompt-comparison-owner/v1\0";
+  return OWNER_LEASE_LIMITS.firstPort + createHash("sha256").update(domain + file).digest().readUInt32BE(0) % OWNER_LEASE_LIMITS.ports;
 }
-export async function acquireCodingHookOwner(databasePath: string, signal?: AbortSignal): Promise<CodingHookOwnerLease> {
-  const before = ownerPath(databasePath), port = codingHookOwnerPort(before.file);
+export async function acquireCodingHookOwner(databasePath: string, signal?: AbortSignal, namespace: OwnerLeaseNamespace = "coding-hooks"): Promise<CodingHookOwnerLease> {
+  const before = ownerPath(databasePath), port = codingHookOwnerPort(before.file, namespace);
   if (signal?.aborted) throw new CodingHookOwnerRefusal("aborted");
   const server = createServer(socket => { socket.on("error", () => {}); socket.destroy(); }); server.maxConnections = 1;
   let active = false, releasing: Promise<void> | undefined;
@@ -57,7 +60,12 @@ export async function acquireCodingHookOwner(databasePath: string, signal?: Abor
     if (signal?.aborted) throw new CodingHookOwnerRefusal("aborted");
     if (!same(before.stat, after.stat) || !same(before.parent, after.parent) || !server.listening) throw new CodingHookOwnerRefusal("invalid_owner_path");
     active = true;
-    return Object.freeze({ databasePath: before.file, port, birth: randomBytes(16).toString("hex"), isActive: () => active && server.listening, release });
+    return Object.freeze({ databasePath: before.file, port, birth: randomBytes(16).toString("hex"), isActive: () => {
+      if (!active || !server.listening) return false;
+      if (namespace === "coding-hooks") return true;
+      try { const current = ownerPath(databasePath); return same(before.stat, current.stat) && same(before.parent, current.parent); }
+      catch { return false; }
+    }, release });
   } catch (error) { await release(); throw error; }
 }
 
