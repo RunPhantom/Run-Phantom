@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { normalizeAccessibility, parseAccessibilityRequest } from "../src/verification/accessibility";
+import { normalizeAccessibility, parseAccessibilityRequest, parseAccessibilityEvidence } from "../src/verification/accessibility";
 
 const rules = ["button-name", "image-alt", "label", "color-contrast"];
 const request = { generation: 3, rules, regions: ["#audit"] };
@@ -29,6 +29,10 @@ describe("explicit accessibility request boundary", () => {
     expect(() => parseAccessibilityRequest(value)).toThrow();
     const regions = ["body"]; Object.defineProperty(regions, "0", { get() { reads++; return "body"; } });
     expect(() => parseAccessibilityRequest({ ...request, regions })).toThrow(); expect(reads).toBe(0);
+  });
+  test("current identity and secret scope are validated before any audit", () => {
+    expect(() => parseAccessibilityRequest({ ...request, regions: ['[data-text="entered-secret"]'] }, ["entered-secret"])).toThrow();
+    expect(() => normalizeAccessibility(request, { ...identity, generation: 4 }, [valid()])).toThrow("generation changed");
   });
 });
 
@@ -101,5 +105,16 @@ describe("accessibility engine source and coverage", () => {
     const result = normalizeAccessibility({ ...request, regions: ["#audit", "#other"] }, identity, [valid()]);
     expect(result.status).toBe("inconclusive"); expect(result.coverage).toBe("partial");
     expect(result.regions).toHaveLength(2); expect(result.loss).toContain("region-unavailable");
+  });
+  test("host admission independently binds exact source, current scope and actual population", () => {
+    const result = evidence(); expect(parseAccessibilityEvidence(result, request, identity)).toEqual(result);
+    const bad = evidence([valid({ violations: [{ id: "label", nodes: [node()] }] })]);
+    expect(parseAccessibilityEvidence(bad, request, identity)).toEqual(bad);
+    for (const change of [{ sessionId: "b".repeat(32) }, { generation: 4 }, { requestedRules: ["label"] }, { status: "findings" },
+      { engine: { ...result.engine, bundleSha256: "0".repeat(64) } }, { population: { total: 0, retained: 0, dropped: 1 } }, { html: "private" }])
+      expect(() => parseAccessibilityEvidence({ ...result, ...change }, request, identity)).toThrow();
+    const partial = evidence([{ ...valid(), rootCoverage: "partial", rootLoss: ["closed-shadow-root"] }]);
+    expect(parseAccessibilityEvidence(partial, request, identity)).toEqual(partial);
+    expect(() => parseAccessibilityEvidence({ ...partial, coverage: "complete", status: "no-findings" }, request, identity)).toThrow();
   });
 });

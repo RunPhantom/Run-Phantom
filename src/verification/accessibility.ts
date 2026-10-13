@@ -1,34 +1,20 @@
 /** Explicit native engine evidence. Page values never provide audit authority. */
 import { BrowserInputError, browserArray, browserGeneration, browserId, browserObject, parseBrowserTarget, scrubBrowserSecrets } from "./browser-contract";
+import { createHash, randomUUID } from "node:crypto";
+import engineSource from "./vendor/axe-core-4.11.0/axe.min.js" with { type: "text" };
+import type { AccessibilityRule, AccessibilityLoss, AccessibilityRequest, AccessibilityIdentity, AccessibilityTarget, AccessibilityFinding, AccessibilityEvidence } from "./accessibility-types";
+export type { AccessibilityRule, AccessibilityLoss, AccessibilityRequest, AccessibilityIdentity, AccessibilityTarget, AccessibilityFinding, AccessibilityRulePopulation, AccessibilityEvidence } from "./accessibility-types";
 
 export const ACCESSIBILITY_ENGINE = { name: "axe-core", version: "4.11.0",
   bundleSha256: "e9e5863c33a874f09bc01acd9234b7e3c871479f5eef8802fa582544465e6d01" } as const;
 export const ACCESSIBILITY_LIMITS = { regions: 4, rules: 4, selectorBytes: 256, domNodes: 2000,
   findings: 100, targetBytes: 256, outputBytes: 65536, engineMs: 5000 } as const;
 export const ACCESSIBILITY_RULES = ["button-name", "image-alt", "label", "color-contrast"] as const;
-export type AccessibilityRule = typeof ACCESSIBILITY_RULES[number];
-export type AccessibilityLoss = "engine-unavailable" | "engine-identity" | "engine-result-invalid" | "region-unavailable"
-  | "rule-unavailable" | "review-required" | "no-applicable-nodes" | "closed-shadow-root" | "iframe-excluded"
-  | "root-inventory-limit" | "root-inventory-unavailable" | "finding-limit" | "target-redacted" | "target-unavailable"
-  | "output-limit" | "population-limit" | "document-changed" | "engine-timeout" | "unsupported-browser";
-export interface AccessibilityRequest { generation: number; rules: AccessibilityRule[]; regions: string[] }
-export interface AccessibilityIdentity { sessionId: string; generation: number; capturedAt: number }
-export type AccessibilityTarget = Array<string | string[]>;
-export interface AccessibilityFinding { rule: AccessibilityRule; region: string; impact: "minor" | "moderate" | "serious" | "critical" | null; target: AccessibilityTarget }
-export interface AccessibilityRulePopulation { rule: AccessibilityRule; passed: number; violations: number; incomplete: number; inapplicable: boolean; observed: boolean }
-export interface AccessibilityEvidence extends AccessibilityIdentity {
-  formatVersion: 1; source: "host-run-native-engine"; engine: typeof ACCESSIBILITY_ENGINE;
-  requestedRules: AccessibilityRule[]; selectedRegions: string[];
-  coverage: "complete" | "partial" | "unavailable"; status: "findings" | "no-findings" | "inconclusive";
-  population: { total: number | null; retained: number; dropped: number };
-  regions: Array<{ region: string; coverage: "complete" | "partial" | "unavailable"; rules: AccessibilityRulePopulation[] }>;
-  findings: AccessibilityFinding[]; loss: AccessibilityLoss[]; limits: typeof ACCESSIBILITY_LIMITS;
-}
 const rootLoss = ["closed-shadow-root", "iframe-excluded", "root-inventory-limit", "root-inventory-unavailable", "document-changed"] as const;
 const categories = ["passes", "violations", "incomplete", "inapplicable"] as const;
 const invalid = (): never => { throw new BrowserInputError(400, "Explicit bounded accessibility rules and regions required"); };
 
-export function parseAccessibilityRequest(value: unknown): AccessibilityRequest {
+export function parseAccessibilityRequest(value: unknown, secrets: readonly string[] = []): AccessibilityRequest {
   const body = browserObject(value, ["generation", "rules", "regions"]);
   const generation = browserGeneration(body.generation);
   const rules = browserArray(body.rules, ACCESSIBILITY_LIMITS.rules).map(rule => {
@@ -36,7 +22,7 @@ export function parseAccessibilityRequest(value: unknown): AccessibilityRequest 
     return rule as AccessibilityRule;
   });
   const regions = browserArray(body.regions, ACCESSIBILITY_LIMITS.regions).map(region => {
-    if (typeof region !== "string" || Buffer.byteLength(region) > ACCESSIBILITY_LIMITS.selectorBytes || region !== region.trim()) invalid();
+    if (typeof region !== "string" || Buffer.byteLength(region) > ACCESSIBILITY_LIMITS.selectorBytes || region !== region.trim() || scrubBrowserSecrets(region, secrets) !== region) invalid();
     const target = parseBrowserTarget({ kind: "css", selector: region });
     return target.kind === "css" ? target.selector : invalid();
   });
@@ -56,7 +42,7 @@ function field(value: unknown, key: string): unknown {
 function dataArray(value: unknown, max: number): unknown[] { return browserArray(value, max); }
 
 export function normalizeAccessibility(rawRequest: unknown, rawIdentity: unknown, rawResults: unknown, secrets: readonly string[] = []): AccessibilityEvidence {
-  const request = parseAccessibilityRequest(rawRequest), identity = browserObject(rawIdentity, ["sessionId", "generation", "capturedAt"]);
+  const request = parseAccessibilityRequest(rawRequest, secrets), identity = browserObject(rawIdentity, ["sessionId", "generation", "capturedAt"]);
   const sessionId = browserId(identity.sessionId), generation = browserGeneration(identity.generation);
   if (generation !== request.generation) throw new BrowserInputError(409, "Accessibility generation changed");
   if (!Number.isSafeInteger(identity.capturedAt) || (identity.capturedAt as number) < 0) throw new BrowserInputError(400, "Valid accessibility capture time required");
@@ -69,7 +55,7 @@ export function normalizeAccessibility(rawRequest: unknown, rawIdentity: unknown
   let completed = 0, total = 0, applicable = 0, populationKnown = true;
   const safeTarget = (value: unknown, loss: Set<AccessibilityLoss>): AccessibilityTarget => {
     const safeText = (raw: unknown): string => {
-      if (typeof raw !== "string" || !raw || Buffer.byteLength(raw) > ACCESSIBILITY_LIMITS.targetBytes || /[\0<>]/.test(raw)) { loss.add("target-unavailable"); return "[TARGET OMITTED]"; }
+      if (typeof raw !== "string" || !raw || Buffer.byteLength(raw) > ACCESSIBILITY_LIMITS.targetBytes || /[\0<>]|https?:\/\/|javascript:|data:/i.test(raw)) { loss.add("target-unavailable"); return "[TARGET OMITTED]"; }
       const safe = scrubBrowserSecrets(raw, secrets);
       if (safe !== raw) loss.add("target-redacted");
       if (Buffer.byteLength(safe) > ACCESSIBILITY_LIMITS.targetBytes) { loss.add("target-unavailable"); return "[TARGET OMITTED]"; }
@@ -157,4 +143,246 @@ export function normalizeAccessibility(rawRequest: unknown, rawIdentity: unknown
   while (Buffer.byteLength(JSON.stringify(evidence)) > ACCESSIBILITY_LIMITS.outputBytes && evidence.findings.length) { evidence.findings.pop(); lose("output-limit"); finish(); }
   if (Buffer.byteLength(JSON.stringify(evidence)) > ACCESSIBILITY_LIMITS.outputBytes) throw new BrowserInputError(503, "Accessibility evidence exceeded its finite output budget");
   return evidence;
+}
+
+/** Revalidate finite native replies at the host boundary before exposing any evidence. */
+export function parseAccessibilityEvidence(value: unknown, rawRequest: unknown, identity: AccessibilityIdentity, secrets: readonly string[] = []): AccessibilityEvidence {
+  const base = normalizeAccessibility(rawRequest, identity, undefined, secrets), request = parseAccessibilityRequest(rawRequest, secrets);
+  const reject = (): never => { throw new BrowserInputError(503, "Native accessibility evidence is invalid or unavailable"); };
+  const body = browserObject(value, ["formatVersion", "source", "engine", "sessionId", "generation", "capturedAt", "requestedRules", "selectedRegions", "coverage", "status", "population", "regions", "findings", "loss", "limits"]);
+  if (body.formatVersion !== 1 || body.source !== base.source || body.sessionId !== base.sessionId || body.generation !== base.generation || body.capturedAt !== base.capturedAt) reject();
+  for (const [key, expected] of [["engine", ACCESSIBILITY_ENGINE], ["limits", ACCESSIBILITY_LIMITS]] as const) {
+    const supplied = browserObject(body[key], Object.keys(expected));
+    if (Object.keys(supplied).length !== Object.keys(expected).length || Object.entries(expected).some(([name, wanted]) => supplied[name] !== wanted)) reject();
+  }
+  const same = (actual: unknown, expected: string[], max: number) => {
+    const array = browserArray(actual, max); if (array.length !== expected.length || array.some((item, index) => item !== expected[index])) reject();
+  };
+  same(body.requestedRules, request.rules, ACCESSIBILITY_LIMITS.rules); same(body.selectedRegions, request.regions, ACCESSIBILITY_LIMITS.regions);
+  const permittedLoss: AccessibilityLoss[] = ["engine-unavailable", "engine-identity", "engine-result-invalid", "region-unavailable", "rule-unavailable", "review-required", "no-applicable-nodes", ...rootLoss,
+    "finding-limit", "target-redacted", "target-unavailable", "output-limit", "population-limit", "engine-timeout", "unsupported-browser"];
+  const loss = browserArray(body.loss, permittedLoss.length).map(reason => { if (!permittedLoss.includes(reason as AccessibilityLoss)) reject(); return reason as AccessibilityLoss; });
+  if (new Set(loss).size !== loss.length) reject();
+  const count = (value: unknown): number => { if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > ACCESSIBILITY_LIMITS.domNodes) reject(); return value as number; };
+  let total = 0, applicable = 0, incomplete = 0;
+  const regions = browserArray(body.regions, ACCESSIBILITY_LIMITS.regions).map((value, index) => {
+    const region = browserObject(value, ["region", "coverage", "rules"]);
+    if (region.region !== request.regions[index] || !["complete", "partial", "unavailable"].includes(region.coverage as string)) reject();
+    const rules = browserArray(region.rules, ACCESSIBILITY_LIMITS.rules).map((value, index) => {
+      const rule = browserObject(value, ["rule", "passed", "violations", "incomplete", "inapplicable", "observed"]);
+      if (rule.rule !== request.rules[index] || typeof rule.inapplicable !== "boolean" || typeof rule.observed !== "boolean") reject();
+      const passed = count(rule.passed), violations = count(rule.violations), review = count(rule.incomplete);
+      if (rule.inapplicable && (passed || violations || review) || !rule.observed && (passed || violations || review || rule.inapplicable)
+        || rule.observed && !rule.inapplicable && !(passed || violations || review) || region.coverage === "complete" && (!rule.observed || review)) reject();
+      total += violations; applicable += passed + violations + review; incomplete += review;
+      return { rule: rule.rule as AccessibilityRule, passed, violations, incomplete: review, inapplicable: rule.inapplicable as boolean, observed: rule.observed as boolean };
+    });
+    if (rules.length !== request.rules.length) reject();
+    return { region: region.region as string, coverage: region.coverage as AccessibilityEvidence["coverage"], rules };
+  });
+  if (regions.length !== request.regions.length || applicable > ACCESSIBILITY_LIMITS.domNodes * ACCESSIBILITY_LIMITS.regions) reject();
+  const text = (value: unknown): string => {
+    if (typeof value !== "string" || !value || Buffer.byteLength(value) > ACCESSIBILITY_LIMITS.targetBytes || /[\0<>]|https?:\/\/|javascript:|data:/i.test(value)) reject();
+    // Existing host placeholders are data; do not rescan their letters as entered secrets.
+    if ((value as string).split(/\[(?:REDACTED|TARGET OMITTED)\]/g).some(part => scrubBrowserSecrets(part, secrets) !== part)) reject();
+    return value as string;
+  };
+  const findings = browserArray(body.findings, ACCESSIBILITY_LIMITS.findings).map(value => {
+    const finding = browserObject(value, ["rule", "region", "impact", "target"]);
+    if (!request.rules.includes(finding.rule as AccessibilityRule) || !request.regions.includes(finding.region as string)
+      || finding.impact !== null && !["minor", "moderate", "serious", "critical"].includes(finding.impact as string)) reject();
+    const target = browserArray(finding.target, 4).map(part => { if (!Array.isArray(part)) return text(part); const path = browserArray(part, 4).map(text); if (!path.length) reject(); return path; });
+    if (!target.length) reject();
+    return { rule: finding.rule as AccessibilityRule, region: finding.region as string, impact: finding.impact as AccessibilityFinding["impact"], target };
+  });
+  for (const region of regions) for (const rule of region.rules) {
+    if (findings.filter(finding => finding.region === region.region && finding.rule === rule.rule).length > rule.violations) reject();
+  }
+  const population = browserObject(body.population, ["total", "retained", "dropped"]);
+  if (population.retained !== findings.length || population.dropped !== total - findings.length || total < findings.length
+    || population.total !== null && population.total !== total) reject();
+  const coverage = regions.every(region => region.coverage === "unavailable") ? "unavailable" : loss.length || regions.some(region => region.coverage !== "complete") ? "partial" : "complete";
+  if (body.coverage !== coverage || coverage === "complete" && (population.total === null || !applicable || incomplete)) reject();
+  const status = findings.length ? "findings" : coverage === "complete" && applicable > 0 ? "no-findings" : "inconclusive";
+  if (body.status !== status) reject();
+  const result: AccessibilityEvidence = { ...base, coverage, status, engine: { ...ACCESSIBILITY_ENGINE }, limits: { ...ACCESSIBILITY_LIMITS },
+    regions, findings, loss, population: { total: population.total as number | null, retained: findings.length, dropped: total - findings.length } };
+  if (Buffer.byteLength(JSON.stringify(result)) > ACCESSIBILITY_LIMITS.outputBytes) reject();
+  return result;
+}
+
+export interface AccessibilityCDP {
+  send(method: string, params?: Record<string, unknown>): Promise<Record<string, any>>;
+  detach(): Promise<void>;
+}
+export interface AccessibilityPage {
+  context(): { newCDPSession(page: AccessibilityPage): Promise<AccessibilityCDP> };
+  isClosed(): boolean;
+}
+export interface AccessibilityAuthority {
+  current(): boolean;
+  /** Must invalidate and tear down the owned connection, not merely reject a promise. */
+  terminate(): Promise<void>;
+}
+function installAuditScope(input: { regions: string[]; cap: number }) {
+  let changed = false, capped = false;
+  const observer = new MutationObserver(() => { changed = true; });
+  const observe = (root: Node) => observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+  observe(document);
+  const roots = input.regions.map(selector => {
+    const matches = document.querySelectorAll(selector);
+    if (matches.length !== 1) throw new Error("region");
+    const root = matches[0], style = getComputedStyle(root);
+    if (!root.isConnected || root.ownerDocument !== document || style.display === "none" || style.visibility !== "visible" || !root.getClientRects().length) throw new Error("region");
+    return root;
+  });
+  const nodes: Element[] = [], visited = new Set<Node>(), pending: Node[] = [...roots]; let count = 0;
+  while (pending.length && !capped) {
+    const root = pending.pop()!, walker = document.createTreeWalker(root, NodeFilter.SHOW_ALL);
+    let node: Node | null = root;
+    while (node) {
+      if (!visited.has(node)) {
+        visited.add(node); if (++count > input.cap) { capped = true; break; }
+        if (node instanceof Element) {
+          // Bound native metadata responses before requesting any node description.
+          let attributes = 0;
+          if (node.attributes.length > 100) { capped = true; break; }
+          for (const attribute of node.attributes) { attributes += attribute.name.length + attribute.value.length; if (attributes > 16384) { capped = true; break; } }
+          if (capped) break; nodes.push(node);
+          if (node.shadowRoot) { observe(node.shadowRoot); pending.push(node.shadowRoot); }
+        }
+      }
+      node = walker.nextNode();
+    }
+  }
+  const current = () => {
+    if (observer.takeRecords().length) changed = true;
+    return !changed && roots.every((root, index) => root.isConnected && root.ownerDocument === document
+      && document.querySelectorAll(input.regions[index]).length === 1 && document.querySelector(input.regions[index]) === root);
+  };
+  return { roots, nodes, capped, current, dispose: () => observer.disconnect() };
+}
+
+async function executeAuditScope(input: { rules: string[]; regions: string[]; cap: number; findings: number; targetBytes: number }) {
+  const globals = globalThis as unknown as { axe: { configure(options: unknown): void; run(root: Element, options: unknown): Promise<Record<string, any>> };
+    __rpAudit: ReturnType<typeof installAuditScope> };
+  const scope = globals.__rpAudit, engine = globals.axe;
+  const results: Array<Record<string, unknown>> = []; let population = 0, retained = 0;
+  try {
+    engine.configure({ noHtml: true, allowedOrigins: [] });
+    for (let index = 0; index < scope.roots.length; index++) {
+      if (!scope.current()) throw new Error("document-changed");
+      const raw = await engine.run(scope.roots[index], { runOnly: { type: "rule", values: input.rules }, iframes: false,
+        preload: false, resultTypes: ["violations", "incomplete", "passes", "inapplicable"], elementRef: false, selectors: true });
+      const result: Record<string, unknown> = { testEngine: { name: raw.testEngine?.name, version: raw.testEngine?.version } };
+      for (const category of ["passes", "violations", "incomplete", "inapplicable"]) {
+        if (!Array.isArray(raw[category]) || raw[category].length > input.rules.length) throw new Error("result");
+        result[category] = raw[category].map((entry: Record<string, any>) => {
+          if (!Array.isArray(entry.nodes)) throw new Error("result");
+          population += entry.nodes.length; if (population > input.cap) throw new Error("population-limit");
+          return { id: entry.id, nodes: entry.nodes.map((node: Record<string, any>) => {
+            if (category !== "violations") return null;
+            if (retained++ >= input.findings) return { impact: null, target: [""] };
+            const target = node.target;
+            // Keep only a finite selector path, never HTML, check data or failure text.
+            const valid = Array.isArray(target) && target.length > 0 && target.length <= 4
+              && target.every((part: unknown) => typeof part === "string" || Array.isArray(part) && part.length > 0 && part.length <= 4 && part.every(item => typeof item === "string"))
+              && new TextEncoder().encode(JSON.stringify(target)).length <= input.targetBytes;
+            return { impact: node.impact ?? null, target: valid ? target : [""] };
+          }) };
+        });
+      }
+      results.push({ region: input.regions[index], result });
+    }
+    if (!scope.current()) throw new Error("document-changed");
+    return { results, failure: null };
+  } catch (error) { const reason = error instanceof Error ? error.message : ""; return { results: [], failure: reason === "document-changed" || reason === "population-limit" ? reason : "engine-unavailable" }; }
+}
+
+/** Engine executes only in a fresh native isolated Chromium world, never a page SDK world. */
+export async function scanAccessibility(page: AccessibilityPage, rawRequest: unknown, rawIdentity: unknown,
+  authority: AccessibilityAuthority, secrets: readonly string[] = []): Promise<AccessibilityEvidence> {
+  const request = parseAccessibilityRequest(rawRequest, secrets);
+  // Validate identity even on an unavailable path; no unauthenticated live identity is echoed.
+  const unavailable = (reason: AccessibilityLoss) => {
+    const result = normalizeAccessibility(request, rawIdentity, undefined, secrets);
+    if (!result.loss.includes(reason)) result.loss.push(reason); return result;
+  };
+  if (createHash("sha256").update(engineSource).digest("hex") !== ACCESSIBILITY_ENGINE.bundleSha256) return unavailable("engine-identity");
+  if (!authority.current() || page.isClosed()) return unavailable("document-changed");
+  let cdp: AccessibilityCDP | undefined, world: number | undefined, timedOut = false, changed = false;
+  let teardown: Promise<void> | undefined;
+  const group = `rp-audit-${randomUUID()}`;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const work = async (): Promise<AccessibilityEvidence> => {
+    cdp = await page.context().newCDPSession(page);
+    const tree = await cdp.send("Page.getFrameTree");
+    world = (await cdp.send("Page.createIsolatedWorld", { frameId: tree.frameTree.frame.id, worldName: group, grantUniveralAccess: false })).executionContextId as number;
+    if (!authority.current() || page.isClosed()) return unavailable("document-changed");
+    const setup = await cdp.send("Runtime.evaluate", { contextId: world, expression: `globalThis.__rpAudit=(${installAuditScope.toString()})(${JSON.stringify({ regions: request.regions, cap: ACCESSIBILITY_LIMITS.domNodes })});globalThis.__rpAudit.capped`, returnByValue: true, objectGroup: group });
+    if (setup.exceptionDetails) return unavailable("region-unavailable");
+    if (setup.result.value !== false) return unavailable("root-inventory-limit");
+    const handles = await cdp.send("Runtime.evaluate", { contextId: world, expression: "globalThis.__rpAudit.nodes", objectGroup: group });
+    if (handles.exceptionDetails || !handles.result.objectId) return unavailable("root-inventory-unavailable");
+    const properties = await cdp.send("Runtime.getProperties", { objectId: handles.result.objectId, ownProperties: true, generatePreview: false });
+    if (!Array.isArray(properties.result) || properties.result.length > ACCESSIBILITY_LIMITS.domNodes + 1) return unavailable("root-inventory-limit");
+    const ids: string[] = properties.result.filter((property: Record<string, any>) => /^\d+$/.test(property.name)).map((property: Record<string, any>) => property.value?.objectId as string);
+    if (ids.some(id => typeof id !== "string")) return unavailable("root-inventory-unavailable");
+    const loss = new Set<AccessibilityLoss>();
+    const inventory = async () => {
+      const signatures: string[] = [];
+      // Bounded handles and depth-zero native descriptions, never a flattened DOM dump.
+      for (let index = 0; index < ids.length; index += 8) {
+        if (!authority.current() || page.isClosed() || timedOut) throw new Error("changed");
+        const batch = await Promise.all(ids.slice(index, index + 8).map(objectId => cdp!.send("DOM.describeNode", { objectId, depth: 0, pierce: false })));
+        for (const response of batch) {
+          const node = response.node;
+          if (!node || !Number.isSafeInteger(node.backendNodeId) || node.children?.length) throw new Error("inventory");
+          const roots = node.shadowRoots ?? [];
+          if (!Array.isArray(roots) || roots.length > 4) throw new Error("inventory");
+          if (roots.some((root: Record<string, any>) => root.shadowRootType === "closed")) loss.add("closed-shadow-root");
+          if (roots.some((root: Record<string, any>) => !["open", "closed", "user-agent"].includes(root.shadowRootType as string))) throw new Error("inventory");
+          if (node.frameId || ["IFRAME", "FRAME", "OBJECT", "EMBED"].includes(node.nodeName as string)) loss.add("iframe-excluded");
+          signatures.push(`${node.backendNodeId}:${roots.map((root: Record<string, any>) => `${root.backendNodeId}:${root.shadowRootType}`).join(",")}`);
+        }
+      }
+      return signatures.join("|");
+    };
+    let before: string;
+    try { before = await inventory(); } catch { return unavailable("root-inventory-unavailable"); }
+    const loaded = await cdp.send("Runtime.evaluate", { contextId: world, expression: engineSource, objectGroup: group });
+    if (loaded.exceptionDetails) return unavailable("engine-unavailable");
+    const audited = await cdp.send("Runtime.evaluate", { contextId: world, expression: `(${executeAuditScope.toString()})(${JSON.stringify({ rules: request.rules, regions: request.regions, cap: ACCESSIBILITY_LIMITS.domNodes, findings: ACCESSIBILITY_LIMITS.findings, targetBytes: ACCESSIBILITY_LIMITS.targetBytes })})`, awaitPromise: true, returnByValue: true, objectGroup: group });
+    if (audited.exceptionDetails) {
+      const stable = await cdp.send("Runtime.evaluate", { contextId: world, expression: "globalThis.__rpAudit.current()", returnByValue: true });
+      return unavailable(stable.result?.value === false ? "document-changed" : "engine-unavailable");
+    }
+    const after = await inventory();
+    const stable = await cdp.send("Runtime.evaluate", { contextId: world, expression: "globalThis.__rpAudit.current()", returnByValue: true });
+    changed = stable.result?.value !== true || before !== after || !authority.current() || page.isClosed();
+    if (changed) return unavailable("document-changed");
+    if (audited.result.value?.failure !== null) return unavailable(["document-changed", "population-limit", "engine-unavailable"].includes(audited.result.value?.failure)
+      ? audited.result.value.failure as AccessibilityLoss : "engine-result-invalid");
+    const results = dataArray(audited.result.value.results, ACCESSIBILITY_LIMITS.regions).map(value => ({
+      region: field(value, "region"), result: field(value, "result"), rootCoverage: loss.size ? "partial" : "complete", rootLoss: [...loss],
+    }));
+    return normalizeAccessibility(request, rawIdentity, results, secrets);
+  };
+  const deadline = new Promise<AccessibilityEvidence>(resolve => { timer = setTimeout(() => {
+    timedOut = true;
+    // Teardown starts at the execution deadline and completes before a timeout result returns.
+    teardown = authority.terminate();
+    void teardown.then(() => resolve(unavailable("engine-timeout")), () => resolve(unavailable("engine-timeout")));
+  }, ACCESSIBILITY_LIMITS.engineMs); });
+  try { const result = await Promise.race([work(), deadline]); if (teardown) await teardown.catch(() => {}); return timedOut ? unavailable("engine-timeout") : result; }
+  catch { return unavailable(changed || !authority.current() || page.isClosed() ? "document-changed" : "engine-unavailable"); }
+  finally {
+    if (timer) clearTimeout(timer);
+    if (teardown) await teardown.catch(() => {});
+    if (cdp) {
+      if (world !== undefined && !page.isClosed()) await cdp.send("Runtime.evaluate", { contextId: world, expression: "globalThis.__rpAudit?.dispose()" }).catch(() => {});
+      await cdp.send("Runtime.releaseObjectGroup", { objectGroup: group }).catch(() => {});
+      await cdp.detach().catch(() => {});
+    }
+  }
 }
