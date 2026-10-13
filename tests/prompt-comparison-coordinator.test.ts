@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { drizzle } from "drizzle-orm/bun-sqlite";
-import { migrate } from "drizzle-orm/bun-sqlite/migrator";
+import { migrateDatabase } from "../src/db/migrate";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,7 +8,6 @@ import path from "node:path";
 import { acquireComparisonOwner } from "../src/prompts/comparison-owner";
 import { ComparisonCoordinator } from "../src/prompts/comparison";
 import { ComparisonStore } from "../src/prompts/comparison-store";
-import { COMPARISON_STORAGE_SQL } from "../src/prompts/comparison-storage";
 import { COMPARISON_MODELS } from "../src/prompts/comparison-protocol";
 import { PromptRegistry } from "../src/prompts/registry";
 import { createComparisonProviderClient } from "../src/prompts/providers";
@@ -21,7 +19,7 @@ let server: ReturnType<typeof Bun.serve>;
 const controls = new Set<() => void>();
 beforeEach(async () => {
   allowed = true; calls = 0; active = 0; peak = 0; responseMode = "normal"; controls.clear(); directory = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-comparison-http-"))); const file = path.join(directory, "owner.sqlite"); db = new Database(file);
-  db.exec("PRAGMA legacy_alter_table=ON; PRAGMA foreign_keys=OFF"); migrate(drizzle(db), { migrationsFolder: `${import.meta.dir}/../drizzle` }); db.exec("PRAGMA foreign_keys=ON; PRAGMA legacy_alter_table=OFF"); db.exec(COMPARISON_STORAGE_SQL);
+  db.exec("PRAGMA legacy_alter_table=ON; PRAGMA foreign_keys=OFF"); migrateDatabase(db, `${import.meta.dir}/../drizzle`); db.exec("PRAGMA foreign_keys=ON; PRAGMA legacy_alter_table=OFF");
   db.exec("INSERT INTO evaluation_evidence_scopes VALUES('local:local',1,1); INSERT INTO prompt_scope_controls VALUES('local:local',1); INSERT INTO comparison_scope_controls VALUES('local:local',1)");
   lease = await acquireComparisonOwner(file);
   const owner = { database: db, scope: { kind: "local" as const, id: "local" }, authorize() { if (!allowed) throw new Error("membership revoked"); } }; prompts = new PromptRegistry(owner); store = new ComparisonStore(owner, lease, { budgets: { openai: 1000000, anthropic: 1000000 }, availability: { openai: true, anthropic: true } }); store.recoverPending();

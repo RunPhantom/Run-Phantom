@@ -1,7 +1,6 @@
 import { beforeEach, afterEach, expect, test, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
-import { drizzle } from "drizzle-orm/bun-sqlite";
-import { migrate } from "drizzle-orm/bun-sqlite/migrator";
+import { migrateDatabase } from "../src/db/migrate";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,7 +8,6 @@ import path from "node:path";
 import { PromptRegistry } from "../src/prompts/registry";
 import { acquireComparisonOwner } from "../src/prompts/comparison-owner";
 import { ComparisonStore } from "../src/prompts/comparison-store";
-import { COMPARISON_STORAGE_SQL } from "../src/prompts/comparison-storage";
 import { COMPARISON_MODELS, COMPARISON_LIMITS } from "../src/prompts/comparison-protocol";
 import { estimateComparisonUsage } from "../src/prompts/spend-ledger";
 import { createComparisonProviderClient } from "../src/prompts/providers";
@@ -25,9 +23,8 @@ function owner(database: Database, id = "local", kind: "local" | "project" = "lo
 function request(promptId: string, operationKey = randomUUID(), targets = [...COMPARISON_MODELS]) { return { operationKey, promptId, revision: 1, variables: { topic: "$& {{literal}}" }, targets, options: { maxOutputTokens: 128, temperature: 0 }, operationBudgetMicrousd: 1000000, expectedGeneration: store.capture("edit").comparisonGeneration }; }
 function saved() { return prompts.create({ operationKey: randomUUID(), name: "Frozen", template: "Explain {{topic}}" }, prompts.capture("edit")); }
 function initialize(database: Database) {
-  database.exec("PRAGMA legacy_alter_table=ON; PRAGMA foreign_keys=OFF"); migrate(drizzle(database), { migrationsFolder: `${import.meta.dir}/../drizzle` });
+  database.exec("PRAGMA legacy_alter_table=ON; PRAGMA foreign_keys=OFF"); migrateDatabase(database, `${import.meta.dir}/../drizzle`);
   database.exec("PRAGMA foreign_keys=ON; PRAGMA legacy_alter_table=OFF");
-  database.exec(COMPARISON_STORAGE_SQL);
   database.exec("INSERT INTO evaluation_evidence_scopes VALUES('local:local',1,1); INSERT INTO prompt_scope_controls VALUES('local:local',1); INSERT INTO comparison_scope_controls VALUES('local:local',1)");
 }
 beforeEach(async () => {
