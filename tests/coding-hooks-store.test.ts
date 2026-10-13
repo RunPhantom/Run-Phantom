@@ -66,7 +66,7 @@ test("identical management preserves policy generation; changed policy and token
   store.commitInstallation(id, changed.installationGeneration, changedToken, "c".repeat(64), changed.ownerGeneration); expect(admit(changedToken, sourceIdentity).captureMode).toBe("metadata");
 });
 test("global target and local full authority over the same registered project deduplicate identities without sharing policy", () => {
-  const local = active("full"), globalId = "e".repeat(32), globalToken = "e".repeat(64), globalBinding = { ...binding("metadata", globalId), scope: "global" as const, workspace: null, settingsPath: "/private/home/.claude/settings.json" };
+  const local = active("full"), globalId = "e".repeat(32), globalToken = "e".repeat(64), globalBinding = { ...binding("metadata", globalId), scope: "global" as const, workspace: null, settingsPath: "/private/profile/.claude/settings.json" };
   const receipt = store.prepareInstallation(globalBinding, globalToken, "f".repeat(64)); store.commitInstallation(globalId, receipt.installationGeneration, globalToken, "f".repeat(64), receipt.ownerGeneration);
   const global = admit(globalToken, sourceIdentity); expect(global.sourceKey).toBe(local.sourceKey); expect(global.runId).toBe(local.runId); expect(global.captureMode).toBe("metadata");
   const foreignId = "f".repeat(32), foreignToken = "f".repeat(64), foreignBinding = { ...binding("full", foreignId), workspace: "/private/other-project", registeredWorkspace: "/private/other-project", projectDirectory: "/private/projects/other-project", settingsPath: "/private/other-project/.claude/settings.local.json" };
