@@ -82,7 +82,7 @@ test("actual app review selects, commits, reloads and separately replays a CSS p
     expect(current.revision).not.toBe(flow.revision); expect(current.steps[0].command).toEqual(flow.steps[0].command); expect(current.steps[0].predicate).toEqual(flow.steps[0].predicate);
     expect(current.steps[0].anchor).toMatchObject({ kind: "semantic", query: { kind: "test-id", testId: "order-42" }, source: { file: "src/Checkout.tsx", line: 12 } }); expect(JSON.stringify(current)).not.toContain("rpref_");
     await ui.reload(); await expect(ui.getByText("Order review flow", { exact: true })).toBeVisible();
-    await page.locator("#current").evaluate(element => { element.id = "presentation-renamed"; element.className = "new-presentation"; });
+    await page.locator("#current").evaluate(element => { element.id = "presentation-renamed"; element.setAttribute("class", "new-presentation"); });
     await ui.getByRole("button", { name: "Replay Order review flow" }).click(); await expect.poll(async () => (await effects(page)).clicks).toBe(1);
     await expect(ui.getByRole("status").filter({ hasText: "Order review flow: pass" })).toBeVisible();
     expect((await observe(request, runPhantom, session.id)).events.filter(event => event.type === "action.boundary")).toHaveLength(1);
