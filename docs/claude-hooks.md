@@ -55,13 +55,40 @@ transport, including under full consent and ambient redaction exemptions.
 
 Metadata retains no prompt, argument, result or assistant body. Exact message
 identities retain usage once, without root rollups. Stop is a turn claim;
-SessionEnd is a separate session closure claim. SubagentStop advances only the
-registered main transcript and retains an advisory producer-reported subagent
-terminal claim; its independent agent path never contributes a cursor or body.
-Independent subagent transcript capture remains pending a separate bounded source
-model. Observations remain producer
-reported, runtime unverified and explicitly partial. Conflicts and absent source
-identity or counts remain visible rather than inferred as success or zero.
+SessionEnd is a separate session closure claim. New installations use main-only
+capture: SubagentStop advances only the registered main transcript and retains an
+advisory producer-reported subagent terminal claim.
+
+Independent agent transcripts require a separate manual activation while the
+current daemon is running. Use the installation ID returned by installation:
+
+```sh
+runphantom hooks activate-context-v2 claude --installation-id <opaque ID>
+```
+
+If global and local installations share a registered root, select every sharing
+installation with another `--installation-id` argument. An incomplete sharing
+selection refuses without changing authority. The current owner, installation,
+settings and catalog versions must still match. Activation pauses and drains old
+callbacks before refreshing private credentials; it preserves existing metadata
+or explicit full consent, unknown settings handlers, source identities and old
+evidence. It grants no new workspace or body policy. An unchanged repeated
+activation preserves current credentials. A failed transition remains disabled
+or paused and requires current-owner recovery; it never restores an old token.
+
+For a newly observed source identity after activation, the main transcript and up
+to 32 independent agent transcripts keep separate bounded file identities and
+cursors. A child transcript cannot advance the main cursor or close the session.
+An assistant identity appearing in multiple contexts retains usage once; conflicting
+observations refuse instead of replacing prior evidence. Existing main-only
+sessions remain main-only, and deleted identities remain suppressed. Callback
+JSON cannot choose the transport: the current authenticated server catalog does.
+The selection response is read-only and checked against both current generations
+before transcript acquisition. No failed selection falls back to another protocol.
+
+Observations remain producer reported, runtime unverified and explicitly partial.
+Conflicts and absent source identity or counts remain visible rather than inferred
+as success or zero.
 
 Startup migrates the actual owner SQLite connection before acquiring one exclusive
 loopback lifetime lease derived from its canonical path. The lease port lies in
