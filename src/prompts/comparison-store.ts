@@ -181,6 +181,7 @@ export class ComparisonStore {
       const head = this.#head(id); if (head.tombstone) throw new ComparisonError("deleted"); const receipt = this.#receipt(head), row = receipt.attempts[position];
       if (!row || row.status !== "running") throw new ComparisonError("operation_conflict");
       let charge = row.reserveMicrousd, state = "conservative", observed: string | null = null, breach = 0, payload: string | null = null, reason: string | null = null;
+      let status: ComparisonAttemptStatus = outcome.status;
       if (outcome.status === "completed") {
         promptText(outcome.result.output, L.attemptPayloadBytes); const priced = estimateComparisonUsage(receipt.request!.targets[position], outcome.result.usage, receipt.request!.rates[position]);
         const total = priced.estimate.totalUsd;
@@ -189,16 +190,19 @@ export class ComparisonStore {
         let inputMinimum = known(observations.inputTokens) ? observations.inputTokens : 0;
         if (row.provider === "anthropic") for (const value of [observations.cacheReadTokens, observations.cacheWriteTokens]) if (known(value)) inputMinimum += value;
         if (!Number.isSafeInteger(inputMinimum) || inputMinimum > reservation.inputTokenCeiling || known(observations.outputTokens) && observations.outputTokens > receipt.request!.options.maxOutputTokens) breach = 1;
-        payload = comparisonJson({ ...outcome.result, ...priced }, L.attemptPayloadBytes);
         if (total !== null && Number.isFinite(total) && total >= 0) {
           observed = String(total); const amount = Math.ceil(total * 1000000); breach = breach || (amount > row.reserveMicrousd ? 1 : 0);
           if (Number.isSafeInteger(amount) && amount <= chargeCap) { charge = amount; state = "measured_estimate"; }
           else { state = "unrepresentable_overage"; breach = 1; }
         }
+        try { payload = comparisonJson({ ...outcome.result, ...priced }, L.attemptPayloadBytes); }
+        catch (error) {
+          if (!(error instanceof ComparisonError) || error.code !== "limit_refused") throw error;
+          status = "failed"; reason = "response_limit";
+        }
       } else { if (!reasons.has(outcome.reason)) throw new ComparisonError("invalid_request"); reason = outcome.reason; }
       const currentBytes = this.#get<{ n: number }>(`SELECT ${attemptContent.map(column => `coalesce(${bytes(column)},0)`).join("+")} n FROM prompt_comparison_attempts WHERE scope_key=? AND comparison_id=? AND position=?`, this.#scope, id, position)!.n;
       const retained = this.#totals().bytes - currentBytes;
-      let status: ComparisonAttemptStatus = outcome.status;
       const cleanupBytes = this.#cleanupRetention(id, position);
       if (retained + contentBytes(status, reason, payload, state, observed) + cleanupBytes > L.retainedBytes && payload !== null) {
         status = "failed"; reason = "response_limit"; payload = null;

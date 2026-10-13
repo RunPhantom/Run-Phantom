@@ -12,6 +12,8 @@ import { ComparisonStore } from "../src/prompts/comparison-store";
 import { COMPARISON_STORAGE_SQL } from "../src/prompts/comparison-storage";
 import { COMPARISON_MODELS, COMPARISON_LIMITS } from "../src/prompts/comparison-protocol";
 import { estimateComparisonUsage } from "../src/prompts/spend-ledger";
+import { createComparisonProviderClient } from "../src/prompts/providers";
+import { ComparisonCoordinator } from "../src/prompts/comparison";
 
 let directory: string, file: string, db: Database, prompts: PromptRegistry, store: ComparisonStore;
 let lease: Awaited<ReturnType<typeof acquireComparisonOwner>>;
@@ -136,6 +138,75 @@ test("unknown long-context pricing preserves observed counts and full charge whi
   const receipt = store.finish(operation.id, 0, fence, { status: "completed", result: { output: "Answer", finishReason: "stop", provenance: "controlled-http-fixture", usage: { model: "gpt-5.4", inputTokens: 272001, contextTokens: 272001, cacheReadTokens: 0, outputTokens: 1, tier: "standard" } } });
   const row = receipt.attempts[0]; expect(row.accountingState).toBe("conservative"); expect(row.chargeMicrousd).toBe(row.reserveMicrousd); expect(row.budgetBreach).toBe(true); expect(row.payload).toMatchObject({ usage: { categories: { input: { count: 272001 } } }, estimate: { totalUsd: null } });
   expect(store.start(operation.id, 1, fence)).toBeNull();
+});
+
+test("retained payload accounting keeps measured overage and admission fuse through same-file reopen", async () => {
+  const first = saved(), operation = store.submit(request(first.id, randomUUID(), [COMPARISON_MODELS[1]]), store.capture("edit")), fence = store.capture("edit");
+  store.start(operation.id, 0, fence);
+  const result = { output: "x".repeat(7900), finishReason: "stop", provenance: "controlled-http-fixture", usage: { model: "gpt-4.1", inputTokens: 1000000, outputTokens: 1, cacheReadTokens: 0, tier: "standard" } };
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(COMPARISON_LIMITS.attemptPayloadBytes);
+  const priced = estimateComparisonUsage(COMPARISON_MODELS[1], result.usage, operation.request!.rates[0]);
+  expect(Buffer.byteLength(JSON.stringify({ ...result, ...priced }))).toBeGreaterThan(COMPARISON_LIMITS.attemptPayloadBytes);
+  const receipt = store.finish(operation.id, 0, fence, { status: "completed", result });
+  expect(receipt.attempts[0]).toMatchObject({ status: "failed", reason: "response_limit", payload: null, chargeMicrousd: 2000008, accountingState: "measured_estimate", observedEstimateUsd: "2.000008", budgetBreach: true });
+  expect(store.budgetTotals().openai).toMatchObject({ chargeMicrousd: 2000008, holdMicrousd: 0, breached: true });
+  await lease.close(); db.close(); db = new Database(file); lease = await acquireComparisonOwner(file);
+  prompts = new PromptRegistry(owner(db)); store = new ComparisonStore(owner(db), lease, { budgets, availability: { openai: true, anthropic: true } });
+  expect(store.get(operation.id, store.capture("read"))).toEqual(receipt);
+  expect(store.submit(request(first.id, randomUUID(), [COMPARISON_MODELS[1]]), store.capture("edit")).attempts[0].status).toBe("budget_refused");
+  const clear = store.capture("delete"); store.clear({ operationKey: randomUUID(), expectedGeneration: clear.comparisonGeneration, confirmRemoval: true }, clear);
+  expect(store.budgetTotals().openai).toMatchObject({ chargeMicrousd: 2000008, holdMicrousd: 0, breached: true });
+  expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+});
+
+test("retained payload accounting preserves an unrepresentable overage without refund or false measured charge", () => {
+  const operation = store.submit(request(saved().id, randomUUID(), [COMPARISON_MODELS[1]]), store.capture("edit")), fence = store.capture("edit");
+  store.start(operation.id, 0, fence);
+  const receipt = store.finish(operation.id, 0, fence, { status: "completed", result: { output: "x".repeat(7900), finishReason: "stop", provenance: "controlled-http-fixture", usage: { model: "gpt-4.1", inputTokens: 2000000000000, outputTokens: 1, cacheReadTokens: 0, tier: "standard" } } });
+  expect(receipt.attempts[0]).toMatchObject({ status: "failed", reason: "response_limit", payload: null, chargeMicrousd: operation.attempts[0].reserveMicrousd, accountingState: "unrepresentable_overage", budgetBreach: true });
+  expect(Number(receipt.attempts[0].observedEstimateUsd)).toBeGreaterThan(2251799);
+  expect(store.budgetTotals().openai.breached).toBe(true);
+});
+
+test("retained payload accounting keeps unknown-price input breach conservative and fused", () => {
+  const operation = store.submit(request(saved().id, randomUUID(), [COMPARISON_MODELS[0]]), store.capture("edit")), fence = store.capture("edit");
+  store.start(operation.id, 0, fence);
+  const receipt = store.finish(operation.id, 0, fence, { status: "completed", result: { output: "x".repeat(7900), finishReason: "stop", provenance: "controlled-http-fixture", usage: { model: "gpt-5.4", inputTokens: 272001, contextTokens: 272001, outputTokens: 1, cacheReadTokens: 0, tier: "standard" } } });
+  expect(receipt.attempts[0]).toMatchObject({ status: "failed", reason: "response_limit", payload: null, chargeMicrousd: operation.attempts[0].reserveMicrousd, accountingState: "conservative", observedEstimateUsd: null, budgetBreach: true });
+  expect(store.budgetTotals().openai.breached).toBe(true);
+});
+
+test("retained payload accounting preserves invalid output refusal atomically", () => {
+  const operation = store.submit(request(saved().id, randomUUID(), [COMPARISON_MODELS[1]]), store.capture("edit")), fence = store.capture("edit");
+  store.start(operation.id, 0, fence); const before = store.get(operation.id, fence), budget = store.budgetTotals();
+  expect(() => store.finish(operation.id, 0, fence, { status: "completed", result: { output: "x".repeat(7900) + "\0", finishReason: "stop", provenance: "controlled-http-fixture", usage: { model: "gpt-4.1", inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, tier: "standard" } } })).toThrow();
+  expect(store.get(operation.id, fence)).toEqual(before); expect(store.budgetTotals()).toEqual(budget);
+});
+
+test("retained payload accounting survives the actual adapter and coordinator before reopening its native file", async () => {
+  let calls = 0;
+  const endpoint = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(message) {
+    const body = await message.json() as { model: string; store: boolean; service_tier: string; max_completion_tokens: number };
+    expect(body).toMatchObject({ model: "gpt-4.1", store: false, service_tier: "default", max_completion_tokens: 128 }); calls++;
+    return Response.json({ model: "gpt-4.1", service_tier: "default", choices: [{ message: { role: "assistant", content: "x".repeat(7900) }, finish_reason: "stop" }], usage: { prompt_tokens: 1000000, completion_tokens: 1, prompt_tokens_details: { cached_tokens: 0 } } });
+  } });
+  const client = createComparisonProviderClient({ credentials: { openai: "controlled-private-fixture" }, transport: (_official, init) => fetch(`http://127.0.0.1:${endpoint.port}/controlled`, init), provenance: "controlled-http-fixture" });
+  const coordinator = new ComparisonCoordinator(lease, client);
+  try {
+    const first = saved(), input = request(first.id, randomUUID(), [COMPARISON_MODELS[1]]);
+    const operation = coordinator.submit(store, input, store.capture("edit")); await coordinator.idle();
+    expect(calls).toBe(1);
+    const receipt = store.get(operation.id, store.capture("read"));
+    expect(receipt.attempts[0]).toMatchObject({ status: "failed", reason: "response_limit", payload: null, chargeMicrousd: 2000008, accountingState: "measured_estimate", observedEstimateUsd: "2.000008", budgetBreach: true });
+    const refused = coordinator.submit(store, { ...input, operationKey: randomUUID() }, store.capture("edit")); await coordinator.idle();
+    expect(refused.attempts[0].status).toBe("budget_refused"); expect(calls).toBe(1);
+    await coordinator.close(); db.close(); db = new Database(file); lease = await acquireComparisonOwner(file);
+    prompts = new PromptRegistry(owner(db)); store = new ComparisonStore(owner(db), lease, { budgets, availability: { openai: true, anthropic: true } });
+    expect(store.get(operation.id, store.capture("read"))).toEqual(receipt);
+    expect(store.budgetTotals().openai).toMatchObject({ chargeMicrousd: 2000008, holdMicrousd: 0, breached: true });
+    expect(store.submit({ ...input, operationKey: randomUUID() }, store.capture("edit")).attempts[0].status).toBe("budget_refused");
+    expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]); expect(db.query("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
+  } finally { await coordinator.close(); await endpoint.stop(true); }
 });
 
 function retainedBytes() {
