@@ -90,47 +90,71 @@ export async function executeFrozen(frozen: DatasetExecution, dispatch: Endpoint
   const deadline = result.createdAt + result.request.timeoutMs;
   const timer = setTimeout(abort, Math.max(0, deadline - Date.now()));
   result.status = "running";
-  const publish = () => options.publish?.(structuredClone(result)); publish();
+  let failed = false, failure: unknown;
+  const publish = () => { if (!failed) options.publish?.(structuredClone(result)); };
   let cursor = 0;
   const finish = (attempt: ExecutionAttempt, status: ExecutionAttempt["status"], reason: string) => {
     attempt.status = status; attempt.reason = reason; attempt.completedAt = Date.now();
   };
   const worker = async () => {
-    while (cursor < result.cases.length) {
-      const item = result.cases[cursor++];
-      for (const attempt of item.attempts) {
-        if (controller.signal.aborted) { finish(attempt, options.signal?.aborted ? "cancelled" : "timed_out", "Stopped before completion"); continue; }
-        const input = item.case.input, safe = input === null ? null : sanitizeSnapshotText(input);
-        if (input === null || item.case.sourceRedacted || item.case.sourceTruncated || !safe || safe.redacted || safe.truncated || safe.value !== input) {
-          finish(attempt, "unavailable", "Frozen input is missing or withheld"); continue;
-        }
-        const release = await slots.acquire(controller.signal);
-        if (!release || controller.signal.aborted) { release?.(); finish(attempt, options.signal?.aborted ? "cancelled" : "timed_out", "Dispatch admission unavailable before deadline"); continue; }
-        attempt.status = "running"; attempt.startedAt = Date.now(); attempt.sideEffects = "may_have_occurred"; publish();
-        let settle!: (value: DispatchResult | null) => void;
-        const observed = new Promise<DispatchResult | null>(resolve => { settle = resolve; });
-        const stopped = () => settle(null); controller.signal.addEventListener("abort", stopped, { once: true });
-        // Both success and rejection release only after the real callback, even if the caller ignores abort.
-        Promise.resolve().then(() => dispatch(result.request, structuredClone(item), structuredClone(attempt), controller.signal))
-          .then(value => { release(); settle(value); }, () => { release(); settle({ status: "failed", runId: null, actualCostUsd: null }); });
-        const value = await observed; controller.signal.removeEventListener("abort", stopped);
-        if (!value || controller.signal.aborted) { finish(attempt, options.signal?.aborted ? "cancelled" : "timed_out", "Dispatch stopped; external side effects may have occurred"); }
-        else {
-          if (!["transport_success", "failed", "unavailable"].includes(value.status) || (value.actualCostUsd !== null && (!Number.isFinite(value.actualCostUsd) || value.actualCostUsd < 0 || dollars(value.actualCostUsd) > dollars(result.request.maxCostPerAttemptUsd)))) {
-            finish(attempt, "unavailable", "Endpoint completion or usage is outside the frozen contract"); controller.abort();
-          } else {
-            finish(attempt, value.status, value.status === "transport_success" ? "Endpoint dispatch completed; captured grading is separate" : "Endpoint did not complete successfully");
-            try { attempt.runId = value.runId === null ? null : parseId(value.runId); attempt.actualCostUsd = value.actualCostUsd; }
-            catch { finish(attempt, "unavailable", "Endpoint returned an invalid capture identity"); attempt.runId = null; }
+    try {
+      while (cursor < result.cases.length) {
+        const item = result.cases[cursor++];
+        for (const attempt of item.attempts) {
+          if (controller.signal.aborted) { finish(attempt, options.signal?.aborted ? "cancelled" : "timed_out", "Stopped before completion"); continue; }
+          const input = item.case.input, safe = input === null ? null : sanitizeSnapshotText(input);
+          if (input === null || item.case.sourceRedacted || item.case.sourceTruncated || !safe || safe.redacted || safe.truncated || safe.value !== input) {
+            finish(attempt, "unavailable", "Frozen input is missing or withheld"); continue;
+          }
+          const release = await slots.acquire(controller.signal);
+          if (!release || controller.signal.aborted) { release?.(); finish(attempt, options.signal?.aborted ? "cancelled" : "timed_out", "Dispatch admission unavailable before deadline"); continue; }
+          let handedOff = false, stopped: (() => void) | undefined;
+          try {
+            attempt.status = "running"; attempt.startedAt = Date.now(); attempt.sideEffects = "may_have_occurred"; publish();
+            if (controller.signal.aborted) { finish(attempt, options.signal?.aborted ? "cancelled" : "timed_out", "Stopped before endpoint callback"); continue; }
+            // Prepare arguments while the worker still owns the permit: publication or cloning may throw.
+            const capturedItem = structuredClone(item), capturedAttempt = structuredClone(attempt);
+            let settle!: (value: DispatchResult | null) => void;
+            const observed = new Promise<DispatchResult | null>(resolve => { settle = resolve; });
+            stopped = () => settle(null); controller.signal.addEventListener("abort", stopped, { once: true });
+            let callback: Promise<DispatchResult>;
+            handedOff = true;
+            try { callback = Promise.resolve(dispatch(result.request, capturedItem, capturedAttempt, controller.signal)); }
+            catch { callback = Promise.resolve({ status: "failed", runId: null, actualCostUsd: null }); }
+            // After handoff only actual callback settlement releases the permit, even if it ignores abort.
+            callback.then(value => { release(); settle(value); }, () => { release(); settle({ status: "failed", runId: null, actualCostUsd: null }); });
+            const value = await observed;
+            if (!value || controller.signal.aborted) { finish(attempt, options.signal?.aborted ? "cancelled" : "timed_out", "Dispatch stopped; external side effects may have occurred"); }
+            else {
+              if (!["transport_success", "failed", "unavailable"].includes(value.status) || (value.actualCostUsd !== null && (!Number.isFinite(value.actualCostUsd) || value.actualCostUsd < 0 || dollars(value.actualCostUsd) > dollars(result.request.maxCostPerAttemptUsd)))) {
+                finish(attempt, "unavailable", "Endpoint completion or usage is outside the frozen contract"); controller.abort();
+              } else {
+                finish(attempt, value.status, value.status === "transport_success" ? "Endpoint dispatch completed; captured grading is separate" : "Endpoint did not complete successfully");
+                try { attempt.runId = value.runId === null ? null : parseId(value.runId); attempt.actualCostUsd = value.actualCostUsd; }
+                catch { finish(attempt, "unavailable", "Endpoint returned an invalid capture identity"); attempt.runId = null; }
+              }
+            }
+            publish();
+            if ((attempt as ExecutionAttempt).status === "transport_success") break;
+          } finally {
+            if (stopped) controller.signal.removeEventListener("abort", stopped);
+            if (!handedOff) release();
           }
         }
-        publish();
-        if ((attempt as ExecutionAttempt).status === "transport_success") break;
       }
+    } catch (cause) {
+      // Record synchronously before another granted worker can begin a callback.
+      if (!failed) { failed = true; failure = cause; }
+      controller.abort();
     }
   };
-  try { await Promise.all(Array.from({ length: result.request.concurrency }, worker)); }
+  try {
+    publish();
+    // Aborting observation settles peers promptly; their actual callbacks still own any permits.
+    await Promise.all(Array.from({ length: result.request.concurrency }, worker));
+    if (failed) throw failure;
+    result.status = options.signal?.aborted ? "cancelled" : "completed"; result.completedAt = Date.now(); publish();
+    return result;
+  } catch (cause) { controller.abort(); throw cause; }
   finally { clearTimeout(timer); options.signal?.removeEventListener("abort", abort); }
-  result.status = options.signal?.aborted ? "cancelled" : "completed"; result.completedAt = Date.now(); publish();
-  return result;
 }

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, spyOn } from "bun:test";
 import { freezeExecution, parseExecutionDraft, executeFrozen, DispatchSlots } from "../src/evaluations/executor";
 import http from "node:http";
 import { once } from "node:events";
@@ -113,4 +113,82 @@ test("actual private HTTP calls share two global slots and admission deadline re
   } finally {
     for (const response of responses) response.end(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
   }
+});
+
+test("publication revocation after slot admission returns the unhanded permit and original error", async () => {
+  const frozen = freezeExecution({ ...revision(), cases: revision().cases.slice(0, 1) }, parseExecutionDraft(draft({ concurrency: 1, timeoutMs: 1000 })));
+  const slots = new DispatchSlots(); let calls = 0, publications = 0;
+  const authorityError = new Error("Owned publication authority revoked after slot admission");
+  const rejected = await executeFrozen(frozen, async () => { calls++; return { status: "transport_success", runId: null, actualCostUsd: null }; }, {
+    slots, publish() { if (++publications === 2) throw authorityError; },
+  }).catch((cause: unknown) => cause);
+  expect(rejected).toBe(authorityError);
+  expect(calls).toBe(0); expect(publications).toBe(2); expect(slots.counts()).toEqual({ active: 0, queued: 0 });
+});
+
+test("initial publication failure clears its deadline and external abort listener", async () => {
+  const controller = new AbortController(), slots = new DispatchSlots();
+  const set = spyOn(globalThis, "setTimeout"), clear = spyOn(globalThis, "clearTimeout");
+  const add = spyOn(controller.signal, "addEventListener"), remove = spyOn(controller.signal, "removeEventListener");
+  try {
+    const frozen = freezeExecution(revision(), parseExecutionDraft(draft({ timeoutMs: 1000 })));
+    const authorityError = new Error("Initial authority unavailable");
+    const rejected = await executeFrozen(frozen, async () => { throw new Error("Must not dispatch"); }, { slots, signal: controller.signal,
+      publish() { throw authorityError; } }).catch((cause: unknown) => cause);
+    expect(rejected).toBe(authorityError);
+    expect(set).toHaveBeenCalledTimes(1); expect(clear).toHaveBeenCalledTimes(1);
+    expect(clear.mock.calls[0][0] === set.mock.results[0].value).toBe(true);
+    expect(add).toHaveBeenCalledTimes(1); expect(remove).toHaveBeenCalledTimes(1);
+    expect(remove.mock.calls[0][1]).toBe(add.mock.calls[0][1]); expect(slots.counts()).toEqual({ active: 0, queued: 0 });
+  } finally {
+    for (const timer of set.mock.results) if (timer.type === "return") clearTimeout(timer.value);
+    set.mockRestore(); clear.mockRestore(); add.mockRestore(); remove.mockRestore();
+  }
+});
+
+test("asynchronous slot grant followed by revoked publication releases only that grant", async () => {
+  const slots = new DispatchSlots(), controller = new AbortController();
+  const first = (await slots.acquire(controller.signal))!, second = (await slots.acquire(controller.signal))!;
+  const frozen = freezeExecution({ ...revision(), cases: revision().cases.slice(0, 1) }, parseExecutionDraft(draft({ concurrency: 1, timeoutMs: 1000 })));
+  let calls = 0, publications = 0;
+  const pending = executeFrozen(frozen, async () => { calls++; return { status: "transport_success", runId: null, actualCostUsd: null }; }, {
+    slots, publish() { if (++publications === 2) throw new Error("Queued grant authority revoked"); },
+  });
+  const rejected = pending.then(() => null, cause => cause);
+  try {
+    expect(slots.counts()).toEqual({ active: 2, queued: 1 }); first();
+    expect((await rejected as Error).message).toBe("Queued grant authority revoked");
+    expect(calls).toBe(0); expect(slots.counts()).toEqual({ active: 1, queued: 0 });
+  } finally { first(); second(); }
+  expect(slots.counts()).toEqual({ active: 0, queued: 0 });
+});
+
+test("worker publication failure aborts and joins peers without releasing their actual held callbacks", async () => {
+  const frozen = freezeExecution({ ...revision(), cases: revision().cases.slice(0, 2) }, parseExecutionDraft(draft({ timeoutMs: 1000 })));
+  const slots = new DispatchSlots(); let publications = 0, calls = 0, signal: AbortSignal | undefined;
+  const authorityError = new Error("Parallel publication owner revoked");
+  let settle!: (value: { status: "transport_success"; runId: null; actualCostUsd: null }) => void;
+  const pending = executeFrozen(frozen, async (_request, _item, _attempt, observedSignal) => {
+    calls++; signal = observedSignal; return new Promise(resolve => { settle = resolve; });
+  }, { slots, publish() { if (++publications === 3) throw authorityError; } });
+  try {
+    expect(await pending.catch((cause: unknown) => cause)).toBe(authorityError);
+    expect(calls).toBe(1); expect(signal?.aborted).toBe(true); expect(slots.counts()).toEqual({ active: 1, queued: 0 });
+    const rejectedPublications = publications;
+    settle({ status: "transport_success", runId: null, actualCostUsd: null });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(slots.counts()).toEqual({ active: 0, queued: 0 }); expect(publications).toBe(rejectedPublications);
+  } finally { settle?.({ status: "transport_success", runId: null, actualCostUsd: null }); }
+});
+
+test("first worker failure prevents a concurrently granted peer from starting its callback", async () => {
+  const frozen = freezeExecution({ ...revision(), cases: revision().cases.slice(0, 2) }, parseExecutionDraft(draft({ timeoutMs: 1000 })));
+  const slots = new DispatchSlots(); let calls = 0, publications = 0;
+  const authorityError = new Error("First worker authority revoked");
+  const rejected = await executeFrozen(frozen, async () => { calls++; return { status: "transport_success", runId: null, actualCostUsd: null }; }, {
+    slots, publish() { if (++publications === 2) throw authorityError; },
+  }).catch((cause: unknown) => cause);
+  expect(rejected).toBe(authorityError);
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  expect(calls).toBe(0); expect(publications).toBe(2); expect(slots.counts()).toEqual({ active: 0, queued: 0 });
 });
