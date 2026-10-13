@@ -7,9 +7,9 @@ import { promptInteger, promptText } from "./protocol";
 
 const observedAt = "2026-10-13T00:00:00.000Z";
 const quotes = {
-  "gpt-4.1-mini": { input: 0.4, output: 1.6, cache: 0.1, reference: "https://developers.openai.com/api/docs/models/gpt-4.1-mini", alias: "gpt-4.1-mini-2025-04-14" },
+  "gpt-5.4": { input: 2.5, output: 15, cache: 0.25, reference: "https://developers.openai.com/api/docs/models/gpt-5.4", alias: "gpt-5.4-2026-03-05" },
   "gpt-4.1": { input: 2, output: 8, cache: 0.5, reference: "https://developers.openai.com/api/docs/models/gpt-4.1", alias: "gpt-4.1-2025-04-14" },
-  "claude-haiku-4-5-20251001": { input: 1, output: 5, cache: 0.1, reference: "https://platform.claude.com/docs/en/about-claude/pricing", alias: null },
+  "claude-opus-4-6": { input: 5, output: 25, cache: 0.5, reference: "https://platform.claude.com/docs/en/about-claude/pricing", alias: null },
   "claude-sonnet-4-6": { input: 3, output: 15, cache: 0.3, reference: "https://platform.claude.com/docs/en/about-claude/pricing", alias: null },
 } as const;
 const priced = (usdPerMillionTokens: number): CategoryRate => ({ kind: "priced", usdPerMillionTokens });

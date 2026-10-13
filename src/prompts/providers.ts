@@ -1,6 +1,6 @@
 import { strictEvidenceJson } from "../evaluations/evidence-reader/json";
 import { readerLimits } from "../evaluations/evidence-reader/limits";
-import { COMPARISON_LIMITS, comparisonJson, comparisonTarget, type ComparisonOptions, type ComparisonProvider, type ComparisonTarget } from "./comparison-protocol";
+import { COMPARISON_LIMITS, comparisonJson, comparisonTarget, comparisonFamily, type ComparisonOptions, type ComparisonProvider, type ComparisonTarget } from "./comparison-protocol";
 import { promptInteger, promptText } from "./protocol";
 import type { ComparisonUsage } from "./spend-ledger";
 
@@ -53,8 +53,9 @@ export function createComparisonProviderClient(client: ClientOptions = {}) {
       if (!Number.isFinite(remaining) || remaining <= 0 || remaining > COMPARISON_LIMITS.attemptMs) throw new ComparisonProviderError("timeout", false);
       const timer = setTimeout(() => timeout.abort(), remaining), signal = AbortSignal.any([input.signal, timeout.signal]);
       const token = client.credentials?.[target.provider] ?? process.env[target.provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY"]!;
-      const body = target.provider === "openai" ? { model: target.model, messages: [{ role: "user", content: compiled }], max_completion_tokens: outputTokens, temperature: input.options.temperature, stream: false }
-        : { model: target.model, messages: [{ role: "user", content: compiled }], max_tokens: outputTokens, temperature: input.options.temperature, stream: false };
+      const family = comparisonFamily(target);
+      const body = target.provider === "openai" ? { model: target.model, messages: [{ role: "user", content: compiled }], max_completion_tokens: outputTokens, temperature: input.options.temperature, stream: false, store: false, service_tier: "default", ...(family.reasoningEffort ? { reasoning_effort: family.reasoningEffort } : {}) }
+        : { model: target.model, messages: [{ role: "user", content: compiled }], max_tokens: outputTokens, temperature: input.options.temperature, stream: false, thinking: { type: "disabled" }, service_tier: "standard_only", inference_geo: "global" };
       const headers: Record<string, string> = target.provider === "openai" ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
         : { "Content-Type": "application/json", "x-api-key": token, "anthropic-version": "2023-06-01" };
       let sent = false;
@@ -77,9 +78,12 @@ export function createComparisonProviderClient(client: ClientOptions = {}) {
         catch (error) { throw new ComparisonProviderError(error instanceof Error && "code" in error && error.code === "credentials" ? "protected_content" : "response_limit", true); }
         const cached = target.provider === "openai" && usage.prompt_tokens_details !== undefined ? object(usage.prompt_tokens_details).cached_tokens : usage.cache_read_input_tokens;
         const reasoning = target.provider === "openai" && usage.completion_tokens_details !== undefined ? object(usage.completion_tokens_details).reasoning_tokens : undefined;
+        const observedTier = usage.service_tier ?? raw.service_tier;
+        const tier = target.provider === "openai" ? observedTier === "default" ? "standard" : observedTier ?? "unknown"
+          : observedTier === "standard" && usage.inference_geo === "global" ? "standard" : "unknown";
         const result: ComparisonProviderResult = { output, finishReason, provenance, usage: { model: raw.model,
           inputTokens: target.provider === "openai" ? usage.prompt_tokens : usage.input_tokens, outputTokens: target.provider === "openai" ? usage.completion_tokens : usage.output_tokens,
-          cacheReadTokens: cached, ...(target.provider === "anthropic" ? { cacheWriteTokens: usage.cache_creation_input_tokens } : {}), reasoningTokens: reasoning, tier: usage.service_tier ?? raw.service_tier ?? "standard" } };
+          cacheReadTokens: cached, ...(target.provider === "anthropic" ? { cacheWriteTokens: usage.cache_creation_input_tokens } : {}), reasoningTokens: reasoning, tier } };
         try { comparisonJson(result, COMPARISON_LIMITS.attemptPayloadBytes); } catch { throw new ComparisonProviderError("response_limit", true); }
         return result;
       } catch (error) {

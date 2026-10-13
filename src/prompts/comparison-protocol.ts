@@ -7,8 +7,8 @@ export const COMPARISON_LIMITS = Object.freeze({ targets: 4, active: 2, queued: 
   outputTokens: 1024, attemptMs: 30000, operationsPerScope: 100, operationsGlobal: 1000, attemptsGlobal: 4000,
   controlsGlobal: 1000, retainedBytes: 33554432, operationBudgetMicrousd: 1000000, providerBudgetMicrousd: 30000000, listPage: 50 });
 export const COMPARISON_MODELS = Object.freeze([
-  Object.freeze({ provider: "openai", model: "gpt-4.1-mini" }), Object.freeze({ provider: "openai", model: "gpt-4.1" }),
-  Object.freeze({ provider: "anthropic", model: "claude-haiku-4-5-20251001" }), Object.freeze({ provider: "anthropic", model: "claude-sonnet-4-6" }),
+  Object.freeze({ provider: "openai", model: "gpt-5.4" }), Object.freeze({ provider: "openai", model: "gpt-4.1" }),
+  Object.freeze({ provider: "anthropic", model: "claude-opus-4-6" }), Object.freeze({ provider: "anthropic", model: "claude-sonnet-4-6" }),
 ] as const);
 export type ComparisonProvider = "openai" | "anthropic";
 export interface ComparisonTarget { readonly provider: ComparisonProvider; readonly model: string }
@@ -19,7 +19,18 @@ export interface ComparisonRequest {
 }
 export interface FrozenComparisonRequest extends ComparisonRequest {
   readonly policy: typeof COMPARISON_POLICY; readonly prompt: { readonly id: string; readonly revision: number; readonly name: string; readonly templateSha256: string };
-  readonly compiled: string;
+  readonly compiled: string; readonly families: readonly ComparisonFamily[];
+}
+export interface ComparisonFamily extends ComparisonTarget {
+  readonly version: "standard-text/v1"; readonly endpoint: "chat-completions" | "messages";
+  readonly reasoningEffort: "none" | null; readonly thinking: "disabled" | null;
+  readonly tier: "default" | "standard_only"; readonly inferenceGeo: "global" | null; readonly store: false;
+}
+export function comparisonFamily(targetValue: ComparisonTarget): ComparisonFamily {
+  const target = comparisonTarget(targetValue);
+  return Object.freeze({ ...target, version: "standard-text/v1", endpoint: target.provider === "openai" ? "chat-completions" : "messages",
+    reasoningEffort: target.model === "gpt-5.4" ? "none" : null, thinking: target.provider === "anthropic" ? "disabled" : null,
+    tier: target.provider === "openai" ? "default" : "standard_only", inferenceGeo: target.provider === "anthropic" ? "global" : null, store: false });
 }
 const messages = { invalid_request: "Comparison request is invalid.", limit_refused: "Comparison exceeds its limit.",
   source_conflict: "The selected prompt revision does not match.", operation_conflict: "Comparison operation key conflicts.",
@@ -66,7 +77,7 @@ export function freezeComparisonRequest(input: ComparisonRequest, source: Prompt
     || createHash("sha256").update(source.template).digest("hex") !== source.templateSha256) throw new ComparisonError("source_conflict");
   const compiled = promptText(literalPromptCompilation(source.template, input.variables), COMPARISON_LIMITS.inputBytes);
   const result = { ...input, variables: { ...input.variables }, targets: input.targets.map(target => Object.freeze({ ...target })), options: Object.freeze({ ...input.options }),
-    prompt: Object.freeze({ id: source.id, revision: source.revision, name: source.name, templateSha256: source.templateSha256 }), compiled, policy: COMPARISON_POLICY };
+    prompt: Object.freeze({ id: source.id, revision: source.revision, name: source.name, templateSha256: source.templateSha256 }), compiled, families: Object.freeze(input.targets.map(comparisonFamily)), policy: COMPARISON_POLICY };
   comparisonJson(result, COMPARISON_LIMITS.frozenRequestBytes);
   Object.freeze(result.variables); Object.freeze(result.targets); return Object.freeze(result);
 }
