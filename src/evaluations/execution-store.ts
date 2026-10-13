@@ -68,6 +68,7 @@ export interface ExecutionAccountingPolicy { costAccount: string; policyDigest: 
 interface Receipt { scope_key: string; operation_key: string; execution_id: string; request_digest: string; cost_account: string; endpoint_name: string;
   endpoint_policy_digest: string; job_token: string; status: string; created_at: number }
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+const RETAINED_CAP = 32 * 1024 * 1024;
 function encoded(value: DatasetExecution): string {
   const data = JSON.stringify(value);
   if (Buffer.byteLength(data) > L.MAX_RECORD_BYTES) throw new EvaluationError("Execution exceeds its retained bound", 413);
@@ -93,6 +94,39 @@ export class ExecutionStore {
     if (row.data === null || digest(row.data) !== row.digest) throw new EvaluationError("Execution integrity is unavailable", 409);
     return JSON.parse(row.data) as DatasetExecution;
   }
+  private stopReserve(execution: DatasetExecution): number {
+    const terminal = structuredClone(execution);
+    terminal.status = "interrupted"; terminal.completedAt = Number.MAX_SAFE_INTEGER;
+    for (const item of terminal.cases) for (const attempt of item.attempts) if (["not_started","running"].includes(attempt.status)) {
+      // Reserve future dispatch and the larger stop fields without changing retained observations.
+      attempt.status = "interrupted"; attempt.startedAt = Number.MAX_SAFE_INTEGER; attempt.completedAt = Number.MAX_SAFE_INTEGER;
+      attempt.sideEffects = "may_have_occurred"; attempt.reason = "Cancelled; possible external side effects are retained";
+    }
+    return Buffer.byteLength(JSON.stringify(terminal));
+  }
+  private fitsRetention(execution: DatasetExecution, data: string, reserveActive = true): boolean {
+    const bytes = Buffer.byteLength(data); if (bytes > L.MAX_RECORD_BYTES) return false;
+    const retained = (this.#db.query("SELECT coalesce(sum(length(cast(data AS BLOB))),0) bytes FROM dataset_execution_content").get() as { bytes: number }).bytes;
+    const prior = this.#db.query("SELECT length(cast(data AS BLOB)) bytes FROM dataset_execution_content WHERE execution_id=?").get(execution.id) as { bytes: number } | null;
+    let projected = retained - (prior?.bytes ?? 0) + bytes;
+    if (reserveActive) {
+      const pending = this.#db.query("SELECT r.execution_id id,length(cast(c.data AS BLOB)) bytes FROM dataset_execution_receipts r JOIN dataset_execution_content c ON c.execution_id=r.execution_id WHERE r.status IN ('queued','running') AND r.execution_id<>? LIMIT 3").all(execution.id) as Array<{id:string;bytes:number}>;
+      if (pending.length > L.MAX_ACTIVE) throw new EvaluationError("Execution active capacity is unavailable",409);
+      for (const row of pending) {
+        const value = this.read(row.id), reserve = this.stopReserve(value);
+        if (reserve > L.MAX_RECORD_BYTES) return false;
+        projected += Math.max(0,reserve-row.bytes);
+      }
+      if (["queued","running"].includes(execution.status)) {
+        const reserve = this.stopReserve(execution); if (reserve > L.MAX_RECORD_BYTES) return false;
+        projected += Math.max(0,reserve-bytes);
+      }
+    }
+    return Number.isSafeInteger(projected) && projected <= RETAINED_CAP;
+  }
+  private assertRetention(execution: DatasetExecution, data: string): void {
+    if (!this.fitsRetention(execution,data)) throw new EvaluationError("Execution retention capacity is full",409);
+  }
   get(id: string): DatasetExecution { return this.transaction(() => { this.receipt(id); return this.read(id); }); }
   admit(execution: DatasetExecution, policy: ExecutionAccountingPolicy): { execution: DatasetExecution; token: string; reused: boolean } {
     const data = encoded(execution);
@@ -105,7 +139,8 @@ export class ExecutionStore {
       const counts = this.#db.query("SELECT count(*) n,sum(status IN ('queued','running')) active FROM dataset_execution_receipts").get() as { n: number; active: number | null };
       const content = this.#db.query("SELECT count(*) n,coalesce(sum(length(cast(data AS BLOB))),0) bytes FROM dataset_execution_content").get() as { n: number; bytes: number };
       const planned = execution.cases.flatMap(item => item.attempts), totalAttempts = (this.#db.query("SELECT count(*) n FROM dataset_execution_attempts").get() as { n: number }).n;
-      if (counts.n >= 1000 || (counts.active ?? 0) >= L.MAX_ACTIVE || content.n >= L.MAX_OPERATIONS || content.bytes + Buffer.byteLength(data) > 32 * 1024 * 1024 || totalAttempts + planned.length > 5000) throw new EvaluationError("Execution retention or active capacity is full", 409);
+      if (counts.n >= 1000 || (counts.active ?? 0) >= L.MAX_ACTIVE || content.n >= L.MAX_OPERATIONS || content.bytes + Buffer.byteLength(data) > RETAINED_CAP || totalAttempts + planned.length > 5000) throw new EvaluationError("Execution retention or active capacity is full", 409);
+      this.assertRetention(execution,data);
       const reserve = Math.ceil(execution.request.maxCostPerAttemptUsd * 1_000_000);
       if (!policy.costAccount || policy.costAccount.length > 128 || !/^[a-f0-9]{64}$/.test(policy.policyDigest) || reserve !== policy.maximumAttemptMicrousd ||
         !Number.isSafeInteger(policy.maximumTotalMicrousd) || policy.maximumTotalMicrousd < 0 || policy.maximumTotalMicrousd > 30_000_000) throw new EvaluationError("Native cost authority is unavailable", 409);
@@ -131,7 +166,8 @@ export class ExecutionStore {
         const content = this.read(id), attempt = content.cases.flatMap(item => item.attempts).find(item => item.id === attemptId);
         if (!attempt) throw new EvaluationError("Attempt identity is unavailable", 409);
         attempt.status = "running"; attempt.startedAt = Date.now(); attempt.sideEffects = "may_have_occurred"; content.status = "running";
-        const data = encoded(content); this.#db.query("UPDATE dataset_execution_content SET data=?,digest=? WHERE execution_id=?").run(data,digest(data),id);
+        const data = encoded(content); this.assertRetention(content,data);
+        this.#db.query("UPDATE dataset_execution_content SET data=?,digest=? WHERE execution_id=?").run(data,digest(data),id);
       }
       return changed === 1;
     });
@@ -143,6 +179,7 @@ export class ExecutionStore {
       const prior = this.read(execution.id);
       const identity = (value: DatasetExecution) => JSON.stringify([value.id,value.requestDigest,value.request,value.dataset,value.createdAt,value.cases.map(item => [item.case,item.attempts.map(attempt => [attempt.id,attempt.index])])]);
       if (identity(prior) !== identity(execution)) throw new EvaluationError("Execution frozen identity changed", 409);
+      this.assertRetention(execution,data);
       for (const item of execution.cases) for (const attempt of item.attempts) {
         if (attempt.status === "running" || attempt.status === "not_started") continue; // Only begin() authorizes dispatch; queued work retains its hold.
         this.#db.query("UPDATE dataset_execution_attempts SET status=?,hold_microusd=0 WHERE execution_id=? AND attempt_id=? AND status IN ('not_started','running')").run(attempt.status, execution.id, attempt.id);
@@ -155,17 +192,35 @@ export class ExecutionStore {
   private stop(id: string, status: "cancelled" | "interrupted"): DatasetExecution {
     const receipt = this.receipt(id), execution = this.read(id);
     if (!["queued", "running"].includes(receipt.status)) return execution;
-    for (const item of execution.cases) for (const attempt of item.attempts) if (["not_started","running"].includes(attempt.status)) { attempt.status = status; attempt.reason = status === "cancelled" ? "Cancelled; possible external side effects are retained" : "Interrupted; no automatic execution on restart"; attempt.completedAt = Date.now(); }
+    const pending = new Set(execution.cases.flatMap(item => item.attempts.filter(attempt => ["not_started","running"].includes(attempt.status)).map(attempt => attempt.id)));
+    for (const item of execution.cases) for (const attempt of item.attempts) if (pending.has(attempt.id)) { attempt.status = status; attempt.reason = status === "cancelled" ? "Cancelled; possible external side effects are retained" : "Interrupted; no automatic execution on restart"; attempt.completedAt = Date.now(); }
     execution.status = status; execution.completedAt = Date.now();
+    let data = JSON.stringify(execution);
+    // Old records may predate lifecycle reservations. Preserve identity/charges while making any omission explicit.
+    if (!this.fitsRetention(execution,data,false)) {
+      execution.completedAt = null;
+      for (const item of execution.cases) if (item.attempts.some(attempt => pending.has(attempt.id))) {
+        for (const attempt of item.attempts) if (pending.has(attempt.id)) {
+          attempt.completedAt = null; attempt.reason = `${status === "cancelled" ? "Cancelled" : "Interrupted"}; retention omitted times`;
+        }
+        item.grading = {status:"inconclusive",checks:[],runId:null,reason:"retention omitted grading"};
+      }
+      data = JSON.stringify(execution);
+      if (!this.fitsRetention(execution,data,false)) throw new EvaluationError("Execution retention cannot represent its stop metadata",409);
+    }
     this.#db.query("UPDATE dataset_execution_attempts SET status=?,hold_microusd=0 WHERE execution_id=? AND status IN ('not_started','running')").run(status,id);
-    const data = encoded(execution); this.#db.query("UPDATE dataset_execution_content SET data=?,digest=?,completed_at=? WHERE execution_id=?").run(data,digest(data),execution.completedAt,id);
+    this.#db.query("UPDATE dataset_execution_content SET data=?,digest=?,completed_at=? WHERE execution_id=?").run(data,digest(data),execution.completedAt,id);
     this.#db.query("UPDATE dataset_execution_receipts SET status=?,job_token=? WHERE execution_id=?").run(status,randomUUID(),id); return execution;
   }
   cancel(id: string): DatasetExecution { return this.transaction(() => this.stop(id,"cancelled")); }
   /** Authority closure must already hold the exclusive kernel owner lease. Never called by construction. */
   recover(): void { this.transaction(() => { for (const row of this.#db.query("SELECT execution_id id FROM dataset_execution_receipts WHERE status IN ('queued','running')").all() as Array<{id:string}>) this.stop(row.id,"interrupted"); }); }
   clear(): void { this.transaction(() => {
-    for (const row of this.#db.query("SELECT execution_id id FROM dataset_execution_receipts WHERE status IN ('queued','running')").all() as Array<{id:string}>) this.stop(row.id,"cancelled");
+    // Content is removed in this transaction; persisting a larger stop snapshot first would waste retention capacity.
+    for (const row of this.#db.query("SELECT execution_id id FROM dataset_execution_receipts WHERE status IN ('queued','running')").all() as Array<{id:string}>) {
+      this.#db.query("UPDATE dataset_execution_attempts SET status='cancelled',hold_microusd=0 WHERE execution_id=? AND status IN ('not_started','running')").run(row.id);
+      this.#db.query("UPDATE dataset_execution_receipts SET status='cancelled',job_token=? WHERE execution_id=?").run(randomUUID(),row.id);
+    }
     this.#db.exec("DELETE FROM dataset_execution_content");
     this.#db.exec("UPDATE dataset_execution_receipts SET status='deleted' WHERE status<>'deleted'");
   }); }
