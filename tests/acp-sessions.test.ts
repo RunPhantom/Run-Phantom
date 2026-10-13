@@ -206,4 +206,35 @@ describe("bounded ACP native process sessions", () => {
       expect(await owned.service.availability(owned.cwd)).toMatchObject({available:true});reaped(owned.pids);
     }finally{await owned.dispose();}
   });
+  test("32 actual native-created sessions fill retention and the 33rd is refused before spawn", async () => {
+    const owned=setup();
+    try{
+      for(let index=0;index<32;index++){
+        owned.env.RUNPHANTOM_ACP_FIXTURE_SESSION_ID=`fixture_${index}`;
+        await owned.service.chat({backendUrl:"http://127.0.0.1:1",content:`Question ${index}`,cwd:owned.cwd},handlers().callbacks);
+      }
+      expect(owned.service.list(owned.cwd)).toHaveLength(32);expect(owned.pids).toHaveLength(32);
+      expect(await rejected(owned.service.chat({backendUrl:"http://127.0.0.1:1",content:"No 33rd session",cwd:owned.cwd},handlers().callbacks))).toMatchObject({category:"limit"});
+      expect(owned.pids).toHaveLength(32);reaped(owned.pids);
+    }finally{await owned.dispose();}
+  });
+  test("64 actual own transcript messages fill one session and further turns cannot spawn", async () => {
+    const owned=setup();const seen=handlers();
+    try{
+      for(let index=0;index<32;index++)await owned.service.chat({backendUrl:"http://127.0.0.1:1",content:`Turn ${index}`,cwd:owned.cwd,resumeSessionId:index?seen.id:undefined},seen.callbacks);
+      expect(owned.service.get(owned.cwd,seen.id)?.messages).toHaveLength(64);expect(owned.pids).toHaveLength(32);
+      expect(await rejected(owned.service.chat({backendUrl:"http://127.0.0.1:1",content:"Too many messages",cwd:owned.cwd,resumeSessionId:seen.id},handlers().callbacks))).toMatchObject({category:"limit"});
+      expect(owned.pids).toHaveLength(32);reaped(owned.pids);
+    }finally{await owned.dispose();}
+  });
+  test("retained content limit includes previous turns and refuses excessive prompt without native dispatch", async () => {
+    const owned=setup();const seen=handlers();
+    try{
+      for(let index=0;index<3;index++)await owned.service.chat({backendUrl:"http://127.0.0.1:1",content:"x".repeat(16_384),cwd:owned.cwd,resumeSessionId:index?seen.id:undefined},seen.callbacks);
+      expect(owned.pids).toHaveLength(3);
+      const before=owned.service.get(owned.cwd,seen.id);
+      expect(await rejected(owned.service.chat({backendUrl:"http://127.0.0.1:1",content:"x".repeat(16_384),cwd:owned.cwd,resumeSessionId:seen.id},handlers().callbacks))).toMatchObject({category:"limit"});
+      expect(owned.service.get(owned.cwd,seen.id)).toEqual(before);expect(owned.pids).toHaveLength(3);reaped(owned.pids);
+    }finally{await owned.dispose();}
+  });
 });
