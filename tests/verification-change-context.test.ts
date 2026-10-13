@@ -45,8 +45,8 @@ async function until(predicate: () => boolean): Promise<void> {
 function heldProject() {
   const cwd = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-held-git-")));
   git(cwd, "init", "-q"); writeFileSync(path.join(cwd, "tracked.txt"), "original\n"); git(cwd, "add", "--", "tracked.txt"); git(cwd, "commit", "-qm", "Retain real git process race fixture");
-  const marker = path.join(cwd, "held"); const release = path.join(cwd, "release"); const executable = path.join(cwd, "git-fixture.sh");
-  writeFileSync(executable, `#!/bin/sh\nfor arg in "$@"; do\n if [ "$arg" = --show-toplevel ]; then\n /usr/bin/git "$@"\n result=$?\n : > '${marker}'\n while [ ! -f '${release}' ]; do /bin/sleep 0.01; done\n exit "$result"\n fi\ndone\nexec /usr/bin/git "$@"\n`, { mode: 0o700 });
+  const marker = path.join(cwd, "held"); const release = path.join(cwd, "release");
+  const executable = path.join(import.meta.dir, "fixtures", "held-git.sh");
   return { cwd, marker, release, executable };
 }
 
