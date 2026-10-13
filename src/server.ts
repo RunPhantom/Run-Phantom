@@ -10,6 +10,7 @@ import { normalizeOtelId } from "./ids";
 import { searchRuns, RunSearchError } from "./run-search";
 import { getRunComparison, RunComparisonError } from "./run-comparison";
 import { withholdAgentDefinitionCapture } from "./agent-definitions";
+import { guardSpanForPersistence, projectCapturedGuardSpan } from "./guard-evidence";
 import { parseOtlpRequest } from "./parse";
 import { decodeOtlpProtobuf } from "./otlp-protobuf";
 import {
@@ -1425,7 +1426,7 @@ export async function createServer(port: number) {
     if (!row) { res.status(404).json({ error: "Span not found" }); return; }
     const { input_head, output_head, input_chars, output_chars, ...rest } = row;
     res.json({
-      ...withholdAgentDefinitionCapture(rest),
+      ...projectCapturedGuardSpan(withholdAgentDefinitionCapture(rest)),
       input_chars,
       output_chars,
       input_preview: input_chars > 80 ? input_head.slice(0, 80) + "…" : input_head,
@@ -1493,7 +1494,7 @@ export async function createServer(port: number) {
   // through get_span_payload.
   const MAX_DETAIL_ATTR_CHARS = 2_000;
   function compactSpanForDetail(span: any): any {
-    span = withholdAgentDefinitionCapture(span);
+    span = projectCapturedGuardSpan(withholdAgentDefinitionCapture(span));
     if (typeof span?.attributes !== "string" || span.attributes.length <= MAX_DETAIL_ATTR_CHARS) return span;
     let parsed: Record<string, unknown>;
     try {
@@ -1520,7 +1521,7 @@ export async function createServer(port: number) {
       // Fall back to saved run cache
       const cached = getCachedRun(id);
       if (cached) {
-        try { const data = JSON.parse(cached); if (data.run) { res.json({ ...data, spans: Array.isArray(data.spans) ? data.spans.map(withholdAgentDefinitionCapture) : data.spans }); return; } } catch {}
+        try { const data = JSON.parse(cached); if (data.run) { res.json(publicCachedRun(data)); return; } } catch {}
       }
       if (!run) { res.status(404).json({ error: "Not found" }); return; }
     }
@@ -2266,16 +2267,26 @@ export async function createServer(port: number) {
   });
 
   // Saved run cache — persists across clears
+  function publicCachedRun(data: any) {
+    return { run: data.run, spans: Array.isArray(data.spans) ? data.spans.map((span: any) => projectCapturedGuardSpan(withholdAgentDefinitionCapture(span))) : [],
+      liveEvents: Array.isArray(data.liveEvents) ? data.liveEvents : [], subAgents: Array.isArray(data.subAgents) ? data.subAgents : [] };
+  }
   app.put(/^\/api\/saved-runs\/cache\/(.+)$/, (req, res) => {
     const id = (req.params as unknown as string[])[0];
-    cacheSavedRun(id, JSON.stringify(req.body));
+    const data = req.body;
+    if (!data || typeof data !== "object" || !data.run || !Array.isArray(data.spans)) {
+      res.status(400).json({ error: "Cache requires a run and spans" }); return;
+    }
+    cacheSavedRun(id, JSON.stringify({ run: data.run, spans: data.spans.map((span: any) => guardSpanForPersistence(withholdAgentDefinitionCapture(span))),
+      liveEvents: Array.isArray(data.liveEvents) ? data.liveEvents : [], subAgents: Array.isArray(data.subAgents) ? data.subAgents : [] }));
     res.json({ ok: true });
   });
   app.get(/^\/api\/saved-runs\/cache\/(.+)$/, (req, res) => {
     const id = (req.params as unknown as string[])[0];
     const data = getCachedRun(id);
     if (!data) { res.status(404).json({ error: "Not cached" }); return; }
-    res.json(JSON.parse(data));
+    const cached = JSON.parse(data);
+    res.json(publicCachedRun(cached));
   });
   app.delete(/^\/api\/saved-runs\/cache\/(.+)$/, (req, res) => {
     const id = (req.params as unknown as string[])[0];

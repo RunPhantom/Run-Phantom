@@ -1,3 +1,5 @@
+import type { CapturedGuardEvidence } from "../../../src/guard-evidence-protocol";
+
 export interface Run {
   id: string;
   name: string | null;
@@ -104,6 +106,8 @@ export interface Span {
   input_tokens: number | null;
   output_tokens: number | null;
   attributes: string | null;
+  /** Derived by the daemon from the validated captured OTLP event receipt. */
+  guardEvidence?: CapturedGuardEvidence;
   /**
    * SDK-agnostic typed view of this span's content. Populated by the server.
    * Always present on spans served via `/api/runs/detail/:id`. May be missing
