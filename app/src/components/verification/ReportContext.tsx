@@ -140,12 +140,12 @@ function ChangeReview({ report }: { report: VerificationReport }) {
     {message && <p role="status" className="break-words text-xs">{message}</p>}
     {result && <div className="space-y-3 text-xs">
       <p><strong>Saved measured outcome: {result.handoff.status}</strong>. {result.handoff.reason}</p>
-      <p className="break-all">Git HEAD observed after the saved report: {result.head ?? "unavailable"}. Tested revision: unavailable.</p>
+      <p className="break-words">Git HEAD observed after the saved report: <code className="break-all">{result.head ?? "unavailable"}</code>. Tested revision: unavailable.</p>
       <p>{result.complete ? "Metadata capture complete within its bounds." : "Metadata capture incomplete."} {result.withheldPaths} path records withheld; at least {result.omittedRows} rows omitted.</p>
       {result.reasons.length > 0 && <ul className="list-disc space-y-1 pl-5">{result.reasons.map(reason => <li key={reason}>{unavailableReasons[reason] ?? "Some metadata is unavailable."}</li>)}</ul>}
-      <p className="break-all">Metadata-only fingerprint: {result.fingerprint ?? "unavailable"}. It does not fingerprint untracked contents.</p>
+      <p className="break-words">Metadata-only fingerprint: <code className="break-all">{result.fingerprint ?? "unavailable"}</code>. It does not fingerprint untracked contents.</p>
       {!result.changes.length && <p>No changed-file rows were retained.</p>}
-      <ul className="space-y-2" aria-label="Changed file metadata">{result.changes.map((row, index) => <li key={index} className="break-all rounded border p-2"><code>{row.previousPath ? `${row.previousPath} → ` : ""}{row.path}</code><p>Index {row.index}; worktree {row.worktree}; {row.binary === true ? "binary" : row.binary === false ? `+${row.added} / −${row.deleted}` : "counts unavailable"}{row.bytes === undefined ? "" : `; ${row.bytes} bytes`}. Contents unavailable.</p></li>)}</ul>
+      <ul className="space-y-2" aria-label="Changed file metadata">{result.changes.map((row, index) => <li key={index} className="break-words rounded border p-2"><code className="break-all">{row.previousPath ? `${row.previousPath} → ` : ""}{row.path}</code><p>Index {row.index}; worktree {row.worktree}; {row.binary === true ? "binary" : row.binary === false ? `+${row.added} / −${row.deleted}` : "counts unavailable"}{row.bytes === undefined ? "" : `; ${row.bytes} bytes`}. Contents unavailable.</p></li>)}</ul>
       <h4 className="font-semibold">Advisory related tests</h4>
       {!result.relatedTests.length && <p>No filename match was retained. This does not establish test coverage.</p>}
       <ul className="space-y-1">{result.relatedTests.map(hint => <li className="break-all" key={hint.path}><code>{hint.path}</code> · Filename match; not executed</li>)}</ul>
