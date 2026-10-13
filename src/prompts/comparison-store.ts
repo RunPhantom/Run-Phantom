@@ -205,6 +205,16 @@ export class ComparisonStore {
       return { removed: true as const, generation: next.comparisonGeneration };
     }).immediate();
   }
+  /** Internal coordinator scope comparison; no caller string or database handle is exposed. */
+  sameScope(other: ComparisonStore): boolean { return this.#db === other.#db && this.#scope === other.#scope && this.#live.ownsDatabase(other.#db.filename) && other.#live.ownsDatabase(this.#db.filename); }
+  /** Native owner cleanup only: publication may lose user authority, but uncertain charge must remain. */
+  terminatePending(idValue: unknown): void {
+    const id = promptId(idValue), owner = this.#live.capture(); this.#db.transaction(() => {
+      this.#live.assertCurrent(owner); if (!this.#live.ownsDatabase(this.#db.filename)) throw new ComparisonError("unavailable"); this.#totals();
+      this.#db.query("UPDATE prompt_comparison_attempts SET status='authority_lost',reason='authority_lost',payload=NULL,hold_microusd=0,finished_at=? WHERE scope_key=? AND comparison_id=? AND status IN('queued','running')").run(Date.now(), this.#scope, id);
+      this.#live.assertCurrent(owner);
+    }).immediate();
+  }
   /** Trusted startup only, after exclusive live lease; no retry or route can invoke recovery. */
   recoverPending(): void {
     const owner = this.#live.capture(); this.#db.transaction(() => {
