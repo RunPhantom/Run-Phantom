@@ -115,7 +115,8 @@ test("actual three-engine producer masks before retention and survives later pag
         const exported = await download; const exportPath = info.outputPath(`native-${engine}-export.json`); await exported.saveAs(exportPath);
         const exportSource = await (await import("node:fs/promises")).readFile(exportPath, "utf8"); expect(exportSource).not.toContain(privateToken); expect(JSON.parse(exportSource).entries).toEqual(saved.entries);
         await viewer.evaluate(() => document.fonts.ready);
-        expect(await viewer.evaluate(() => document.fonts.check('14px "Inter Variable"') && document.fonts.check('14px "Syne"'))).toBe(true);
+        const loadedFonts = await viewer.evaluate(() => Array.from(document.fonts).filter(face => face.status === "loaded").map(face => face.family.replaceAll('"', '')));
+        expect(loadedFonts).toContain("Inter Variable"); expect(loadedFonts).toContain("Syne");
         for (const [width, height] of [[1440, 900], [1280, 800], [1024, 768], [768, 1024], [390, 844], [320, 740]]) {
           await viewer.setViewportSize({ width, height }); expect(await viewer.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
           const screenshot = info.outputPath(`native-${engine}-player-${width}.png`); await viewer.screenshot({ path: screenshot, fullPage: true });
@@ -123,9 +124,13 @@ test("actual three-engine producer masks before retention and survives later pag
         expect(await viewer.locator("[data-masked-recording]").evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgb(255, 255, 255)");
         expect(await viewer.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe("rgb(249, 250, 252)");
         expect(await viewer.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--rp-accent").trim().toLowerCase())).toBe("#0021cc");
-        await viewer.setViewportSize({ width: 1280, height: 800 }); await viewer.evaluate(() => { document.documentElement.style.zoom = "2"; });
+        await viewer.setViewportSize({ width: 1280, height: 800 });
+        const unzoomedHeight = await viewer.getByRole("button", { name: "Play recording", exact: true }).evaluate(element => element.getBoundingClientRect().height);
+        await viewer.evaluate(() => { document.documentElement.style.zoom = "2"; });
+        await expect.poll(() => viewer.getByRole("button", { name: "Play recording", exact: true }).evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(unzoomedHeight * 1.9);
         expect(await viewer.evaluate(() => document.documentElement.scrollWidth)).toBe(1280);
         await cursor.focus(); await cursor.press("Tab"); await expect(viewer.getByRole("button", { name: "Play recording", exact: true })).toBeFocused();
+        await expect.poll(() => viewer.getByRole("button", { name: "Play recording", exact: true }).evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(unzoomedHeight * 1.9);
         await viewer.screenshot({ path: info.outputPath(`native-${engine}-css200-keyboard.png`), fullPage: true });
         await viewer.evaluate(() => { document.documentElement.style.zoom = ""; });
         expect(viewerFaults).toEqual([]); expect(foreignRequests).toEqual([]);
