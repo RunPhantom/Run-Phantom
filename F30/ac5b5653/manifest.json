@@ -1,0 +1,71 @@
+{
+  "feature": "F30",
+  "sourceHead": "ac5b5653af8f2e773575ddd57e3f96143fd5bfd5",
+  "nativeArtifactSha256": "bcf58cbf82272131c890cbd070b55fab5f0c77d40ece1419fa5f4bc5d3eae307",
+  "nativeArtifactVersion": "0.1.0-f30-ac5b565-qualified",
+  "host": "macOS arm64",
+  "backend": {
+    "pass": 1540,
+    "skip": 3,
+    "fail": 0,
+    "assertions": 11886,
+    "files": 132,
+    "environment": "original suite with private outer fresh DB; original default 1538/3/2 retained"
+  },
+  "sourceBrowser": {
+    "pass": 174,
+    "skip": 12,
+    "unresolved": 0,
+    "composition": "168 default plus six unchanged dedicated connected fixture; original six default fixture failures retained"
+  },
+  "nativeTeamOriginalJourneys": 12,
+  "nativePersistentVisualSuites": 2,
+  "nativeCommonCases": 3,
+  "nativeQueryPhases": 2,
+  "nativeBackendOptins": 2,
+  "teamPhysicalTables": 33,
+  "localPhysicalTables": 39,
+  "localCanonicalReceipts": 13,
+  "assetsPerBoot": 321,
+  "persistentBoots": 4,
+  "screenshots": {
+    "shared-review-320.png": {
+      "sha256": "0220f41de100c6ed87e847e8f49969e86f1420befb4de20cbc0a4b91a064fc49",
+      "bytes": 196181,
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "shared-review-375.png": {
+      "sha256": "7388f36a43fdb2e603e4d490c5ea5d990b004eab14c39a2fe743517b70e632c2",
+      "bytes": 194968,
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "shared-review-390.png": {
+      "sha256": "b9b195ea408aee257a3b127b1a526d4e82d84256c53da7d89dca29a168c65df1",
+      "bytes": 195863,
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "shared-review-768.png": {
+      "sha256": "edfee3d225f169e9eb91f5abb1edcda7126822fe54acdbf9c2e4f267290a82f7",
+      "bytes": 222980,
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "shared-review-1024.png": {
+      "sha256": "b57dbb51c4d0e0f946655fb732e6bd6bf69afcfc344b25b97365f593466ab1f3",
+      "bytes": 220721,
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "shared-review-1440.png": {
+      "sha256": "53dd4030af5c159ec77e14f5b8866fb454e73669e26e17d7ea327d3ab8aa04d9",
+      "bytes": 221112,
+      "synthetic": true,
+      "copiedNative": true
+    }
+  },
+  "providerCalls": 0,
+  "globalAcceptance": false
+}
