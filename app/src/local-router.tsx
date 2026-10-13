@@ -18,6 +18,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { VerificationPage } from "./pages/VerificationPage";
 import { EvaluationsPage } from "./pages/EvaluationsPage";
 import { ReviewQueuesRoute } from "./components/review-queues/ReviewQueuesRoute";
+import { PromptsPage } from "./pages/PromptsPage";
 import { RouteError } from "./components/RouteError";
 import { sendRunPhantomMessage, useRunPhantomConnectionStatus } from "./hooks/use-runphantom-ws";
 import { useAgentUiCommands } from "./hooks/use-agent-ui-commands";
@@ -143,6 +144,7 @@ export const localRoutes: RouteObject[] = [
       { path: "verification", element: <VerificationPage />, errorElement: <RouteError /> },
       { path: "evaluations", element: <EvaluationsPage />, errorElement: <RouteError /> },
       { path: "review-queues", element: <ReviewQueuesRoute />, errorElement: <RouteError /> },
+      { path: "prompts", element: <PromptsPage />, errorElement: <RouteError /> },
       { path: "*", element: <NotFoundPage />, errorElement: <RouteError /> },
     ],
   },

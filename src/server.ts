@@ -110,6 +110,8 @@ import { createReviewQueueRouter } from "./review-queues/router";
 import { EvidenceImportService } from "./evaluations/evidence-import";
 import { EvidenceSupervisor } from "./evaluations/evidence-supervisor";
 import { createLocalEvidenceOwner } from "./evaluations/evidence-inventory";
+import { createLocalPromptRegistry } from "./prompts/registry";
+import { createPromptRouter } from "./prompts/router";
 import { EvidenceError } from "./evaluations/evidence-protocol";
 import { evidenceBinaryHandler, evidenceJsonBody } from "./evaluations/evidence-router";
 import { EVALUATION_LIMITS } from "./evaluations/protocol";
@@ -759,8 +761,13 @@ export async function createServer(port: number) {
   const verification = createVerificationService({ broadcast, allowedSourceIps, allowedHosts });
   const evaluations = createEvaluationService();
   const evidenceDatabase = getDrizzleDb().$client;
-  evidenceDatabase.query("INSERT OR IGNORE INTO evaluation_evidence_scopes(scope_key,generation,active) VALUES('local:local',1,1)").run();
+  evidenceDatabase.transaction(() => {
+    evidenceDatabase.query("INSERT OR IGNORE INTO evaluation_evidence_scopes(scope_key,generation,active) VALUES('local:local',1,1)").run();
+    evidenceDatabase.query("INSERT INTO prompt_scope_controls(scope_key,generation) SELECT scope_key,1 FROM evaluation_evidence_scopes WHERE scope_key='local:local' ON CONFLICT(scope_key) DO NOTHING").run();
+  }).immediate();
   const evidenceOwner = createLocalEvidenceOwner(evidenceDatabase);
+  const prompts = createLocalPromptRegistry(evidenceDatabase);
+  prompts.capture("read");
   const evidenceImports = new EvidenceImportService(new EvidenceSupervisor());
   evidenceImports.initialize(evidenceOwner);
   server.on("upgrade", (req, socket, head) => {
@@ -995,6 +1002,7 @@ export async function createServer(port: number) {
 
   // This one identity binary transport remains behind every local-access guard.
   app.post("/api/evaluations/evidence/imports", evidenceBinaryHandler(evidenceImports, evidenceOwner));
+  app.use("/api/prompts", createPromptRouter(prompts));
 
   // Keep the bounded review parser behind local access guards and ahead of the global JSON parser.
   app.use("/api/review-queues", createReviewQueueRouter());
