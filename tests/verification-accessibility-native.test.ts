@@ -50,6 +50,30 @@ describe.skipIf(!installed)("actual owned Chromium accessibility engine adapter"
     await page.evaluate(() => { (window as any).axe = { version: "4.11.0", run: () => Promise.resolve({ violations: [], passes: [] }) }; });
     const result = await audit(); expect(result.status).toBe("findings"); expect(result.findings.some(item => item.rule === "button-name")).toBe(true);
   }), 15000);
+  test("completed audits dispose actual isolated observers and release engine and selected-node globals", async () => withPage(async (page) => {
+    await page.setContent(html(fixed)); let cleaned = 0; const worlds = new Set<number>();
+    const proxy: AccessibilityPage = { isClosed: () => page.isClosed(), context: () => ({ newCDPSession: async () => {
+      const real: AccessibilityCDP = await page.context().newCDPSession(page);
+      return { detach: () => real.detach(), send: async (method, params) => {
+        const result = await real.send(method, params);
+        if (method === "Page.createIsolatedWorld") worlds.add(result.executionContextId);
+        if (method === "Runtime.evaluate" && typeof params?.expression === "string" && params.expression.includes("delete globalThis.axe")) {
+          const state = await real.send("Runtime.evaluate", { contextId: params.contextId, expression: "typeof globalThis.axe==='undefined'&&typeof globalThis.__rpAudit==='undefined'", returnByValue: true });
+          expect(state.result.value).toBe(true); cleaned++;
+          const window = await real.send("Runtime.evaluate", { contextId: params.contextId, expression: "globalThis", objectGroup: "audit-cleanup-test" });
+          const listeners = await real.send("DOMDebugger.getEventListeners", { objectId: window.result.objectId, depth: 0, pierce: false });
+          expect(listeners.listeners.filter((listener: any) => listener.type === "message")).toHaveLength(0);
+          await real.send("Runtime.releaseObjectGroup", { objectGroup: "audit-cleanup-test" });
+        }
+        return result;
+      } };
+    } }) };
+    for (let index = 0; index < 3; index++) {
+      const result = await scanAccessibility(proxy, request, identity, { current: () => !page.isClosed(), terminate: async () => { await page.close(); } });
+      expect(result.status).toBe("no-findings");
+    }
+    expect(cleaned).toBe(3); expect(worlds.size).toBe(1);
+  }), 20000);
   test("same-document mutation fences a held real engine response without a navigation change", async () => withPage(async (page) => {
     await page.setContent(html(fixed));
     let release!: () => void, held!: () => void;

@@ -20,7 +20,9 @@ describe("explicit accessibility request boundary", () => {
     for (const value of [{}, { ...request, generation: -1 }, { ...request, rules: [] }, { ...request, rules: ["all"] },
       { ...request, rules: ["label", "label"] }, { ...request, regions: [] }, { ...request, regions: ["#audit", "#audit"] },
       { ...request, regions: Array(5).fill("body") }, { ...request, regions: ["a".repeat(257)] },
-      { ...request, regions: ["iframe >> button"] }, { ...request, html: "<script>throw 1</script>" },
+      { ...request, regions: ["iframe >> button"] }, { ...request, regions: ["https://example.com"] },
+      { ...request, regions: ["data:text/html,example"] }, { ...request, regions: ["javascript:example"] }, { ...request, html: "<script>throw 1</script>" },
+      { ...request, regions: ["<button>"] },
       { ...request, url: "https://example.com" }, { ...request, timeout: 60000 }]) expect(() => parseAccessibilityRequest(value)).toThrow();
   });
   test("never executes accessor or custom array data", () => {

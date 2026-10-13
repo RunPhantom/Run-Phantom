@@ -22,7 +22,8 @@ export function parseAccessibilityRequest(value: unknown, secrets: readonly stri
     return rule as AccessibilityRule;
   });
   const regions = browserArray(body.regions, ACCESSIBILITY_LIMITS.regions).map(region => {
-    if (typeof region !== "string" || Buffer.byteLength(region) > ACCESSIBILITY_LIMITS.selectorBytes || region !== region.trim() || scrubBrowserSecrets(region, secrets) !== region) invalid();
+    if (typeof region !== "string" || Buffer.byteLength(region) > ACCESSIBILITY_LIMITS.selectorBytes || region !== region.trim()
+      || /<|https?:\/\/|javascript:|data:/i.test(region) || scrubBrowserSecrets(region, secrets) !== region) invalid();
     const target = parseBrowserTarget({ kind: "css", selector: region });
     return target.kind === "css" ? target.selector : invalid();
   });
@@ -263,12 +264,16 @@ function installAuditScope(input: { regions: string[]; cap: number }) {
   return { roots, nodes, capped, current, dispose: () => observer.disconnect() };
 }
 
+const isolatedWorlds = new WeakMap<AccessibilityPage, string>();
+
 async function executeAuditScope(input: { rules: string[]; regions: string[]; cap: number; findings: number; targetBytes: number }) {
-  const globals = globalThis as unknown as { axe: { configure(options: unknown): void; run(root: Element, options: unknown): Promise<Record<string, any>> };
+  const globals = globalThis as unknown as { axe: { configure(options: unknown): void; frameMessenger(options: unknown): void; run(root: Element, options: unknown): Promise<Record<string, any>> };
     __rpAudit: ReturnType<typeof installAuditScope> };
   const scope = globals.__rpAudit, engine = globals.axe;
   const results: Array<Record<string, unknown>> = []; let population = 0, retained = 0;
   try {
+    // Frames are explicitly excluded: close the native postMessage listener.
+    engine.frameMessenger({ open: () => () => {}, post: () => false });
     engine.configure({ noHtml: true, allowedOrigins: [] });
     for (let index = 0; index < scope.roots.length; index++) {
       if (!scope.current()) throw new Error("document-changed");
@@ -299,7 +304,7 @@ async function executeAuditScope(input: { rules: string[]; regions: string[]; ca
   } catch (error) { const reason = error instanceof Error ? error.message : ""; return { results: [], failure: reason === "document-changed" || reason === "population-limit" ? reason : "engine-unavailable" }; }
 }
 
-/** Engine executes only in a fresh native isolated Chromium world, never a page SDK world. */
+/** A host-private isolated world is reused per page; a genuine engine is reloaded for each audit. */
 export async function scanAccessibility(page: AccessibilityPage, rawRequest: unknown, rawIdentity: unknown,
   authority: AccessibilityAuthority, secrets: readonly string[] = []): Promise<AccessibilityEvidence> {
   const request = parseAccessibilityRequest(rawRequest, secrets);
@@ -313,11 +318,13 @@ export async function scanAccessibility(page: AccessibilityPage, rawRequest: unk
   let cdp: AccessibilityCDP | undefined, world: number | undefined, timedOut = false, changed = false;
   let teardown: Promise<void> | undefined;
   const group = `rp-audit-${randomUUID()}`;
+  let worldName = isolatedWorlds.get(page);
+  if (!worldName) { worldName = `rp-audit-world-${randomUUID()}`; isolatedWorlds.set(page, worldName); }
   let timer: ReturnType<typeof setTimeout> | undefined;
   const work = async (): Promise<AccessibilityEvidence> => {
     cdp = await page.context().newCDPSession(page);
     const tree = await cdp.send("Page.getFrameTree");
-    world = (await cdp.send("Page.createIsolatedWorld", { frameId: tree.frameTree.frame.id, worldName: group, grantUniveralAccess: false })).executionContextId as number;
+    world = (await cdp.send("Page.createIsolatedWorld", { frameId: tree.frameTree.frame.id, worldName, grantUniveralAccess: false })).executionContextId as number;
     if (!authority.current() || page.isClosed()) return unavailable("document-changed");
     const setup = await cdp.send("Runtime.evaluate", { contextId: world, expression: `globalThis.__rpAudit=(${installAuditScope.toString()})(${JSON.stringify({ regions: request.regions, cap: ACCESSIBILITY_LIMITS.domNodes })});globalThis.__rpAudit.capped`, returnByValue: true, objectGroup: group });
     if (setup.exceptionDetails) return unavailable("region-unavailable");
@@ -380,7 +387,8 @@ export async function scanAccessibility(page: AccessibilityPage, rawRequest: unk
     if (timer) clearTimeout(timer);
     if (teardown) await teardown.catch(() => {});
     if (cdp) {
-      if (world !== undefined && !page.isClosed()) await cdp.send("Runtime.evaluate", { contextId: world, expression: "globalThis.__rpAudit?.dispose()" }).catch(() => {});
+      if (world !== undefined && !page.isClosed()) await cdp.send("Runtime.evaluate", { contextId: world,
+        expression: "globalThis.__rpAudit?.dispose();delete globalThis.__rpAudit;delete globalThis.axe" }).catch(() => {});
       await cdp.send("Runtime.releaseObjectGroup", { objectGroup: group }).catch(() => {});
       await cdp.detach().catch(() => {});
     }
