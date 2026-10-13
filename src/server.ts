@@ -106,6 +106,7 @@ import verificationSdk from "./verification/browser-sdk.js" with { type: "text" 
 import { VERIFICATION_LIMITS } from "./verification/protocol";
 import { createEvaluationService } from "./evaluations/service";
 import { createEvaluationRouter } from "./evaluations/router";
+import { createReviewQueueRouter } from "./review-queues/router";
 import { EvidenceImportService } from "./evaluations/evidence-import";
 import { EvidenceSupervisor } from "./evaluations/evidence-supervisor";
 import { createLocalEvidenceOwner } from "./evaluations/evidence-inventory";
@@ -1002,6 +1003,9 @@ export async function createServer(port: number) {
   // This one identity binary transport remains behind every local-access guard.
   app.post("/api/evaluations/evidence/imports", evidenceBinaryHandler(evidenceImports, evidenceOwner));
   app.use("/api/prompts", createPromptRouter(prompts));
+
+  // Keep the bounded review parser behind local access guards and ahead of the global JSON parser.
+  app.use("/api/review-queues", createReviewQueueRouter());
 
   app.use(["/api/verification", "/api/evaluations"], (req, res, next) => {
     const hasBody = req.headers["transfer-encoding"] !== undefined || Number(req.headers["content-length"] ?? 0) > 0;

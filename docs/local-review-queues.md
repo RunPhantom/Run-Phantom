@@ -12,7 +12,7 @@ Select up to 50 approved items and an existing destination dataset revision. Pro
 
 ## Retention and deletion
 
-The UI loads up to two metadata pages of 50 items and a source window of five items. At most 16 dirty or in-flight drafts are retained outside the active source window. Saving, retrying or discarding drafts frees that budget.
+The UI loads up to two metadata pages of 50 items and a source window of five items. At most 16 dirty or in-flight drafts are retained outside the active source window with source-free revision and acknowledgment metadata. Saving, retrying or discarding drafts frees that budget. Finite HTTP replies may briefly coexist with the previous window while it is replaced; persistent state and pending autosave frames do not retain full source payloads outside the window.
 
 Storage limits are 100 queues, 10,000 items per queue, 50,000 items total, 10,000 promotion receipts and 256 MiB of logical UTF-8 schema, source, draft and receipt content. A schema is at most 8 KiB, a retained source 48 KiB and a draft 32 KiB. Requests are limited to 64 KiB. Reaching a limit refuses additional retention; it does not silently evict drafts.
 
@@ -22,4 +22,4 @@ A queue UUID is never reused. Deleting and re-intaking the same membership alloc
 
 ## Component verification
 
-The isolated component suite mounts the owned router and UI against the existing database with the proposed three-table DDL in an ephemeral fixture. This fixture is not a production migration, central route registration or installed-runtime qualification. Central schema and route composition and a copied-runtime two-boot qualification remain separate integration checks.
+The isolated component suite mounts the owned router and UI against an ephemeral database through the normal migrations. The connected suite uses the actual source app, sidebar, local router, daemon access guards and HTTP API against an ephemeral database. Native controls cover migration upgrade and rollback, stale revisions, transactional promotion and restart. A copied executable needs its own two-boot verification.
