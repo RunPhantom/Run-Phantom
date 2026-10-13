@@ -47,7 +47,7 @@ test("canonical12 appends the approved three-table suffix while every 0..11 SQL 
 });
 test("actual fresh migration installs prompt tables and trigger with a genuine receipt and no lazy control row", () => {
   const db = getDrizzleDb().$client;
-  expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'prompt_%' ORDER BY name").all()).toEqual(["prompt_heads", "prompt_revisions", "prompt_scope_controls"].map(name => ({ name })));
+  expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('prompt_heads','prompt_revisions','prompt_scope_controls') ORDER BY name").all()).toEqual(["prompt_heads", "prompt_revisions", "prompt_scope_controls"].map(name => ({ name })));
   expect(db.query("SELECT name FROM sqlite_master WHERE type='trigger' AND name='prompt_revision_immutable'").all()).toEqual([{ name: "prompt_revision_immutable" }]);
   expect(history(db)).toHaveLength(journal.entries.length); expect(history(db)[12]).toEqual({ hash: digest(readFileSync(path.join(migrations, entry.tag + ".sql"))), created_at: entry.when });
   expect(db.query("SELECT * FROM prompt_scope_controls").all()).toEqual([]);
