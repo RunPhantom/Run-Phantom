@@ -1,0 +1,106 @@
+{
+  "feature": "F08",
+  "sourceHead": "a423ee63ece4b6efe937d7ba21ecb0d5715699c0",
+  "host": "macOS arm64",
+  "nativeArtifactSha256": "d143023643ee84de06bd0107193f6452ef368617aebd4465acdd9f9d66df4c4e",
+  "screenshots": {
+    "reopened-disabled-1920.png": {
+      "sha256": "7f4551cb87c58fc03b886932b10fc5d0065ef2af9fda0bbe5e34ca0b97515465",
+      "synthetic": true,
+      "copiedNative": true,
+      "state": "default-disabled observer"
+    },
+    "reopened-neutral-1920.png": {
+      "sha256": "b74151ab7671f75d94eb4bca3016677f79e2286be3e49b444298cf2b7fb6661e",
+      "synthetic": true,
+      "copiedNative": true,
+      "state": "deliberately opened historical neutral observation while observer stays disabled"
+    },
+    "reopened-disabled-1440.png": {
+      "sha256": "80452b6735ed0774c56723ec7be55f9de57f635b4e82ac808150ea6327730a6d",
+      "synthetic": true,
+      "copiedNative": true,
+      "state": "default-disabled observer"
+    },
+    "reopened-neutral-1440.png": {
+      "sha256": "7ccb7ffa38af29410b26d7015eaf2d6dcdea21bf4771d478a6b5d5fdeda2ee79",
+      "synthetic": true,
+      "copiedNative": true,
+      "state": "deliberately opened historical neutral observation while observer stays disabled"
+    },
+    "reopened-disabled-1024.png": {
+      "sha256": "3045e0d98d1cb6a6c6b38a9cd72fe4cf16ac96bebf6b0cb8fd69f999c74f8337",
+      "synthetic": true,
+      "copiedNative": true,
+      "state": "default-disabled observer"
+    },
+    "reopened-neutral-1024.png": {
+      "sha256": "39b7522a63b625997563abab85eb4ea4d3cb595d01ed4c72b665866f18e5b097",
+      "synthetic": true,
+      "copiedNative": true,
+      "state": "deliberately opened historical neutral observation while observer stays disabled"
+    },
+    "reopened-disabled-768.png": {
+      "sha256": "ff0b382540d031245bb1043be195fd0ea02ee3ae998d22a4c93a5880d16f774e",
+      "synthetic": true,
+      "copiedNative": true,
+      "state": "default-disabled observer"
+    },
+    "reopened-neutral-768.png": {
+      "sha256": "4f239309ab1a73285a9ff1902bc95f6d141f4bcb265ee9a23f0f4211fd773e77",
+      "synthetic": true,
+      "copiedNative": true,
+      "state": "deliberately opened historical neutral observation while observer stays disabled"
+    },
+    "reopened-disabled-390.png": {
+      "sha256": "fb23fef3ba413ffd8209c7191bd1e584fee61c8dec9cbcb0f0fe80da19e068c0",
+      "synthetic": true,
+      "copiedNative": true,
+      "state": "default-disabled observer"
+    },
+    "reopened-neutral-390.png": {
+      "sha256": "fdf5889aebce5572cfdaaa435326a293253248c6cd90f129da2ed1ee85e2c04c",
+      "synthetic": true,
+      "copiedNative": true,
+      "state": "deliberately opened historical neutral observation while observer stays disabled"
+    },
+    "reopened-disabled-320.png": {
+      "sha256": "9388fb2591b5dfec236fe56d85cd2e49823348357ee5d37372f550a80e1b3e7a",
+      "synthetic": true,
+      "copiedNative": true,
+      "state": "default-disabled observer"
+    },
+    "reopened-neutral-320.png": {
+      "sha256": "e1a9d5a7f3a0bc90973ccd01c9b624922c40812b9185935b6f3fb6c2e237bc2b",
+      "synthetic": true,
+      "copiedNative": true,
+      "state": "deliberately opened historical neutral observation while observer stays disabled"
+    }
+  },
+  "backend": {
+    "pass": 1525,
+    "skip": 1,
+    "fail": 0
+  },
+  "sourceBrowser": {
+    "pass": 175,
+    "skip": 12,
+    "fail": 0,
+    "workers": 1,
+    "retries": 0
+  },
+  "copiedOriginalCommon": 3,
+  "copiedOriginalFeature": 5,
+  "distinctNativeBoots": 2,
+  "physicalTablesExact": 41,
+  "canonicalReceipts": 14,
+  "globalAcceptance": false,
+  "providerCalls": 0,
+  "risks": [
+    "Earlier unexplained Team non-200 intermittence remains OPEN; response body was not captured and current GREEN does not diagnose it.",
+    "Held-out prose accuracy7/16 expected cases with2 uncovered cases is not broad completion-understanding acceptance.",
+    "Authority revocation is learned on existing3/5-second polling boundaries; no instantaneous revocation claim.",
+    "Copied prompt/queue histories are empty and prove empty-table preservation only; one prompt scope control exists.",
+    "Providers, Windows and other browser engines remain unqualified."
+  ]
+}
