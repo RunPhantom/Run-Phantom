@@ -228,14 +228,15 @@ export interface AccessibilityAuthority {
 function installAuditScope(input: { regions: string[]; cap: number }) {
   let changed = false, capped = false;
   const observer = new MutationObserver(() => { changed = true; });
+  const visible = (root: Element) => { const style = getComputedStyle(root); return style.display !== "none" && style.visibility === "visible" && root.getClientRects().length > 0; };
   try {
     const observe = (root: Node) => observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
     observe(document);
     const roots = input.regions.map(selector => {
       const matches = document.querySelectorAll(selector);
       if (matches.length !== 1) throw new Error("region");
-      const root = matches[0], style = getComputedStyle(root);
-      if (!root.isConnected || root.ownerDocument !== document || style.display === "none" || style.visibility !== "visible" || !root.getClientRects().length) throw new Error("region");
+      const root = matches[0];
+      if (!root.isConnected || root.ownerDocument !== document || !visible(root)) throw new Error("region");
       return root;
     });
     const nodes: Element[] = [], visited = new Set<Node>(), pending: Node[] = [...roots]; let count = 0;
@@ -259,7 +260,7 @@ function installAuditScope(input: { regions: string[]; cap: number }) {
     }
     const current = () => {
       if (observer.takeRecords().length) changed = true;
-      return !changed && roots.every((root, index) => root.isConnected && root.ownerDocument === document
+      return !changed && roots.every((root, index) => root.isConnected && root.ownerDocument === document && visible(root)
         && document.querySelectorAll(input.regions[index]).length === 1 && document.querySelector(input.regions[index]) === root);
     };
     return { roots, nodes, capped, current, dispose: () => observer.disconnect() };

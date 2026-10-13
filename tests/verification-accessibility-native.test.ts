@@ -72,6 +72,57 @@ function recordObserverProof(name: string, state: ObserverState, server: any) {
 }
 
 describe.skipIf(!installed)("actual owned Chromium accessibility engine adapter", () => {
+  for (const [name, css, hidden] of [
+    ["display", "#audit{display:none!important}", true],
+    ["visibility", "#audit{visibility:hidden!important}", true],
+    ["unchanged selected style", "#not-selected{display:none!important}", false],
+  ] as const) test(`native CSSOM ${name} preserves the current rendered-scope fence for a held genuine result`, async () => withPage(async (page, _audit, server) => {
+    await page.setContent(html(fixed));
+    let holdNext = false, world: number | undefined, held!: () => void, release!: () => void;
+    const ready = new Promise<void>(resolve => { held = resolve; }), resumed = new Promise<void>(resolve => { release = resolve; });
+    const inspect: AccessibilityCDP = await page.context().newCDPSession(page), worlds = new Set<number>();
+    const proxy: AccessibilityPage = { isClosed: () => page.isClosed(), context: () => ({ newCDPSession: async () => {
+      const real: AccessibilityCDP = await page.context().newCDPSession(page);
+      return { detach: () => real.detach(), send: async (method, params) => {
+        const result = await real.send(method, params);
+        if (method === "Page.createIsolatedWorld") { world = result.executionContextId; worlds.add(world!); }
+        if (holdNext && method === "Runtime.evaluate" && params?.awaitPromise === true) { held(); await resumed; }
+        return result;
+      } };
+    } }) };
+    const authority = { current: () => !page.isClosed(), terminate: async () => { await page.close(); } };
+    try {
+      const baseline = await scanAccessibility(proxy, request, identity, authority);
+      expect(baseline.status).toBe("no-findings"); expect(baseline.coverage).toBe("complete");
+      holdNext = true;
+      const pending = scanAccessibility(proxy, request, identity, authority);
+      try {
+        await ready;
+        const witness = await page.evaluate((css: string) => {
+          const root = document.querySelector("#audit")!, beforeHtml = root.outerHTML, beforeLocation = location.href, beforeDocument = root.ownerDocument;
+          const visible = () => { const style = getComputedStyle(root); return style.display !== "none" && style.visibility === "visible" && root.getClientRects().length > 0; };
+          const beforeVisible = visible(), sheet = document.styleSheets[0], beforeRules = sheet.cssRules.length;
+          sheet.insertRule(css, beforeRules);
+          return { beforeVisible, afterVisible: visible(), htmlUnchanged: beforeHtml === root.outerHTML,
+            nodeUnchanged: root === document.querySelector("#audit"), documentUnchanged: beforeDocument === root.ownerDocument,
+            locationUnchanged: beforeLocation === location.href, ruleAdded: sheet.cssRules.length === beforeRules + 1 };
+        }, css);
+        const current = await inspect.send("Runtime.evaluate", { contextId: world, expression: "globalThis.__rpAudit.current()", returnByValue: true });
+        holdNext = false; release();
+        const result = await pending, fresh = await scanAccessibility(proxy, request, identity, authority);
+        const directory = process.env.RUNPHANTOM_ACCESSIBILITY_OBSERVER_PROOF_DIR;
+        if (directory) writeFileSync(path.join(directory, `cssom-${name.replaceAll(" ", "-")}.json`), JSON.stringify({ mechanism: "held untouched real native engine reply; native insertRule; no DOM change, fake output or retained HTML/styles", ownedPid: server.process().pid, providerCalls: 0, witness, currentAfterCssom: current.result.value, baseline, held: result, fresh }, null, 2) + "\n");
+        expect(witness).toEqual({ beforeVisible: true, afterVisible: !hidden, htmlUnchanged: true, nodeUnchanged: true, documentUnchanged: true, locationUnchanged: true, ruleAdded: true });
+        expect(fresh.status).toBe(hidden ? "inconclusive" : "no-findings"); expect(fresh.coverage).toBe(hidden ? "unavailable" : "complete");
+        if (hidden) { expect(fresh.loss).toContain("region-unavailable"); expect(fresh.population.total).toBeNull(); }
+        expect(current.result.value).toBe(!hidden);
+        expect(result.generation).toBe(1); expect(result.source).toBe("host-run-native-engine"); expect(result.status).toBe(hidden ? "inconclusive" : "no-findings");
+        expect(result.coverage).toBe(hidden ? "unavailable" : "complete"); expect(result.findings).toEqual([]);
+        if (hidden) { expect(result.loss).toContain("document-changed"); expect(result.population.total).toBeNull(); }
+        expect(page.isClosed()).toBe(false); expect(worlds.size).toBe(1);
+      } finally { holdNext = false; release(); await pending; }
+    } finally { await inspect.detach().catch(() => {}); }
+  }), 20000);
   test("refused scope setup disconnects observers before post-GC native mutation on the reused page", async () => withPage(async (page, _audit, server) => {
     await page.setContent(html(fixed + '<div id="duplicate"></div><div id="duplicate"></div><div id="hidden" hidden></div>'));
     await withObserverProbe(page, async probe => {
