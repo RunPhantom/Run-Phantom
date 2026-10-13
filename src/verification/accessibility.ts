@@ -228,40 +228,42 @@ export interface AccessibilityAuthority {
 function installAuditScope(input: { regions: string[]; cap: number }) {
   let changed = false, capped = false;
   const observer = new MutationObserver(() => { changed = true; });
-  const observe = (root: Node) => observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
-  observe(document);
-  const roots = input.regions.map(selector => {
-    const matches = document.querySelectorAll(selector);
-    if (matches.length !== 1) throw new Error("region");
-    const root = matches[0], style = getComputedStyle(root);
-    if (!root.isConnected || root.ownerDocument !== document || style.display === "none" || style.visibility !== "visible" || !root.getClientRects().length) throw new Error("region");
-    return root;
-  });
-  const nodes: Element[] = [], visited = new Set<Node>(), pending: Node[] = [...roots]; let count = 0;
-  while (pending.length && !capped) {
-    const root = pending.pop()!, walker = document.createTreeWalker(root, NodeFilter.SHOW_ALL);
-    let node: Node | null = root;
-    while (node) {
-      if (!visited.has(node)) {
-        visited.add(node); if (++count > input.cap) { capped = true; break; }
-        if (node instanceof Element) {
-          // Bound native metadata responses before requesting any node description.
-          let attributes = 0;
-          if (node.attributes.length > 100) { capped = true; break; }
-          for (const attribute of node.attributes) { attributes += attribute.name.length + attribute.value.length; if (attributes > 16384) { capped = true; break; } }
-          if (capped) break; nodes.push(node);
-          if (node.shadowRoot) { observe(node.shadowRoot); pending.push(node.shadowRoot); }
+  try {
+    const observe = (root: Node) => observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+    observe(document);
+    const roots = input.regions.map(selector => {
+      const matches = document.querySelectorAll(selector);
+      if (matches.length !== 1) throw new Error("region");
+      const root = matches[0], style = getComputedStyle(root);
+      if (!root.isConnected || root.ownerDocument !== document || style.display === "none" || style.visibility !== "visible" || !root.getClientRects().length) throw new Error("region");
+      return root;
+    });
+    const nodes: Element[] = [], visited = new Set<Node>(), pending: Node[] = [...roots]; let count = 0;
+    while (pending.length && !capped) {
+      const root = pending.pop()!, walker = document.createTreeWalker(root, NodeFilter.SHOW_ALL);
+      let node: Node | null = root;
+      while (node) {
+        if (!visited.has(node)) {
+          visited.add(node); if (++count > input.cap) { capped = true; break; }
+          if (node instanceof Element) {
+            // Bound native metadata responses before requesting any node description.
+            let attributes = 0;
+            if (node.attributes.length > 100) { capped = true; break; }
+            for (const attribute of node.attributes) { attributes += attribute.name.length + attribute.value.length; if (attributes > 16384) { capped = true; break; } }
+            if (capped) break; nodes.push(node);
+            if (node.shadowRoot) { observe(node.shadowRoot); pending.push(node.shadowRoot); }
+          }
         }
+        node = walker.nextNode();
       }
-      node = walker.nextNode();
     }
-  }
-  const current = () => {
-    if (observer.takeRecords().length) changed = true;
-    return !changed && roots.every((root, index) => root.isConnected && root.ownerDocument === document
-      && document.querySelectorAll(input.regions[index]).length === 1 && document.querySelector(input.regions[index]) === root);
-  };
-  return { roots, nodes, capped, current, dispose: () => observer.disconnect() };
+    const current = () => {
+      if (observer.takeRecords().length) changed = true;
+      return !changed && roots.every((root, index) => root.isConnected && root.ownerDocument === document
+        && document.querySelectorAll(input.regions[index]).length === 1 && document.querySelector(input.regions[index]) === root);
+    };
+    return { roots, nodes, capped, current, dispose: () => observer.disconnect() };
+  } catch (error) { observer.disconnect(); throw error; }
 }
 
 const isolatedWorlds = new WeakMap<AccessibilityPage, string>();

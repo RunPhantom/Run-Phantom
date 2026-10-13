@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { pathToFileURL } from "node:url";
+import { writeFileSync } from "node:fs";
+import path from "node:path";
 import { scanAccessibility, type AccessibilityPage, type AccessibilityCDP } from "../src/verification/accessibility";
 
 const installed = process.env.RUNPHANTOM_TEST_BROWSER_MODULE;
@@ -19,7 +21,111 @@ async function withPage(callback: (page: any, audit: (value?: unknown) => Return
   finally { current = false; await browser.close().catch(() => {}); await server.close().catch(() => {}); expect(() => process.kill(pid, 0)).toThrow(); }
 }
 
+interface ObserverState {
+  created: number; scopes: number[]; observes: Array<{ id: number; root: string }>;
+  disconnects: number[]; deliveries: Record<string, number>; traversalRefusals: number;
+  scopeAbsent: boolean; engineAbsent: boolean;
+}
+async function withObserverProbe(page: any, callback: (probe: {
+  page: AccessibilityPage; worlds: Set<number>; mutate(): Promise<ObserverState>;
+  control(): Promise<number>; refuseShadowTraversal(): Promise<void>;
+}) => Promise<void>) {
+  const inspect: AccessibilityCDP = await page.context().newCDPSession(page), worlds = new Set<number>();
+  let world: number | undefined;
+  const evaluate = async (expression: string, awaitPromise = false) => {
+    const result = await inspect.send("Runtime.evaluate", { contextId: world, expression, awaitPromise, returnByValue: true });
+    if (result.exceptionDetails) throw new Error("Native observer probe failed");
+    return result.result.value;
+  };
+  const proxy: AccessibilityPage = { isClosed: () => page.isClosed(), context: () => ({ newCDPSession: async () => {
+    const real: AccessibilityCDP = await page.context().newCDPSession(page);
+    return { detach: () => real.detach(), send: async (method, params) => {
+      const setup = method === "Runtime.evaluate" && typeof params?.expression === "string" && params.expression.startsWith("globalThis.__rpAudit=");
+      if (setup) await evaluate("globalThis.__rpObserverProbe.constructingScope=true");
+      let result: Record<string, any>;
+      try { result = await real.send(method, params); }
+      finally { if (setup) await evaluate("globalThis.__rpObserverProbe.constructingScope=false"); }
+      if (method === "Page.createIsolatedWorld") {
+        world = result.executionContextId; worlds.add(world!);
+        // Weak identity and numeric logs never retain the observer objects being measured.
+        await evaluate(`if(!globalThis.__rpObserverProbe){const Native=MutationObserver,ids=new WeakMap,observe=Native.prototype.observe,disconnect=Native.prototype.disconnect,walk=document.createTreeWalker;const state=globalThis.__rpObserverProbe={created:0,scopes:[],observes:[],disconnects:[],deliveries:{},traversalRefusals:0,constructingScope:false,failShadowTraversal:false};function Wrapped(callback){const id=++state.created;const observer=new Native((records,owner)=>{state.deliveries[id]=(state.deliveries[id]||0)+1;return callback(records,owner)});ids.set(observer,id);if(state.constructingScope)state.scopes.push(id);return observer}Wrapped.prototype=Native.prototype;Object.setPrototypeOf(Wrapped,Native);globalThis.MutationObserver=Wrapped;Native.prototype.observe=function(...args){const result=observe.apply(this,args);state.observes.push({id:ids.get(this),root:args[0] instanceof ShadowRoot?'shadow':'document'});return result};Native.prototype.disconnect=function(...args){const result=disconnect.apply(this,args);state.disconnects.push(ids.get(this));return result};document.createTreeWalker=function(...args){if(state.failShadowTraversal&&args[0] instanceof ShadowRoot){state.traversalRefusals++;throw new Error('Owned traversal refusal')}return walk.apply(this,args)}}`);
+      }
+      return result;
+    } };
+  } }) };
+  try {
+    await callback({ page: proxy, worlds,
+      control: () => evaluate("(()=>{const observer=new MutationObserver(()=>{});observer.observe(document,{attributes:true,subtree:true});globalThis.__rpObserverControl=new WeakRef(observer);return globalThis.__rpObserverProbe.created})()"),
+      refuseShadowTraversal: () => evaluate("globalThis.__rpObserverProbe.failShadowTraversal=true"),
+      mutate: async () => {
+        await inspect.send("HeapProfiler.collectGarbage");
+        return evaluate("(async()=>{const root=document.querySelector('#audit');root.setAttribute('data-native-observer-proof',String(Date.now()));root.querySelector('#open')?.shadowRoot?.append(document.createElement('span'));await new Promise(resolve=>setTimeout(resolve,25));return {...JSON.parse(JSON.stringify(globalThis.__rpObserverProbe)),scopeAbsent:typeof globalThis.__rpAudit==='undefined',engineAbsent:typeof globalThis.axe==='undefined'}})()", true);
+      } });
+  } finally {
+    if (world !== undefined && !page.isClosed()) await evaluate("globalThis.__rpObserverControl?.deref()?.disconnect();delete globalThis.__rpObserverControl").catch(() => {});
+    await inspect.detach().catch(() => {});
+  }
+}
+function recordObserverProof(name: string, state: ObserverState, server: any) {
+  const directory = process.env.RUNPHANTOM_ACCESSIBILITY_OBSERVER_PROOF_DIR;
+  if (directory) writeFileSync(path.join(directory, `${name}.json`), JSON.stringify({ instrumentation: "native observer calls, WeakMap identities, numeric logs, native GC and real DOM mutation", providerCalls: 0, ownedPid: server.process().pid, state }, null, 2) + "\n");
+}
+
 describe.skipIf(!installed)("actual owned Chromium accessibility engine adapter", () => {
+  test("refused scope setup disconnects observers before post-GC native mutation on the reused page", async () => withPage(async (page, _audit, server) => {
+    await page.setContent(html(fixed + '<div id="duplicate"></div><div id="duplicate"></div><div id="hidden" hidden></div>'));
+    await withObserverProbe(page, async probe => {
+      for (let repeat = 0; repeat < 3; repeat++) for (const region of ["#missing", "#duplicate", "#hidden", "["]) {
+        const result = await scanAccessibility(probe.page, { ...request, regions: ["#audit", region] }, identity,
+          { current: () => !page.isClosed(), terminate: async () => { await page.close(); } });
+        expect(result.status).toBe("inconclusive"); expect(result.coverage).toBe("unavailable"); expect(result.loss).toContain("region-unavailable");
+      }
+      const control = await probe.control(), state = await probe.mutate(); recordObserverProof("refused-roots", state, server);
+      expect(state.deliveries[control]).toBe(1); expect(state.scopes).toHaveLength(12);
+      expect(state.scopeAbsent).toBe(true); expect(state.engineAbsent).toBe(true);
+      expect(state.scopes.map(id => state.deliveries[id] ?? 0)).toEqual(Array(12).fill(0));
+      for (const id of state.scopes) { expect(state.observes.filter(item => item.id === id)).toHaveLength(1); expect(state.disconnects.filter(item => item === id)).toHaveLength(1); }
+      expect(page.isClosed()).toBe(false); expect(probe.worlds.size).toBe(1);
+    });
+  }), 20000);
+  test("successful scopes dispose their own native observers without counting engine observers", async () => withPage(async (page, _audit, server) => {
+    await page.setContent(html(fixed));
+    await withObserverProbe(page, async probe => {
+      for (let repeat = 0; repeat < 3; repeat++) {
+        const result = await scanAccessibility(probe.page, request, identity,
+          { current: () => !page.isClosed(), terminate: async () => { await page.close(); } });
+        expect(result.status).toBe("no-findings"); expect(result.coverage).toBe("complete");
+      }
+      const control = await probe.control(), state = await probe.mutate(); recordObserverProof("successful-scopes", state, server);
+      expect(state.deliveries[control]).toBe(1); expect(state.scopes).toHaveLength(3);
+      expect(state.scopeAbsent).toBe(true); expect(state.engineAbsent).toBe(true);
+      expect(state.scopes.map(id => state.deliveries[id] ?? 0)).toEqual([0, 0, 0]);
+      for (const id of state.scopes) expect(state.disconnects.filter(item => item === id)).toHaveLength(1);
+      expect(page.isClosed()).toBe(false); expect(probe.worlds.size).toBe(1);
+    });
+  }), 20000);
+  test("construction failure after a real shadow observation disconnects that same native observer", async () => withPage(async (page, _audit, server) => {
+    await page.setContent(html(fixed + '<div id="open"></div>'));
+    await page.evaluate(() => { document.querySelector("#open")!.attachShadow({ mode: "open" }).innerHTML = "<button>Shadow action</button>"; });
+    await withObserverProbe(page, async probe => {
+      // Initialize the private world through a refused selector before injecting a later construction fault.
+      await scanAccessibility(probe.page, { ...request, regions: ["#missing"] }, identity,
+        { current: () => !page.isClosed(), terminate: async () => { await page.close(); } });
+      await probe.refuseShadowTraversal();
+      for (let repeat = 0; repeat < 3; repeat++) {
+        const result = await scanAccessibility(probe.page, request, identity,
+          { current: () => !page.isClosed(), terminate: async () => { await page.close(); } });
+        expect(result.status).toBe("inconclusive"); expect(result.loss).toContain("region-unavailable");
+      }
+      const control = await probe.control(), state = await probe.mutate(); recordObserverProof("refused-shadow-traversal", state, server);
+      expect(state.deliveries[control]).toBe(1); expect(state.scopes).toHaveLength(4); expect(state.traversalRefusals).toBe(3);
+      expect(state.scopeAbsent).toBe(true); expect(state.engineAbsent).toBe(true);
+      expect(state.scopes.map(id => state.deliveries[id] ?? 0)).toEqual([0, 0, 0, 0]);
+      for (const id of state.scopes.slice(1)) expect(state.observes.filter(item => item.id === id).map(item => item.root)).toEqual(["document", "shadow"]);
+      for (const id of state.scopes) expect(state.disconnects.filter(item => item === id)).toHaveLength(1);
+      expect(page.isClosed()).toBe(false); expect(probe.worlds.size).toBe(1);
+    });
+  }), 20000);
   test("real invalid findings become scoped no-findings only after the actual fixture is fixed", async () => withPage(async (page, audit) => {
     await page.setContent(html('<button id="action"></button><img id="image"><input id="entry"><p>Readable text</p>'));
     const bad = await audit(); expect(bad.status).toBe("findings"); expect(bad.engine.version).toBe("4.11.0");
