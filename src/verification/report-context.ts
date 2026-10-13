@@ -1,4 +1,4 @@
-import type { Predicate, VerificationReportContext } from "./protocol";
+import type { FailureHandoff, Predicate, VerificationReport, VerificationReportContext } from "./protocol";
 import { VERIFICATION_LIMITS as L } from "./protocol";
 import { parseFlowSteps, parseRelativeTarget } from "./validation";
 import { sanitizeWithReport } from "./serialization";
@@ -131,4 +131,40 @@ export function boundReportContext(input: VerificationReportContext, scrub: Scru
     throw new Error("Saved verification context exceeds its required outcome budget");
   }
   return context;
+}
+
+/** Advice describes an already retained report; it never interprets agent completion prose. */
+export function buildFailureHandoff(report: VerificationReport): FailureHandoff {
+  const validStatus = (value: unknown) => value === "pass" || value === "fail" || value === "inconclusive";
+  if (!validStatus(report.status)) throw new Error("Retained report outcome unavailable");
+  let redacted = report.context?.redacted ?? false;
+  let truncated = report.context?.truncated ?? false;
+  const clean = (value: unknown) => {
+    const result = sanitizeWithReport(value);
+    redacted ||= !!result.redacted;
+    truncated ||= !!result.truncation;
+    return result.value;
+  };
+  const text = (value: string) => { const result = clean(value); return typeof result === "string" ? result : "[REDACTED]"; };
+  const context = report.context ? boundReportContext(report.context) : undefined;
+  redacted ||= context?.redacted ?? false;
+  truncated ||= context?.truncated ?? false;
+  const checks = (context?.checks ?? []).map(check => {
+    if (!validStatus(check.status) || ![check.step, check.since, check.through, check.generation, check.dropped].every(Number.isSafeInteger)
+      || check.step < 1 || check.since < 0 || check.through < check.since || check.generation < 0 || check.dropped < 0
+      || typeof check.complete !== "boolean" || typeof check.settled !== "boolean") throw new Error("Retained check outcome unavailable");
+    return { step: check.step, predicate: clean(check.predicate), status: check.status, actual: text(check.reason),
+      since: check.since, through: check.through, generation: check.generation, complete: check.complete, dropped: check.dropped,
+      settled: check.settled, coverage: { ...check.coverage }, ...(check.controlSource ? { controlSource: check.controlSource } : {}),
+      ...(check.controlSourceOmitted ? { controlSourceOmitted: check.controlSourceOmitted } : {}), ...(check.causal ? { causal: check.causal } : {}) };
+  });
+  const handoff: FailureHandoff = { reportId: report.id, name: text(report.name), status: report.status, reason: text(report.reason),
+    origin: context ? text(context.origin) : null, reproduction: "partial",
+    reproductionNote: "This is retained outcome evidence, not a replay script. Original actions and entered values were not retained in this report. Reproduce explicitly in the recorded application and recheck the declared expectation; no command has been run by this handoff.",
+    checks, checksOmitted: Math.max(0, (report.context?.checks.length ?? 0) - checks.length), redacted, truncated };
+  while (Buffer.byteLength(JSON.stringify(handoff)) > 16384 && handoff.checks.length) {
+    handoff.checks.pop(); handoff.checksOmitted++; handoff.truncated = true;
+  }
+  if (Buffer.byteLength(JSON.stringify(handoff)) > 16384) throw new Error("Retained handoff exceeds its byte bound");
+  return handoff;
 }

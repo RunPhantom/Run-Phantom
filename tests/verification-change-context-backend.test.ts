@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import http from "node:http";
@@ -9,7 +9,8 @@ import express from "express";
 import { WebSocket } from "ws";
 import { closeDb, getDrizzleDb } from "../src/db";
 import { createVerificationService } from "../src/verification/service";
-import { createVerificationRouter } from "../src/verification/router";
+import { createVerificationRouter, verifyVerificationChangeRequest } from "../src/verification/router";
+import { ChangeContextReader } from "../src/verification/change-context";
 import { listReports } from "../src/verification/store";
 
 let directory: string;
@@ -36,23 +37,26 @@ function project(changes: boolean) {
   writeFileSync(path.join(cwd, "src/Cart.tsx"), "export const Cart = 'original';\n");
   writeFileSync(path.join(cwd, "tests/Checkout.test.ts"), "// A tracked related-test filename; it has not been executed.\n");
   writeFileSync(path.join(cwd, "src/pixel.bin"), Buffer.from([0, 1, 0, 2]));
+  utimesSync(path.join(cwd, "src/pixel.bin"), 1700000000, 1700000000);
   git(cwd, "add", "--", "."); git(cwd, "commit", "-qm", "Establish native change-context fixture");
   const head = git(cwd, "rev-parse", "HEAD");
   if (changes) {
     git(cwd, "mv", "--", "src/Cart.tsx", "src/Checkout.tsx");
     writeFileSync(path.join(cwd, "src/Checkout.tsx"), "export const Cart = 'changed';\n");
     writeFileSync(path.join(cwd, "src/pixel.bin"), Buffer.from([0, 4, 0, 8]));
+    utimesSync(path.join(cwd, "src/pixel.bin"), 1700000000, 1700000000);
     writeFileSync(path.join(cwd, "src/欢迎.mdx"), "PRIVATE_UNTRACKED_CONTENT_MUST_NOT_BE_READ\n");
     writeFileSync(path.join(cwd, ".env"), "PASSWORD=PRIVATE_SECRET_FILE_MUST_NOT_BE_READ\n");
   }
-  return { cwd, head };
+  return { cwd: realpathSync(cwd), head };
 }
 async function fixture(cwd: string) {
   const service = createVerificationService({ broadcast() {}, checkTimeoutMs: 500, commandTimeoutMs: 500 });
   const workspace = { cwd, revision: "selected-1" };
   const authority = { id: "local-owner", role: "owner" as "owner" | "reader", generation: 1 };
-  const app = express(); app.use(express.json());
-  app.use("/api/verification", createVerificationRouter(service, { changeWorkspace: () => workspace, changeAuthority: () => authority }));
+  const changes = new ChangeContextReader({ workspace: () => workspace, authority: () => authority, report: id => listReports().find(item => item.id === id) });
+  const app = express(); app.use(express.json({ verify: verifyVerificationChangeRequest }));
+  app.use("/api/verification", createVerificationRouter(service, { changeContext: changes }));
   const server = http.createServer(app);
   server.on("upgrade", (req, socket, head) => service.bridge.handleUpgrade(req, socket, head));
   server.listen(0, "127.0.0.1"); await once(server, "listening");
@@ -81,7 +85,7 @@ async function fixture(cwd: string) {
   const report = (await api(`/sessions/${created.id}/assert`, { name: "Measured failing checkout", predicate: { kind: "console", level: "error", absent: true }, since: acted.cursor })).body;
   expect(report.status).toBe("fail");
   const stored = JSON.stringify(listReports().find(item => item.id === report.id));
-  return { api, report, stored, workspace, authority, async close() { ws.terminate(); service.close(); await new Promise<void>(resolve => server.close(() => resolve())); } };
+  return { api, report, stored, workspace, authority, async close() { changes.close(); ws.terminate(); service.close(); await new Promise<void>(resolve => server.close(() => resolve())); } };
 }
 
 describe("explicit change context preserves measured report authority", () => {
@@ -92,6 +96,7 @@ describe("explicit change context preserves measured report authority", () => {
       expect(offered.body.workspaceId).toBeString(); expect(JSON.stringify(offered.body)).not.toContain(repo.cwd);
       const captured = await f.api(`/reports/${f.report.id}/change-context`, { workspaceId: offered.body.workspaceId });
       expect(captured.status).toBe(200); expect(captured.body.head).toBe(repo.head);
+      if (!captured.body.changes.some((row: { path: string }) => row.path === "src/pixel.bin")) console.log("Bounded same-size binary diagnostic", JSON.stringify(captured.body));
       expect(captured.body.testedRevision).toBeNull(); expect(captured.body.fingerprintCoverage).toBe("metadata-only");
       expect(captured.body.changes.some((row: { path: string; previousPath?: string }) => row.path === "src/Checkout.tsx" && row.previousPath === "src/Cart.tsx")).toBe(true);
       expect(captured.body.changes.find((row: { path: string }) => row.path === "src/pixel.bin").binary).toBe(true);
