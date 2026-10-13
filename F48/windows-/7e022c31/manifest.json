@@ -1,0 +1,48 @@
+{
+  "feature": "F48",
+  "branchHead": "ee1e263b2b940c45b45cf04032c393f6d754f212",
+  "actualCheckout": "7e022c31d60b08c1fcae67e3f188273828982bdf",
+  "githubSyntheticPrMerge": true,
+  "run": 38328195586,
+  "backend": {
+    "passed": 677,
+    "originalConditionalSkips": 37,
+    "failed": 0,
+    "assertions": 3876
+  },
+  "sourceBrowser": {
+    "passed": 135,
+    "conditionalSkips": 10,
+    "failed": 0,
+    "workflowWorkers": 2,
+    "workflowRetries": 1
+  },
+  "copiedNativeCommonPassed": 3,
+  "rootPersonallyViewedAllThreePngs": true,
+  "screenshots": {
+    "runphantom-desktop-detail.png": {
+      "sha256": "8cdd3ddda2d2a0017b3b6faec8e20199a9e550f7cc450015feb7485bae46d875",
+      "synthetic": true,
+      "nativeWindowsExecutable": true
+    },
+    "runphantom-desktop.png": {
+      "sha256": "5478664d0db9050e504ff619d69841db388009add4544090ba713edc432d0b5f",
+      "synthetic": true,
+      "nativeWindowsExecutable": true
+    },
+    "runphantom-mobile.png": {
+      "sha256": "5fabaea554403d0f60b42a6beae077de2c1d5648ca998dfb8b91af828a470f05",
+      "synthetic": true,
+      "nativeWindowsExecutable": true
+    }
+  },
+  "exactHeadColdPushFailed": {
+    "run": 38328188839,
+    "passed": 676,
+    "conditionalSkips": 37,
+    "failed": 1,
+    "firstIdentityCommandMs": 3047,
+    "observedPhases": []
+  },
+  "globalAcceptance": false
+}
