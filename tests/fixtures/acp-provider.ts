@@ -1,8 +1,18 @@
+import { appendFileSync } from "node:fs";
 // Controlled native process fixture; this is not an authenticated provider or live model.
 const mode = process.env.RUNPHANTOM_ACP_FIXTURE_MODE ?? process.argv[2] ?? "positive";
 const sessionId = process.env.RUNPHANTOM_ACP_FIXTURE_SESSION_ID ?? "fixture_session";
 let promptId: unknown;
 let denied = false;
+const receipt = process.env.RUNPHANTOM_ACP_FIXTURE_RECEIPT_PATH;
+if (receipt) appendFileSync(receipt, JSON.stringify({ event: "birth", pid: process.pid, mode, cwd: process.cwd(), argv: process.argv }) + "\n");
+if (mode.endsWith("slow_exit")) {
+  setInterval(() => {}, 100);
+  process.on("SIGTERM", () => {
+    if (receipt) appendFileSync(receipt, JSON.stringify({ event: "term", pid: process.pid }) + "\n");
+    setTimeout(() => process.exit(0), 250);
+  });
+}
 function send(value: unknown) { process.stdout.write(JSON.stringify(value) + "\n"); }
 function update(sessionUpdate: string, fields: Record<string, unknown> = {}, id = sessionId) {
   send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: id, update: { sessionUpdate, ...fields } } });
@@ -21,7 +31,7 @@ for await (const chunk of process.stdin) {
     input = input.slice(index + 1);
     switch (frame.method) {
       case "initialize":
-        if (mode === "hold_initialize") break;
+        if (mode.startsWith("hold_initialize")) break;
         if (mode === "malformed") { process.stdout.write('{"jsonrpc":\n'); break; }
         if (mode === "utf8") { process.stdout.write(Buffer.from([0xc3, 0x28, 10])); break; }
         if (mode === "oversize") { process.stdout.write("x".repeat(65_537)); break; }
@@ -48,7 +58,7 @@ for await (const chunk of process.stdin) {
           process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: promptId, result: { stopReason: "end_turn" } }) + '\n{"jsonrpc":"2.0","method":"unadvertised_notification","params":{}}\n');
           break;
         }
-        if (mode === "hold_prompt") { update("agent_message_chunk", { content: { type: "text", text: "Partial answer" } }); break; }
+        if (mode.startsWith("hold_prompt")) { update("agent_message_chunk", { content: { type: "text", text: "Partial answer" } }); break; }
         if (mode === "foreign") { update("agent_message_chunk", { content: { type: "text", text: "Foreign private content" } }, "foreign_session"); break; }
         if (mode === "unknown") { update("future_unsupported_update", { arbitrary: "Synthetic" }); break; }
         if (mode === "terminal_stop") { send({jsonrpc:"2.0",id:promptId,result:{stopReason:"max_tokens"}});break; }
