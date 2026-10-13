@@ -28,7 +28,7 @@ app.use((req,res,next) => {
 });
 app.use("/api/review-queues", createReviewQueueRouter());
 app.get("/api/runs", (_req,res) => res.json(getRuns(50)));
-app.get("/api/runs/search", (req,res) => { const q = typeof req.query.q === "string" ? req.query.q : ""; res.json({ runs:getRuns(50).filter(run => !q || (run.name ?? run.id).includes(q)),nextCursor:null,hasMore:false,elapsedMs:0 }); });
+app.get("/api/runs/search", (req,res) => { const q = typeof req.query.q === "string" ? req.query.q : ""; res.json({ runs:getRuns(50).filter(run => !q || (run.name ?? run.id ?? "").includes(q)),nextCursor:null,hasMore:false,elapsedMs:0 }); });
 app.use(express.json({ limit:"2mb" }));
 app.use("/api/evaluations",createEvaluationRouter(new EvaluationService()));
 const vite = await createViteServer({ root:path.resolve(import.meta.dirname,".."), server:{ middlewareMode:true,fs:{ allow:[path.resolve(import.meta.dirname,"../.."),realpathSync(path.resolve(import.meta.dirname,"../../node_modules"))] } }, appType:"mpa" });

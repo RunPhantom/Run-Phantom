@@ -92,6 +92,13 @@
       "when": 1791766000003,
       "tag": "0012_prompt_registry",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1791766000004,
+      "tag": "0013_completion_reports",
+      "breakpoints": true
     }
   ]
 }

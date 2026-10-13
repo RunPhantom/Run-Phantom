@@ -83,3 +83,11 @@
   .evidence-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (prefers-reduced-motion: reduce) { .evidence-workspace * { transition: none !important; animation: none !important; } }
+.completion-evidence { min-width: 0; }
+.completion-draft { display: grid; gap: 16px; margin-top: 20px; }
+.completion-history { border-top: 1px solid #d9deea; padding-top: 16px; }
+.completion-report { border-top: 1px solid #d9deea; padding-top: 20px; margin-top: 20px; overflow-wrap: anywhere; }
+.completion-observations { display: grid; gap: 16px; margin-top: 16px; }
+.completion-observations > li { padding-block: 16px; border-top: 1px solid #e8ecf5; }
+.completion-text { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono, monospace); font-size: 12px; line-height: 18px; margin-block: 10px; }
+.completion-error { color: #903737; font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
