@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { flushSync } from "react-dom";
 import { isRunDeleting, setRunDeleting, subscribeRunDeletions, setRunDeletionError, useRunDeletionError, useRunDeletions } from "../hooks/use-runs";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
@@ -43,7 +43,7 @@ import { useAnnotations } from "../hooks/use-annotations";
 import type { Annotation, AnnotationKind } from "../hooks/use-annotations";
 import { useAgentForEvent } from "../hooks/use-agents";
 import { useRunPhantomConnectionStatus, useRunPhantomEvent } from "../hooks/use-runphantom-ws";
-import { getCostBreakdown, fmtCost } from "../utils/costs";
+import { getCostBreakdown, getPricingSnapshot, getPricingUsageByModel, subscribePricing, fmtCost, fmtRate } from "../utils/costs";
 import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
 import { useDialogFocus } from "../hooks/use-dialog-focus";
 
@@ -261,6 +261,11 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
 }) {
   const [showCost, setShowCost] = useState(false);
   const costRef = useRef<HTMLSpanElement>(null);
+  const costButtonRef = useRef<HTMLButtonElement>(null);
+  const costPanelRef = useRef<HTMLDivElement>(null);
+  const costPanelId = useId();
+  const pricing = useSyncExternalStore(subscribePricing, getPricingSnapshot, getPricingSnapshot);
+  const [costPosition, setCostPosition] = useState<{ left: number; top: number; width: number } | null>(null);
   const inTok = stats.inTokens ?? 0;
   const outTok = stats.outTokens ?? 0;
 
@@ -273,12 +278,36 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
 
   const breakdown = useMemo(() => {
     if (!spans) return [];
-    const byModel = getTokensByModel(spans);
+    const byModel = getPricingUsageByModel(spans);
     return [...byModel.entries()].map(([m, { inTok, outTok }]) => ({
       model: m, inTok, outTok,
-      breakdown: getCostBreakdown(m, inTok, outTok),
+      breakdown: pricing.catalogue ? getCostBreakdown(m, inTok, outTok) : null,
     }));
-  }, [spans]);
+  }, [spans, pricing.catalogue]);
+
+  useLayoutEffect(() => {
+    if (!showCost) return;
+    const position = () => {
+      const rect = costButtonRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = Math.min(352, window.innerWidth - 32);
+      const height = Math.min(costPanelRef.current?.scrollHeight ?? 400, 400, window.innerHeight - 32);
+      setCostPosition({ left: Math.max(16, Math.min(rect.left, window.innerWidth - width - 16)), top: rect.bottom + height + 8 <= window.innerHeight - 16 ? rect.bottom + 8 : Math.max(16, rect.top - height - 8), width });
+    };
+    position();
+    window.addEventListener("resize", position);
+    window.addEventListener("scroll", position, true);
+    return () => { window.removeEventListener("resize", position); window.removeEventListener("scroll", position, true); };
+  }, [showCost, breakdown]);
+
+  useEffect(() => {
+    if (!showCost) return;
+    const dismiss = (event: PointerEvent) => { if (event.target instanceof Node && !costRef.current?.contains(event.target)) setShowCost(false); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { setShowCost(false); costButtonRef.current?.focus(); } };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", escape); };
+  }, [showCost]);
 
   const liveDur = active && startedAt ? now - startedAt : stats.dur;
   const durValid = Number.isFinite(liveDur) && liveDur >= 0;
@@ -308,37 +337,45 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
       }</span>
       {(inTok > 0 || outTok > 0) && <><Dot /><Badge label="tokens" /><span><NumberFlow value={inTok} {...TOKEN_NUMBER_FLOW_TIMING} /> in / <NumberFlow value={outTok} {...TOKEN_NUMBER_FLOW_TIMING} /> out</span></>}
       {(() => {
-        const totalCost = breakdown.reduce((sum, b) => sum + (b.breakdown?.totalCost ?? 0), 0);
-        const cost = totalCost > 0 ? fmtCost(totalCost) : null;
-        return cost && (
+        const known = breakdown.filter(row => row.breakdown !== null);
+        const unavailableCount = breakdown.length - known.length;
+        const totalCost = known.reduce((sum, row) => sum + row.breakdown!.totalCost, 0);
+        const availableTotal = known.length > 0 && Number.isFinite(totalCost);
+        const label = availableTotal ? `${unavailableCount ? "Known estimates" : "Estimated cost"} ${fmtCost(totalCost)}${unavailableCount ? ` · ${unavailableCount} unavailable` : ""}` : "Estimate unavailable";
+        return breakdown.length > 0 && (
         <>
           <Dot />
-          <span ref={costRef} className="relative cursor-help"
-            onMouseEnter={() => setShowCost(true)} onMouseLeave={() => setShowCost(false)}>
-            {cost}
-            {showCost && breakdown.length > 0 && (
-              <div className="absolute left-0 top-full mt-1 z-50 rounded-lg p-2.5 shadow-xl whitespace-nowrap"
-                style={{ background: C.elevated, border: `1px solid ${C.borderLight}` }}>
-                <div className="text-[9px] uppercase tracking-wide mb-2 font-medium" style={{ color: C.fg0 }}>Cost Breakdown</div>
+          <span ref={costRef} className="relative">
+            <button ref={costButtonRef} type="button" className="min-h-11 min-w-11 rounded px-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2" aria-expanded={showCost} aria-controls={costPanelId} onClick={() => setShowCost(open => !open)}>
+              <span aria-live="polite">{label}</span>
+            </button>
+            {showCost && (
+              <div ref={costPanelRef} id={costPanelId} role="region" aria-label="Nominal cost estimates" className="fixed z-50 rounded-lg p-3 shadow-xl overflow-y-auto text-[12px]"
+                style={{ background: C.elevated, border: `1px solid ${C.borderLight}`, ...costPosition, maxHeight: "min(400px, calc(100vh - 32px))", visibility: costPosition ? "visible" : "hidden" }}>
+                <div className="mb-2 font-medium" style={{ color: C.fg2 }}>Nominal input/output estimates</div>
+                <p className="mb-3 whitespace-normal" style={{ color: C.fg1 }}>OpenRouter catalogue quotes; actual provider and tier billing may differ. Cache, audio, discounts, and other fees are excluded. Reported cost stays separate.</p>
                 {breakdown.map(b => (
-                  <div key={b.model} className="mb-2 last:mb-0">
-                    <div className="text-[10px] font-medium mb-0.5" style={{ color: C.fg2 }}>{b.model}</div>
-                    {b.breakdown && (
-                      <div className="text-[9px] space-y-0.5" style={{ color: C.fg0 }}>
+                  <div key={b.model === null ? "missing-model" : `model:${b.model}`} className="mb-3 last:mb-0 whitespace-normal break-words">
+                    <div className="font-medium mb-1" style={{ color: C.fg2 }}>{b.model ?? "Model unavailable"}</div>
+                    {b.breakdown ? (
+                      <div className="space-y-1" style={{ color: C.fg0 }}>
                         <div className="flex justify-between gap-4">
-                          <span>{b.inTok.toLocaleString()} input @ ${b.breakdown.inRate}/M</span>
+                          <span>{b.inTok!.toLocaleString()} input @ {fmtRate(b.breakdown.inRate)}/M</span>
                           <span style={{ color: C.fg1 }}>{fmtCost(b.breakdown.inCost)}</span>
                         </div>
                         <div className="flex justify-between gap-4">
-                          <span>{b.outTok.toLocaleString()} output @ ${b.breakdown.outRate}/M</span>
+                          <span>{b.outTok!.toLocaleString()} output @ {fmtRate(b.breakdown.outRate)}/M</span>
                           <span style={{ color: C.fg1 }}>{fmtCost(b.breakdown.outCost)}</span>
                         </div>
                         <div className="flex justify-between gap-4 pt-0.5" style={{ borderTop: `1px solid ${C.border}` }}>
                           <span style={{ color: C.fg1 }}>total</span>
                           <span style={{ color: C.fg2 }}>{fmtCost(b.breakdown.totalCost)}</span>
                         </div>
+                        <div style={{ color: C.fg1 }}>Catalogue ID: {b.breakdown.catalogueId}</div>
+                        <div style={{ color: C.fg1 }}>Revision: <span className="font-mono">{b.breakdown.rateRevision}</span></div>
+                        <div style={{ color: C.fg1 }}>Fetched: {b.breakdown.source.observedAt}</div>
                       </div>
-                    )}
+                    ) : <p style={{ color: C.fg1 }}>{b.model === null ? "Model identity was not captured." : b.inTok === null || b.outTok === null ? "Input or output token capture is unavailable." : pricing.status === "disabled" ? "Public pricing is disabled. Enable it in Settings." : pricing.status === "loading" || pricing.status === "idle" ? "Public pricing is loading." : pricing.status === "error" ? pricing.error : "No unambiguous exact catalogue price is available."}</p>}
                   </div>
                 ))}
               </div>
