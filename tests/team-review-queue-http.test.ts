@@ -1,4 +1,5 @@
 import { beforeAll, afterAll, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { createServer } from "node:net";
 import { request as httpRequest } from "node:http";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
@@ -36,6 +37,38 @@ test("actual project editor creates a shared review queue",async()=>{expect((awa
 test("shared queue lookup authenticates before authority or entity lookup",async()=>{expect((await call("GET",`/projects/${project}/review-queues`)).response.status).toBe(401);});
 test("viewer remains read only for actual shared review mutation",async()=>{expect((await call("POST",`/projects/${project}/review-queues`,{name:"Forbidden"},viewer)).response.status).toBe(403);});
 test("actual editor creates a project-owned curated dataset",async()=>{expect((await call("POST",`/projects/${project}/review-datasets`,{name:"Project β curated cases"},editor)).response.status).toBe(201);});
+
+for (const [label, body] of [
+  ["direct", '{"name":"First contradictory value","name":"Second accepted value"}'],
+  ["escaped", '{"name":"First escaped value","na\\u006de":"Second accepted value"}'],
+  ["nested", '{"name":"Nested duplicate","schema":{"fields":[{"key":"score","label":"Score","type":"number","required":false,"minimum":0,"minimum":1,"mapping":{"kind":"jsonPath","path":"$.score"}}]}}'],
+] as const) test(`actual HTTP ${label} duplicate decoded keys refuse before any review SQL mutation`, async () => {
+  const db = new Database(join(profile, "team", "team.sqlite"), { readonly: true });
+  const tables = ["team_review_queues", "team_review_items", "team_review_datasets", "team_review_dataset_revisions", "team_review_promotions"];
+  const rows = () => tables.map(table => db.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+  try {
+    const before = rows();
+    const response = await fetch(url + `/api/team/projects/${project}/review-queues`, { method: "POST", headers: { Origin: url, Cookie: editor.cookie, "X-RunPhantom-CSRF": editor.csrf, "Content-Type": "application/json" }, body });
+    const data = await response.json();
+    const after = rows();
+    expect(after).toEqual(before);
+    expect(response.status).toBe(400);
+    expect(data.error.code).toBe("invalid_request");
+    expect(typeof data.error.message).toBe("string");
+    expect(JSON.stringify(data)).not.toContain("Second accepted value");
+    expect(Object.keys(data.error).sort()).toEqual(["code", "message", "requestId"]);
+    expect(data.error.requestId).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
+  } finally { db.close(); }
+});
+
+test("ordinary raw HTTP JSON retains literal zero and false in a new shared queue", async () => {
+  const body = '{"name":"Literal typed positive","schema":{"fields":[{"key":"score","label":"Score","type":"number","required":false,"minimum":0,"mapping":{"kind":"jsonPath","path":"$.score"}}]}}';
+  const response = await fetch(url + `/api/team/projects/${project}/review-queues`, { method: "POST", headers: { Origin: url, Cookie: editor.cookie, "X-RunPhantom-CSRF": editor.csrf, "Content-Type": "application/json" }, body });
+  const data = await response.json();
+  expect(response.status).toBe(201);
+  expect(data.schema.fields[0].minimum).toBe(0);
+  expect(data.schema.fields[0].required).toBe(false);
+});
 
 const runId="1".repeat(32), spanId="2".repeat(16);
 async function intake() {

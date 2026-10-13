@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveBuiltAppDir } from "../ui-assets";
 import { parseJsonEvidence } from "../evaluations/json-evidence";
+import { hasDuplicateJsonKeys } from "../json-keys";
 import { TeamStore, type SessionContext, type ProjectContext } from "./store";
 import { TeamCheckService } from "./checks";
 import type { TeamEvidenceRead, TeamEvidenceWrite, TeamEvidenceResponse } from "./evidence";
@@ -246,7 +247,10 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
   const reviewBody = async (req: Request) => {
     if (!/^application\/json(?:\s*;\s*charset=(?:utf-8|"utf-8"))?$/i.test(rawHeader(req, "content-type") ?? "")
       || ![undefined, "identity"].includes(rawHeader(req, "content-encoding"))) throw new TeamError("unsupported_media_type", "Project review controls require uncompressed UTF-8 JSON");
-    return jsonBody(req, REVIEW_LIMITS.MAX_REQUEST_BYTES);
+    const body = await readBody(req, REVIEW_LIMITS.MAX_REQUEST_BYTES);
+    const value = parseJson(body);
+    if (hasDuplicateJsonKeys(body.toString("utf8"))) throw new TeamError("invalid_request", "Project review JSON contains duplicate fields");
+    return value;
   };
   const reviewRevision = (value: unknown) => {
     if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) throw new TeamError("invalid_request", "Project review revision is invalid"); return parseVersion(Number(value));
