@@ -2,7 +2,7 @@ import { beforeEach, afterEach, expect, test, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,7 +10,8 @@ import { PromptRegistry } from "../src/prompts/registry";
 import { acquireComparisonOwner } from "../src/prompts/comparison-owner";
 import { ComparisonStore } from "../src/prompts/comparison-store";
 import { COMPARISON_STORAGE_SQL } from "../src/prompts/comparison-storage";
-import { COMPARISON_MODELS } from "../src/prompts/comparison-protocol";
+import { COMPARISON_MODELS, COMPARISON_LIMITS } from "../src/prompts/comparison-protocol";
+import { estimateComparisonUsage } from "../src/prompts/spend-ledger";
 
 let directory: string, file: string, db: Database, prompts: PromptRegistry, store: ComparisonStore;
 let lease: Awaited<ReturnType<typeof acquireComparisonOwner>>;
@@ -136,3 +137,127 @@ test("unknown long-context pricing preserves observed counts and full charge whi
   const row = receipt.attempts[0]; expect(row.accountingState).toBe("conservative"); expect(row.chargeMicrousd).toBe(row.reserveMicrousd); expect(row.budgetBreach).toBe(true); expect(row.payload).toMatchObject({ usage: { categories: { input: { count: 272001 } } }, estimate: { totalUsd: null } });
   expect(store.start(operation.id, 1, fence)).toBeNull();
 });
+
+function retainedBytes() {
+  const columns = (names: string[]) => names.map(name => `coalesce(length(CAST(${name} AS BLOB)),0)`).join("+");
+  return (db.query(`SELECT (SELECT coalesce(sum(${columns(["scope_key", "id", "operation_key", "request_digest", "prompt_id", "frozen_request"])}+80),0) FROM prompt_comparisons)+(SELECT coalesce(sum(${columns(["scope_key", "comparison_id", "provider", "model", "status", "reason", "payload", "accounting_state", "observed_estimate_usd"])}+96),0) FROM prompt_comparison_attempts)+(SELECT coalesce(sum(length(CAST(scope_key AS BLOB))+8),0) FROM comparison_scope_controls) n`).get() as { n: number }).n;
+}
+
+/** Native valid finite histories, not a claim of background provider dispatches. */
+function nearCapacity(freeBytes: number, runningPosition = 0) {
+  const complete = store.submit(request(saved().id), store.capture("edit"));
+  for (let position = 0; position < 4; position++) {
+    const target = COMPARISON_MODELS[position], usage = { model: target.model, inputTokens: 3, outputTokens: 2, cacheReadTokens: 0, ...(target.provider === "openai" ? { contextTokens: 3 } : { cacheWriteTokens: 0 }), tier: "standard" };
+    const priced = estimateComparisonUsage(target, usage, complete.request!.rates[position]);
+    const result = { output: "", finishReason: "stop", provenance: "controlled-http-fixture" as const, usage };
+    result.output = "x".repeat(COMPARISON_LIMITS.attemptPayloadBytes - Buffer.byteLength(JSON.stringify({ ...result, ...priced })));
+    store.start(complete.id, position, store.capture("edit")); store.finish(complete.id, position, store.capture("edit"), { status: "completed", result });
+  }
+  const prototype = store.get(complete.id, store.capture("read"));
+  const target = store.submit(request(saved().id), store.capture("edit")); store.start(target.id, runningPosition, store.capture("edit"));
+  const rows = db.query("SELECT * FROM prompt_comparison_attempts WHERE comparison_id=? ORDER BY position").all(complete.id) as Array<{
+    position: number; provider: string; model: string; status: string; reason: string | null; payload: string; reserve_microusd: number; hold_microusd: number;
+    charge_microusd: number; accounting_state: string; observed_estimate_usd: string; budget_breach: number; deadline_at: number; started_at: number; finished_at: number;
+  }>;
+  const groups = Array.from({ length: 10 }, () => {
+    const id = randomUUID(), scope = `project:${id}`;
+    db.query("INSERT INTO evaluation_evidence_scopes VALUES(?,1,1)").run(scope); db.query("INSERT INTO prompt_scope_controls VALUES(?,1)").run(scope); db.query("INSERT INTO comparison_scope_controls VALUES(?,1)").run(scope);
+    const projectOwner = owner(db, id, "project"), registry = new PromptRegistry(projectOwner);
+    const source = registry.create({ operationKey: randomUUID(), name: "Frozen", template: "Explain {{topic}}" }, registry.capture("edit"));
+    return { scope, source, projectOwner };
+  });
+  const plan = (index: number) => {
+    const group = groups[Math.floor(index / 100)], id = randomUUID(), key = randomUUID();
+    const frozen = { ...prototype.request!, operationKey: key, promptId: group.source.id, prompt: { ...prototype.request!.prompt, id: group.source.id } };
+    const semantic = { operationKey: key, promptId: group.source.id, revision: frozen.revision, variables: frozen.variables, targets: frozen.targets, options: frozen.options, operationBudgetMicrousd: frozen.operationBudgetMicrousd };
+    const serialized = JSON.stringify(frozen), digest = createHash("sha256").update(JSON.stringify({ scope: group.scope, request: semantic })).digest("hex");
+    const headSize = Buffer.byteLength(group.scope) + 36 + 36 + 64 + 36 + Buffer.byteLength(serialized) + 80;
+    const size = headSize + rows.reduce((sum, row) => sum + Buffer.byteLength(group.scope) + 36 + Buffer.byteLength(row.provider) + Buffer.byteLength(row.model) + Buffer.byteLength(row.status) + Buffer.byteLength(row.payload) + Buffer.byteLength(row.accounting_state) + Buffer.byteLength(row.observed_estimate_usd) + 96, 0);
+    return { group, id, key, serialized, digest, size };
+  };
+  const need = COMPARISON_LIMITS.retainedBytes - freeBytes - retainedBytes(), first = plan(0), count = Math.ceil(need / first.size);
+  expect(count).toBeLessThan(998); let shaving = count * first.size - need;
+  db.transaction(() => {
+    for (let index = 0; index < count; index++) {
+      const item = index === 0 ? first : plan(index);
+      db.query("INSERT INTO prompt_comparisons(scope_key,id,operation_key,request_digest,prompt_id,frozen_request,prompt_generation,evidence_generation,comparison_generation,target_count,created_at) VALUES(?,?,?,?,?,?,1,1,1,4,?)").run(item.group.scope, item.id, item.key, item.digest, item.group.source.id, item.serialized, prototype.createdAt);
+      for (const row of rows) {
+        const body = JSON.parse(row.payload) as { output: string }; const take = Math.min(shaving, body.output.length); body.output = body.output.slice(take); shaving -= take;
+        db.query("INSERT INTO prompt_comparison_attempts(scope_key,comparison_id,position,provider,model,status,reason,payload,reserve_microusd,hold_microusd,charge_microusd,accounting_state,observed_estimate_usd,budget_breach,deadline_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(item.group.scope, item.id, row.position, row.provider, row.model, row.status, row.reason, JSON.stringify(body), row.reserve_microusd, row.hold_microusd, row.charge_microusd, row.accounting_state, row.observed_estimate_usd, row.budget_breach, row.deadline_at, row.started_at, row.finished_at);
+      }
+      const validating = new ComparisonStore(item.group.projectOwner, lease, { budgets, availability: { openai: true, anthropic: true } });
+      expect(validating.get(item.id, validating.capture("read")).attempts).toHaveLength(4);
+    }
+  }).immediate();
+  expect(shaving).toBe(0); expect(retainedBytes()).toBe(COMPARISON_LIMITS.retainedBytes - freeBytes);
+  expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  return target;
+}
+
+test("near-cap completion retains truthful terminal accounting and leaves clear and recovery usable", () => {
+  const clock = spyOn(Date, "now"); clock.mockReturnValue(1791766000000);
+  try {
+    const target = nearCapacity(100), fence = store.capture("edit");
+    const completed = { output: "", finishReason: "stop", provenance: "controlled-http-fixture" as const, usage: { model: "gpt-5.4", inputTokens: 3, outputTokens: 2, cacheReadTokens: 0, contextTokens: 3, tier: "standard" } };
+    const priced = estimateComparisonUsage(COMPARISON_MODELS[0], completed.usage, target.request!.rates[0]);
+    completed.output = "x".repeat(COMPARISON_LIMITS.attemptPayloadBytes - Buffer.byteLength(JSON.stringify({ ...completed, ...priced })));
+    const result = store.finish(target.id, 0, fence, { status: "completed", result: completed });
+    expect(retainedBytes()).toBeLessThanOrEqual(COMPARISON_LIMITS.retainedBytes);
+    expect(result.attempts).toHaveLength(4); expect(result.attempts[0]).toMatchObject({ status: "failed", reason: "response_limit", payload: null, accountingState: "measured_estimate", budgetBreach: false });
+    expect(result.attempts[0].chargeMicrousd).toBeGreaterThan(0); expect(result.attempts[0].observedEstimateUsd).not.toBeNull();
+    expect(store.get(target.id, fence)).toEqual(result);
+    const charged = store.budgetTotals().openai.chargeMicrousd; store.terminatePending(target.id); store.recoverPending();
+    expect(retainedBytes()).toBeLessThanOrEqual(COMPARISON_LIMITS.retainedBytes);
+    expect(store.get(target.id, fence).attempts.every(row => !["queued", "running"].includes(row.status))).toBe(true);
+    store.clear({ operationKey: randomUUID(), expectedGeneration: 1, confirmRemoval: true }, store.capture("delete"));
+    expect(store.get(target.id, store.capture("read")).tombstone).toBe(true); expect(store.budgetTotals().openai.chargeMicrousd).toBe(charged);
+    expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  } finally { clock.mockRestore(); }
+}, 30000);
+
+test("admission reserves every pending target's complete future payload before retaining another operation", () => {
+  const clock = spyOn(Date, "now"); clock.mockReturnValue(1791766000000);
+  try {
+    const target = nearCapacity(20000), before = retainedBytes(), budget = store.budgetTotals();
+    const counts = db.query("SELECT (SELECT count(*) FROM prompt_comparisons) operations,(SELECT count(*) FROM prompt_comparison_attempts) attempts").get();
+    expect(() => store.submit(request(target.request!.promptId), store.capture("edit"))).toThrow("capacity");
+    expect(retainedBytes()).toBe(before); expect(store.budgetTotals()).toEqual(budget);
+    expect(db.query("SELECT (SELECT count(*) FROM prompt_comparisons) operations,(SELECT count(*) FROM prompt_comparison_attempts) attempts").get()).toEqual(counts);
+    expect(store.get(target.id, store.capture("read")).attempts).toHaveLength(4);
+  } finally { clock.mockRestore(); }
+}, 30000);
+
+test("full historical retention purges only the current operation's content and preserves overage accounting", async () => {
+  const clock = spyOn(Date, "now"); clock.mockReturnValue(1791766000000);
+  try {
+    const target = nearCapacity(0, 1), fence = store.capture("edit"), reserved = target.attempts[1].reserveMicrousd;
+    const others = db.query("SELECT count(*) n,sum(length(CAST(payload AS BLOB))) bytes FROM prompt_comparison_attempts WHERE comparison_id<>?").get(target.id);
+    const receipt = store.finish(target.id, 1, fence, { status: "completed", result: { output: "Answer", finishReason: "stop", provenance: "controlled-http-fixture", usage: { model: "gpt-4.1", inputTokens: 2000000000000, outputTokens: 1, cacheReadTokens: 0, tier: "standard" } } });
+    expect(receipt.tombstone).toBe(true); expect(receipt.request).toBeNull(); expect(receipt.attempts).toHaveLength(4);
+    expect(receipt.attempts[1]).toMatchObject({ status: "failed", reason: "response_limit", payload: null, chargeMicrousd: reserved, accountingState: "unrepresentable_overage", budgetBreach: true });
+    expect(Number(receipt.attempts[1].observedEstimateUsd)).toBeGreaterThan(2251799);
+    expect(receipt.attempts.filter(row => row.position !== 1).every(row => row.status === "authority_lost" && row.chargeMicrousd === 0 && row.holdMicrousd === 0)).toBe(true);
+    expect(retainedBytes()).toBeLessThanOrEqual(COMPARISON_LIMITS.retainedBytes);
+    expect(db.query("SELECT count(*) n,sum(length(CAST(payload AS BLOB))) bytes FROM prompt_comparison_attempts WHERE comparison_id<>?").get(target.id)).toEqual(others);
+    expect(store.get(target.id, fence)).toEqual(receipt); store.recoverPending(); store.terminatePending(target.id);
+    await lease.close(); db.close(); db = new Database(file); db.exec("PRAGMA foreign_keys=ON"); lease = await acquireComparisonOwner(file);
+    prompts = new PromptRegistry(owner(db)); store = new ComparisonStore(owner(db), lease, { budgets, availability: { openai: true, anthropic: true } });
+    expect(store.get(target.id, store.capture("read"))).toEqual(receipt); store.recoverPending();
+    const budget = store.budgetTotals(); store.clear({ operationKey: randomUUID(), expectedGeneration: 1, confirmRemoval: true }, store.capture("delete"));
+    expect(store.budgetTotals()).toEqual(budget); expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  } finally { clock.mockRestore(); }
+}, 30000);
+
+test("an output that fits alone cannot consume other pending targets' terminal cleanup space", () => {
+  const clock = spyOn(Date, "now"); clock.mockReturnValue(1791766000000);
+  try {
+    const target = nearCapacity(8192 + 16), fence = store.capture("edit");
+    const result = { output: "", finishReason: "stop", provenance: "controlled-http-fixture" as const, usage: { model: "gpt-5.4", inputTokens: 3, outputTokens: 2, cacheReadTokens: 0, contextTokens: 3, tier: "standard" } };
+    const priced = estimateComparisonUsage(COMPARISON_MODELS[0], result.usage, target.request!.rates[0]);
+    result.output = "x".repeat(COMPARISON_LIMITS.attemptPayloadBytes - Buffer.byteLength(JSON.stringify({ ...result, ...priced })));
+    const receipt = store.finish(target.id, 0, fence, { status: "completed", result });
+    expect(receipt.attempts[0]).toMatchObject({ status: "failed", reason: "response_limit", payload: null });
+    store.recoverPending(); expect(store.get(target.id, fence).attempts.slice(1).every(row => row.status === "interrupted")).toBe(true);
+    expect(retainedBytes()).toBeLessThanOrEqual(COMPARISON_LIMITS.retainedBytes);
+  } finally { clock.mockRestore(); }
+}, 30000);

@@ -31,6 +31,8 @@ const integer = (column: string, minimum = 0, maximum = Number.MAX_SAFE_INTEGER)
 const same = (a: ComparisonFence, b: ComparisonFence) => a.promptGeneration === b.promptGeneration && a.evidenceGeneration === b.evidenceGeneration && a.comparisonGeneration === b.comparisonGeneration && a.owner.birth === b.owner.birth && a.owner.generation === b.owner.generation;
 const positionValue = (value: unknown): number => { if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 3) throw new ComparisonError("invalid_request"); return value; };
 const chargeCap = 2251799813685;
+const attemptContent = ["status", "reason", "payload", "accounting_state", "observed_estimate_usd"];
+const contentBytes = (...values: (string | null)[]) => values.reduce((total, value) => total + (value === null ? 0 : Buffer.byteLength(value)), 0);
 const reasons = new Set(["provider_error", "invalid_response", "response_limit", "protected_content", "cancelled", "timeout", "authority_lost"]);
 const terminal = new Set<ComparisonAttemptStatus>(["completed", "failed", "timeout", "cancelled", "unavailable", "budget_refused", "interrupted", "authority_lost"]);
 const headColumns = [cell("id", 36), cell("operation_key", 36), cell("request_digest", 64), cell("frozen_request", L.frozenRequestBytes), integer("tombstone", 0, 1), integer("target_count", 1, 4), integer("created_at"), integer("prompt_generation", 1), integer("evidence_generation", 1), integer("comparison_generation", 1),
@@ -63,7 +65,7 @@ export class ComparisonStore {
   #transaction<T>(capability: PromptCapability, fence: ComparisonFence, work: (current: ComparisonFence) => T): T {
     return this.#db.transaction(() => {
       const current = this.#generation(capability); if (!same(current, fence)) throw new ComparisonError("authority_changed");
-      this.#totals(); const result = work(current); if (!same(current, this.#generation(capability))) throw new ComparisonError("authority_changed"); comparisonJson(result); return result;
+      this.#totals(); const result = work(current); this.#totals(); if (!same(current, this.#generation(capability))) throw new ComparisonError("authority_changed"); comparisonJson(result); return result;
     }).immediate();
   }
   #totals() {
@@ -77,6 +79,14 @@ export class ComparisonStore {
     const total = this.#get<{ n: number }>(`SELECT (SELECT coalesce(sum(${sums(["scope_key", "id", "operation_key", "request_digest", "prompt_id", "frozen_request"])}+80),0) FROM prompt_comparisons)+(SELECT coalesce(sum(${sums(["scope_key", "comparison_id", "provider", "model", "status", "reason", "payload", "accounting_state", "observed_estimate_usd"])}+96),0) FROM prompt_comparison_attempts)+(SELECT coalesce(sum(${bytes("scope_key")}+8),0) FROM comparison_scope_controls) n`)!.n;
     if (!Number.isSafeInteger(total) || total < 0 || total > L.retainedBytes) throw new ComparisonError("integrity");
     return { operations, attempts, scoped, bytes: total };
+  }
+  #pendingRetention() {
+    // Reserve every pending replacement, including its terminal reason and accounting cells.
+    const current = attemptContent.map(column => `coalesce(${bytes(column)},0)`).join("+");
+    return this.#get<{ n: number }>(`SELECT coalesce(sum(${L.attemptPayloadBytes + 32 + 64 + 32 + 64}-(${current})),0) n FROM prompt_comparison_attempts WHERE status IN('queued','running')`)!.n;
+  }
+  #cleanupRetention(id: string, position: number | null) {
+    return this.#get<{ n: number }>(`SELECT coalesce(sum(max(0,${Buffer.byteLength("authority_lost") + Buffer.byteLength("privacy_removed")}-${bytes("status")}-coalesce(${bytes("reason")},0))),0) n FROM prompt_comparison_attempts WHERE status IN('queued','running') AND NOT(scope_key=? AND comparison_id=? AND (? IS NULL OR position=?))`, this.#scope, id, position, position)!.n;
   }
   #budgetTotals() {
     const totals = {} as Record<ComparisonProvider, { chargeMicrousd: number; holdMicrousd: number; breached: boolean; ceilingMicrousd: number }>;
@@ -133,7 +143,9 @@ export class ComparisonStore {
       const source = this.#prompts.get(input.promptId, input.revision, { promptGeneration: current.promptGeneration, evidenceGeneration: current.evidenceGeneration });
       const frozen = freezeComparisonRequest(input, source), reservations = input.targets.map(target => reserveComparisonAttempt(frozen.compiled, target, input.options.maxOutputTokens));
       const execution = { ...frozen, rates: reservations.map(reservation => reservation.rate) }, serialized = comparisonJson(execution, L.frozenRequestBytes);
-      if (totals.bytes + Buffer.byteLength(serialized) + 1024 + input.targets.length * 1024 > L.retainedBytes) throw new ComparisonError("capacity");
+      const scopeBytes = Buffer.byteLength(this.#scope), headBytes = scopeBytes + 36 + 36 + 64 + 36 + Buffer.byteLength(serialized) + 80;
+      const targetBytes = input.targets.reduce((total, target) => total + scopeBytes + 36 + Buffer.byteLength(target.provider) + Buffer.byteLength(target.model) + 32 + 64 + L.attemptPayloadBytes + 32 + 64 + 96, 0);
+      if (totals.bytes + this.#pendingRetention() + headBytes + targetBytes > L.retainedBytes) throw new ComparisonError("capacity");
       const budget = this.#budgetTotals(), queue = this.#get<{ n: number }>("SELECT count(*) n FROM (SELECT scope_key,comparison_id FROM prompt_comparison_attempts WHERE status='queued' GROUP BY scope_key,comparison_id)")!.n;
       const held = { openai: 0, anthropic: 0 }; let operationHold = 0;
       input.targets.forEach((target, index) => { if (this.#options.availability[target.provider]) { held[target.provider] += reservations[index].microusd; operationHold += reservations[index].microusd; } });
@@ -184,7 +196,23 @@ export class ComparisonStore {
           else { state = "unrepresentable_overage"; breach = 1; }
         }
       } else { if (!reasons.has(outcome.reason)) throw new ComparisonError("invalid_request"); reason = outcome.reason; }
-      this.#db.query("UPDATE prompt_comparison_attempts SET status=?,reason=?,payload=?,charge_microusd=?,accounting_state=?,observed_estimate_usd=?,budget_breach=?,finished_at=? WHERE scope_key=? AND comparison_id=? AND position=? AND status='running'").run(outcome.status, reason, payload, charge, state, observed, breach, Date.now(), this.#scope, id, position);
+      const currentBytes = this.#get<{ n: number }>(`SELECT ${attemptContent.map(column => `coalesce(${bytes(column)},0)`).join("+")} n FROM prompt_comparison_attempts WHERE scope_key=? AND comparison_id=? AND position=?`, this.#scope, id, position)!.n;
+      const retained = this.#totals().bytes - currentBytes;
+      let status: ComparisonAttemptStatus = outcome.status;
+      const cleanupBytes = this.#cleanupRetention(id, position);
+      if (retained + contentBytes(status, reason, payload, state, observed) + cleanupBytes > L.retainedBytes && payload !== null) {
+        status = "failed"; reason = "response_limit"; payload = null;
+      }
+      const projected = retained + contentBytes(status, reason, payload, state, observed), purge = projected + cleanupBytes > L.retainedBytes;
+      if (purge) {
+        // Historical receipts may predate reservation. Remove only this operation's content,
+        // after preserving its terminal accounting, rather than stranding charged running work.
+        const removed = this.#get<{ n: number }>(`SELECT coalesce(${bytes("frozen_request")},0)+coalesce(${bytes("prompt_id")},0) n FROM prompt_comparisons WHERE scope_key=? AND id=?`, this.#scope, id)!.n;
+        const cleanup = this.#get<{ n: number }>(`SELECT coalesce(sum(CASE WHEN position=? THEN 0 ELSE CASE WHEN status IN('queued','running') THEN ${Buffer.byteLength("authority_lost") + Buffer.byteLength("privacy_removed")}-${bytes("status")}-coalesce(${bytes("reason")},0) ELSE 0 END-coalesce(${bytes("payload")},0) END),0) n FROM prompt_comparison_attempts WHERE scope_key=? AND comparison_id=?`, position, this.#scope, id)!.n;
+        if (projected - removed + cleanup + this.#cleanupRetention(id, null) > L.retainedBytes) throw new ComparisonError("capacity");
+      }
+      this.#db.query("UPDATE prompt_comparison_attempts SET status=?,reason=?,payload=?,charge_microusd=?,accounting_state=?,observed_estimate_usd=?,budget_breach=?,finished_at=? WHERE scope_key=? AND comparison_id=? AND position=? AND status='running'").run(status, reason, payload, charge, state, observed, breach, Date.now(), this.#scope, id, position);
+      if (purge) this.#db.query("UPDATE prompt_comparisons SET tombstone=1,frozen_request=NULL,prompt_id=NULL WHERE scope_key=? AND id=? AND tombstone=0").run(this.#scope, id);
       return this.#receipt(this.#head(id));
     });
   }
@@ -201,6 +229,7 @@ export class ComparisonStore {
       if (current.comparisonGeneration === Number.MAX_SAFE_INTEGER) throw new ComparisonError("capacity");
       this.#db.query("UPDATE comparison_scope_controls SET generation=generation+1 WHERE scope_key=? AND generation=?").run(this.#scope, current.comparisonGeneration);
       this.#db.query("UPDATE prompt_comparisons SET tombstone=1,frozen_request=NULL,prompt_id=NULL WHERE scope_key=? AND tombstone=0").run(this.#scope);
+      this.#totals();
       const next = this.#generation("delete"); if (!same({ ...current, comparisonGeneration: current.comparisonGeneration + 1 }, next)) throw new ComparisonError("authority_changed");
       return { removed: true as const, generation: next.comparisonGeneration };
     }).immediate();
@@ -212,6 +241,7 @@ export class ComparisonStore {
     const id = promptId(idValue), owner = this.#live.capture(); this.#db.transaction(() => {
       this.#live.assertCurrent(owner); if (!this.#live.ownsDatabase(this.#db.filename)) throw new ComparisonError("unavailable"); this.#totals();
       this.#db.query("UPDATE prompt_comparison_attempts SET status='authority_lost',reason='authority_lost',payload=NULL,hold_microusd=0,finished_at=? WHERE scope_key=? AND comparison_id=? AND status IN('queued','running')").run(Date.now(), this.#scope, id);
+      this.#totals();
       this.#live.assertCurrent(owner);
     }).immediate();
   }
@@ -219,7 +249,7 @@ export class ComparisonStore {
   recoverPending(): void {
     const owner = this.#live.capture(); this.#db.transaction(() => {
       this.#live.assertCurrent(owner); this.#totals();
-      this.#db.query("UPDATE prompt_comparison_attempts SET status='interrupted',reason='interrupted',hold_microusd=0,finished_at=? WHERE status IN('queued','running')").run(Date.now()); this.#live.assertCurrent(owner);
+      this.#db.query("UPDATE prompt_comparison_attempts SET status='interrupted',reason='interrupted',hold_microusd=0,finished_at=? WHERE status IN('queued','running')").run(Date.now()); this.#totals(); this.#live.assertCurrent(owner);
     }).immediate();
   }
 }
