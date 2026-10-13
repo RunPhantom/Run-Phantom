@@ -1,0 +1,115 @@
+{
+  "feature": "F22",
+  "sourceHead": "656c971de0f2e8eb725ea95211c3a28ccfd4e872",
+  "host": "macOS arm64",
+  "nativeArtifactSha256": "3f29802dc920910202312e250bb863cba33e83ef3d229c3f575c0b92b299bd38",
+  "parentSuiteHead": "14be21fa47697f282002cd7667355c74759c7876",
+  "parentBackend": {
+    "pass": 786,
+    "skip": 1,
+    "fail": 0
+  },
+  "parentSourceBrowser": {
+    "pass": 148,
+    "skip": 13,
+    "fail": 0
+  },
+  "currentFocusedBrowserPass": 7,
+  "currentCopiedBrowser": {
+    "pass": 65,
+    "skip": 0,
+    "fail": 0,
+    "retries": 0
+  },
+  "physicalTablesExact": 17,
+  "physicalRowsExact": 221,
+  "screenshots": {
+    "boot0-flow-repair-360.png": {
+      "sha256": "5935f5c24a34fa3511364c7df0f1748f1d6cfc63609c79263011b123130c2d3f",
+      "boot": 0,
+      "width": 360,
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "boot0-flow-repair-390.png": {
+      "sha256": "5229abe9ff7917764ab84736c106d7b924dbae7a91d21a8a63300a02d1d79b5d",
+      "boot": 0,
+      "width": 390,
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "boot0-flow-repair-768.png": {
+      "sha256": "3f6c9659fd73152daa3c8c05a064eb3df9c1de814826f059c34bae549c1e0d76",
+      "boot": 0,
+      "width": 768,
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "boot0-flow-repair-1024.png": {
+      "sha256": "c161102ba1dd2803f7c9b12a3e6a4620bd6472db8271e38d88ea6ecf5acf9dc2",
+      "boot": 0,
+      "width": 1024,
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "boot0-flow-repair-1440.png": {
+      "sha256": "12421e94e73466ea120a4b3ac7fcd864c50ec2a7edc5b1736a042353f63a9d25",
+      "boot": 0,
+      "width": 1440,
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "boot0-flow-repair-1920.png": {
+      "sha256": "d774283693110d73c43a04941f48b6cb4eeb612e96671f5e44775b4fc2541527",
+      "boot": 0,
+      "width": 1920,
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "boot1-flow-repair-360.png": {
+      "sha256": "e4fed076f164a6e99459605072eea6e553e5030cc61d8b57a83663dff4e1f9a4",
+      "boot": 1,
+      "width": 360,
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "boot1-flow-repair-390.png": {
+      "sha256": "4d5966c010d5963c7164bec6f984dc0e4ba8967575e4179db0b6b43ca53fbb12",
+      "boot": 1,
+      "width": 390,
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "boot1-flow-repair-768.png": {
+      "sha256": "11ed8c39ff5a2ebbd3b0766cbf116922cce921f06ea39b28de3c2bf3ff42f44c",
+      "boot": 1,
+      "width": 768,
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "boot1-flow-repair-1024.png": {
+      "sha256": "ecbb9fc6eca74f4aae6790abbe3cff285edd050a61626371796e52ce9ce48fe9",
+      "boot": 1,
+      "width": 1024,
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "boot1-flow-repair-1440.png": {
+      "sha256": "fd85e364abcb82b8a08b1bb019d13b20125c6416dd72ae4b2d98f7847f34a594",
+      "boot": 1,
+      "width": 1440,
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "boot1-flow-repair-1920.png": {
+      "sha256": "f9447fd726b56acde11f324b4a496283ca007860af797608a6b00fff5edcae32",
+      "boot": 1,
+      "width": 1920,
+      "synthetic": true,
+      "copiedNative": true
+    }
+  },
+  "providerCalls": 0,
+  "globalAcceptance": false,
+  "visualScope": "Actual scrolled action view at six widths on two native births; warm inherited shell and adjacent assistant remain; no whole-page, native-device or global accessibility/theme certificate."
+}
