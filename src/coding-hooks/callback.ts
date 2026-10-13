@@ -54,8 +54,8 @@ export async function runClaudeHookCallback(args: string[], input: Readable = pr
     if (acquired.status !== "accepted" || controller.signal.aborted) return 0;
     const admitted = parseClaudeHookInput(acquired.text);
     if (admitted.status !== "accepted") return 0;
-    const { captureClaudeHook } = await import("./client");
-    await captureClaudeHook(acquired.text, admitted.value, args[3], args[1], controller.signal);
+    const { captureInstalledClaudeHook } = await import("./client");
+    await captureInstalledClaudeHook(acquired.text, admitted.value, args[3], args[1], controller.signal);
     return 0;
   } catch { return 0; }
   finally { clearTimeout(timer); input.pause(); }

@@ -61,7 +61,7 @@ export class ClaudeHookManagement {
       await rename(temporary, file);
     } finally { const current = await lstat(temporary, { bigint: true }).catch(() => null); if (current && sameFile(current, temporaryStats!)) await unlink(temporary); }
   }
-  /** Inactive internal owner action; neither callback bodies nor normal startup can invoke it. */
+  /** Explicit trusted owner action; neither callback bodies nor startup can opt in. */
   async transitionContextV2(raw: string, gate: ContextPauseGate): Promise<{ status: "configured"; unchanged: boolean; captureVerified: false }> {
     if (!this.store.contextOptions.contextTransport || !this.transportActive || this.transportOrigin === null) refuse("inactive", 503);
     const transitions = new ContextTransitionStore(this.store), request = parseTransitionV2(raw), plan = transitions.plan(request);

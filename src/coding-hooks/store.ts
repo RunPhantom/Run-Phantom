@@ -226,10 +226,11 @@ export class CodingHookStore {
       const authority = this.authenticate(token), session = this.session(admission.sourceKey);
       if (authority.ownerGeneration !== admission.ownerGeneration || authority.row.generation !== admission.installationGeneration) refuse("stale");
       if (!session || !authority.registrations.some(registration => registration.registrationId === session.source_root_key)) refuse("unauthorized", 401); if (session.state === "suppressed") refuse("suppressed");
+      // Upgrade only existing coherent legacy projections inside this same rollback-bound transaction.
+      this.upgradeLegacyProjections(session, checkDeadline);
       if (this.contextOptions.contextTransport && validateLegacySource(this.db, session.source_key, session.source_root_key) === "context-v2") refuse("corrupt", 503);
       if (this.contextOptions.contextTransport) assertHookCanonicalQuota(this, checkDeadline);
       const batch = validateClaudeBatch(JSON.stringify(input), admission.sourceKey, authority.row.capture_mode);
-      this.upgradeLegacyProjections(session, checkDeadline);
       if (session.incarnation_key !== null && batch.incarnationKey !== null && (batch.incarnationKey !== session.incarnation_key || session.prefix_bytes > 0 && (batch.prefixBytes !== session.prefix_bytes || batch.prefixSha256 !== session.prefix_sha256) || batch.transcriptCursor! < session.source_cursor || batch.observedFileBytes! < session.observed_file_bytes)) refuse("source_changed");
       const run = this.db.query("SELECT id FROM runs WHERE id=?").get(session.run_id);
       const entityCount = (this.db.query("SELECT count(*) count FROM coding_hook_entities WHERE source_key=?").get(session.source_key) as { count: number }).count;

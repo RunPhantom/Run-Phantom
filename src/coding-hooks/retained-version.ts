@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { Database } from "bun:sqlite";
 import { sanitizeClaudeRetention } from "./claude";
 import { claudeEntityProjection } from "./projection";
@@ -49,7 +50,7 @@ export function validateLegacySource(db: Database, key: string, registration: st
  if (Object.keys(data).join(",") !== "coverage,reasons,unlinkedAssertions" || data.coverage !== "partial" || !validCoverageReasons(data.reasons) || new Set(data.reasons).size !== data.reasons.length) refuse("corrupt",503);
  const assertions = data.unlinkedAssertions;
  if (assertions !== null && (!assertions || typeof assertions !== "object" || Array.isArray(assertions) || Object.keys(assertions).join(",") !== "prompt,assistant,error" || Object.values(assertions).some(value => value !== null && (typeof value !== "string" || value.length > 4096)))) refuse("corrupt",503);
- if (JSON.stringify(data) !== row.data || JSON.stringify(sanitizeClaudeRetention({ bodies: [], assertions }).value) !== JSON.stringify({ bodies: [], assertions })) refuse("corrupt",503);
+ if (JSON.stringify(data) !== row.data || !isDeepStrictEqual(JSON.parse(JSON.stringify(sanitizeClaudeRetention({ bodies: [], assertions }).value)), { bodies: [], assertions })) refuse("corrupt",503);
  if (!db.query("SELECT 1 FROM runs WHERE id=?").get(row.run_id)) refuse("corrupt",503);
  const entries = db.query("SELECT entity_key,span_id,kind,phase,incarnation_key,source_offset,observation_sha256,projection_sha256,CASE WHEN length(CAST(data AS BLOB))<=16384 THEN data END data FROM coding_hook_entities WHERE source_key=? ORDER BY entity_key LIMIT 1001").all(key) as {entity_key:string;span_id:string;kind:string;phase:string;incarnation_key:string|null;source_offset:number|null;observation_sha256:string;projection_sha256:string;data:string}[];
  if (entries.length > 1000) refuse("quota",507);
@@ -61,7 +62,12 @@ export function validateLegacySource(db: Database, key: string, registration: st
   const canonical = readCanonical(db,row.run_id,spanId); if (!canonical || hookDigest(JSON.stringify(canonical)) !== entry.projection_sha256) refuse("corrupt",503);
   const attrs = parseBoundedHookJson(canonical.attributes,16384);
   if (attrs.status !== "accepted" || !attrs.value || typeof attrs.value !== "object" || Array.isArray(attrs.value) || (attrs.value.currentCapturePolicy !== "full" && attrs.value.currentCapturePolicy !== "metadata")) refuse("corrupt",503);
-  if (JSON.stringify(claudeEntityProjection(entity,{runId:row.run_id,rootSpanId:row.root_span_id},attrs.value.currentCapturePolicy,entry.data)) !== JSON.stringify(canonical)) refuse("corrupt",503);
+  const projection = claudeEntityProjection(entity,{runId:row.run_id,rootSpanId:row.root_span_id},attrs.value.currentCapturePolicy,entry.data);
+  // The existing witness-bound publisher also supports this exact older projection.
+  const legacyAttributes = JSON.parse(projection.attributes);
+  delete legacyAttributes.captureContract; delete legacyAttributes.entityKind; delete legacyAttributes.sourceKind; delete legacyAttributes.captureModel;
+  const legacy = { ...projection, span_type: entity.kind === "tool" ? "tool" : entity.kind === "assistant" ? "llm" : "agent", attributes: JSON.stringify(legacyAttributes) };
+  if (JSON.stringify(projection) !== JSON.stringify(canonical) && JSON.stringify(legacy) !== JSON.stringify(canonical)) refuse("corrupt",503);
   if (entity.kind === "session") { roots++; if (entity.sourceKind !== "hook" || entity.model !== null || entity.body !== null || entity.usage !== null || entity.phase !== (row.state === "closed" ? "complete" : "pending")) refuse("corrupt",503); }
   ids.add(spanId);
  }

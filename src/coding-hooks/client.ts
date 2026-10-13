@@ -8,7 +8,7 @@ import { parseBoundedHookJson, type ClaudeHookInput } from "./shared";
 import type { HookAdmission } from "./store";
 
 export const CLIENT_LIMITS = Object.freeze({ responseBytes: 16384, requestMs: 300, transportBytes: 262144 });
-export function postClaudeHook(capability: ClaudeCapabilityDescriptor, endpoint: "admission" | "publication", body: unknown, signal: AbortSignal): Promise<Record<string, unknown>> {
+export function postClaudeHook(capability: ClaudeCapabilityDescriptor, endpoint: "admission" | "publication" | "transport", body: unknown, signal: AbortSignal): Promise<Record<string, unknown>> {
   const encoded = JSON.stringify(body);
   if (Buffer.byteLength(encoded) > CLIENT_LIMITS.transportBytes || capability.state !== "active" || !capability.origin || !capability.token || signal.aborted) return Promise.reject(new Error("unavailable"));
   return new Promise((resolve, reject) => {
@@ -64,4 +64,18 @@ export async function captureClaudeHook(raw: string, hook: ClaudeHookInput, file
   const acquired = await acquireRegisteredClaudeTranscript(hook, admission, signal); if (acquired.status !== "accepted" || signal.aborted) return;
   const normalized = normalizeClaudeHook(raw, { sourceKey: admission.sourceKey, captureMode: admission.captureMode }, acquired.value); if (normalized.status !== "accepted" || signal.aborted) return;
   await postClaudeHook(capability, "publication", { version: HOOK_PROTOCOL, ownerGeneration: admission.ownerGeneration, installationGeneration: admission.installationGeneration, sourceKey: admission.sourceKey, batch: normalized.value }, signal);
+}
+
+/** The current server catalog selects the installed protocol; hook JSON cannot opt in. */
+export async function captureInstalledClaudeHook(raw: string, hook: ClaudeHookInput, file: string, installationId: string, signal: AbortSignal): Promise<void> {
+  const capability = await readClaudeCapabilityDescriptor(file, installationId, undefined, signal);
+  if (capability.state !== "active") return;
+  const expected = { version: HOOK_PROTOCOL, ownerGeneration: capability.ownerGeneration, installationGeneration: capability.installationGeneration };
+  const selected = await postClaudeHook(capability, "transport", expected, signal);
+  if (Object.keys(selected).sort().join(",") !== "installationGeneration,ownerGeneration,transport,version" || selected.version !== expected.version || selected.ownerGeneration !== expected.ownerGeneration || selected.installationGeneration !== expected.installationGeneration || signal.aborted) return;
+  if (selected.transport === "main-v1") await captureClaudeHook(raw, hook, file, installationId, signal);
+  else if (selected.transport === "context-v2") {
+    const { captureClaudeContextHook } = await import("./context-client");
+    await captureClaudeContextHook(raw, hook, file, installationId, signal, true);
+  }
 }

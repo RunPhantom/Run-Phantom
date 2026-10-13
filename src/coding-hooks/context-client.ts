@@ -18,7 +18,7 @@ function bindingV2(value:ReturnType<typeof parseContextJson>,cap:ClaudeCapabilit
  const relative=path.relative(b.transcriptRoot,project);if(!relative||relative.includes(path.sep)||relative===".."||path.isAbsolute(relative))refuse("malformed",400);
  return {installationId:b.installationId,scope:b.scope,captureMode:b.captureMode,workspace:b.workspace,registeredWorkspace:b.registeredWorkspace,transcriptRoot:b.transcriptRoot,projectDirectory:b.projectDirectory,homeDirectory:b.homeDirectory,settingsPath:b.settingsPath,executable:b.executable};
 }
-/** Explicit internal fixture entry only. Normal installed callback never imports/selects this protocol. */
+/** Only trusted catalog-derived installed dispatch or explicit native fixtures enable this protocol. */
 export async function captureClaudeContextHook(raw:string,hook:ClaudeHookInput,file:string,id:string,signal:AbortSignal,internalContextTransport=false):Promise<void> {
  if(!internalContextTransport)return;const cap=await readClaudeCapabilityDescriptor(file,id,undefined,signal);if(cap.state!=="active"||!hook.cwd||!hook.transcriptPath||hook.transcriptPath!==path.join(path.dirname(hook.transcriptPath),hook.sessionId+".jsonl"))return;
  const project=path.dirname(hook.transcriptPath),selector=hook.event==="SubagentStop"?selectorV2({kind:"agent",agentId:hook.agentId},hook.event):selectorV2({kind:"main"},hook.event);

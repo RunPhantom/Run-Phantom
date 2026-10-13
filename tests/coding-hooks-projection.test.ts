@@ -132,3 +132,19 @@ test("same cached identity cannot change entity kind during an incoming observat
  const before=allBytes(),forged={...publishedBatch,entities:publishedBatch.entities.map(entity=>entity.kind==="tool"?{...entity,kind:"prompt" as const,phase:"complete" as const}:entity)};
  expect(()=>runtime.codingHooks.store.publish(token,admission,forged)).toThrow("corrupt");expect(allBytes()).toBe(before);
 });
+
+test("active context capability admits exact coherent old projection read-only before transactional publication upgrade", () => {
+  oldProjections(); const before = allBytes();
+  const again = runtime.codingHooks.store.admit(token, "b".repeat(64), claimsForRegistration(admission.binding));
+  expect(again.sourceKey).toBe(admission.sourceKey); expect(allBytes()).toBe(before);
+});
+for (const mutation of ["attribute", "type"] as const) {
+  test(`active context capability rejects coherent-hash old projection with forged ${mutation} before acquisition`, () => {
+    oldProjections(); const db = getDrizzleDb().$client, row = canonical().find(value => value.name === "Assistant")!;
+    if (mutation === "attribute") { const attributes = JSON.parse(row.attributes!); attributes.unlistedAuthority = true; db.query("UPDATE spans SET attributes=? WHERE id=? AND run_id=?").run(JSON.stringify(attributes), row.id, row.run_id); }
+    else db.query("UPDATE spans SET span_type='INTERNAL' WHERE id=? AND run_id=?").run(row.id, row.run_id);
+    const changed = db.query(`SELECT ${canonicalColumns} FROM spans WHERE id=? AND run_id=?`).get(row.id, row.run_id);
+    db.query("UPDATE coding_hook_entities SET projection_sha256=? WHERE span_id=? AND source_key=?").run(hookDigest(JSON.stringify(changed)), row.id, admission.sourceKey);
+    const before = allBytes(); expect(() => runtime.codingHooks.store.admit(token, "b".repeat(64), claimsForRegistration(admission.binding))).toThrow("corrupt"); expect(allBytes()).toBe(before);
+  });
+}

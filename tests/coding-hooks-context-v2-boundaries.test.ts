@@ -95,3 +95,19 @@ test("native legacy transport charges mixed v1/v2 distinct canonical projections
 test("native default-false legacy quota behavior remains the original baseline accounting", () => {
   const admission = legacyPublished(), before = snapshot(); expect(limited(3464, false).admit(token, identity, claims).sourceKey).toBe(admission.sourceKey); expect(snapshot()).toBe(before);
 });
+
+test("native active shared witness accepts the structurally unchanged metadata null-assertion floor", () => {
+  const metadata = { ...binding, captureMode: "metadata" as const };
+  const receipt = store.prepareInstallation(metadata, token, "c".repeat(64)); store.commitInstallation(metadata.installationId, receipt.installationGeneration, token, "c".repeat(64), receipt.ownerGeneration);
+  const admission = store.admit(token, identity, claims), result = normalizeClaudeHook(hookFixture("PostToolUse", { tool_use_id: "metadata_tool", tool_name: "lookup", tool_input: "UNRETAINED_INPUT", tool_response: "UNRETAINED_OUTPUT" }), { sourceKey: admission.sourceKey, captureMode: "metadata" }, null);
+  if (result.status !== "accepted") throw new Error("fixture"); store.publish(token, admission, result.value);
+  const before = snapshot(); expect(store.admit(token, identity, claims).sourceKey).toBe(admission.sourceKey); expect(snapshot()).toBe(before);
+  expect(before).not.toContain("UNRETAINED_INPUT"); expect(before).not.toContain("UNRETAINED_OUTPUT"); expect(JSON.parse((store.db.query("SELECT data FROM coding_hook_sessions").get() as { data: string }).data).unlinkedAssertions).toBeNull();
+});
+
+test("native structural floor comparison still rejects a retained secret-bearing assertion without changing any byte", () => {
+  const admission = legacyPublished(), session = store.db.query("SELECT data FROM coding_hook_sessions WHERE source_key=?").get(admission.sourceKey) as { data: string }, data = JSON.parse(session.data);
+  data.unlinkedAssertions = { prompt: "password=SECRET_FLOOR_MARKER", assistant: null, error: null };
+  store.db.query("UPDATE coding_hook_sessions SET data=? WHERE source_key=?").run(JSON.stringify(data), admission.sourceKey);
+  assertRefusal(() => store.admit(token, identity, claims), "corrupt");
+});

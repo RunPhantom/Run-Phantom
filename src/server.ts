@@ -703,7 +703,7 @@ function demoChatHtml(): string {
 export async function createServer(port: number) {
   const app = express();
   const server = http.createServer(app);
-  const hookOwner = await startCodingHookOwner(getDrizzleDb().$client);
+  const hookOwner = await startCodingHookOwner(getDrizzleDb().$client, undefined, { contextTransport: true });
   let hookController: CodingHookController;
   let clearingHooks = false;
   const hookManagementWork = new Set<Promise<void>>();
@@ -1008,7 +1008,7 @@ export async function createServer(port: number) {
 
   // This one identity binary transport remains behind every local-access guard.
   app.post("/api/evaluations/evidence/imports", evidenceBinaryHandler(evidenceImports, evidenceOwner));
-  app.post(["/api/coding-hooks/claude/admission", "/api/coding-hooks/claude/publication"], (req, res) => { void hookController.handle(req, res); });
+  app.post(["/api/coding-hooks/claude/admission", "/api/coding-hooks/claude/publication", "/api/coding-hooks/claude/transport"], (req, res) => { void hookController.handle(req, res); });
   app.post("/api/coding-hooks/claude/manage", express.raw({ type: "application/json", limit: 16384 }), (req, res) => {
     if (clearingHooks || !hookOwner.store.isOwnerActive() || hookManagementWork.size >= 2) { res.status(503).json({ status: "unavailable", reason: "unavailable" }); return; }
     const work = (async () => {
@@ -1018,7 +1018,11 @@ export async function createServer(port: number) {
         const parsed = parseBoundedHookJson(new TextDecoder("utf-8", { fatal: true }).decode(req.body), 16384);
         if (parsed.status !== "accepted") throw new HookRefusal("malformed", 400);
         const currentPort = currentServerPort(); if (!currentPort) throw new HookRefusal("inactive", 503);
-        res.json(await executeHookManagement(new ClaudeHookManagement(hookOwner.store, `http://127.0.0.1:${currentPort}`, true), parseHookManagementCommand(parsed.value)));
+        const manager = new ClaudeHookManagement(hookOwner.store, `http://127.0.0.1:${currentPort}`, true);
+        if (parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value) && parsed.value.action === "activate-context-v2") {
+          // The trusted owner action is distinct from hook bodies and never promotes capture policy.
+          res.json(await manager.transitionContextV2(new TextDecoder("utf-8", { fatal: true }).decode(req.body), hookController));
+        } else res.json(await executeHookManagement(manager, parseHookManagementCommand(parsed.value)));
       } catch (error) { res.status(error instanceof HookRefusal ? error.status : 503).json({ status: "unavailable", reason: error instanceof HookRefusal ? error.reason : "unavailable" }); }
     })();
     hookManagementWork.add(work); void work.finally(() => hookManagementWork.delete(work));

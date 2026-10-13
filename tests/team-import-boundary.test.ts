@@ -76,7 +76,7 @@ describe("team runtime authority boundary", () => {
     expect(violations).toEqual([]);
     expect(visited.has(path.join(root, "src/coding-hooks/shared.ts"))).toBe(true);
     expect([...visited].map(file => path.relative(root, file).split(path.sep).join("/")).sort()).toEqual([
-      "src/coding-hooks/acquisition.ts", "src/coding-hooks/callback.ts", "src/coding-hooks/capability.ts", "src/coding-hooks/claude.ts", "src/coding-hooks/client.ts", "src/coding-hooks/protocol.ts", "src/coding-hooks/shared.ts",
+      "src/coding-hooks/acquisition.ts", "src/coding-hooks/callback.ts", "src/coding-hooks/capability.ts", "src/coding-hooks/claude.ts", "src/coding-hooks/client.ts", "src/coding-hooks/context-client.ts", "src/coding-hooks/context-v2.ts", "src/coding-hooks/projection.ts", "src/coding-hooks/protocol.ts", "src/coding-hooks/retained-version.ts", "src/coding-hooks/shared.ts",
       "src/evaluations/json-evidence.ts", "src/json-keys.ts", "src/verification/protocol.ts", "src/verification/redaction.ts", "src/verification/serialization.ts",
     ]);
   });

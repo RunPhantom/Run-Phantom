@@ -135,3 +135,84 @@ test("existing uninstall revokes exact owned settings before binary cleanup and 
   const before = spans(); await new Promise<void>((resolve, reject) => server!.close(error => error ? reject(error) : resolve())); server = undefined;
   const removed = await removeConfiguredClaudeHooks(process.env.RUNPHANTOM_DB_PATH); expect(removed).toBe(1); const settings = readFileSync(b.settingsPath, "utf8"); expect(settings).toContain("echo unknown"); expect(settings).not.toContain(b.installationId); expect(existsSync(capabilityPath(b))).toBe(false); expect(spans()).toBe(before); expect(getDrizzleDb().$client.query("SELECT state,capture_mode FROM coding_hook_installations").all()).toEqual([{ state: "disabled", capture_mode: "metadata" }]);
 });
+
+function activationBody(runtime: Awaited<ReturnType<typeof start>>, ids: string[]) {
+  return { action: "activate-context-v2", installationIds: [...ids].sort(), expectedOwnerGeneration: runtime.codingHooks.store.currentOwnerGeneration(), expectedInstallations: [...ids].sort().map(id => {
+    const installed = runtime.codingHooks.store.readInstallation(id)!;
+    return { installationId: id, generation: installed.row.generation, configSha256: installed.row.config_sha256, catalogSha256: hookDigest(installed.row.data!) };
+  }) };
+}
+const hookRows = () => JSON.stringify(["coding_hook_owner", "coding_hook_installations", "coding_hook_sessions", "coding_hook_entities", "runs", "spans"].map(table => getDrizzleDb().$client.query(`SELECT * FROM ${table} ORDER BY rowid`).all()));
+function activate(runtime: Awaited<ReturnType<typeof start>>, body: unknown) {
+  return fetch(`http://127.0.0.1:${runtime.port}/api/coding-hooks/claude/manage`, { method: "POST", headers: { "content-type": "application/json", "x-runphantom-hook-owner": capabilityOwnerKey(getDrizzleDb().$client.filename) }, body: JSON.stringify(body) });
+}
+test("actual daemon supports manual context activation while new installations remain v1", async () => {
+  const runtime = await start(), b = binding("local", "workspace", "full");
+  expect(runtime.codingHooks.store.contextOptions.contextTransport).toBe(true);
+  await runtime.codingHooks.management().install(b, { fullConsent: true });
+  expect(runtime.codingHooks.store.readInstallation(b.installationId)!.catalogVersion).toBe("runphantom.claude-catalog/v1");
+  const epoch = getDrizzleDb().$client.query("SELECT source_epoch FROM coding_hook_owner").get(), settings = readFileSync(b.settingsPath, "utf8");
+  const response = await activate(runtime, activationBody(runtime, [b.installationId]));
+  expect(response.status).toBe(200); expect(await response.json()).toEqual({ status: "configured", unchanged: false, captureVerified: false });
+  expect(runtime.codingHooks.store.readInstallation(b.installationId)!.catalogVersion).toBe("runphantom.claude-catalog/v2");
+  expect(getDrizzleDb().$client.query("SELECT source_epoch FROM coding_hook_owner").get()).toEqual(epoch); expect(readFileSync(b.settingsPath, "utf8")).toBe(settings);
+  expect(getDrizzleDb().$client.query("SELECT * FROM coding_hook_sessions").all()).toEqual([]);
+});
+test("actual transport selection is read-only closed and fenced by both installed generations", async () => {
+  const runtime = await start(), b = binding("local", "workspace"); await runtime.codingHooks.management().install(b);
+  const cap = await readClaudeCapabilityDescriptor(capabilityPath(b), b.installationId), before = hookRows();
+  const body = { version: HOOK_PROTOCOL, ownerGeneration: cap.ownerGeneration, installationGeneration: cap.installationGeneration };
+  const select = (text: string, token = cap.token!) => fetch(`http://127.0.0.1:${runtime.port}/api/coding-hooks/claude/transport`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + token }, body: text });
+  const response = await select(JSON.stringify(body)); expect(response.status).toBe(200); expect(await response.json()).toEqual({ ...body, transport: "main-v1" }); expect(hookRows()).toBe(before);
+  for (const text of [JSON.stringify({ ...body, transport: "context-v2" }), JSON.stringify({ ...body, ownerGeneration: "0".repeat(32) }), JSON.stringify({ ...body, installationGeneration: "0".repeat(32) }), JSON.stringify(body).replace('"version":', '"version":"invalid","version":')]) {
+    const refused = await select(text); expect(refused.status).toBeGreaterThanOrEqual(400); expect(hookRows()).toBe(before);
+  }
+  expect((await select(" ".repeat(16385))).status).toBe(413); expect(hookRows()).toBe(before);
+  expect((await select(JSON.stringify(body), "0".repeat(64))).status).toBe(401); expect(hookRows()).toBe(before);
+});
+test("manually activated actual installed vector acquires main and two independent agents without moving main cursor", async () => {
+  const runtime = await start(), b = binding("local", "workspace", "full"); await runtime.codingHooks.management().install(b, { fullConsent: true });
+  const old = await readClaudeCapabilityDescriptor(capabilityPath(b), b.installationId);
+  expect((await activate(runtime, activationBody(runtime, [b.installationId]))).status).toBe(200); source(b); await native(b);
+  const db = getDrizzleDb().$client, main = db.query("SELECT incarnation_key,source_cursor,observed_file_bytes,prefix_bytes,prefix_sha256 FROM coding_hook_sessions").get(); expect(main).not.toBeNull();
+  const agents = path.join(b.projectDirectory, hookSession, "subagents"); mkdirSync(agents, { recursive: true });
+  writeFileSync(path.join(agents, "agent-child_1.jsonl"), JSON.stringify(transcriptRecord()) + "\n");
+  writeFileSync(path.join(agents, "agent-child_2.jsonl"), JSON.stringify(transcriptRecord({ uuid: "agent_record_2", requestId: "agent_request_2", message: { id: "agent_msg_2", model: "fixture-model", content: [{ type: "text", text: "ACTUAL_SECOND_AGENT_RESULT" }], usage: { input_tokens: 3, output_tokens: 2, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } } })) + "\n");
+  for (const id of ["child_1", "child_2"]) { await native(b, { agent_id: id, agent_type: "Task", agent_transcript_path: path.join(agents, `agent-${id}.jsonl`) }, "SubagentStop"); expect(db.query("SELECT incarnation_key,source_cursor,observed_file_bytes,prefix_bytes,prefix_sha256 FROM coding_hook_sessions").get()).toEqual(main); }
+  expect(spans()).toContain("ACTUAL_SECOND_AGENT_RESULT");
+  const data = db.query("SELECT data FROM coding_hook_sessions").get() as { data: string }; expect(JSON.parse(data.data).agents).toHaveLength(2); expect(JSON.parse(data.data).mainRevision).toBe(1);
+  expect(db.query("SELECT sum(input_tokens) input,sum(output_tokens) output FROM spans WHERE span_type='LLM_GENERATION'").get()).toEqual({ input: 13, output: 6 });
+  const before = spans(); await native(b); expect(spans()).toBe(before); expect(db.query("SELECT sum(input_tokens) input,sum(output_tokens) output FROM spans WHERE span_type='LLM_GENERATION'").get()).toEqual({ input: 13, output: 6 });
+  const refused = await fetch(`http://127.0.0.1:${runtime.port}/api/coding-hooks/claude/transport`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + old.token }, body: JSON.stringify({ version: HOOK_PROTOCOL, ownerGeneration: old.ownerGeneration, installationGeneration: old.installationGeneration }) }); expect(refused.status).toBe(401); expect(spans()).toBe(before);
+});
+test("actual native explicit activation CLI submits only selected current CAS without printing private credentials", async () => {
+  const runtime = await start(), b = binding("local", "workspace"); await runtime.codingHooks.management().install(b);
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(?:KEY|TOKEN|SECRET|PASSWORD|AUTH)/i.test(key)));
+  const child = spawn(realpathSync(path.resolve(import.meta.dir, "../bin/runphantom-dev")), ["hooks", "activate-context-v2", "claude", "--installation-id", b.installationId], { env: { ...inherited, RUNPHANTOM_PORT: String(runtime.port), BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }, stdio: "pipe" });
+  let output = "", error = ""; child.stdout.on("data", value => output += value); child.stderr.on("data", value => error += value); child.stdin.end(); const timer = setTimeout(() => child.kill("SIGKILL"), 4000);
+  const status = await new Promise(resolve => child.once("close", resolve)); clearTimeout(timer); expect(status).toBe(0); expect(error).toBe(""); expect(JSON.parse(output)).toEqual({ status: "configured", unchanged: false, captureVerified: false }); expect(output).not.toMatch(/token|ownerGeneration|Bearer|http:/); expect(runtime.codingHooks.store.readInstallation(b.installationId)!.catalogVersion).toBe("runphantom.claude-catalog/v2");
+});
+
+test("actual manual transition preserves existing v1 evidence and never upgrades its independent agent authority", async () => {
+  const runtime = await start(), b = binding("local", "workspace", "full"); await runtime.codingHooks.management().install(b, { fullConsent: true }); source(b); await native(b);
+  const db = getDrizzleDb().$client, before = JSON.stringify(["coding_hook_sessions", "coding_hook_entities", "runs", "spans"].map(table => db.query(`SELECT * FROM ${table} ORDER BY rowid`).all()));
+  expect((await activate(runtime, activationBody(runtime, [b.installationId]))).status).toBe(200);
+  expect(JSON.stringify(["coding_hook_sessions", "coding_hook_entities", "runs", "spans"].map(table => db.query(`SELECT * FROM ${table} ORDER BY rowid`).all()))).toBe(before);
+  const agent = path.join(b.projectDirectory, hookSession, "subagents/agent-old_v1.jsonl"); mkdirSync(path.dirname(agent), { recursive: true }); writeFileSync(agent, JSON.stringify(transcriptRecord({ uuid: "old_v1_agent", message: { id: "old_v1_agent", content: [{ type: "text", text: "V1_AGENT_MUST_NOT_BE_ACQUIRED" }] } })) + "\n");
+  await native(b, { agent_id: "old_v1", agent_transcript_path: agent }, "SubagentStop"); expect(spans()).not.toContain("V1_AGENT_MUST_NOT_BE_ACQUIRED"); expect(JSON.stringify(["coding_hook_sessions", "coding_hook_entities", "runs", "spans"].map(table => db.query(`SELECT * FROM ${table} ORDER BY rowid`).all()))).toBe(before);
+  source(b, [transcriptRecord(), transcriptRecord({ uuid: "next_main", requestId: "next_main_request", message: { id: "next_main_message", model: "fixture-model", content: [{ type: "text", text: "LEGACY_MAIN_CONTINUES" }], usage: { input_tokens: 7, output_tokens: 3 } } })]); await native(b); expect(spans()).toContain("LEGACY_MAIN_CONTINUES");
+  const session = db.query("SELECT data FROM coding_hook_sessions").get() as { data: string }; expect(JSON.parse(session.data).version).toBeUndefined();
+});
+test("actual activation rejects incomplete sharing closure and malformed owner action before any fence", async () => {
+  const runtime = await start(), local = binding("local", "workspace", "full"), global = binding("global", "workspace"); await runtime.codingHooks.management().install(local, { fullConsent: true }); await runtime.codingHooks.management().install(global);
+  const before = hookRows(), body = activationBody(runtime, [local.installationId]); expect((await activate(runtime, body)).status).toBe(409); expect(hookRows()).toBe(before);
+  const unauthorized = await fetch(`http://127.0.0.1:${runtime.port}/api/coding-hooks/claude/manage`, { method: "POST", headers: { "content-type": "application/json", "x-runphantom-hook-owner": "0".repeat(64) }, body: JSON.stringify(activationBody(runtime, [local.installationId, global.installationId])) }); expect(unauthorized.status).toBe(403); expect(hookRows()).toBe(before);
+  const duplicate = await fetch(`http://127.0.0.1:${runtime.port}/api/coding-hooks/claude/manage`, { method: "POST", headers: { "content-type": "application/json", "x-runphantom-hook-owner": capabilityOwnerKey(getDrizzleDb().$client.filename) }, body: JSON.stringify(activationBody(runtime, [local.installationId, global.installationId])).replace('"action":', '"action":"install","action":') }); expect(duplicate.status).toBe(400); expect(hookRows()).toBe(before);
+  expect((await activate(runtime, activationBody(runtime, [local.installationId, global.installationId]))).status).toBe(200); expect(runtime.codingHooks.store.readInstallation(local.installationId)!.row.capture_mode).toBe("full"); expect(runtime.codingHooks.store.readInstallation(global.installationId)!.row.capture_mode).toBe("metadata");
+});
+test("actual clear after installed v2 capture keeps suppression and never reacquires newly appended bodies", async () => {
+  const runtime = await start(), b = binding("local", "workspace", "full"); await runtime.codingHooks.management().install(b, { fullConsent: true }); expect((await activate(runtime, activationBody(runtime, [b.installationId]))).status).toBe(200); source(b); await native(b);
+  const db = getDrizzleDb().$client, epoch = db.query("SELECT source_epoch FROM coding_hook_owner").get(); expect((await fetch(`http://127.0.0.1:${runtime.port}/api/clear`, { method: "POST" })).status).toBe(200); expect(db.query("SELECT source_epoch FROM coding_hook_owner").get()).toEqual(epoch); expect(db.query("SELECT state FROM coding_hook_sessions").all()).toEqual([{ state: "suppressed" }]);
+  source(b, [transcriptRecord(), transcriptRecord({ uuid: "cleared_append", message: { id: "cleared_append", content: [{ type: "text", text: "CLEARED_BODY_MUST_NOT_BE_ACQUIRED" }] } })]); await native(b); expect(spans()).toBe("[]");
+  await runtime.codingHooks.management().install(b, { fullConsent: true }); await native(b); expect(spans()).toBe("[]"); expect(db.query("SELECT state FROM coding_hook_sessions").all()).toEqual([{ state: "suppressed" }]);
+});
