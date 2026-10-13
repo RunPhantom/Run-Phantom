@@ -1,54 +1,26 @@
 import { CodingHookStore, type InstallationBinding, type HookAdmission } from "./store";
 import { CATALOG_CONTEXT_VERSION, selectRegistration } from "./catalog";
-import { hookDigest, isHex, refuse, HOOK_PROTOCOL } from "./protocol";
-import { parseBoundedHookJson } from "./shared";
+import { hookDigest, refuse, HOOK_PROTOCOL } from "./protocol";
+import { assertHookCanonicalQuota, verifyContextSource, contextMapV2, type Verified } from "./context-integrity";
+export { contextMapV2 } from "./context-integrity";
 import type { NormalizedClaudeEntity } from "./claude";
 import { contextEntityProjection } from "./context-projection";
-import { readCompleteSession, validateSessionColumns, validateLegacySource, readCanonical, CANONICAL_COLUMNS, type CompleteSessionRow } from "./retained-version";
-import { agentIdentityV2, contextKeyV2, descriptorV2, retainedSessionV2, retainedEntityV2, sessionDigestV2, parsePublicationV2, type AdmissionRequestV2, type DescriptorStateV2, type SelectorV2, type RetainedSessionV2, type RetainedEntityV2, type PublicationRequestV2 } from "./context-v2";
+import { readCompleteSession, validateLegacySource, type CompleteSessionRow } from "./retained-version";
+import { agentIdentityV2, contextKeyV2, descriptorV2, sessionDigestV2, parsePublicationV2, type AdmissionRequestV2, type DescriptorStateV2, type SelectorV2, type RetainedSessionV2, type RetainedEntityV2, type PublicationRequestV2 } from "./context-v2";
 
 export interface ContextAdmissionV2 {
  version:2;status:"accepted";dispatch:"context-v2";ownerGeneration:string;installationGeneration:string;sourceKey:string;runId:string;rootSpanId:string;captureMode:"metadata"|"full";runtimeVerified:false;producerVerified:false;coverage:"partial";binding:InstallationBinding;event:AdmissionRequestV2["event"];selector:SelectorV2;descriptor:DescriptorStateV2;sessionRevision:number;retainedSessionSha256:string;
 }
 export interface LegacyMainAdmissionV2 {version:2;status:"accepted";dispatch:"legacy-main-v1";event:AdmissionRequestV2["event"];selector:{kind:"main"};admission:HookAdmission&{version:typeof HOOK_PROTOCOL;coverage:"partial";producerVerified:false;runtimeVerified:false};}
-interface CacheRow {entity_key:string;span_id:string;kind:string;phase:string;incarnation_key:string|null;source_offset:number|null;observation_sha256:string;projection_sha256:string;data:string;updated_at:number;}
-interface Verified {row:CompleteSessionRow;data:RetainedSessionV2;contexts:Map<string,DescriptorStateV2>;entities:Map<string,{row:CacheRow;wrapper:RetainedEntityV2;mode:"metadata"|"full"}>;digest:string;}
 const terminal=(phase:NormalizedClaudeEntity["phase"])=>["success","failure","interrupted","complete","conflict"].includes(phase);
 const rootEntity=(key:string):NormalizedClaudeEntity=>({entityKey:hookDigest(JSON.stringify(["runphantom.claude.entity/v1",key,"session","root"])),kind:"session",phase:"pending",name:"Claude session",model:null,sourceKind:"hook",incarnationKey:null,sourceOffset:null,reportedAt:null,reportedDurationMs:null,runtimeDurationMs:null,runtimeVerified:false,producerVerified:false,usage:null,body:null,coverageReasons:["producer_unverified"]});
-export function contextMapV2(row:CompleteSessionRow,data:RetainedSessionV2):Map<string,DescriptorStateV2> {
- const map=new Map<string,DescriptorStateV2>(),main=descriptorV2({contextKey:contextKeyV2(row.source_key,{kind:"main"}),incarnationKey:row.incarnation_key,transcriptCursor:row.source_cursor,prefixBytes:row.prefix_bytes,prefixSha256:row.prefix_sha256,observedFileBytes:row.observed_file_bytes,revision:data.mainRevision});map.set(main.contextKey,main);
- for(const t of data.agents){const key=hookDigest(JSON.stringify([row.source_key,"agent",t[0]]));map.set(key,descriptorV2({contextKey:key,incarnationKey:t[1],transcriptCursor:t[2],prefixBytes:t[3],prefixSha256:t[4],observedFileBytes:t[5],revision:t[6]}));}return map;
-}
 /** Inactive by default: the existing owned connection and explicit test/management gate are required. */
 export class ContextHookStore {
  constructor(readonly store:CodingHookStore){}
  assertCurrentQuota():void { this.atomic(deadline=>this.quota(deadline)); }
  private atomic<T>(work:(deadline:()=>void)=>T):T {const start=performance.now(),deadline=()=>{if(performance.now()-start>250)refuse("deadline",503);};return this.store.contextTransaction(()=>{deadline();const result=work(deadline);deadline();return result;});}
- private verify(key:string,registration:string,deadline:()=>void):Verified {
-  const row=readCompleteSession(this.store.db,key);if(!row)refuse("corrupt",503);if(row.state==="suppressed")refuse("suppressed");validateSessionColumns(row,key,registration);
-  const data=retainedSessionV2(row.data),contexts=contextMapV2(row,data),digest=sessionDigestV2(row);
-  if(!this.store.db.query("SELECT 1 FROM runs WHERE id=?").get(row.run_id))refuse("corrupt",503);
-  const rows=this.store.db.query("SELECT entity_key,span_id,kind,phase,incarnation_key,source_offset,observation_sha256,projection_sha256,CASE WHEN length(CAST(data AS BLOB))<=16384 THEN data END data,updated_at FROM coding_hook_entities WHERE source_key=? ORDER BY entity_key LIMIT 1001").all(key) as CacheRow[];
-  if(rows.length>1000)refuse("quota",507);const entities:Verified["entities"]=new Map();let roots=0;const spanIds=new Set<string>();
-  for(const cached of rows){deadline();const wrapper=retainedEntityV2(cached.data,key,contexts),e=wrapper.entity,span=e.kind==="session"?row.root_span_id:e.entityKey.slice(0,16);
-   if(cached.entity_key!==e.entityKey||cached.span_id!==span||cached.kind!==e.kind||cached.phase!==e.phase||cached.incarnation_key!==e.incarnationKey||cached.source_offset!==e.sourceOffset||cached.observation_sha256!==wrapper.observedSha256||!isHex(cached.projection_sha256,64))refuse("corrupt",503);
-   const canonical=readCanonical(this.store.db,row.run_id,span);if(!canonical||hookDigest(JSON.stringify(canonical))!==cached.projection_sha256)refuse("corrupt",503);
-   const a=parseBoundedHookJson(canonical.attributes,16384);if(a.status!=="accepted"||!a.value||typeof a.value!=="object"||Array.isArray(a.value)||(a.value.currentCapturePolicy!=="full"&&a.value.currentCapturePolicy!=="metadata"))refuse("corrupt",503);
-   const mode=a.value.currentCapturePolicy;if(JSON.stringify(contextEntityProjection(cached.data,key,{runId:row.run_id,rootSpanId:row.root_span_id},mode,contexts,e.kind==="session"?digest:null))!==JSON.stringify(canonical))refuse("corrupt",503);
-   if(e.kind==="session"){roots++;if(e.sourceKind!=="hook"||e.model!==null||e.body!==null||e.usage!==null||e.phase!==(row.state==="closed"?"complete":"pending"))refuse("corrupt",503);}
-   entities.set(e.entityKey,{row:cached,wrapper,mode});spanIds.add(span);
-  }
-  if(roots!==1)refuse("corrupt",503);
-  const spans=this.store.db.query("SELECT id,CASE WHEN length(CAST(attributes AS BLOB))<=16384 THEN attributes END attributes FROM spans WHERE run_id=? AND CASE WHEN json_valid(attributes) THEN json_extract(attributes,'$.source')='claude_hook' OR json_extract(attributes,'$.captureContract') LIKE 'runphantom.claude-hook.observation/%' ELSE attributes LIKE '%runphantom.claude-hook.observation/%' END LIMIT 1001").all(row.run_id) as {id:string;attributes:string|null}[];
-  if(spans.length>1000)refuse("quota",507);for(const span of spans){deadline();if(spanIds.has(span.id))continue;const a=parseBoundedHookJson(span.attributes,16384);if(a.status==="accepted"&&a.value&&typeof a.value==="object"&&!Array.isArray(a.value)&&(a.value.source==="claude_hook"||typeof a.value.captureContract==="string"&&a.value.captureContract.startsWith("runphantom.claude-hook.observation/")))refuse("corrupt",503);}
-  return {row,data,contexts,entities,digest};
- }
- private quota(deadline:()=>void):void {
-  const sources=this.store.db.query("SELECT DISTINCT source_key FROM coding_hook_entities LIMIT 100001").all() as {source_key:string}[];if(sources.length>100000)refuse("quota",507);let bytes=0;
-  for(const source of sources){deadline();const session=readCompleteSession(this.store.db,source.source_key);if(!session)refuse("corrupt",503);const version=validateLegacySource(this.store.db,source.source_key,session.source_root_key);if(version==="context-v2")this.verify(source.source_key,session.source_root_key,deadline);
-   const spans=this.store.db.query(`SELECT DISTINCT ${CANONICAL_COLUMNS.map(c=>`s.${c}`).join(",")} FROM spans s JOIN coding_hook_entities e ON s.run_id=? AND e.source_key=? AND s.id=e.span_id`).all(session.run_id,source.source_key) as Record<string,unknown>[];for(const span of spans){deadline();bytes+=Buffer.byteLength(JSON.stringify(span));}}
-  this.store.assertContextQuota(bytes);
- }
+ private verify(key:string,registration:string,deadline:()=>void):Verified {return verifyContextSource(this.store,key,registration,deadline);}
+ private quota(deadline:()=>void):void {assertHookCanonicalQuota(this.store,deadline);}
  private writeProjection(row:CompleteSessionRow,wrapper:RetainedEntityV2,mode:"metadata"|"full",contexts:ReadonlyMap<string,DescriptorStateV2>,digest:string,now:number):void {
   const retained=JSON.stringify(wrapper);if(Buffer.byteLength(retained)>16384)refuse("quota",507);const e=wrapper.entity,projection=contextEntityProjection(retained,row.source_key,{runId:row.run_id,rootSpanId:row.root_span_id},mode,contexts,e.kind==="session"?digest:null),columns=Object.keys(projection);
   this.store.db.query(`INSERT INTO spans(${columns.join(",")}) VALUES(${columns.map(()=>"?").join(",")}) ON CONFLICT(run_id,id) DO UPDATE SET ${columns.filter(c=>c!=="id"&&c!=="run_id").map(c=>`${c}=excluded.${c}`).join(",")}`).run(...Object.values(projection));

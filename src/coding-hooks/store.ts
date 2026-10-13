@@ -7,6 +7,7 @@ import type { HookSourceClaims } from "./protocol";
 import { parseBoundedHookJson } from "./shared";
 import { claudeEntityProjection } from "./projection";
 import { validateLegacySource } from "./retained-version";
+import { assertHookCanonicalQuota } from "./context-integrity";
 import { HookRefusal, hookDigest, isHex, refuse, validateClaudeBatch, validateClaudeRetainedEntity } from "./protocol";
 
 export const STORE_LIMITS = Object.freeze({ installations: 64, registrations: 64, sessions: 10000, sessionEntities: 1000, entities: 100000, bytes: 33554432 });
@@ -133,11 +134,13 @@ export class CodingHookStore {
   }
   admit(token: string, identity: string, claims: HookSourceClaims): HookAdmission {
     if (!isHex(identity, 64)) refuse("malformed", 400);
+    const started = performance.now(), checkDeadline = () => { if (performance.now() - started > 250) refuse("deadline", 503); };
     return this.transaction(() => {
       const authority = this.authenticate(token), registration = selectRegistration(authority.registrations, claims), sourceKey = hookDigest(JSON.stringify(["runphantom.claude.session/v1", authority.sourceEpoch, registration.registrationId, identity]));
       if (this.contextOptions.contextTransport) {
         const retainedVersion = validateLegacySource(this.db, sourceKey, registration.registrationId);
         if (retainedVersion === "context-v2" || retainedVersion === "absent" && authority.catalogVersion === CATALOG_CONTEXT_VERSION) refuse("unavailable", 409);
+        assertHookCanonicalQuota(this, checkDeadline);
       }
       let session = this.session(sourceKey);
       if (!session) {
@@ -146,6 +149,7 @@ export class CodingHookStore {
         this.checkQuota(); session = this.session(sourceKey)!;
       }
       if (session.state === "suppressed") refuse("suppressed");
+      if (this.contextOptions.contextTransport) { assertHookCanonicalQuota(this, checkDeadline); checkDeadline(); }
       return { ownerGeneration: authority.ownerGeneration, installationGeneration: authority.row.generation, sourceKey, runId: session.run_id, rootSpanId: session.root_span_id, captureMode: authority.row.capture_mode,
         transcriptCursor: session.source_cursor, incarnationKey: session.incarnation_key, prefixBytes: session.prefix_bytes, prefixSha256: session.prefix_sha256, observedFileBytes: session.observed_file_bytes, binding: { ...authority.binding, registeredWorkspace: registration.registeredWorkspace, transcriptRoot: registration.transcriptRoot, projectDirectory: registration.projectDirectory, homeDirectory: registration.homeDirectory } };
     });
@@ -223,6 +227,7 @@ export class CodingHookStore {
       if (authority.ownerGeneration !== admission.ownerGeneration || authority.row.generation !== admission.installationGeneration) refuse("stale");
       if (!session || !authority.registrations.some(registration => registration.registrationId === session.source_root_key)) refuse("unauthorized", 401); if (session.state === "suppressed") refuse("suppressed");
       if (this.contextOptions.contextTransport && validateLegacySource(this.db, session.source_key, session.source_root_key) === "context-v2") refuse("corrupt", 503);
+      if (this.contextOptions.contextTransport) assertHookCanonicalQuota(this, checkDeadline);
       const batch = validateClaudeBatch(JSON.stringify(input), admission.sourceKey, authority.row.capture_mode);
       this.upgradeLegacyProjections(session, checkDeadline);
       if (session.incarnation_key !== null && batch.incarnationKey !== null && (batch.incarnationKey !== session.incarnation_key || session.prefix_bytes > 0 && (batch.prefixBytes !== session.prefix_bytes || batch.prefixSha256 !== session.prefix_sha256) || batch.transcriptCursor! < session.source_cursor || batch.observedFileBytes! < session.observed_file_bytes)) refuse("source_changed");
@@ -261,7 +266,7 @@ export class CodingHookStore {
       let sessionData = encodeSession();
       if (Buffer.byteLength(sessionData) > 16384) { batch.unlinkedAssertions = null; batch.coverageReasons = [...new Set([...batch.coverageReasons, "body_partial"])]; sessionData = encodeSession(); }
       this.db.query("UPDATE coding_hook_sessions SET state=?,incarnation_key=COALESCE(?,incarnation_key),prefix_sha256=CASE WHEN ? IS NULL THEN prefix_sha256 ELSE ? END,prefix_bytes=COALESCE(?,prefix_bytes),source_cursor=COALESCE(?,source_cursor),observed_file_bytes=COALESCE(?,observed_file_bytes),data=?,updated_at=? WHERE source_key=?").run(batch.sessionClosureClaim || session.state === "closed" ? "closed" : "open", batch.incarnationKey, batch.incarnationKey, batch.prefixSha256, batch.prefixBytes, batch.transcriptCursor, batch.observedFileBytes, sessionData, now, session.source_key);
-      this.db.query("UPDATE runs SET last_updated_at=? WHERE id=?").run(now, session.run_id); this.checkQuota(); checkDeadline();
+      this.db.query("UPDATE runs SET last_updated_at=? WHERE id=?").run(now, session.run_id); this.checkQuota(); if (this.contextOptions.contextTransport) assertHookCanonicalQuota(this, checkDeadline); checkDeadline();
       return { status: "accepted", runId: session.run_id, entities: batch.entities.length };
     });
   }

@@ -68,6 +68,6 @@ export function validateLegacySource(db: Database, key: string, registration: st
  if (roots !== 1) refuse("corrupt",503);
  const spans = db.query("SELECT id,CASE WHEN length(CAST(attributes AS BLOB))<=16384 THEN attributes END attributes FROM spans WHERE run_id=? AND CASE WHEN json_valid(attributes) THEN json_extract(attributes,'$.source')='claude_hook' OR json_extract(attributes,'$.captureContract') LIKE 'runphantom.claude-hook.observation/%' ELSE attributes LIKE '%runphantom.claude-hook.observation/%' END LIMIT 1001").all(row.run_id) as {id:string;attributes:string|null}[];
  if (spans.length > 1000) refuse("quota",507);
- for (const span of spans) { deadline(); if (ids.has(span.id)) continue; const attrs = parseBoundedHookJson(span.attributes,16384); if (attrs.status === "accepted" && attrs.value && typeof attrs.value === "object" && !Array.isArray(attrs.value) && (attrs.value.source === "claude_hook" || typeof attrs.value.captureContract === "string" && attrs.value.captureContract.startsWith("runphantom.claude-hook.observation/"))) refuse("corrupt",503); }
+ for (const span of spans) { deadline(); if (!ids.has(span.id)) refuse("corrupt",503); }
  deadline(); return "legacy-main-v1";
 }
