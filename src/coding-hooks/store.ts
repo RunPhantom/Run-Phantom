@@ -5,6 +5,7 @@ import type { NormalizedClaudeBatch, NormalizedClaudeEntity } from "./claude";
 import { CATALOG_VERSION, encodeInstallationCatalog, registrationForBinding, selectRegistration, sourceRootKey, validateCatalog, type SourceRegistration } from "./catalog";
 import type { HookSourceClaims } from "./protocol";
 import { parseBoundedHookJson } from "./shared";
+import { claudeEntityProjection } from "./projection";
 import { HookRefusal, hookDigest, isHex, refuse, validateClaudeBatch, validateClaudeRetainedEntity } from "./protocol";
 
 export const STORE_LIMITS = Object.freeze({ installations: 64, registrations: 64, sessions: 10000, sessionEntities: 1000, entities: 100000, bytes: 33554432 });
@@ -141,31 +142,66 @@ export class CodingHookStore {
     const row = this.db.query(`SELECT (${bytes})<=65536 bounded,${columns.map(column => `CASE WHEN (${bytes})<=65536 THEN ${column} END ${column}`).join(",")} FROM spans WHERE run_id=? AND id=?`).get(runId, spanId) as Record<string, unknown> | null;
     if (!row) return null; if (!row.bounded) refuse("projection_conflict"); delete row.bounded; return row;
   }
+  private validatePrior(row: EntityRow, current: Record<string, unknown>, session: SessionRow, entityKey: string): NormalizedClaudeEntity {
+    if (!row.data || !isHex(row.observation_sha256, 64) || !isHex(row.projection_sha256, 64)) refuse("corrupt", 503);
+    if (hookDigest(JSON.stringify(current)) !== row.projection_sha256) refuse("projection_conflict");
+    const prior = validateClaudeRetainedEntity(row.data, session.source_key, session.incarnation_key, session.source_cursor);
+    const spanId = prior.kind === "session" ? session.root_span_id : prior.entityKey.slice(0, 16);
+    if (prior.entityKey !== entityKey || row.span_id !== spanId || row.kind !== prior.kind || row.phase !== prior.phase
+      || row.incarnation_key !== prior.incarnationKey || row.source_offset !== prior.sourceOffset) refuse("corrupt", 503);
+    const attrs = parseBoundedHookJson(current.attributes, 16384);
+    if (attrs.status !== "accepted" || !attrs.value || typeof attrs.value !== "object" || Array.isArray(attrs.value)
+      || !isHex(attrs.value.retainedEntitySha256, 64) || attrs.value.retainedEntitySha256 !== hookDigest(row.data)) refuse("corrupt", 503);
+    return prior;
+  }
+  private upgradeLegacyProjections(session: SessionRow, checkDeadline: () => void): void {
+    const rows = this.db.query("SELECT entity_key,span_id,kind,phase,incarnation_key,source_offset,projection_sha256,observation_sha256,CASE WHEN length(CAST(data AS BLOB))<=16384 THEN data END data FROM coding_hook_entities WHERE source_key=? ORDER BY entity_key LIMIT 1001").all(session.source_key) as (EntityRow & { entity_key: string })[];
+    if (rows.length > 1000) refuse("quota", 507);
+    for (const row of rows) {
+      checkDeadline(); const current = this.canonical(session.run_id, row.span_id); if (!current) refuse("projection_conflict");
+      const prior = this.validatePrior(row, current, session, row.entity_key); checkDeadline();
+      if (!['tool', 'llm', 'agent'].includes(current.span_type as string)) continue;
+      const decoded = parseBoundedHookJson(current.attributes, 16384);
+      if (decoded.status !== "accepted" || !decoded.value || typeof decoded.value !== "object" || Array.isArray(decoded.value)) refuse("corrupt", 503);
+      const mode = decoded.value.currentCapturePolicy;
+      if (mode !== "full" && mode !== "metadata") refuse("corrupt", 503);
+      const projection = claudeEntityProjection(prior, { runId: session.run_id, rootSpanId: session.root_span_id }, mode, row.data!);
+      const oldAttrs = JSON.parse(projection.attributes);
+      delete oldAttrs.captureContract; delete oldAttrs.entityKind; delete oldAttrs.sourceKind; delete oldAttrs.captureModel;
+      const expected = { ...projection, span_type: prior.kind === "tool" ? "tool" : prior.kind === "assistant" ? "llm" : "agent", attributes: JSON.stringify(oldAttrs) };
+      // The old canonical projection must agree with every retained field, not only a self-reported type label.
+      if (JSON.stringify(expected) !== JSON.stringify(current)) refuse("corrupt", 503);
+      checkDeadline();
+      const columns = Object.keys(projection).filter(column => !["id", "run_id"].includes(column));
+      this.db.query(`UPDATE spans SET ${columns.map(column => `${column}=?`).join(",")} WHERE run_id=? AND id=?`).run(...columns.map(column => projection[column as keyof typeof projection]), session.run_id, row.span_id);
+      this.db.query("UPDATE coding_hook_entities SET projection_sha256=? WHERE source_key=? AND entity_key=?").run(hookDigest(JSON.stringify(projection)), session.source_key, row.entity_key);
+      checkDeadline();
+    }
+  }
   publish(token: string, admission: Pick<HookAdmission, "ownerGeneration" | "installationGeneration" | "sourceKey">, input: NormalizedClaudeBatch): { status: "accepted"; runId: string; entities: number } {
+    const started = performance.now(), checkDeadline = () => { if (performance.now() - started > 250) refuse("deadline", 503); };
     return this.transaction(() => {
+      checkDeadline();
       const authority = this.authenticate(token), session = this.session(admission.sourceKey);
       if (authority.ownerGeneration !== admission.ownerGeneration || authority.row.generation !== admission.installationGeneration) refuse("stale");
       if (!session || !authority.registrations.some(registration => registration.registrationId === session.source_root_key)) refuse("unauthorized", 401); if (session.state === "suppressed") refuse("suppressed");
       const batch = validateClaudeBatch(JSON.stringify(input), admission.sourceKey, authority.row.capture_mode);
+      this.upgradeLegacyProjections(session, checkDeadline);
       if (session.incarnation_key !== null && batch.incarnationKey !== null && (batch.incarnationKey !== session.incarnation_key || session.prefix_bytes > 0 && (batch.prefixBytes !== session.prefix_bytes || batch.prefixSha256 !== session.prefix_sha256) || batch.transcriptCursor! < session.source_cursor || batch.observedFileBytes! < session.observed_file_bytes)) refuse("source_changed");
       const run = this.db.query("SELECT id FROM runs WHERE id=?").get(session.run_id);
       const entityCount = (this.db.query("SELECT count(*) count FROM coding_hook_entities WHERE source_key=?").get(session.source_key) as { count: number }).count;
       if (run && entityCount === 0) refuse("projection_conflict");
       const now = Date.now(); if (!run) this.db.query("INSERT INTO runs(id,name,started_at,last_updated_at,metadata) VALUES(?,'Claude session',?,?,?)").run(session.run_id, now, now, '{"source":"claude_hook","runtimeVerified":false,"coverage":"partial"}');
       for (const observed of batch.entities) {
+        checkDeadline();
         const spanId = observed.kind === "session" ? session.root_span_id : observed.entityKey.slice(0, 16);
         const priorRow = this.db.query("SELECT span_id,kind,phase,incarnation_key,source_offset,projection_sha256,observation_sha256,CASE WHEN length(CAST(data AS BLOB))<=16384 THEN data END data FROM coding_hook_entities WHERE source_key=? AND entity_key=?").get(session.source_key, observed.entityKey) as EntityRow | null;
         const current = this.canonical(session.run_id, spanId);
         if (priorRow ? !current || hookDigest(JSON.stringify(current)) !== priorRow.projection_sha256 : current !== null) refuse("projection_conflict");
         let next = observed;
         if (priorRow) {
-          if (!priorRow.data) refuse("corrupt", 503);
-          const prior = validateClaudeRetainedEntity(priorRow.data, admission.sourceKey, session.incarnation_key, session.source_cursor);
-          if (prior.entityKey !== observed.entityKey || prior.kind !== observed.kind || priorRow.span_id !== spanId || priorRow.kind !== prior.kind || priorRow.phase !== prior.phase
-            || priorRow.incarnation_key !== prior.incarnationKey || priorRow.source_offset !== prior.sourceOffset) refuse("corrupt", 503);
-          const parsed = parseBoundedHookJson(current!.attributes, 65536);
-          if (parsed.status !== "accepted" || !parsed.value || typeof parsed.value !== "object" || Array.isArray(parsed.value)
-            || !isHex(parsed.value.retainedEntitySha256, 64) || parsed.value.retainedEntitySha256 !== hookDigest(priorRow.data)) refuse("corrupt", 503);
+          const prior = this.validatePrior(priorRow, current!, session, observed.entityKey);
+          if (prior.kind !== observed.kind) refuse("corrupt", 503);
           if (prior.sourceOffset !== null && observed.sourceOffset !== null) {
             if (prior.incarnationKey !== observed.incarnationKey) refuse("source_changed");
             if (observed.sourceOffset < prior.sourceOffset) continue;
@@ -178,10 +214,7 @@ export class CodingHookStore {
           if (observed.sourceKind === "hook" && prior.sourceKind === "hook" && terminal(prior.phase) && next.phase !== "conflict" && priorRow.observation_sha256 !== hookDigest(JSON.stringify(observed))) continue;
         }
         const retained = JSON.stringify(next); if (Buffer.byteLength(retained) > 16384) refuse("malformed", 400);
-        const projection = { id: spanId, run_id: session.run_id, parent_span_id: next.kind === "session" ? null : session.root_span_id, name: next.name, span_type: next.kind === "tool" ? "tool" : next.kind === "assistant" ? "llm" : "agent",
-          status: next.kind === "session" ? "UNSET" : ["failure", "interrupted", "conflict"].includes(next.phase) ? "ERROR" : next.phase === "success" ? "OK" : "UNSET", input_payload: next.body?.input === null || !next.body ? null : JSON.stringify(next.body.input), output_payload: next.body?.output === null || !next.body ? null : JSON.stringify(next.body.output),
-          start_time_ms: next.reportedAt === null ? null : Date.parse(next.reportedAt), end_time_ms: null, duration_ms: null, model: next.model, provider: "anthropic", input_tokens: next.usage?.freshInputTokens ?? null, output_tokens: next.usage?.outputTokens ?? null,
-          attributes: JSON.stringify({ source: "claude_hook", producerVerified: false, runtimeVerified: false, coverage: "partial", coverageReasons: next.coverageReasons, reportedPhase: next.phase, reportedDurationMs: next.reportedDurationMs, usage: next.usage, currentCapturePolicy: authority.row.capture_mode, retainedBody: next.body !== null, retainedEntitySha256: hookDigest(retained) }), otlp_evidence: null };
+        const projection = claudeEntityProjection(next, { runId: session.run_id, rootSpanId: session.root_span_id }, authority.row.capture_mode, retained);
         const columns = Object.keys(projection), values = Object.values(projection);
         this.db.query(`INSERT INTO spans(${columns.join(",")}) VALUES(${columns.map(() => "?").join(",")}) ON CONFLICT(run_id,id) DO UPDATE SET ${columns.filter(column => !["id", "run_id"].includes(column)).map(column => `${column}=excluded.${column}`).join(",")}`).run(...values);
         this.db.query("INSERT INTO coding_hook_entities VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_key,entity_key) DO UPDATE SET phase=excluded.phase,incarnation_key=excluded.incarnation_key,source_offset=excluded.source_offset,observation_sha256=excluded.observation_sha256,projection_sha256=excluded.projection_sha256,data=excluded.data,updated_at=excluded.updated_at").run(session.source_key, next.entityKey, spanId, next.kind, next.phase, next.incarnationKey, next.sourceOffset, hookDigest(JSON.stringify(observed)), hookDigest(JSON.stringify(projection)), retained, now);
@@ -190,7 +223,7 @@ export class CodingHookStore {
       let sessionData = encodeSession();
       if (Buffer.byteLength(sessionData) > 16384) { batch.unlinkedAssertions = null; batch.coverageReasons = [...new Set([...batch.coverageReasons, "body_partial"])]; sessionData = encodeSession(); }
       this.db.query("UPDATE coding_hook_sessions SET state=?,incarnation_key=COALESCE(?,incarnation_key),prefix_sha256=CASE WHEN ? IS NULL THEN prefix_sha256 ELSE ? END,prefix_bytes=COALESCE(?,prefix_bytes),source_cursor=COALESCE(?,source_cursor),observed_file_bytes=COALESCE(?,observed_file_bytes),data=?,updated_at=? WHERE source_key=?").run(batch.sessionClosureClaim || session.state === "closed" ? "closed" : "open", batch.incarnationKey, batch.incarnationKey, batch.prefixSha256, batch.prefixBytes, batch.transcriptCursor, batch.observedFileBytes, sessionData, now, session.source_key);
-      this.db.query("UPDATE runs SET last_updated_at=? WHERE id=?").run(now, session.run_id); this.checkQuota();
+      this.db.query("UPDATE runs SET last_updated_at=? WHERE id=?").run(now, session.run_id); this.checkQuota(); checkDeadline();
       return { status: "accepted", runId: session.run_id, entities: batch.entities.length };
     });
   }

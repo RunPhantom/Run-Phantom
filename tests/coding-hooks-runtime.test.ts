@@ -64,15 +64,15 @@ test("two actual daemon DB boots preserve source epoch and once-only usage while
   await runtime.codingHooks.management().install(b, { fullConsent: true }); const current = await readClaudeCapabilityDescriptor(capabilityPath(b), b.installationId);
   expect(current.token).toBe(first.token); expect(current.installationGeneration).toBe(first.installationGeneration); expect(current.ownerGeneration).not.toBe(first.ownerGeneration);
   await native(b); await native(b); expect(spans()).toContain("second boot content"); expect(getDrizzleDb().$client.query("SELECT source_key,run_id FROM coding_hook_sessions").get()).toEqual(oldSession);
-  expect(getDrizzleDb().$client.query("SELECT input_tokens,output_tokens FROM spans WHERE span_type='llm' ORDER BY input_tokens").all()).toEqual([{ input_tokens: 7, output_tokens: 3 }, { input_tokens: 10, output_tokens: 4 }]);
+  expect(getDrizzleDb().$client.query("SELECT input_tokens,output_tokens FROM spans WHERE span_type='LLM_GENERATION' ORDER BY input_tokens").all()).toEqual([{ input_tokens: 7, output_tokens: 3 }, { input_tokens: 10, output_tokens: 4 }]);
 });
 test("actual global metadata across two workspaces and local full share one project's identities without promoting the other", async () => {
   const runtime = await start(), first = binding("global", "one"), other = binding("global", "two"), full = binding("local", "one", "full");
   await runtime.codingHooks.management().install(first, { registrations: [first, other].map(b => ({ registrationId: hookDigest(JSON.stringify(["runphantom.claude.root/v1", b.registeredWorkspace, b.transcriptRoot, b.projectDirectory])), registeredWorkspace: b.registeredWorkspace, transcriptRoot: b.transcriptRoot, projectDirectory: b.projectDirectory, homeDirectory: b.homeDirectory })) });
   await runtime.codingHooks.management().install(full, { fullConsent: true }); source(full); source(other); await native(full); await native(first); await native(other);
   expect(getDrizzleDb().$client.query("SELECT source_key FROM coding_hook_sessions").all()).toHaveLength(2);
-  const bodies = getDrizzleDb().$client.query("SELECT output_payload FROM spans WHERE span_type='llm'").all(); expect(bodies.filter((x: any) => x.output_payload !== null)).toHaveLength(1); expect(bodies.filter((x: any) => x.output_payload === null)).toHaveLength(1);
-  expect(getDrizzleDb().$client.query("SELECT input_tokens FROM spans WHERE span_type='llm'").all()).toHaveLength(2);
+  const bodies = getDrizzleDb().$client.query("SELECT output_payload FROM spans WHERE span_type='LLM_GENERATION'").all(); expect(bodies.filter((x: any) => x.output_payload !== null)).toHaveLength(1); expect(bodies.filter((x: any) => x.output_payload === null)).toHaveLength(1);
+  expect(getDrizzleDb().$client.query("SELECT input_tokens FROM spans WHERE span_type='LLM_GENERATION'").all()).toHaveLength(2);
   const before = spans(); await native(full, { cwd: other.registeredWorkspace }); await native(full, { transcript_path: path.join(other.projectDirectory, hookSession + ".jsonl") }); expect(spans()).toBe(before);
   await native(full, { reason: "other" }, "SessionEnd"); expect(getDrizzleDb().$client.query("SELECT state FROM coding_hook_sessions WHERE source_root_key=?").get(hookDigest(JSON.stringify(["runphantom.claude.root/v1", full.registeredWorkspace, full.transcriptRoot, full.projectDirectory])))).toEqual({ state: "closed" });
 });

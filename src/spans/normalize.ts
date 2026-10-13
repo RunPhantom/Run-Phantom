@@ -31,7 +31,11 @@ import { traceloopLlmAdapter, traceloopToolAdapter } from "./adapters/traceloop"
 import { openInferenceLlmAdapter, openInferenceToolAdapter } from "./adapters/openinference";
 import { genAiMetadataAdapter, genAiToolAdapter } from "./adapters/gen-ai";
 
+import { parseBoundedHookJson } from "../coding-hooks/shared";
+import { claudeHookAdapter, CLAUDE_HOOK_CAPTURE_CONTRACT } from "./adapters/claude-hook";
+
 const ADAPTERS: SpanAdapter[] = [
+  claudeHookAdapter,
   aiSdkLlmAdapter,
   livekitLlmAdapter,
   traceloopLlmAdapter,
@@ -67,6 +71,9 @@ export function adapterInputFromStoredSpan(row: {
   let attrs: Record<string, string | number | boolean> = {};
   if (row.attributes) {
     try { attrs = JSON.parse(row.attributes); } catch { /* leave empty */ }
+    if (attrs?.captureContract === CLAUDE_HOOK_CAPTURE_CONTRACT && parseBoundedHookJson(row.attributes, 16384).status !== "accepted") {
+      attrs = { captureContract: CLAUDE_HOOK_CAPTURE_CONTRACT, invalidCapture: true };
+    }
   }
   const spanType =
     row.span_type === "LLM_GENERATION" ||
