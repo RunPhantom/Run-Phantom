@@ -631,15 +631,27 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
         </div>
       );
     }
-    // "Waiting for activity" promises something more is coming. On a run that has
-    // already finished nothing ever will, and the copy contradicted the run's own
-    // status — so say what is actually true: the trace holds no conversation.
+    if (spans.some(span => span.normalized?.capture)) {
+      return (
+        <div className="flex flex-col items-center justify-center h-48 gap-1.5 px-6 text-center">
+          <div className="text-sm" style={{ color: C.fg2 }}>No model messages in the captured trace</div>
+          <div role="status" className="text-xs" style={{ color: C.fg1 }}>Producer-reported observations · Partial capture · Runtime unverified</div>
+          <div className="text-xs" style={{ color: C.fg1 }}>Completion unverified. Captured spans are in the Span Tree tab.</div>
+        </div>
+      );
+    }
+    const roots = spans.filter(span => span.parent_span_id === null);
+    const endedRoot = roots.length > 0 && roots.every(span => typeof span.start_time_ms === "number" && Number.isFinite(span.start_time_ms)
+      && typeof span.end_time_ms === "number" && Number.isFinite(span.end_time_ms)
+      && span.end_time_ms >= span.start_time_ms);
     if (!isActive) {
       return (
         <div className="flex flex-col items-center justify-center h-48 gap-1.5 px-6 text-center">
           <div className="text-sm" style={{ color: C.fg2 }}>No conversation in this trace</div>
           <div className="text-xs" style={{ color: C.fg1 }}>
-            This run finished without recording any model messages. Its spans are in the Span Tree tab.
+            {endedRoot
+              ? "This run finished without recording any model messages. Its spans are in the Span Tree tab."
+              : "No model messages were recorded. Completion is unverified. Its spans are in the Span Tree tab."}
           </div>
         </div>
       );
