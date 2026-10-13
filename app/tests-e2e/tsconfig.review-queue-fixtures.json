@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "types": ["node", "bun"] },
+  "include": ["review-queue-component-server.ts", "../../src/embeds.d.ts"],
+  "exclude": []
+}
