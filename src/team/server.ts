@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveBuiltAppDir } from "../ui-assets";
 import { parseJsonEvidence } from "../evaluations/json-evidence";
+import { hasDuplicateJsonKeys } from "../json-keys";
 import { TeamStore, type SessionContext, type ProjectContext } from "./store";
 import { TeamCheckService } from "./checks";
 import type { TeamEvidenceRead, TeamEvidenceWrite, TeamEvidenceResponse } from "./evidence";
@@ -18,6 +19,9 @@ import { strictEvidenceJson } from "../evaluations/evidence-reader/json";
 import { readerLimits } from "../evaluations/evidence-reader/limits";
 import { normalizeTeamIngest } from "./ingest";
 import { TeamError } from "./errors";
+import { EvaluationError, parseVersion } from "../evaluations/validation";
+import { REVIEW_LIMITS } from "../review-queues/protocol";
+import { exportTeamReviewRevision } from "./review-queues";
 import { TEAM_LIMITS as L, type PageQuery, type RunFilters, type Role, type InviteCreate, type KeyCreate, type NoteCreate } from "./protocol";
 import { loadTeamConfig, validateTeamConfig, prepareTeamDirectory, loadBootstrapHash, normalizedAddress, loopbackAddress, type TeamConfig } from "./config";
 import { TeamAuth, RateBuckets, rawHeader, readSessionSecret, checkCsrf, tokenHash, sessionResponse, setSessionCookie, fields, emailValue, hasControlCharacters } from "./auth";
@@ -218,6 +222,62 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
   app.post("/api/team/projects", wrap(async (req, res) => { const { context } = authenticate(req), body = fields(await jsonBody(req), ["name"]); send(res, store.createProject(context, { name: body.name as string }), 201); }));
   const p = "/api/team/projects/:projectId";
   app.get(p, wrap((req, res) => send(res, store.getProject(scope(req)))));
+  const reviewRoute = (method: string, role: Role, query: string[], work: (req: Request, context: ProjectContext) => unknown, status = 200) =>
+    (req: Request, res: Response, next: NextFunction) => {
+      void (async () => {
+        if (req.method !== method || req.path.endsWith("/") || req.path.includes("%") || req.originalUrl.includes("#") || req.originalUrl.includes("\\")
+          || new URL(req.originalUrl, "http://team.invalid").pathname !== req.originalUrl.split("?")[0]) throw new TeamError("invalid_request", "Project review route is invalid");
+        for (const [name, value] of Object.entries(req.params)) {
+          const valid = name === "itemId" ? /^[a-f0-9]{64}$/.test(value) : name === "key" ? /^[A-Za-z0-9_-]{1,128}$/.test(value)
+            : name === "version" ? /^[1-9][0-9]*$/.test(value) && Number(value) <= 20
+            : /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
+          if (!valid) throw new TeamError("invalid_request", "Project review identifier is invalid");
+        }
+        const context = scope(req, role), seen = new Set<string>();
+        for (const [key] of new URL(req.originalUrl, "http://team.invalid").searchParams) {
+          if (!query.includes(key) || seen.has(key)) throw new TeamError("invalid_request", "Project review query fields are invalid"); seen.add(key);
+        }
+        if (states.get(req)!.signal.aborted) throw new TeamError("conflict", "Project review request was interrupted");
+        const result = await work(req, context);
+        store.projectScope(context, context.projectId, role);
+        if (states.get(req)!.signal.aborted) throw new TeamError("conflict", "Project review request was interrupted");
+        if (status === 204) res.sendStatus(204); else send(res, result, status);
+      })().catch(next);
+    };
+  const reviewBody = async (req: Request) => {
+    if (!/^application\/json(?:\s*;\s*charset=(?:utf-8|"utf-8"))?$/i.test(rawHeader(req, "content-type") ?? "")
+      || ![undefined, "identity"].includes(rawHeader(req, "content-encoding"))) throw new TeamError("unsupported_media_type", "Project review controls require uncompressed UTF-8 JSON");
+    const body = await readBody(req, REVIEW_LIMITS.MAX_REQUEST_BYTES);
+    const value = parseJson(body);
+    if (hasDuplicateJsonKeys(body.toString("utf8"))) throw new TeamError("invalid_request", "Project review JSON contains duplicate fields");
+    return value;
+  };
+  const reviewRevision = (value: unknown) => {
+    if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) throw new TeamError("invalid_request", "Project review revision is invalid"); return parseVersion(Number(value));
+  };
+  const queues = `${p}/review-queues`, items = `${queues}/:queueId/items`, datasets = `${p}/review-datasets`;
+  app.get(queues, reviewRoute("GET", "viewer", [], (_req, context) => store.listReviewQueues(context)));
+  app.post(queues, reviewRoute("POST", "editor", [], async (req, context) => store.createReviewQueue(context, await reviewBody(req)), 201));
+  app.delete(`${queues}/:queueId`, reviewRoute("DELETE", "admin", [], (req, context) => store.deleteReviewQueue(context, req.params.queueId), 204));
+  app.get(items, reviewRoute("GET", "viewer", ["limit", "cursor"], (req, context) => store.listReviewItems(context, req.params.queueId, pageQuery(req))));
+  app.post(items, reviewRoute("POST", "editor", [], async (req, context) => store.insertReviewItem(context, req.params.queueId, await reviewBody(req)), 201));
+  app.get(`${queues}/:queueId/window`, reviewRoute("GET", "viewer", ["centerId"], (req, context) => {
+    if (typeof req.query.centerId !== "string" || !/^[a-f0-9]{64}$/.test(req.query.centerId)) throw new TeamError("invalid_request", "Project review window identity is invalid");
+    return store.reviewWindow(context, req.params.queueId, req.query.centerId);
+  }));
+  app.put(`${items}/:itemId`, reviewRoute("PUT", "editor", [], async (req, context) => store.mutateReviewItem(context, req.params.queueId, req.params.itemId, "save", await reviewBody(req))));
+  for (const kind of ["approve", "reopen"] as const) app.post(`${items}/:itemId/${kind}`, reviewRoute("POST", "editor", [], async (req, context) => store.mutateReviewItem(context, req.params.queueId, req.params.itemId, kind, await reviewBody(req))));
+  app.delete(`${items}/:itemId`, reviewRoute("DELETE", "admin", ["expectedRevision"], (req, context) => store.deleteReviewItem(context, req.params.queueId, req.params.itemId, reviewRevision(req.query.expectedRevision)), 204));
+  app.post(`${queues}/:queueId/promotions`, reviewRoute("POST", "editor", [], async (req, context) => {
+    const body = fields(await reviewBody(req), ["datasetId", "expectedDatasetVersion", "idempotencyKey", "items"]);
+    return store.promoteReviewItems(context, {...body, queueId:req.params.queueId});
+  }, 201));
+  app.get(`${queues}/:queueId/promotions/:key`, reviewRoute("GET", "viewer", [], (req, context) => store.getReviewPromotion(context, req.params.queueId, req.params.key)));
+  app.get(datasets, reviewRoute("GET", "viewer", [], (_req, context) => store.listReviewDatasets(context)));
+  app.post(datasets, reviewRoute("POST", "editor", [], async (req, context) => store.createReviewDataset(context, await reviewBody(req)), 201));
+  app.delete(`${datasets}/:datasetId`, reviewRoute("DELETE", "admin", [], (req, context) => store.deleteReviewDataset(context, req.params.datasetId), 204));
+  app.get(`${datasets}/:datasetId/revisions/:version`, reviewRoute("GET", "viewer", [], (req, context) => store.getReviewDatasetRevision(context, req.params.datasetId, Number(req.params.version))));
+  app.get(`${datasets}/:datasetId/revisions/:version/export`, reviewRoute("GET", "viewer", [], (req, context) => exportTeamReviewRevision(store.getReviewDatasetRevision(context, req.params.datasetId, Number(req.params.version)))));
   const evidence = `${p}/evidence`;
   const evidenceRoute = (method: string, query: string[], capability: EvidenceCapability, fn: (req: Request, context: ProjectContext, generation: number) => TeamEvidenceResponse | Promise<TeamEvidenceResponse>) =>
     (req: Request, res: Response, next: NextFunction) => {
@@ -390,7 +450,7 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
   app.use((_req, _res, next) => next(new TeamError("not_found", "Resource not found")));
   app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
     if (res.headersSent || res.destroyed) return;
-    const safe = error instanceof TeamError ? error : error instanceof EvidenceError || error instanceof PromptRegistryError
+    const safe = error instanceof TeamError ? error : error instanceof EvidenceError || error instanceof PromptRegistryError || error instanceof EvaluationError
       ? new TeamError(error.status === 403 ? "forbidden" : error.status === 404 ? "not_found" : error.status === 409 ? "conflict" : error.status === 413 ? "too_large" : "invalid_request", error.message)
       : new TeamError("internal_error", "Request failed");
     if (safe.retryAfter !== undefined) res.setHeader("Retry-After", String(Math.min(3600, Math.max(1, Math.ceil(safe.retryAfter)))));

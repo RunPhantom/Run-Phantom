@@ -9,6 +9,17 @@ export class TeamApiError extends Error {
   }
 }
 
+async function boundedTeamReviewJson(response: Response): Promise<unknown> {
+  const invalid = () => new TeamApiError(502, "invalid_response", "The project review response is unavailable or exceeds its bounds.");
+  const reader = response.body?.getReader(); if (!reader) throw invalid();
+  const chunks: Uint8Array[] = []; let size = 0;
+  try {
+    for (;;) { const part = await reader.read(); if (part.done) break; size += part.value.byteLength; if (size > 2 * 1024 * 1024) throw invalid(); chunks.push(part.value); }
+    const bytes = new Uint8Array(size); let offset = 0; for (const part of chunks) { bytes.set(part, offset); offset += part.byteLength; }
+    try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { throw invalid(); }
+  } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+}
+
 /** One in-memory client per team session provider; no local daemon requests. */
 export class TeamClient {
   private csrf: string | null = null;
@@ -35,7 +46,14 @@ export class TeamClient {
     return this.jsonRequest(path, options, true);
   }
 
-  private async jsonRequest<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal }, prompt: boolean): Promise<T> {
+  /** Project review transport preserves the ordinary Team request and prompt budgets. */
+  async reviews<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
+    if (!/^\/projects\/[0-9a-f-]{36}\/review-(?:queues|datasets)(?:\/|\?|$)/.test(path) || path.includes("#") || path.includes("\\")) throw new TeamApiError(400, "invalid_request", "Choose a project review endpoint.");
+    if (options.body !== undefined && new TextEncoder().encode(JSON.stringify(options.body)).byteLength > 65536) throw new TeamApiError(413, "too_large", "Project review request exceeds its limit.");
+    return this.jsonRequest(path, options, "review");
+  }
+
+  private async jsonRequest<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal }, prompt: boolean | "review"): Promise<T> {
     const generation = this.generation;
     const project = path.match(/^\/projects\/([^/?]+)(?:\/|$)/)?.[1];
     const projectGeneration = project ? this.projectGenerations.get(project) ?? 0 : 0;
@@ -50,7 +68,7 @@ export class TeamClient {
       method, headers, credentials: "same-origin", cache: "no-store", signal: options.signal,
       ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
     });
-    const data: unknown = response.status === 204 ? undefined : prompt ? await boundedPromptJson(response) : await response.json().catch(() => undefined);
+    const data: unknown = response.status === 204 ? undefined : prompt === "review" ? await boundedTeamReviewJson(response) : prompt ? await boundedPromptJson(response) : await response.json().catch(() => undefined);
     if (generation !== this.generation || options.signal?.aborted || project && !membershipRead && projectGeneration !== (this.projectGenerations.get(project) ?? 0)) throw new DOMException("Request superseded", "AbortError");
     if (!response.ok) {
       const failure = (data as ApiError | undefined)?.error;
