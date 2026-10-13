@@ -1,4 +1,4 @@
-/** Inactive observer DDL. The migration coordinator must approve and install the actual qualified prefix. */
+/** Canonical migration13 installs this DDL; request handlers never install schema. */
 export const COMPLETION_STORAGE_SQL = `
 CREATE TABLE evaluation_completion_reports (
   scope_key TEXT NOT NULL, scope_generation INTEGER NOT NULL CHECK(scope_generation>0),
@@ -13,10 +13,11 @@ CREATE TABLE evaluation_completion_reports (
   payload_digest TEXT NOT NULL CHECK(length(payload_digest)=64),
   payload_bytes INTEGER NOT NULL CHECK(payload_bytes BETWEEN 1 AND 65536),
   created_at INTEGER NOT NULL CHECK(created_at BETWEEN 0 AND 9007199254740991),
-  PRIMARY KEY(scope_key,id), UNIQUE(scope_key,scope_generation,operation_key),
+  PRIMARY KEY(scope_key,id),
   FOREIGN KEY(scope_key) REFERENCES evaluation_evidence_scopes(scope_key) ON DELETE CASCADE,
   FOREIGN KEY(scope_key,set_id,set_revision) REFERENCES evaluation_evidence_sets(scope_key,id,revision) ON DELETE CASCADE
 );
+CREATE UNIQUE INDEX completion_report_operation_unique ON evaluation_completion_reports(scope_key,scope_generation,operation_key);
 CREATE INDEX completion_report_attachment ON evaluation_completion_reports(scope_key,scope_generation,attachment_kind,attachment_id,created_at,id);
 CREATE TABLE evaluation_completion_payloads (
   scope_key TEXT NOT NULL, report_id TEXT NOT NULL,

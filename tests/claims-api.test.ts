@@ -9,7 +9,6 @@ import { createServer } from "../src/server";
 import { closeDb, getDrizzleDb, upsertRun } from "../src/db";
 import { EVIDENCE_IMPORT_CONTENT_TYPE, EVIDENCE_READER_IDENTITY } from "../src/evaluations/evidence-import";
 import { evidenceDigest } from "../src/evaluations/evidence-validation";
-import { COMPLETION_STORAGE_SQL } from "../src/claims/storage";
 import { currentCompletionReport } from "../src/claims/service";
 import { createLocalEvidenceOwner, type EvidenceOwner } from "../src/evaluations/evidence-inventory";
 import { EvidenceError } from "../src/evaluations/evidence-protocol";
@@ -32,19 +31,19 @@ async function upload(text = '<testsuite tests="1"><testcase name="pass"/></test
   throw Error("Real reader did not publish claims fixture");
 }
 function input(setId: string, summary = "All tests pass.") { return { enabled: true, attachment, setId, revision: 1, summary, assertions: [{ text: "All tests pass.", reference: { setId, revision: 1, sourceId: "unit" } }] }; }
-function snapshot() { return getDrizzleDb().$client.query("SELECT name,sql FROM sqlite_master WHERE name LIKE '%claim%' ORDER BY name").all(); }
+function snapshot() { return getDrizzleDb().$client.query("SELECT type,name,sql FROM sqlite_master WHERE name LIKE '%completion%' ORDER BY name").all(); }
 test("registered default-disabled report needs no selected scope and writes no observer storage", async () => {
-  const before = snapshot(), response = await json(endpoint, "POST", { enabled: false });
-  expect(response.status).toBe(200); expect(response.value.state).toBe("disabled"); expect(response.response.headers.get("cache-control")).toBe("no-store"); expect(snapshot()).toEqual(before); expect(before).toEqual([]);
+  const db = getDrizzleDb().$client, before = snapshot(), changes = db.query("SELECT total_changes() AS n").get(), response = await json(endpoint, "POST", { enabled: false });
+  expect(response.status).toBe(200); expect(response.value.state).toBe("disabled"); expect(response.response.headers.get("cache-control")).toBe("no-store"); expect(snapshot()).toEqual(before); expect(before.length).toBeGreaterThan(0); expect(db.query("SELECT total_changes() AS n").get()).toEqual(changes); expect(db.query("SELECT * FROM evaluation_completion_reports").all()).toEqual([]);
 });
 test("selected current report outcomes stay unauthenticated and missing inventories stay missing", async () => {
-  const setId = await upload(), before = await (await fetch(base + `/api/evaluations/evidence/sets/${setId}?revision=1`)).text();
+  const setId = await upload(), schemaBefore = snapshot(), before = await (await fetch(base + `/api/evaluations/evidence/sets/${setId}?revision=1`)).text();
   const response = await json(endpoint, "POST", input(setId, COMPLETION_PROSE.map(item => item.text).join("\n")));
   expect(response.status).toBe(200); expect(response.value.authority).toBe("report_only"); expect(response.value.authentication).toBe("not_authenticated");
   expect(response.value.observations[0]).toMatchObject({ category: "structured", state: "reported_outcome", reportedOutcome: "reports_pass", authentication: "not_authenticated" });
   expect(response.value.observations.slice(1).every((item: { state: string }) => item.state === "ambiguous_text")).toBe(true);
   expect(await (await fetch(base + `/api/evaluations/evidence/sets/${setId}?revision=1`)).text()).toBe(before); expect(JSON.parse(before).revision.coverage).toBe("not_declared");
-  expect(snapshot()).toEqual([]);
+  expect(snapshot()).toEqual(schemaBefore); expect(getDrizzleDb().$client.query("SELECT * FROM evaluation_completion_reports").all()).toEqual([]);
 });
 test("wrong attachment, revision, duplicated query/body controls and project overrides are refused", async () => {
   const setId = await upload(); upsertRun({ id: "other-run", started_at: 2, last_updated_at: 2 });
@@ -87,7 +86,6 @@ test("current attachment authority precedes payload lookup and revocation refuse
 });
 
 test("real registered durable API retains original summaries/version through restart and disable then honors source retention removal", async () => {
-  const database = getDrizzleDb().$client; database.exec(COMPLETION_STORAGE_SQL);
   const setId = await upload(), request = { ...input(setId), operationKey: "durable-one", summary: "Original α completion summary. Not all tests pass." };
   const created = await json(reports, "POST", request); expect(created.status).toBe(201); expect(created.value.request.summary).toBe(request.summary);
   const id = created.value.id, query = new URLSearchParams({ attachment: JSON.stringify(attachment) });

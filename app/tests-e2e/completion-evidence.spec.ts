@@ -1,18 +1,9 @@
-import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { readFileSync, writeFileSync } from "node:fs";
 import type { Page, Route } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { seedEvaluationRuns, EVALUATION_RUNS, createEvaluationDataset, startEvaluation } from "./evaluation-fixture";
 import { COMPLETION_PROSE, COMPLETION_HOSTILE } from "../../tests/fixtures/claims-prose";
 import type { CompletionSavedReport } from "../../src/claims/protocol";
-
-test.beforeEach(async ({ runPhantom }) => {
-  if (process.env.F08_COMPONENT_SCHEMA_FIXTURE !== "1") return;
-  const source = fileURLToPath(new URL("../../src/claims/storage.ts", import.meta.url));
-  const prepared = spawnSync("bun", ["-e", `import { Database } from "bun:sqlite"; import { COMPLETION_STORAGE_SQL } from ${JSON.stringify(source)}; const db=new Database(process.argv[1]); db.exec("PRAGMA foreign_keys=ON"); db.exec(COMPLETION_STORAGE_SQL); db.close();`, runPhantom.dbPath], { env: { PATH: process.env.PATH }, encoding: "utf8" });
-  expect(prepared.status, "Approved pending-prefix schema fixture must install in this owned scratch daemon only").toBe(0);
-});
 
 const endpoint = "/api/evaluations/claims/reports", summary = COMPLETION_PROSE.map(item => item.text).join("\n") + "\n" + COMPLETION_HOSTILE;
 async function importReport(page: Page, url: string, id: string, kind = "run") {

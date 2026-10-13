@@ -4,6 +4,15 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { SnapshotRun, SnapshotSpan } from "../evaluations/protocol";
 import { initializeTeamSchema } from "./store-schema";
+import type { IncomingMessage } from "node:http";
+import { TeamEvidence, teamEvidenceAccess, type TeamEvidenceRead, type TeamEvidenceWrite, type TeamEvidenceResponse } from "./evidence";
+import { EvidenceStore } from "../evaluations/evidence-store";
+import { PromptRegistry } from "../prompts/registry";
+import type { PromptCapability, PromptFence } from "../prompts/protocol";
+import { readTeamPrompt, writeTeamPrompt, teamPromptOperation, type TeamPromptRead, type TeamPromptWrite, type TeamPromptResponse } from "./prompts";
+import { EvidenceError, type EvidenceCapability, type EvidenceAttachment } from "../evaluations/evidence-protocol";
+import type { EvidenceOwner, EvidenceInventoryAnchor, EvidenceAnchorIdentity } from "../evaluations/evidence-inventory";
+import { evidenceInteger, parseEvidenceAttachment, parseEvidenceScope } from "../evaluations/evidence-validation";
 import { assertTeamIngestBatch, redactTeamText, type TeamIngestBatch } from "./ingest";
 import { TeamError } from "./errors";
 import { bytes, digest, requiredEmail, requiredHash, requiredId, requiredName, requiredRole, lifetime, pageInput, pageResult, type Paging } from "./store-utils";
@@ -42,6 +51,7 @@ export class TeamStore {
   readonly #db: Database;
   readonly #path: string;
   readonly #now: () => number;
+  readonly #evidence: TeamEvidence;
   #closed = false;
 
   constructor(path: string, options: { bootstrapHash?: string; now?: () => number } = {}) {
@@ -53,11 +63,19 @@ export class TeamStore {
       chmodSync(this.#path, 0o600);
       this.#db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;");
       initializeTeamSchema(this.#db);
+      this.#evidence = new TeamEvidence(this.#db);
       this.#write(() => { /* Startup removes expired bounded credential records. */ });
       if (options.bootstrapHash) this.setBootstrapHash(options.bootstrapHash);
     } catch (error) { this.#db.close(); this.#closed = true; throw error; }
   }
-  close(): void { if (!this.#closed) { this.#db.close(); this.#closed = true; } }
+  close(): void {
+    if (!this.#closed) {
+      const state = this.#evidence.state;
+      if (state.active || state.queued || state.acquiringMetadata) throw new TeamError("conflict", "Evidence work must stop before the database closes");
+      this.#db.close(); this.#closed = true;
+    }
+  }
+  shutdownEvidence(): Promise<void> { return this.#evidence.close(); }
   #get<T>(sql: string, ...params: SQLQueryBindings[]): T | null { return this.#db.query(sql).get(...params) as T | null; }
   #all<T>(sql: string, ...params: SQLQueryBindings[]): T[] { return this.#db.query(sql).all(...params) as T[]; }
   #run(sql: string, ...params: SQLQueryBindings[]): void { this.#db.query(sql).run(...params); }
@@ -173,6 +191,64 @@ export class TeamStore {
     return Object.freeze({ ...current, projectId, role: membership.role });
   }
   #project(scope: ProjectContext, role: Role = "viewer"): ProjectContext { return this.projectScope(scope, scope.projectId, role); }
+  #evidenceAnchor(context: ProjectContext, value: EvidenceInventoryAnchor): EvidenceAnchorIdentity {
+    const scope = this.#project(context);
+    if (value.kind === "dataset_revision" || value.kind === "experiment") throw new EvidenceError("This Team evidence attachment is unsupported");
+    const anchor = parseEvidenceAttachment(value);
+    const row = anchor.kind === "check"
+      ? this.#get<{ recordId: string; projectId: string; createdAt: number }>("SELECT json_extract(data,'$.id') AS recordId,json_extract(data,'$.projectId') AS projectId,created_at AS createdAt FROM checks WHERE project_id=? AND id=?", scope.projectId, anchor.id)
+      : this.#get<{ recordId: string; createdAt: number }>("SELECT json_extract(data,'$.id') AS recordId,json_extract(data,'$.firstSeenAt') AS createdAt FROM runs WHERE project_id=? AND id=?", scope.projectId, anchor.id);
+    if (!row) throw missing();
+    if (row.recordId !== anchor.id || "projectId" in row && row.projectId !== scope.projectId) throw new EvidenceError("Stored attachment identity changed", 409);
+    return { anchor, createdAt: evidenceInteger(row.createdAt, "attachment creation time") };
+  }
+  #evidenceOwner(context: ProjectContext): EvidenceOwner {
+    const current = this.#project(context), scope = parseEvidenceScope({ kind: "project", id: current.projectId });
+    const authorize = (capability: EvidenceCapability, attachment: EvidenceAttachment | null) => {
+      const fresh = this.#project(context);
+      if (!teamEvidenceAccess(fresh.role).includes(capability)) throw forbidden();
+      if (attachment) this.#evidenceAnchor(fresh, attachment);
+      return { actorId: fresh.user.id };
+    };
+    return { database: this.#db, scope, authorize, resolveAnchor: anchor => this.#evidenceAnchor(context, anchor),
+      store: new EvidenceStore(this.#db, scope, { now: this.#now, maxRawBytes: 64 * 1024 * 1024, maxNormalizedBytes: 32 * 1024 * 1024,
+        authorize: (capability, actualScope, attachment) => {
+          if (actualScope.kind !== "project" || actualScope.id !== current.projectId) throw missing();
+          return authorize(capability, attachment);
+        } }) };
+  }
+  evidenceAccess(context: ProjectContext, capability: EvidenceCapability = "normalized_read"): void {
+    this.#db.transaction(() => this.#evidenceOwner(context).authorize(capability, null)).immediate();
+  }
+  readEvidence(context: ProjectContext, input: TeamEvidenceRead): TeamEvidenceResponse {
+    return this.#db.transaction(() => {
+      const fresh = this.#project(context);
+      return this.#evidence.read(this.#evidenceOwner(fresh), input, teamEvidenceAccess(fresh.role));
+    }).immediate();
+  }
+  writeEvidence(context: ProjectContext, input: TeamEvidenceWrite): Promise<TeamEvidenceResponse> { return this.#evidence.write(this.#evidenceOwner(context), input); }
+  receiveEvidence(context: ProjectContext, request: IncomingMessage): Promise<TeamEvidenceResponse> { return this.#evidence.receive(this.#evidenceOwner(context), request); }
+  evidenceGeneration(context: ProjectContext): number { return this.#db.transaction(() => this.#evidence.generation(this.#evidenceOwner(context))).immediate(); }
+  assertEvidenceCurrent(context: ProjectContext, generation: number): void { this.#evidence.assertCurrent(this.#evidenceOwner(context), generation); }
+  #promptRegistry(context: ProjectContext): PromptRegistry {
+    const current = this.#project(context);
+    return new PromptRegistry({ database: this.#db, scope: { kind: "project", id: current.projectId }, authorize: capability => {
+      this.#project(context, capability === "delete" ? "admin" : capability === "edit" ? "editor" : "viewer");
+    } });
+  }
+  promptGeneration(context: ProjectContext, capability: PromptCapability): PromptFence {
+    return teamPromptOperation(() => this.#promptRegistry(context).capture(capability));
+  }
+  readPrompt(context: ProjectContext, input: TeamPromptRead, generation: PromptFence): TeamPromptResponse {
+    return readTeamPrompt(this.#promptRegistry(context), input, generation);
+  }
+  writePrompt(context: ProjectContext, input: TeamPromptWrite, generation: PromptFence): TeamPromptResponse {
+    return writeTeamPrompt(this.#promptRegistry(context), input, generation);
+  }
+  async invalidateEvidenceRun(context: ProjectContext, id: string): Promise<void> {
+    this.#db.transaction(() => { this.#project(context, "admin"); this.#evidenceAnchor(context, { kind: "run", id }); }).immediate();
+    await this.#evidence.invalidateRun(this.#evidenceOwner(context), id);
+  }
   #projectView(row: ProjectRow, role: Role): Project { return { id: row.id, name: row.name, createdAt: row.created_at, role }; }
   #paging(query: PageQuery | undefined, project: string, endpoint: string): Paging { return pageInput(query, digest(JSON.stringify([project, endpoint]))); }
   #anchor(paging: Paging, timestamp: string, id: string): { sql: string; args: SQLQueryBindings[] } {
@@ -193,6 +269,8 @@ export class TeamStore {
       if (this.#count("SELECT COUNT(*) AS n FROM projects") >= L.PROJECTS) throw quota();
       const id = randomUUID(), now = this.#now();
       this.#run("INSERT INTO projects(id,name,created_at) VALUES(?,?,?)", id, name, now);
+      this.#run("INSERT INTO prompt_scope_controls(scope_key,generation) SELECT scope_key,1 FROM evaluation_evidence_scopes WHERE scope_key=?", "project:" + id);
+      if (!this.#get("SELECT scope_key FROM prompt_scope_controls WHERE scope_key=?", "project:" + id)) throw new TeamError("conflict", "Team prompt scope is unavailable");
       this.#run("INSERT INTO memberships(project_id,account_id,role,joined_at) VALUES(?,?,'admin',?)", id, current.user.id, now);
       this.#audit({ ...current, projectId: id, role: "admin" }, "project.created", { type: "project", id });
       return { id, name, createdAt: now, role: "admin" };
@@ -441,6 +519,7 @@ export class TeamStore {
     this.#write(() => {
       const scope = this.#project(context, "admin");
       this.#readRun(scope.projectId, runId);
+      this.#evidence.assertRunInactive(this.#evidenceOwner(scope), runId);
       const amount = this.#count("SELECT byte_size AS n FROM runs WHERE project_id=? AND id=?", scope.projectId, runId)
         + this.#count("SELECT COALESCE(SUM(byte_size),0) AS n FROM spans WHERE project_id=? AND run_id=?", scope.projectId, runId)
         + this.#count("SELECT COALESCE(SUM(byte_size),0) AS n FROM notes WHERE project_id=? AND run_id=?", scope.projectId, runId);

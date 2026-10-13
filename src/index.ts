@@ -1,6 +1,15 @@
 #!/usr/bin/env node
-/** Internal readers must finish before loading either authority runtime. */
-if (process.argv[2] === "__runphantom_evidence_worker_v1") {
+/** Select shared or local authority before loading either runtime. */
+if (process.argv[2] === "hooks" && process.argv[3] === "handle" && process.argv[4] === "claude") {
+  // A host hook must not initialize the daemon/database or let telemetry failure affect its caller.
+  const deadline = setTimeout(() => process.exit(0), 1500);
+  try {
+    const { runClaudeHookCallback } = await import("./coding-hooks/callback");
+    await runClaudeHookCallback(process.argv.slice(5));
+  } catch { /* Telemetry is silent and cannot block the host. */ }
+  finally { clearTimeout(deadline); }
+  process.exit(0);
+} else if (process.argv[2] === "__runphantom_evidence_worker_v1") {
   if (process.argv.length !== 3) process.exit(1);
   const { EVIDENCE_WORKER_FAILURE, prepareEvidenceWorkerEnvironment } = await import("./evaluations/evidence-worker-environment");
   if (!prepareEvidenceWorkerEnvironment()) {

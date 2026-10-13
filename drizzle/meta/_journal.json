@@ -71,6 +71,34 @@
       "when": 1791766000000,
       "tag": "0009_finding_comparisons",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1791766000001,
+      "tag": "0010_coding_hooks",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1791766000002,
+      "tag": "0011_review_queues",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1791766000003,
+      "tag": "0012_prompt_registry",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1791766000004,
+      "tag": "0013_completion_reports",
+      "breakpoints": true
     }
   ]
 }

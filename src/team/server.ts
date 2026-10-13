@@ -8,6 +8,14 @@ import { resolveBuiltAppDir } from "../ui-assets";
 import { parseJsonEvidence } from "../evaluations/json-evidence";
 import { TeamStore, type SessionContext, type ProjectContext } from "./store";
 import { TeamCheckService } from "./checks";
+import type { TeamEvidenceRead, TeamEvidenceWrite, TeamEvidenceResponse } from "./evidence";
+import type { TeamPromptRead, TeamPromptWrite, TeamPromptResponse } from "./prompts";
+import { PROMPT_LIMITS, PromptRegistryError, promptId, promptInteger, promptObject, type PromptCapability, type PromptFence } from "../prompts/protocol";
+import { EvidenceError, type EvidenceCapability } from "../evaluations/evidence-protocol";
+import { EVIDENCE_HEADER_BYTES, EVIDENCE_IMPORT_CONTENT_TYPE } from "../evaluations/evidence-import";
+import { evidenceInteger, evidenceText } from "../evaluations/evidence-validation";
+import { strictEvidenceJson } from "../evaluations/evidence-reader/json";
+import { readerLimits } from "../evaluations/evidence-reader/limits";
 import { normalizeTeamIngest } from "./ingest";
 import { TeamError } from "./errors";
 import { TEAM_LIMITS as L, type PageQuery, type RunFilters, type Role, type InviteCreate, type KeyCreate, type NoteCreate } from "./protocol";
@@ -210,6 +218,126 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
   app.post("/api/team/projects", wrap(async (req, res) => { const { context } = authenticate(req), body = fields(await jsonBody(req), ["name"]); send(res, store.createProject(context, { name: body.name as string }), 201); }));
   const p = "/api/team/projects/:projectId";
   app.get(p, wrap((req, res) => send(res, store.getProject(scope(req)))));
+  const evidence = `${p}/evidence`;
+  const evidenceRoute = (method: string, query: string[], capability: EvidenceCapability, fn: (req: Request, context: ProjectContext, generation: number) => TeamEvidenceResponse | Promise<TeamEvidenceResponse>) =>
+    (req: Request, res: Response, next: NextFunction) => {
+      void (async () => {
+        if (req.method !== method || req.path.endsWith("/") || req.originalUrl.includes("#") || req.originalUrl.includes("\\") || new URL(req.originalUrl, "http://team.invalid").pathname !== req.originalUrl.split("?")[0]) throw new TeamError("invalid_request", "Evidence route is invalid");
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(req.params.projectId)) throw new TeamError("invalid_request", "Project identifier is invalid");
+        for (const [key, id] of Object.entries(req.params)) {
+          if (key !== "projectId" && (typeof id !== "string" || id === "." || id === ".." || /[\\/?#]/.test(id))) throw new TeamError("invalid_request", "Evidence identifier is invalid");
+          if (key !== "projectId") evidenceText(id, "evidence identifier");
+        }
+        const seen = new Set<string>();
+        for (const [key] of new URL(req.originalUrl, "http://team.invalid").searchParams) {
+          if (!query.includes(key) || seen.has(key)) throw new TeamError("invalid_request", "Evidence query fields are invalid");
+          seen.add(key);
+        }
+        const context = scope(req);
+        store.evidenceAccess(context, capability);
+        if (states.get(req)!.signal.aborted) throw new TeamError("conflict", "Evidence request was interrupted");
+        const generation = store.evidenceGeneration(context);
+        const pending = fn(req, context, generation);
+        const response = pending instanceof Promise ? await pending : pending;
+        // This uses the original context and generation after the complete body/operation await.
+        store.evidenceAccess(context, capability);
+        store.assertEvidenceCurrent(context, response.generation);
+        if (states.get(req)!.signal.aborted) throw new TeamError("conflict", "Evidence request was interrupted");
+        res.status(response.status).set("Content-Type", response.contentType).send(Buffer.from(response.bytes));
+      })().catch(next);
+    };
+  const evidenceQuery = (req: Request, name: string, required = true): string | undefined => {
+    const value = new URL(req.originalUrl, "http://team.invalid").searchParams.get(name);
+    if (value === null && !required) return undefined;
+    return evidenceText(value, "evidence query", name === "anchor" || name === "attachment" ? 1024 : 128);
+  };
+  const evidenceRevision = (req: Request, required = false): number | undefined => {
+    const value = evidenceQuery(req, "revision", required);
+    if (value === undefined) return undefined;
+    if (!/^[1-9][0-9]*$/.test(value)) throw new TeamError("invalid_request", "Evidence revision is invalid");
+    return evidenceInteger(Number(value), "evidence revision", Number.MAX_SAFE_INTEGER, 1);
+  };
+  const evidenceAnchorQuery = (req: Request, field: "anchor" | "attachment"): unknown => {
+    try { return strictEvidenceJson(evidenceQuery(req, field)!, readerLimits({ maxDepth: 4 })); }
+    catch { throw new TeamError("invalid_request", "Evidence anchor query requires strict bounded JSON"); }
+  };
+  const evidenceJson = async (req: Request): Promise<unknown> => {
+    if (rawHeader(req, "content-type")?.split(";")[0].trim().toLowerCase() !== "application/json" || ![undefined, "identity"].includes(rawHeader(req, "content-encoding"))) throw new TeamError("unsupported_media_type", "Evidence controls accept uncompressed JSON only");
+    const bytes = await readBody(req, EVIDENCE_HEADER_BYTES);
+    try { return strictEvidenceJson(new TextDecoder("utf8", { fatal: true }).decode(bytes), readerLimits({ maxDepth: 16 })); }
+    catch { throw new TeamError("invalid_request", "Evidence controls require strict bounded UTF-8 JSON"); }
+  };
+  const readEvidence = (input: (req: Request) => TeamEvidenceRead) => (req: Request, context: ProjectContext) => store.readEvidence(context, input(req));
+  const writeEvidence = (input: (req: Request, body: unknown) => TeamEvidenceWrite) => async (req: Request, context: ProjectContext, generation: number) => {
+    const body = await evidenceJson(req);
+    store.assertEvidenceCurrent(context, generation);
+    store.evidenceAccess(context, input(req, body).kind === "inventory" ? "inventory_edit" : "import");
+    return store.writeEvidence(context, input(req, body));
+  };
+  app.get(`${evidence}/capabilities`, evidenceRoute("GET", [], "normalized_read", readEvidence(() => ({ kind: "capabilities" }))));
+  app.get(`${evidence}/inventories`, evidenceRoute("GET", ["anchor", "revision"], "normalized_read", readEvidence(req => ({ kind: "inventory", anchor: evidenceAnchorQuery(req, "anchor"), revision: evidenceRevision(req) }))));
+  app.put(`${evidence}/inventories`, evidenceRoute("PUT", [], "inventory_edit", writeEvidence((_req, body) => ({ kind: "inventory", value: body }))));
+  app.post(`${evidence}/imports`, evidenceRoute("POST", [], "import", (req, context) => {
+    if (rawHeader(req, "content-type") !== EVIDENCE_IMPORT_CONTENT_TYPE || ![undefined, "identity"].includes(rawHeader(req, "content-encoding"))) throw new TeamError("unsupported_media_type", "Evidence imports require the identity binary transport");
+    return store.receiveEvidence(context, req);
+  }));
+  app.get(`${evidence}/imports`, evidenceRoute("GET", ["operationKey"], "normalized_read", readEvidence(req => ({ kind: "operation", operationKey: evidenceQuery(req, "operationKey")! }))));
+  app.get(`${evidence}/imports/:id`, evidenceRoute("GET", [], "normalized_read", readEvidence(req => ({ kind: "job", id: req.params.id }))));
+  app.post(`${evidence}/imports/:id/cancel`, evidenceRoute("POST", [], "import", writeEvidence((req, body) => ({ kind: "cancel", id: req.params.id, value: body }))));
+  app.get(`${evidence}/sets`, evidenceRoute("GET", ["attachment"], "normalized_read", readEvidence(req => ({ kind: "sets", attachment: evidenceAnchorQuery(req, "attachment") }))));
+  app.get(`${evidence}/sets/:id`, evidenceRoute("GET", ["revision"], "normalized_read", readEvidence(req => ({ kind: "set", id: req.params.id, revision: evidenceRevision(req) }))));
+  app.get(`${evidence}/sets/:id/export`, evidenceRoute("GET", ["revision", "format"], "normalized_read", readEvidence(req => {
+    const format = evidenceQuery(req, "format")!;
+    if (format !== "json" && format !== "junit" && format !== "text") throw new TeamError("invalid_request", "Evidence export format is invalid");
+    return { kind: "export", id: req.params.id, revision: evidenceRevision(req, true)!, format };
+  })));
+  app.get(`${evidence}/sets/:id/raw/:sourceId`, evidenceRoute("GET", ["revision"], "raw_export", readEvidence(req => ({ kind: "raw", id: req.params.id, sourceId: req.params.sourceId, revision: evidenceRevision(req, true)! }))));
+  app.post(`${evidence}/sets/:id/reparse`, evidenceRoute("POST", [], "import", writeEvidence((req, body) => ({ kind: "reparse", id: req.params.id, value: body }))));
+  for (const target of ["raw", "normalized"] as const) app.delete(`${evidence}/sets/:id/retention/${target}`, evidenceRoute("DELETE", ["revision"], "delete", (req, context) => store.writeEvidence(context, { kind: "retention", id: req.params.id, revision: evidenceRevision(req, true)!, target: target === "raw" ? "raw_removed" : "normalized_removed" })));
+  app.delete(`${evidence}/all`, evidenceRoute("DELETE", [], "delete", (_req, context) => store.writeEvidence(context, { kind: "clear" })));
+
+  const prompts = `${p}/prompts`;
+  const promptRoute = (method: string, query: string[], capability: PromptCapability, work: (req: Request, context: ProjectContext, generation: PromptFence) => TeamPromptResponse | Promise<TeamPromptResponse>) =>
+    (req: Request, res: Response, next: NextFunction) => {
+      void (async () => {
+        if (req.method !== method || req.path.endsWith("/") || req.path.includes("%") || req.originalUrl.includes("#") || req.originalUrl.includes("\\") || new URL(req.originalUrl, "http://team.invalid").pathname !== req.originalUrl.split("?")[0]) throw new TeamError("invalid_request", "Prompt route is invalid");
+        promptId(req.params.projectId);
+        if (req.params.id !== undefined) promptId(req.params.id);
+        const seen = new Set<string>();
+        for (const [key] of new URL(req.originalUrl, "http://team.invalid").searchParams) {
+          if (!query.includes(key) || seen.has(key)) throw new TeamError("invalid_request", "Prompt query fields are invalid");
+          seen.add(key);
+        }
+        const context = scope(req), generation = store.promptGeneration(context, capability);
+        if (states.get(req)!.signal.aborted) throw new TeamError("conflict", "Prompt request was interrupted");
+        const response = await work(req, context, generation);
+        const current = store.promptGeneration(context, capability);
+        if (current.promptGeneration !== response.generation || current.evidenceGeneration !== response.evidenceGeneration || states.get(req)!.signal.aborted) throw new TeamError("conflict", "Prompt authority changed. Retry with current access.");
+        send(res, response.value, response.status, PROMPT_LIMITS.responseBytes);
+      })().catch(next);
+    };
+  const promptNumber = (value: unknown) => {
+    if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) throw new TeamError("invalid_request", "Prompt revision is invalid");
+    return promptInteger(Number(value), PROMPT_LIMITS.revisionsPerPrompt);
+  };
+  const promptBody = async (req: Request): Promise<unknown> => {
+    if (rawHeader(req, "content-type")?.split(";")[0].trim().toLowerCase() !== "application/json" || ![undefined, "identity"].includes(rawHeader(req, "content-encoding"))) throw new TeamError("unsupported_media_type", "Prompt controls accept uncompressed JSON only");
+    const bytes = await readBody(req, PROMPT_LIMITS.requestBytes);
+    try { return strictEvidenceJson(new TextDecoder("utf8", { fatal: true }).decode(bytes), readerLimits({ maxDepth: 4 })); }
+    catch { throw new TeamError("invalid_request", "Prompt controls require strict bounded UTF-8 JSON"); }
+  };
+  const promptRead = (input: (req: Request) => TeamPromptRead) => (req: Request, context: ProjectContext, generation: PromptFence) => store.readPrompt(context, input(req), generation);
+  const promptWrite = (input: (req: Request, body: unknown) => TeamPromptWrite) => async (req: Request, context: ProjectContext, generation: PromptFence) => store.writePrompt(context, input(req, await promptBody(req)), generation);
+  app.get(`${prompts}/capabilities`, promptRoute("GET", [], "read", promptRead(() => ({ kind: "capabilities" }))));
+  app.get(prompts, promptRoute("GET", ["cursor"], "read", promptRead(req => ({ kind: "list", cursor: req.query.cursor }))));
+  app.post(prompts, promptRoute("POST", [], "edit", promptWrite((_req, body) => ({ kind: "create", value: body }))));
+  app.post(`${prompts}/clear`, promptRoute("POST", [], "delete", promptWrite((_req, body) => ({ kind: "clear", value: body }))));
+  app.get(`${prompts}/:id/history`, promptRoute("GET", [], "read", promptRead(req => ({ kind: "history", id: req.params.id }))));
+  app.get(`${prompts}/:id/revisions/:revision`, promptRoute("GET", [], "read", promptRead(req => ({ kind: "revision", id: req.params.id, revision: promptNumber(req.params.revision) }))));
+  app.get(`${prompts}/:id/revisions/:revision/export`, promptRoute("GET", [], "read", promptRead(req => ({ kind: "export", id: req.params.id, revision: promptNumber(req.params.revision) }))));
+  app.post(`${prompts}/:id/revisions/:revision/compile`, promptRoute("POST", [], "read", promptWrite((req, body) => ({ kind: "compile", id: req.params.id, revision: promptNumber(req.params.revision), variables: promptObject(body, ["variables"]).variables }))));
+  app.post(`${prompts}/:id/revisions`, promptRoute("POST", [], "edit", promptWrite((req, body) => ({ kind: "append", id: req.params.id, value: body }))));
+  app.delete(`${prompts}/:id`, promptRoute("DELETE", ["expectedRevision"], "delete", (req, context, generation) => store.writePrompt(context, { kind: "delete", id: req.params.id, expectedRevision: promptNumber(req.query.expectedRevision) }, generation)));
   app.get(`${p}/members`, wrap((req, res) => send(res, store.listMembers(scope(req, "admin"), pageQuery(req)))));
   app.patch(`${p}/members/:userId`, wrap(async (req, res) => { const ctx = scope(req, "admin"), body = fields(await jsonBody(req), ["role"]); send(res, store.changeMemberRole(ctx, req.params.userId, body.role as Role)); }));
   app.delete(`${p}/members/:userId`, wrap((req, res) => { store.removeMember(scope(req, "admin"), req.params.userId); res.sendStatus(204); }));
@@ -221,7 +349,10 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
   app.delete(`${p}/keys/:keyId`, wrap((req, res) => { store.revokeKey(scope(req, "admin"), req.params.keyId); res.sendStatus(204); }));
   app.get(`${p}/runs`, wrap(async (req, res) => { const ctx = scope(req), result = await store.searchRuns(ctx, pageQuery(req, ["q", "status", "model", "provider", "from", "to"]) as PageQuery & RunFilters, states.get(req)!.signal); store.projectScope(authenticate(req).context, req.params.projectId); send(res, result, 200, L.SEARCH_BYTES); }));
   app.get(`${p}/runs/:runId`, wrap((req, res) => send(res, store.getRun(scope(req), req.params.runId, pageQuery(req)))));
-  app.delete(`${p}/runs/:runId`, wrap((req, res) => { store.deleteRun(scope(req, "admin"), req.params.runId); res.sendStatus(204); }));
+  app.delete(`${p}/runs/:runId`, wrap(async (req, res) => {
+    const context = scope(req, "admin"); await store.invalidateEvidenceRun(context, req.params.runId);
+    store.deleteRun(context, req.params.runId); res.sendStatus(204);
+  }));
   app.get(`${p}/runs/:runId/spans/:spanId`, wrap((req, res) => send(res, store.getSpan(scope(req), req.params.runId, req.params.spanId))));
   app.get(`${p}/runs/:runId/notes`, wrap((req, res) => send(res, store.listNotes(scope(req), req.params.runId, pageQuery(req)))));
   app.post(`${p}/runs/:runId/notes`, wrap(async (req, res) => { const ctx = scope(req, "editor"), body = fields(await jsonBody(req), ["spanId", "kind", "text"]); send(res, store.createNote(ctx, req.params.runId, body as unknown as NoteCreate), 201); }));
@@ -253,12 +384,15 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
   const uiDir = options.uiDir ?? await resolveBuiltAppDir();
   app.get("/", (_req, res) => res.redirect(302, "/team"));
   app.use("/assets", express.static(path.join(uiDir, "assets"), { dotfiles: "deny", fallthrough: false }));
+  app.use("/fonts", express.static(path.join(uiDir, "fonts"), { dotfiles: "deny", fallthrough: false }));
   app.get(["/favicon.ico", "/favicon.svg"], (req, res, next) => res.sendFile(path.join(uiDir, req.path), error => { if (error) next(new TeamError("not_found", "Resource not found")); }));
   app.get(["/team", "/team/*"], (_req, res, next) => res.sendFile(path.join(uiDir, "index.html"), error => { if (error) next(new TeamError("not_found", "Build the team UI before opening this page")); }));
   app.use((_req, _res, next) => next(new TeamError("not_found", "Resource not found")));
   app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
     if (res.headersSent || res.destroyed) return;
-    const safe = error instanceof TeamError ? error : new TeamError("internal_error", "Request failed");
+    const safe = error instanceof TeamError ? error : error instanceof EvidenceError || error instanceof PromptRegistryError
+      ? new TeamError(error.status === 403 ? "forbidden" : error.status === 404 ? "not_found" : error.status === 409 ? "conflict" : error.status === 413 ? "too_large" : "invalid_request", error.message)
+      : new TeamError("internal_error", "Request failed");
     if (safe.retryAfter !== undefined) res.setHeader("Retry-After", String(Math.min(3600, Math.max(1, Math.ceil(safe.retryAfter)))));
     if (safe.status === 401) {
       try {
@@ -274,6 +408,7 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
     if (closed) return; closed = true;
     checks.close();
     await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); });
+    await store.shutdownEvidence();
     socketRates.clear(); globalRates.clear(); sessionRates.clear(); keyRates.clear(); store.close();
   };
   return { app, server, store, config, bootstrapFile: bootstrap.file, close };

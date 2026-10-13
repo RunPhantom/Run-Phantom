@@ -1,7 +1,6 @@
 import { Database } from "bun:sqlite";
 import { and, asc, count, desc, eq, gte, inArray, isNull, like, ne, or, sql as drizzleSql, type SQL } from "drizzle-orm";
 import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
-import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import path from "path";
 import os from "os";
 import fs from "fs";
@@ -17,6 +16,7 @@ import { OTLP_EVIDENCE_LIMITS } from "./spans/otlp-evidence";
 import { activeLocalEvidenceAttachmentIds } from "./evaluations/evidence-inventory";
 import { EvidenceError } from "./evaluations/evidence-protocol";
 import { bridgeLegacyFindingMigration } from "./db/legacy-finding-migration";
+import { migrateDatabase } from "./db/migrate";
 
 const RUNPHANTOM_DB_PATH_ENV_VAR = "RUNPHANTOM_DB_PATH";
 
@@ -109,7 +109,7 @@ export function getDrizzleDb(): RunPhantomDb {
     // SQLite's immediate transaction coordinates the finite legacy backfill;
     // all startup work stays synchronous, before feature stores or listeners.
     const validateLegacyUpgrade = bridgeLegacyFindingMigration(_sqliteDb, migrationsFolder);
-    migrate(_drizzleDb, { migrationsFolder });
+    migrateDatabase(_sqliteDb, migrationsFolder);
     _sqliteDb.exec("PRAGMA foreign_keys = ON");
     _sqliteDb.exec("PRAGMA legacy_alter_table = OFF");
     validateLegacyUpgrade?.();
@@ -1023,6 +1023,7 @@ export function getRunsByConvoId(convoId: string) {
 
 export function clearAll() {
   getDrizzleDb().transaction((tx) => {
+    tx.delete(schema.review_queues).run();
     tx.delete(schema.evaluation_reviews).run();
     tx.delete(schema.evaluation_experiments).run();
     tx.delete(schema.evaluation_revisions).run();
