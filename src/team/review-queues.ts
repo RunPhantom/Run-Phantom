@@ -1,22 +1,15 @@
-import type { DatasetCase, DatasetRevision } from "../evaluations/protocol";
-import { EvaluationError, fields, object, parseId, parseVersion } from "../evaluations/validation";
+import type { DatasetCase, DatasetExport } from "../evaluations/protocol";
+import { EvaluationError, fields, object, parseId, parseVersion, parseCaseDrafts, parseDatasetCreate } from "../evaluations/validation";
+import { parseJsonEvidence } from "../evaluations/json-evidence";
+import { hasDuplicateJsonKeys } from "../json-keys";
 import { applyReviewMutation, assertReviewItemIntegrity, markReviewPromoted } from "../review-queues/state";
-import type { PromotionReceipt, ReviewItem, ReviewQueue, ReviewSchema, ReviewSource } from "../review-queues/protocol";
+import { REVIEW_LIMITS, type PromotionRequest, type ReviewItem, type ReviewSchema, type ReviewSource } from "../review-queues/protocol";
 import { canonicalReviewJson, compileReviewCase, parseQueueInsert, parseReviewDraft, parseReviewMutation, parseReviewSchema, parseReviewSource,
-  reviewHash, reviewItemId, reviewTimestamp } from "../review-queues/validation";
+  reviewHash, reviewItemId, reviewTimestamp, parseQueueCreate, parsePromotionRequest, parsePromotionReceipt, reviewDigest } from "../review-queues/validation";
 import { TeamError } from "./errors";
 import { redactTeamText } from "./ingest";
-import type { Role } from "./protocol";
-
-export interface TeamReviewActor { accountId: string; role: Role }
-export interface TeamApprovalWitness extends TeamReviewActor { approvedAt: number; revision: number; approvedHash: string }
-export interface TeamReviewQueue extends ReviewQueue { projectId: string }
-export interface TeamReviewItem extends Omit<ReviewItem, "reviewSource"> {
-  projectId: string; projectSourceHash: string;
-  reviewSource: "projectAccount" | null; approvalWitness: TeamApprovalWitness | null;
-}
-export interface TeamReviewDatasetRevision extends DatasetRevision { projectId: string }
-export interface TeamReviewReceipt extends PromotionReceipt { projectId: string; queueId: string; actor: TeamReviewActor }
+import type { TeamReviewActor, TeamReviewItem, TeamReviewReceipt, TeamReviewDatasetRevision } from "./review-queue-protocol";
+export * from "./review-queue-protocol";
 
 const itemFields = ["id", "queueId", "ordinal", "source", "sourceHash", "draft", "draftHash", "revision", "state", "approvedHash", "approvedAt", "reviewSource", "lastMutationId", "lastMutationHash", "promotedDatasetId", "promotedDatasetVersion", "promotedCaseId", "createdAt", "updatedAt", "projectId", "projectSourceHash", "approvalWitness"];
 const invalid = () => new TeamError("invalid_request", "Project review request is invalid or exceeds its bounds");
@@ -40,6 +33,57 @@ function actor(value: TeamReviewActor): TeamReviewActor {
 function safeTeamReview(value: unknown): void {
   const encoded = canonicalReviewJson(value);
   if (redactTeamText(encoded) !== encoded) throw invalid();
+}
+export function parseTeamReviewQueue(value: unknown): { name: string; schema: ReviewSchema } {
+  try { const parsed = parseQueueCreate(value); safeTeamReview(parsed); return parsed; } catch (error) { return mapped(error); }
+}
+export function parseTeamReviewDataset(value: unknown): { name: string } {
+  try { const parsed = parseDatasetCreate(value); safeTeamReview(parsed); return parsed; } catch (error) { return mapped(error); }
+}
+export function parseTeamReviewPromotion(value: unknown): PromotionRequest {
+  try {
+    const parsed = parsePromotionRequest(value); projectId(parsed.queueId); projectId(parsed.datasetId);
+    if (parsed.expectedDatasetVersion >= 20) throw new TeamError("conflict", "The dataset revision limit has been reached");
+    safeTeamReview(parsed); return parsed;
+  } catch (error) { return mapped(error); }
+}
+export function parseTeamReviewStored(text: string | null, limit: number): unknown {
+  try {
+    if (typeof text !== "string" || Buffer.byteLength(text) > limit || hasDuplicateJsonKeys(text)) throw integrity();
+    const parsed = parseJsonEvidence(text); canonicalReviewJson(parsed); return parsed;
+  } catch { throw integrity(); }
+}
+export function parseTeamReviewCases(value: unknown): DatasetCase[] {
+  try {
+    if (!Array.isArray(value) || value.length > 50) throw integrity();
+    const drafts = parseCaseDrafts(value.map(raw => {
+      const row = object(raw, "frozen case");
+      fields(row, ["id", "name", "input", "sourceRunId", "sourceSpanId", "sourceOutput", "tags", "rules", "sourceCapturedAt", "sourceRedacted", "sourceTruncated", "sourceSnapshotVersion"], "frozen case");
+      return { id: reviewDigest(row.id), name: row.name, ...(row.input === null ? {} : { input: row.input }), tags: row.tags, rules: row.rules };
+    }));
+    return value.map((raw, index) => {
+      const row = object(raw), draft = drafts[index];
+      if (typeof row.sourceRunId !== "string" || !/^[a-f0-9]{32}$/.test(row.sourceRunId)
+        || row.sourceSpanId !== null && (typeof row.sourceSpanId !== "string" || !/^[a-f0-9]{16}$/.test(row.sourceSpanId))
+        || row.sourceOutput !== null && (typeof row.sourceOutput !== "string" || Buffer.byteLength(row.sourceOutput) > REVIEW_LIMITS.MAX_SOURCE_BYTES)
+        || typeof row.sourceRedacted !== "boolean" || typeof row.sourceTruncated !== "boolean" || row.sourceSnapshotVersion !== 1) throw integrity();
+      const result: DatasetCase = { id: draft.id!, name: draft.name, input: draft.input ?? null, tags: draft.tags!, rules: draft.rules,
+        sourceRunId: row.sourceRunId, sourceSpanId: row.sourceSpanId as string | null, sourceOutput: row.sourceOutput as string | null,
+        sourceCapturedAt: reviewTimestamp(row.sourceCapturedAt), sourceRedacted: row.sourceRedacted, sourceTruncated: row.sourceTruncated, sourceSnapshotVersion: 1 };
+      safeTeamReview(result); if (canonicalReviewJson(raw) !== canonicalReviewJson(result)) throw integrity(); return result;
+    });
+  } catch { throw integrity(); }
+}
+export function parseTeamReviewReceipt(value: unknown): TeamReviewReceipt {
+  try {
+    const row = object(value), { projectId: project, queueId, actor: witness, ...core } = row;
+    const receipt = parsePromotionReceipt(core), result = { ...receipt, projectId: projectId(project), queueId: projectId(queueId), actor: actor(witness as TeamReviewActor) };
+    if (canonicalReviewJson(value) !== canonicalReviewJson(result)) throw integrity(); return result;
+  } catch { throw integrity(); }
+}
+export function exportTeamReviewRevision(revision: TeamReviewDatasetRevision): DatasetExport {
+  return { format: "runphantom-evaluations/v1", name: revision.datasetName,
+    cases: revision.cases.map(({ name, input, tags, rules }) => ({ name, ...(input === null ? {} : { input }), tags, rules })) };
 }
 function sourceIdentity(project: string, queueId: string, schema: ReviewSchema, source: ReviewSource): string {
   return reviewHash({ projectId: project, queueId, schemaHash: reviewHash(schema), source });
