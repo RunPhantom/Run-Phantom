@@ -13,5 +13,6 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["**/*.ts"]
+  "include": ["**/*.ts"],
+  "exclude": ["review-queue-component-server.ts", "review-queue-connected-server.ts"]
 }
