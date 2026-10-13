@@ -75,6 +75,7 @@ import {
   ACTIVE_WORKSPACE_MISSING_MESSAGE,
   type ActiveWorkspace,
   getActiveWorkspace,
+  getSelectedActiveWorkspace,
   setActiveWorkspace,
 } from "./active-workspace";
 import {
@@ -98,7 +99,9 @@ import {
 } from "./annotations";
 import { replayDefaultDemoTraces } from "./demo-traces";
 import { createVerificationService } from "./verification/service";
-import { createVerificationRouter } from "./verification/router";
+import { createVerificationRouter, verifyVerificationChangeRequest } from "./verification/router";
+import { ChangeContextReader } from "./verification/change-context";
+import { listReports } from "./verification/store";
 import { parseAppOrigin } from "./verification/bridge";
 import verificationSdk from "./verification/browser-sdk.js" with { type: "text" };
 import { VERIFICATION_LIMITS } from "./verification/protocol";
@@ -749,6 +752,10 @@ export async function createServer(port: number) {
   }
 
   const verification = createVerificationService({ broadcast, allowedSourceIps, allowedHosts });
+  const changeOwner = randomUUID();
+  const changes = new ChangeContextReader({ workspace: getSelectedActiveWorkspace,
+    authority: () => ({ id: changeOwner, role: "owner", generation: 1 }),
+    report: id => listReports().find(report => report.id === id) });
   const evaluations = createEvaluationService();
   server.on("upgrade", (req, socket, head) => {
     let pathname: string;
@@ -988,7 +995,7 @@ export async function createServer(port: number) {
     }
     next();
   });
-  app.use("/api/verification", express.json({ limit: VERIFICATION_LIMITS.MAX_FRAME_BYTES }));
+  app.use("/api/verification", express.json({ limit: VERIFICATION_LIMITS.MAX_FRAME_BYTES, verify: verifyVerificationChangeRequest }));
   app.use("/api/evaluations", express.json({
     limit: EVALUATION_LIMITS.MAX_REQUEST,
     verify: (_req, _res, body, encoding) => { parseJsonEvidence(new TextDecoder(encoding).decode(body)); },
@@ -1021,12 +1028,13 @@ export async function createServer(port: number) {
   });
 
   server.on("close", () => {
+    changes.close();
     askUserQuestions.closeAll();
     verification.close();
     evaluations.close();
   });
 
-  app.use("/api/verification", createVerificationRouter(verification));
+  app.use("/api/verification", createVerificationRouter(verification, { changeContext: changes }));
   app.use("/api/evaluations", createEvaluationRouter(evaluations));
 
   // Health check endpoint — used by SDKs to auto-detect a running debugger
