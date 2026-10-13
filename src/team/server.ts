@@ -9,6 +9,8 @@ import { parseJsonEvidence } from "../evaluations/json-evidence";
 import { TeamStore, type SessionContext, type ProjectContext } from "./store";
 import { TeamCheckService } from "./checks";
 import type { TeamEvidenceRead, TeamEvidenceWrite, TeamEvidenceResponse } from "./evidence";
+import type { TeamPromptRead, TeamPromptWrite, TeamPromptResponse } from "./prompts";
+import { PROMPT_LIMITS, PromptRegistryError, promptId, promptInteger, promptObject, type PromptCapability, type PromptFence } from "../prompts/protocol";
 import { EvidenceError, type EvidenceCapability } from "../evaluations/evidence-protocol";
 import { EVIDENCE_HEADER_BYTES, EVIDENCE_IMPORT_CONTENT_TYPE } from "../evaluations/evidence-import";
 import { evidenceInteger, evidenceText } from "../evaluations/evidence-validation";
@@ -293,6 +295,49 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
   app.post(`${evidence}/sets/:id/reparse`, evidenceRoute("POST", [], "import", writeEvidence((req, body) => ({ kind: "reparse", id: req.params.id, value: body }))));
   for (const target of ["raw", "normalized"] as const) app.delete(`${evidence}/sets/:id/retention/${target}`, evidenceRoute("DELETE", ["revision"], "delete", (req, context) => store.writeEvidence(context, { kind: "retention", id: req.params.id, revision: evidenceRevision(req, true)!, target: target === "raw" ? "raw_removed" : "normalized_removed" })));
   app.delete(`${evidence}/all`, evidenceRoute("DELETE", [], "delete", (_req, context) => store.writeEvidence(context, { kind: "clear" })));
+
+  const prompts = `${p}/prompts`;
+  const promptRoute = (method: string, query: string[], capability: PromptCapability, work: (req: Request, context: ProjectContext, generation: PromptFence) => TeamPromptResponse | Promise<TeamPromptResponse>) =>
+    (req: Request, res: Response, next: NextFunction) => {
+      void (async () => {
+        if (req.method !== method || req.path.endsWith("/") || req.path.includes("%") || req.originalUrl.includes("#") || req.originalUrl.includes("\\") || new URL(req.originalUrl, "http://team.invalid").pathname !== req.originalUrl.split("?")[0]) throw new TeamError("invalid_request", "Prompt route is invalid");
+        promptId(req.params.projectId);
+        if (req.params.id !== undefined) promptId(req.params.id);
+        const seen = new Set<string>();
+        for (const [key] of new URL(req.originalUrl, "http://team.invalid").searchParams) {
+          if (!query.includes(key) || seen.has(key)) throw new TeamError("invalid_request", "Prompt query fields are invalid");
+          seen.add(key);
+        }
+        const context = scope(req), generation = store.promptGeneration(context, capability);
+        if (states.get(req)!.signal.aborted) throw new TeamError("conflict", "Prompt request was interrupted");
+        const response = await work(req, context, generation);
+        const current = store.promptGeneration(context, capability);
+        if (current.promptGeneration !== response.generation || current.evidenceGeneration !== response.evidenceGeneration || states.get(req)!.signal.aborted) throw new TeamError("conflict", "Prompt authority changed. Retry with current access.");
+        send(res, response.value, response.status, PROMPT_LIMITS.responseBytes);
+      })().catch(next);
+    };
+  const promptNumber = (value: unknown) => {
+    if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) throw new TeamError("invalid_request", "Prompt revision is invalid");
+    return promptInteger(Number(value), PROMPT_LIMITS.revisionsPerPrompt);
+  };
+  const promptBody = async (req: Request): Promise<unknown> => {
+    if (rawHeader(req, "content-type")?.split(";")[0].trim().toLowerCase() !== "application/json" || ![undefined, "identity"].includes(rawHeader(req, "content-encoding"))) throw new TeamError("unsupported_media_type", "Prompt controls accept uncompressed JSON only");
+    const bytes = await readBody(req, PROMPT_LIMITS.requestBytes);
+    try { return strictEvidenceJson(new TextDecoder("utf8", { fatal: true }).decode(bytes), readerLimits({ maxDepth: 4 })); }
+    catch { throw new TeamError("invalid_request", "Prompt controls require strict bounded UTF-8 JSON"); }
+  };
+  const promptRead = (input: (req: Request) => TeamPromptRead) => (req: Request, context: ProjectContext, generation: PromptFence) => store.readPrompt(context, input(req), generation);
+  const promptWrite = (input: (req: Request, body: unknown) => TeamPromptWrite) => async (req: Request, context: ProjectContext, generation: PromptFence) => store.writePrompt(context, input(req, await promptBody(req)), generation);
+  app.get(`${prompts}/capabilities`, promptRoute("GET", [], "read", promptRead(() => ({ kind: "capabilities" }))));
+  app.get(prompts, promptRoute("GET", ["cursor"], "read", promptRead(req => ({ kind: "list", cursor: req.query.cursor }))));
+  app.post(prompts, promptRoute("POST", [], "edit", promptWrite((_req, body) => ({ kind: "create", value: body }))));
+  app.post(`${prompts}/clear`, promptRoute("POST", [], "delete", promptWrite((_req, body) => ({ kind: "clear", value: body }))));
+  app.get(`${prompts}/:id/history`, promptRoute("GET", [], "read", promptRead(req => ({ kind: "history", id: req.params.id }))));
+  app.get(`${prompts}/:id/revisions/:revision`, promptRoute("GET", [], "read", promptRead(req => ({ kind: "revision", id: req.params.id, revision: promptNumber(req.params.revision) }))));
+  app.get(`${prompts}/:id/revisions/:revision/export`, promptRoute("GET", [], "read", promptRead(req => ({ kind: "export", id: req.params.id, revision: promptNumber(req.params.revision) }))));
+  app.post(`${prompts}/:id/revisions/:revision/compile`, promptRoute("POST", [], "read", promptWrite((req, body) => ({ kind: "compile", id: req.params.id, revision: promptNumber(req.params.revision), variables: promptObject(body, ["variables"]).variables }))));
+  app.post(`${prompts}/:id/revisions`, promptRoute("POST", [], "edit", promptWrite((req, body) => ({ kind: "append", id: req.params.id, value: body }))));
+  app.delete(`${prompts}/:id`, promptRoute("DELETE", ["expectedRevision"], "delete", (req, context, generation) => store.writePrompt(context, { kind: "delete", id: req.params.id, expectedRevision: promptNumber(req.query.expectedRevision) }, generation)));
   app.get(`${p}/members`, wrap((req, res) => send(res, store.listMembers(scope(req, "admin"), pageQuery(req)))));
   app.patch(`${p}/members/:userId`, wrap(async (req, res) => { const ctx = scope(req, "admin"), body = fields(await jsonBody(req), ["role"]); send(res, store.changeMemberRole(ctx, req.params.userId, body.role as Role)); }));
   app.delete(`${p}/members/:userId`, wrap((req, res) => { store.removeMember(scope(req, "admin"), req.params.userId); res.sendStatus(204); }));
@@ -339,12 +384,13 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
   const uiDir = options.uiDir ?? await resolveBuiltAppDir();
   app.get("/", (_req, res) => res.redirect(302, "/team"));
   app.use("/assets", express.static(path.join(uiDir, "assets"), { dotfiles: "deny", fallthrough: false }));
+  app.use("/fonts", express.static(path.join(uiDir, "fonts"), { dotfiles: "deny", fallthrough: false }));
   app.get(["/favicon.ico", "/favicon.svg"], (req, res, next) => res.sendFile(path.join(uiDir, req.path), error => { if (error) next(new TeamError("not_found", "Resource not found")); }));
   app.get(["/team", "/team/*"], (_req, res, next) => res.sendFile(path.join(uiDir, "index.html"), error => { if (error) next(new TeamError("not_found", "Build the team UI before opening this page")); }));
   app.use((_req, _res, next) => next(new TeamError("not_found", "Resource not found")));
   app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
     if (res.headersSent || res.destroyed) return;
-    const safe = error instanceof TeamError ? error : error instanceof EvidenceError
+    const safe = error instanceof TeamError ? error : error instanceof EvidenceError || error instanceof PromptRegistryError
       ? new TeamError(error.status === 403 ? "forbidden" : error.status === 404 ? "not_found" : error.status === 409 ? "conflict" : error.status === 413 ? "too_large" : "invalid_request", error.message)
       : new TeamError("internal_error", "Request failed");
     if (safe.retryAfter !== undefined) res.setHeader("Retry-After", String(Math.min(3600, Math.max(1, Math.ceil(safe.retryAfter)))));

@@ -478,3 +478,49 @@ export const review_queue_promotions = sqliteTable("review_queue_promotions", {
   uniqueIndex("review_queue_promotions_key_unique").on(t.queue_id, t.idempotency_key), index("review_queue_promotions_dataset").on(t.dataset_id, t.dataset_version),
   foreignKey({ columns: [t.dataset_id, t.dataset_version], foreignColumns: [evaluation_revisions.dataset_id, evaluation_revisions.version] }).onDelete("cascade"),
 ]);
+
+export const prompt_scope_controls = sqliteTable("prompt_scope_controls", {
+  scope_key: text("scope_key").primaryKey().notNull().references(() => evaluation_evidence_scopes.scope_key, { onDelete: "cascade" }),
+  generation: integer("generation").notNull().default(1),
+}, t => [
+  check("prompt_scope_controls_scope", sql`length(cast(${t.scope_key} AS BLOB)) BETWEEN 1 AND 128`),
+  check("prompt_scope_controls_generation", sql`typeof(${t.generation})='integer' AND ${t.generation} BETWEEN 1 AND 9007199254740991`),
+]);
+
+export const prompt_heads = sqliteTable("prompt_heads", {
+  scope_key: text("scope_key").notNull().references(() => evaluation_evidence_scopes.scope_key, { onDelete: "cascade" }),
+  id: text("id").notNull(), revision: integer("revision").notNull(), deleted: integer("deleted").notNull().default(0),
+  create_operation_key: text("create_operation_key").notNull(), create_request_digest: text("create_request_digest").notNull(),
+  created_at: integer("created_at").notNull(), updated_at: integer("updated_at").notNull(),
+}, t => [
+  primaryKey({ columns: [t.scope_key, t.id] }),
+  uniqueIndex("prompt_heads_create_operation_unique").on(t.scope_key, t.create_operation_key),
+  index("prompt_heads_scope").on(t.scope_key, t.deleted, desc(t.updated_at), desc(t.id)),
+  check("prompt_heads_id", sql`length(${t.id})=36`),
+  check("prompt_heads_revision", sql`${t.revision} BETWEEN 1 AND 32`),
+  check("prompt_heads_deleted", sql`${t.deleted} IN (0,1)`),
+  check("prompt_heads_operation", sql`length(${t.create_operation_key})=36`),
+  check("prompt_heads_digest", sql`length(${t.create_request_digest})=64`),
+  check("prompt_heads_created", sql`${t.created_at}>=0`),
+  check("prompt_heads_updated", sql`${t.updated_at}>=${t.created_at}`),
+]);
+
+export const prompt_revisions = sqliteTable("prompt_revisions", {
+  scope_key: text("scope_key").notNull(), id: text("id").notNull(), revision: integer("revision").notNull(),
+  name: text("name").notNull(), template: text("template").notNull(), template_sha256: text("template_sha256").notNull(),
+  variable_names: text("variable_names").notNull(), policy: text("policy").notNull(),
+  operation_key: text("operation_key").notNull(), request_digest: text("request_digest").notNull(), created_at: integer("created_at").notNull(),
+}, t => [
+  primaryKey({ columns: [t.scope_key, t.id, t.revision] }),
+  uniqueIndex("prompt_revisions_operation_unique").on(t.scope_key, t.operation_key),
+  foreignKey({ columns: [t.scope_key, t.id], foreignColumns: [prompt_heads.scope_key, prompt_heads.id] }).onDelete("cascade"),
+  check("prompt_revisions_revision", sql`${t.revision} BETWEEN 1 AND 32`),
+  check("prompt_revisions_name", sql`length(cast(${t.name} AS BLOB)) BETWEEN 1 AND 256`),
+  check("prompt_revisions_template", sql`length(cast(${t.template} AS BLOB))<=32768`),
+  check("prompt_revisions_hash", sql`length(${t.template_sha256})=64`),
+  check("prompt_revisions_schema", sql`json_valid(${t.variable_names}) AND length(cast(${t.variable_names} AS BLOB))<=4353`),
+  check("prompt_revisions_policy", sql`${t.policy}='literal-v1'`),
+  check("prompt_revisions_operation", sql`length(${t.operation_key})=36`),
+  check("prompt_revisions_digest", sql`length(${t.request_digest})=64`),
+  check("prompt_revisions_created", sql`${t.created_at}>=0`),
+]);

@@ -407,17 +407,17 @@ export function safeStringify(value: unknown): string {
 export { isSensitiveKey, scrubKnownSecrets };
 
 /** Secret scrubbing runs before truncation, so cutting a token never defeats its recognizer. */
-export function redactText(text: string): string {
+export function redactText(text: string, isSensitive: (key: string) => boolean = isSensitiveKey): string {
   return scrubKnownSecrets(text)
     // Redact the complete scheme credential before the generic key/value pass, which
     // would otherwise remove only "Bearer" and leave an arbitrary token behind.
     .replace(/\bauthorization["']?\s*[:=]\s*["']?(?:bearer|basic)\s+[^\s"'&,;}]+/gi, `authorization: ${REDACTED_VALUE}`)
     .replace(/\b(Bearer|Basic)\s+(?=[A-Za-z0-9._~+/=-]{16,})(?=[A-Za-z0-9._~+/=-]*[\d._~+/=-])[A-Za-z0-9._~+/=-]+/gi,
       (_match, scheme: string) => `${scheme} ${REDACTED_VALUE}`)
-    .replace(/https?:\/\/[^\s<>"']+/gi, (url) => redactUrl(url))
+    .replace(/https?:\/\/[^\s<>"']+/gi, (url) => redactUrl(url, isSensitive))
     .replace(/(^|[\s?&#,;{"'])([A-Za-z][A-Za-z0-9_.-]{0,127})(\s*[=:]\s*["']?)([^&\s,;"'}]+)/g,
       (match, prefix: string, key: string, separator: string) =>
-        isSensitiveKey(key) ? `${prefix}${key}${separator}${REDACTED_VALUE}` : match);
+        isSensitive(key) ? `${prefix}${key}${separator}${REDACTED_VALUE}` : match);
 }
 
 /** Apply the same wire redaction again immediately before report/flow persistence. */

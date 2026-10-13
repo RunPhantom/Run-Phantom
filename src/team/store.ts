@@ -7,6 +7,9 @@ import { initializeTeamSchema } from "./store-schema";
 import type { IncomingMessage } from "node:http";
 import { TeamEvidence, teamEvidenceAccess, type TeamEvidenceRead, type TeamEvidenceWrite, type TeamEvidenceResponse } from "./evidence";
 import { EvidenceStore } from "../evaluations/evidence-store";
+import { PromptRegistry } from "../prompts/registry";
+import type { PromptCapability, PromptFence } from "../prompts/protocol";
+import { readTeamPrompt, writeTeamPrompt, teamPromptOperation, type TeamPromptRead, type TeamPromptWrite, type TeamPromptResponse } from "./prompts";
 import { EvidenceError, type EvidenceCapability, type EvidenceAttachment } from "../evaluations/evidence-protocol";
 import type { EvidenceOwner, EvidenceInventoryAnchor, EvidenceAnchorIdentity } from "../evaluations/evidence-inventory";
 import { evidenceInteger, parseEvidenceAttachment, parseEvidenceScope } from "../evaluations/evidence-validation";
@@ -227,6 +230,21 @@ export class TeamStore {
   receiveEvidence(context: ProjectContext, request: IncomingMessage): Promise<TeamEvidenceResponse> { return this.#evidence.receive(this.#evidenceOwner(context), request); }
   evidenceGeneration(context: ProjectContext): number { return this.#db.transaction(() => this.#evidence.generation(this.#evidenceOwner(context))).immediate(); }
   assertEvidenceCurrent(context: ProjectContext, generation: number): void { this.#evidence.assertCurrent(this.#evidenceOwner(context), generation); }
+  #promptRegistry(context: ProjectContext): PromptRegistry {
+    const current = this.#project(context);
+    return new PromptRegistry({ database: this.#db, scope: { kind: "project", id: current.projectId }, authorize: capability => {
+      this.#project(context, capability === "delete" ? "admin" : capability === "edit" ? "editor" : "viewer");
+    } });
+  }
+  promptGeneration(context: ProjectContext, capability: PromptCapability): PromptFence {
+    return teamPromptOperation(() => this.#promptRegistry(context).capture(capability));
+  }
+  readPrompt(context: ProjectContext, input: TeamPromptRead, generation: PromptFence): TeamPromptResponse {
+    return readTeamPrompt(this.#promptRegistry(context), input, generation);
+  }
+  writePrompt(context: ProjectContext, input: TeamPromptWrite, generation: PromptFence): TeamPromptResponse {
+    return writeTeamPrompt(this.#promptRegistry(context), input, generation);
+  }
   async invalidateEvidenceRun(context: ProjectContext, id: string): Promise<void> {
     this.#db.transaction(() => { this.#project(context, "admin"); this.#evidenceAnchor(context, { kind: "run", id }); }).immediate();
     await this.#evidence.invalidateRun(this.#evidenceOwner(context), id);
@@ -251,6 +269,8 @@ export class TeamStore {
       if (this.#count("SELECT COUNT(*) AS n FROM projects") >= L.PROJECTS) throw quota();
       const id = randomUUID(), now = this.#now();
       this.#run("INSERT INTO projects(id,name,created_at) VALUES(?,?,?)", id, name, now);
+      this.#run("INSERT INTO prompt_scope_controls(scope_key,generation) SELECT scope_key,1 FROM evaluation_evidence_scopes WHERE scope_key=?", "project:" + id);
+      if (!this.#get("SELECT scope_key FROM prompt_scope_controls WHERE scope_key=?", "project:" + id)) throw new TeamError("conflict", "Team prompt scope is unavailable");
       this.#run("INSERT INTO memberships(project_id,account_id,role,joined_at) VALUES(?,?,'admin',?)", id, current.user.id, now);
       this.#audit({ ...current, projectId: id, role: "admin" }, "project.created", { type: "project", id });
       return { id, name, createdAt: now, role: "admin" };

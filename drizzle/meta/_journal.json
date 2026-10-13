@@ -85,6 +85,13 @@
       "when": 1791766000002,
       "tag": "0011_review_queues",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1791766000003,
+      "tag": "0012_prompt_registry",
+      "breakpoints": true
     }
   ]
 }

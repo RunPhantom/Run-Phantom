@@ -1,3 +1,4 @@
+import { boundedPromptJson } from "../components/prompts/client";
 import type { ApiError, SessionResponse } from "../../../src/team/protocol";
 export type * from "../../../src/team/protocol";
 
@@ -24,6 +25,17 @@ export class TeamClient {
   }
 
   async request<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
+    return this.jsonRequest(path, options, false);
+  }
+
+  /** Prompt transport keeps the ordinary Team request budget unchanged. */
+  async prompts<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
+    if (!/^\/projects\/[0-9a-f-]{36}\/prompts(?:\/|\?|$)/.test(path) || path.includes("#") || path.includes("\\")) throw new TeamApiError(400, "invalid_request", "Choose a project prompt endpoint.");
+    if (options.body !== undefined && new TextEncoder().encode(JSON.stringify(options.body)).byteLength > 65536) throw new TeamApiError(413, "too_large", "Prompt request exceeds its limit.");
+    return this.jsonRequest(path, options, true);
+  }
+
+  private async jsonRequest<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal }, prompt: boolean): Promise<T> {
     const generation = this.generation;
     const project = path.match(/^\/projects\/([^/?]+)(?:\/|$)/)?.[1];
     const projectGeneration = project ? this.projectGenerations.get(project) ?? 0 : 0;
@@ -38,7 +50,7 @@ export class TeamClient {
       method, headers, credentials: "same-origin", cache: "no-store", signal: options.signal,
       ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
     });
-    const data: unknown = response.status === 204 ? undefined : await response.json().catch(() => undefined);
+    const data: unknown = response.status === 204 ? undefined : prompt ? await boundedPromptJson(response) : await response.json().catch(() => undefined);
     if (generation !== this.generation || options.signal?.aborted || project && !membershipRead && projectGeneration !== (this.projectGenerations.get(project) ?? 0)) throw new DOMException("Request superseded", "AbortError");
     if (!response.ok) {
       const failure = (data as ApiError | undefined)?.error;

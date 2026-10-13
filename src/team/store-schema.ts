@@ -1,8 +1,10 @@
 import type { Database } from "bun:sqlite";
 import { EVIDENCE_STORAGE_SQL } from "../evaluations/evidence-store";
+import { PROMPT_STORAGE_SQL } from "../prompts/storage";
 import { TeamError } from "./errors";
+import { TEAM_LIMITS } from "./protocol";
 
-export const TEAM_SCHEMA_VERSION = 2;
+export const TEAM_SCHEMA_VERSION = 3;
 
 const TEAM_V1_SQL = `
       CREATE TABLE team_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -118,8 +120,8 @@ type SchemaObject = { name: string; type: string; sql: string };
 const normalizedSql = (sql: string) => sql.replace(/\s+/g, " ").trim().replace(/;$/, "");
 function expectedSchema(sql: string): Map<string, SchemaObject> {
   const objects = new Map<string, SchemaObject>();
-  for (const match of sql.matchAll(/CREATE (TABLE|INDEX) (\w+) [\s\S]*?;/g)) {
-    objects.set(match[2], { name: match[2], type: match[1].toLowerCase(), sql: normalizedSql(match[0]) });
+  for (const match of sql.matchAll(/CREATE (TABLE|(?:UNIQUE )?INDEX) (\w+) [\s\S]*?;/g)) {
+    objects.set(match[2], { name: match[2], type: match[1] === "TABLE" ? "table" : "index", sql: normalizedSql(match[0]) });
   }
   for (const match of sql.matchAll(/CREATE TRIGGER (\w+) [\s\S]*?\bEND;/g)) {
     objects.set(match[1], { name: match[1], type: "trigger", sql: normalizedSql(match[0]) });
@@ -128,8 +130,9 @@ function expectedSchema(sql: string): Map<string, SchemaObject> {
 }
 const v1Schema = expectedSchema(TEAM_V1_SQL);
 const v2Schema = expectedSchema(`${TEAM_V1_SQL}\n${TEAM_EVIDENCE_SQL}`);
+const v3Schema = expectedSchema(`${TEAM_V1_SQL}\n${TEAM_EVIDENCE_SQL}\n${PROMPT_STORAGE_SQL}`);
 function knownTeamSchema(db: Database, version: number): void {
-  const expected = version === 1 ? v1Schema : v2Schema;
+  const expected = version === 1 ? v1Schema : version === 2 ? v2Schema : v3Schema;
   const actual = db.query("SELECT name,type,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'").all() as SchemaObject[];
   if (actual.length !== expected.size || actual.some(row => {
     const object = expected.get(row.name);
@@ -139,11 +142,11 @@ function knownTeamSchema(db: Database, version: number): void {
   if (!initialized || !["0", "1"].includes(initialized.value)) throw new TeamError("conflict", "The selected database is not an initialized team database");
 }
 
-/** Only the Team migration coordinator installs evidence; request handlers never create tables. */
+/** Only the Team migration coordinator installs tables; request handlers never create them. */
 export function initializeTeamSchema(db: Database): void {
   db.transaction(() => {
     const version = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
-    if (![0, 1, TEAM_SCHEMA_VERSION].includes(version)) throw new TeamError("conflict", "Unsupported team database version");
+    if (![0, 1, 2, TEAM_SCHEMA_VERSION].includes(version)) throw new TeamError("conflict", "Unsupported team database version");
     if (version === 0) {
       const objects = db.query("SELECT name FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'").all();
       if (objects.length) throw new TeamError("conflict", "The selected database is not an initialized team database");
@@ -153,7 +156,16 @@ export function initializeTeamSchema(db: Database): void {
       throw new TeamError("conflict", "Team evidence storage requires foreign key enforcement");
     }
     if (version === 0) db.exec(TEAM_V1_SQL);
-    db.exec(TEAM_EVIDENCE_SQL);
-    db.exec("INSERT INTO evaluation_evidence_scopes(scope_key,generation,active) SELECT 'project:'||id,1,1 FROM projects; INSERT INTO team_evidence_scopes(project_id,scope_key) SELECT id,'project:'||id FROM projects; PRAGMA user_version=2;");
+    if (version < 2) {
+      db.exec(TEAM_EVIDENCE_SQL);
+      db.exec("INSERT INTO evaluation_evidence_scopes(scope_key,generation,active) SELECT 'project:'||id,1,1 FROM projects; INSERT INTO team_evidence_scopes(project_id,scope_key) SELECT id,'project:'||id FROM projects; PRAGMA user_version=2;");
+    }
+    const projects = (db.query("SELECT count(*) AS n FROM projects").get() as { n: number }).n;
+    const scopes = (db.query("SELECT count(*) AS n FROM team_evidence_scopes").get() as { n: number }).n;
+    const referenced = (db.query("SELECT count(*) AS n FROM team_evidence_scopes t JOIN evaluation_evidence_scopes e ON e.scope_key=t.scope_key").get() as { n: number }).n;
+    if (projects > TEAM_LIMITS.PROJECTS || scopes !== projects || referenced !== scopes) throw new TeamError("conflict", "Team prompt scopes are unavailable");
+    db.exec(PROMPT_STORAGE_SQL);
+    db.exec("INSERT INTO prompt_scope_controls(scope_key,generation) SELECT t.scope_key,1 FROM team_evidence_scopes t JOIN evaluation_evidence_scopes e ON e.scope_key=t.scope_key");
+    db.exec("PRAGMA user_version=3");
   }).immediate();
 }
