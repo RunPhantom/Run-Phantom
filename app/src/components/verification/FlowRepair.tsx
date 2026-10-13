@@ -5,9 +5,13 @@ import { verificationApi, type VerificationFlow } from "../../api/verification";
 import type { FlowRepairProposal } from "../../../../src/verification/protocol";
 import { relativeTargets, type FlowAnchor } from "../../../../src/verification/protocol";
 import { C } from "../../utils/colors";
+import "./FlowRepair.css";
 
 function describe(anchor: FlowAnchor): string {
-  return anchor.kind === "css" ? `CSS: ${anchor.selector}` : `${JSON.stringify(anchor.query)} · instance: ${anchor.instance.tag}, ${anchor.instance.name || anchor.instance.label || anchor.instance.testId}`;
+  if (anchor.kind === "css") return `CSS: ${anchor.selector}`;
+  const query = anchor.query;
+  const address = query.kind === "test-id" ? `Test id: ${query.testId}` : query.kind === "role" ? `Role: ${query.role}${query.name ? ` · Name: ${query.name}` : ""}` : query.kind === "label" ? `Label: ${query.label}` : `Name: ${query.name}`;
+  return `${address} · ${anchor.instance.role || anchor.instance.tag}: ${anchor.instance.name || anchor.instance.label || anchor.instance.testId}`;
 }
 function source(anchor: FlowAnchor): string {
   return anchor.kind === "semantic" && anchor.source?.status === "captured" ? `${anchor.source.file}:${anchor.source.line}${anchor.source.column === undefined ? "" : `:${anchor.source.column}`} (${anchor.source.scope}, SDK-reported)` : "Source unavailable or unrecorded";
@@ -36,10 +40,10 @@ export function FlowRepair({ flow, sessionId, available, disabled, onCommitted }
     catch (cause) { if (currentScope.current === owned && ticket.current === sequence) setError(cause instanceof Error ? cause.message : "Repair review failed."); }
     finally { running.current = false; setBusy(false); }
   }
-  return <div className="w-full min-w-0 space-y-3">
+  return <div className="flow-repair w-full min-w-0 space-y-3">
     <Button variant="outline" size="sm" disabled={disabled || busy || !editable.length} aria-expanded={open} aria-label={`Review repair for ${flow.name}`} onClick={() => { setOpen(!open); setStep(editable[0] ?? 0); }}>Review repair</Button>
     {open && <section aria-label={`Repair ${flow.name}`} className="space-y-4 rounded-md border p-4 text-xs" style={{ borderColor: C.border, background: C.surface }}>
-      <h4 className="text-sm font-semibold" style={{ color: C.fg3 }}>Review a durable anchor</h4>
+      <h4 className="flow-repair-heading text-sm font-semibold" style={{ color: C.fg3 }}>Review a durable anchor</h4>
       <p style={{ color: C.fg1 }}>Discover current matches, compare the old and proposed identity, then select one candidate. Saving a repair changes this flow only. Replay is a separate action.</p>
       <p className="break-words">Version {flow.version} · revision {flow.revision.slice(0, 12)}</p>
       {!available && <p role="status" style={{ color: C.orange }}>Select a connected app at this origin with semantic discovery to review a repair.</p>}
@@ -49,7 +53,7 @@ export function FlowRepair({ flow, sessionId, available, disabled, onCommitted }
           const owned = currentScope.current; setProposal(null); setSelected("");
           const result = await verificationApi.proposeRepair(flow.id, sessionId, step);
           if (owned === currentScope.current) setProposal(result);
-        })}>Propose repair</Button>
+        })} className="flow-repair-primary">Propose repair</Button>
       </fieldset>
       {currentProposal && <div className="space-y-3">
         <p className="break-words" aria-label="Original anchor">Old: {describe(currentProposal.oldAnchor)}</p>
@@ -64,10 +68,10 @@ export function FlowRepair({ flow, sessionId, available, disabled, onCommitted }
             <span className="min-w-0 break-words">New: {describe(candidate.anchor)}<br />New source: {source(candidate.anchor)} · comparison: {candidate.sourceMatch}<br />{candidate.reason}</span>
           </label>)}
         </fieldset>
-        <div className="flex flex-wrap gap-2"><Button size="sm" disabled={disabled || busy || !selected || !available} onClick={() => void perform(async () => {
+        <div className="flow-repair-actions flex flex-wrap gap-2"><Button size="sm" disabled={disabled || busy || !selected || !available} onClick={() => void perform(async () => {
           await verificationApi.commitRepair(flow.id, currentProposal.id, selected, currentProposal.revision);
           setProposal(null); setSelected(""); setNotice("Reviewed repair saved. Replay separately to check the outcome."); await onCommitted();
-        })}>Commit selected repair</Button><Button size="sm" variant="ghost" disabled={disabled || busy} onClick={() => void perform(async () => { await verificationApi.cancelRepair(flow.id, currentProposal.id); setProposal(null); setSelected(""); setNotice("Repair canceled. Saved flow unchanged."); })}>Cancel repair</Button></div>
+        })} className="flow-repair-primary">Commit selected repair</Button><Button size="sm" variant="ghost" disabled={disabled || busy} onClick={() => void perform(async () => { await verificationApi.cancelRepair(flow.id, currentProposal.id); setProposal(null); setSelected(""); setNotice("Repair canceled. Saved flow unchanged."); })}>Cancel repair</Button></div>
       </div>}
       <div role="status" aria-live="polite">{busy ? "Reading or saving the review…" : notice}</div>
       {error && <p role="alert" className="break-words" style={{ color: C.red }}>{error}</p>}

@@ -5,7 +5,7 @@ import { sanitizeWithReport } from "../../serialization.js";
 import { collectSemanticElements, matchesSemanticQuery, SEMANTIC_LIMITS, type SemanticCoverage, type SemanticElement } from "./query.js";
 import { LiveElementRefs, LiveRefError } from "./refs.js";
 
-export const DISCOVERY_SOURCE_LIMITS = { controls: 32, timeMs: 8 } as const;
+export const DISCOVERY_SOURCE_LIMITS = { controls: 16, timeMs: 8 } as const;
 type SourceReader = (element: Element) => ControlSourceObservation;
 type Sanitize = (value: unknown) => { value: unknown; truncated: boolean };
 
@@ -14,7 +14,7 @@ function incomplete(coverage: SemanticCoverage, reason: string): void {
   if (!coverage.reasons.includes(reason)) coverage.reasons.push(reason);
 }
 
-function summary(entry: SemanticElement, refs: LiveElementRefs, sanitize: Sanitize, coverage: SemanticCoverage, source?: SourceReader): SemanticSummary {
+function summary(entry: SemanticElement, refs: LiveElementRefs, sanitize: Sanitize, coverage: SemanticCoverage, source?: SourceReader, revalidateSource?: SourceReader): SemanticSummary {
   let truncated = entry.nameTruncated;
   const text = (value: string): string => {
     const safe = sanitize(value);
@@ -24,14 +24,15 @@ function summary(entry: SemanticElement, refs: LiveElementRefs, sanitize: Saniti
     return output.slice(0, SEMANTIC_LIMITS.name);
   };
   const name = text(entry.name); const label = text(entry.label); const testId = text(entry.testId); const role = text(entry.role); const tag = text(entry.element.localName);
+  const controlSource = source?.(entry.element);
   let ref: string | undefined;
   try {
-    const raw = refs.refFor(entry.element); const safe = sanitize(raw);
+    const raw = refs.refFor(entry.element, controlSource && revalidateSource ? { observation: controlSource, read: revalidateSource } : undefined); const safe = sanitize(raw);
     if (!safe.truncated && safe.value === raw) ref = raw;
     else truncated = true;
   } catch (error) { incomplete(coverage, error instanceof LiveRefError && error.code === "capacity" ? "reference-capacity-exhausted" : "reference-unavailable"); }
   if (truncated) incomplete(coverage, "summary-truncated-or-redacted");
-  return { ...(ref ? { ref } : {}), tag, role, name, label, testId, depth: entry.depth, disabled: entry.disabled, readonly: entry.readonly, ...(truncated ? { truncated: true } : {}), ...(source ? { controlSource: source(entry.element) } : {}) };
+  return { ...(ref ? { ref } : {}), tag, role, name, label, testId, depth: entry.depth, disabled: entry.disabled, readonly: entry.readonly, ...(truncated ? { truncated: true } : {}), ...(controlSource ? { controlSource } : {}) };
 }
 
 function result(refs: LiveElementRefs, sanitize: Sanitize, query?: SemanticQuery, source?: SourceReader): { result: SemanticResult; truncated?: boolean } {
@@ -49,7 +50,7 @@ function result(refs: LiveElementRefs, sanitize: Sanitize, query?: SemanticQuery
     ...(query ? { query } : {}), count: matches.length, countExact: collected.coverage.complete, elements: [], coverage: collected.coverage };
   if (matches.length > SEMANTIC_LIMITS.summaries) incomplete(output.coverage, "summary-limit");
   for (const entry of matches.slice(0, SEMANTIC_LIMITS.summaries)) {
-    const item = summary(entry, refs, sanitize, output.coverage, boundedSource);
+    const item = summary(entry, refs, sanitize, output.coverage, boundedSource, source);
     output.elements.push(item);
     if (new TextEncoder().encode(JSON.stringify(output)).byteLength > SEMANTIC_LIMITS.bytes - 1024) {
       output.elements.pop(); incomplete(output.coverage, "output-byte-limit"); break;

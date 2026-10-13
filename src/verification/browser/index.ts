@@ -206,6 +206,7 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
       const boundary = (element: Element): void => {
         if (sourceEnabled) {
           const observation = sanitizeControlSource(identifyReactControl(element, sourceRoot), value => String(prepare(value).value));
+          if ((command.type === "ref-click" || command.type === "ref-fill") && refs.resolve(command.ref) !== element) throw new Error("Reference changed during source capture");
           if (!send({ type: "event", event: { type: "action.source", data: { observation }, actionId: id } })) disconnect();
         }
         currentActionId = id;

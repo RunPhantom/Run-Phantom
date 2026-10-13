@@ -1,14 +1,26 @@
-import { readFileSync, mkdirSync } from "node:fs";
+import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { test, expect, observe } from "./verification-fixture";
+import { createServer } from "node:http";
+import { test as base, expect, observe } from "./verification-fixture";
 import { REPO_ROOT_PATH } from "./fixtures";
 import type { Page, APIRequestContext } from "@playwright/test";
 import type { RunPhantomHandle } from "./fixtures";
 import type { AppCommand, SemanticResult, VerificationFlow, FlowRepairProposal } from "../../src/verification/protocol";
 
+const test = base.extend<{ flowApp: { origin: string } }>({
+  flowApp: async ({}, use) => {
+    const server = createServer((_req, res) => { res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }); res.end(readFileSync(path.join(REPO_ROOT_PATH, "app/tests-e2e/fixtures/flow-anchors.html"), "utf8")); });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    try { await use({ origin }); } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+  },
+});
+
 async function pair(page: Page, request: APIRequestContext, daemon: RunPhantomHandle, origin: string, source = true) {
   const response = await request.post(`${daemon.url}/api/verification/sessions`, { data: { origin } }); const session = await response.json();
-  await page.route(`${origin}/durable`, route => route.fulfill({ contentType: "text/html", body: readFileSync(path.join(REPO_ROOT_PATH, "app/tests-e2e/fixtures/flow-anchors.html"), "utf8") }));
+  page.on("requestfailed", request => { if (request.url().endsWith("/verification/sdk.js")) console.info(JSON.stringify({ sdkRequestFailure: request.failure()?.errorText })); });
+  page.on("console", message => { if (message.type() === "error") console.info(message.text()); });
+  const served = await request.get(session.sdkUrl, { headers: { Origin: origin } }); expect(served.status(), "Actual served SDK").toBe(200);
   await page.goto(`${origin}/durable`);
   await page.evaluate(async ({ url, sessionId, token, sdkUrl, source }) => {
     const sdk = await import(sdkUrl); window.runtime = sdk.connect({ url, sessionId, token, ...(source ? { sourceProvenance: { enabled: true } } : {}) });
@@ -26,8 +38,8 @@ const effects = (page: Page) => page.evaluate(() => (window as unknown as { flow
 async function save(request: APIRequestContext, daemon: RunPhantomHandle, origin: string) {
   const response = await request.post(`${daemon.url}/api/verification/flows`, { data: { name: "Order review flow", origin, steps: [{ command: { type: "click", selector: "#original" }, predicate: { kind: "signal", name: "finished" } }] } }); expect(response.status()).toBe(201); return response.json() as Promise<VerificationFlow>;
 }
-test("actual app review selects, commits, reloads and separately replays a CSS presentation change", async ({ page, context, request, runPhantom, targetApp }, testInfo) => {
-  const session = await pair(page, request, runPhantom, targetApp.origin); const flow = await save(request, runPhantom, targetApp.origin);
+test("actual app review selects, commits, reloads and separately replays a CSS presentation change", async ({ page, context, request, runPhantom, flowApp }, testInfo) => {
+  const session = await pair(page, request, runPhantom, flowApp.origin); const flow = await save(request, runPhantom, flowApp.origin);
   const ui = await context.newPage();
   try {
     await ui.goto(runPhantom.url); await ui.getByRole("link", { name: "Verification", exact: true }).click();
@@ -39,11 +51,31 @@ test("actual app review selects, commits, reloads and separately replays a CSS p
     await expect(review.getByRole("button", { name: "Commit selected repair" })).toBeDisabled();
     await review.getByRole("radio", { name: "Select Pay 日本語 ✓", exact: true }).check();
     const screenshotRoot = process.env.RUNPHANTOM_PUBLIC_EVIDENCE_DIR ?? path.join(REPO_ROOT_PATH, ".omx/evidence/F22/screenshots"); mkdirSync(screenshotRoot, { recursive: true });
+    const viewportProof = [];
+    const commitButton = review.getByRole("button", { name: "Commit selected repair" });
+    const cancelButton = review.getByRole("button", { name: "Cancel repair" });
     for (const width of [360, 390, 768, 1024, 1440, 1920]) {
-      await ui.setViewportSize({ width, height: 900 }); await review.scrollIntoViewIfNeeded();
+      await ui.setViewportSize({ width, height: 900 }); await review.locator(".flow-repair-actions").scrollIntoViewIfNeeded();
       expect(await ui.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      const fonts = await ui.evaluate(async () => (await document.fonts.load('700 14px "Syne"')).map(face => ({ family: face.family, status: face.status })));
+      expect(fonts.some(face => face.family === "Syne" && face.status === "loaded")).toBe(true);
+      const headingFont = await review.getByRole("heading", { name: "Review a durable anchor" }).evaluate(element => getComputedStyle(element).fontFamily);
+      expect(headingFont).toContain("Syne");
+      const controls = [];
+      for (const control of [commitButton, cancelButton]) {
+        await expect(control).toBeVisible();
+        const observed = await control.evaluate(element => {
+          const rect = element.getBoundingClientRect(); const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+          return { label: element.textContent, top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, unobstructed: !!hit && element.contains(hit), inViewport: rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth };
+        });
+        expect(observed.unobstructed, `${width}: ${observed.label} unobstructed`).toBe(true); expect(observed.inViewport, `${width}: ${observed.label} reachable after scrolling`).toBe(true); controls.push(observed);
+      }
+      const background = await review.evaluate(element => getComputedStyle(element).backgroundColor); expect(background).toBe("rgb(249, 250, 252)");
+      const accent = await commitButton.evaluate(element => getComputedStyle(element).backgroundColor); expect(accent).toBe("rgb(0, 33, 204)");
+      viewportProof.push({ width, height: 900, fonts, headingFont, background, accent, controls });
       const filename = path.join(screenshotRoot, `flow-repair-${width}.png`); await ui.screenshot({ path: filename, fullPage: true }); await testInfo.attach(`Flow repair ${width}`, { path: filename, contentType: "image/png" });
     }
+    writeFileSync(path.join(screenshotRoot, "browser-layout-proof.json"), JSON.stringify(viewportProof, null, 2));
     await review.getByRole("button", { name: "Commit selected repair" }).click(); await expect(review).toContainText("Reviewed repair saved");
     expect(await effects(page)).toEqual({ clicks: 0, focus: 0, inputs: 0 });
     const saved: VerificationFlow[] = await (await request.get(`${runPhantom.url}/api/verification/flows`)).json(); const current = saved.find(item => item.id === flow.id)!;
@@ -57,8 +89,8 @@ test("actual app review selects, commits, reloads and separately replays a CSS p
   } finally { await ui.close(); }
 });
 
-test("cancel and changed review/list/document identities preserve bytes and dispatch zero actions", async ({ page, request, runPhantom, targetApp }) => {
-  const session = await pair(page, request, runPhantom, targetApp.origin); const flow = await save(request, runPhantom, targetApp.origin);
+test("cancel and changed review/list/document identities preserve bytes and dispatch zero actions", async ({ page, request, runPhantom, flowApp }) => {
+  const session = await pair(page, request, runPhantom, flowApp.origin); const flow = await save(request, runPhantom, flowApp.origin);
   const before = JSON.stringify(await (await request.get(`${runPhantom.url}/api/verification/flows`)).json());
   const propose = async () => { const response = await request.post(`${runPhantom.url}/api/verification/flows/${flow.id}/repair-proposals`, { data: { sessionId: session.id, step: 0 } }); expect(response.status()).toBe(201); return response.json() as Promise<FlowRepairProposal>; };
   const canceled = await propose(); await request.delete(`${runPhantom.url}/api/verification/flows/${flow.id}/repair-proposals/${canceled.id}`);
@@ -76,20 +108,20 @@ test("cancel and changed review/list/document identities preserve bytes and disp
   expect(JSON.stringify(await (await request.get(`${runPhantom.url}/api/verification/flows`)).json())).toBe(before);
 });
 
-test("source capture default OFF and aggregate source count/deadline remain explicit", async ({ page, request, runPhantom, targetApp }) => {
-  const disabled = await pair(page, request, runPhantom, targetApp.origin, false);
+test("source capture default OFF and aggregate source count/deadline remain explicit", async ({ page, request, runPhantom, flowApp }) => {
+  const disabled = await pair(page, request, runPhantom, flowApp.origin, false);
   let output = await command(request, runPhantom, disabled.id, { type: "semantic-snapshot" }); expect(output.result!.elements.every(item => item.controlSource === undefined)).toBe(true);
   await page.evaluate(() => window.runtime.disconnect());
-  const enabled = await pair(page, request, runPhantom, targetApp.origin, true);
+  const enabled = await pair(page, request, runPhantom, flowApp.origin, true);
   await page.evaluate(() => { for (let i = 0; i < 40; i++) { const button = document.createElement("button"); button.textContent = `Bounded ${i}`; button.setAttribute("data-runphantom-source", `src/Button.tsx:${i + 1}:1`); document.body.append(button); } });
   output = await command(request, runPhantom, enabled.id, { type: "semantic-snapshot" });
-  expect(output.result!.elements.filter(item => item.controlSource?.status === "captured").length).toBeLessThanOrEqual(32);
+  expect(output.result!.elements.filter(item => item.controlSource?.status === "captured").length).toBeLessThanOrEqual(16);
   expect(output.result!.elements.some(item => item.controlSource?.status === "unavailable" && item.controlSource.reason === "probe-limit")).toBe(true);
   expect(await effects(page)).toEqual({ clicks: 0, focus: 0, inputs: 0 });
 });
 
-test("a source probe exceeding the aggregate deadline withholds remaining pointers and grants no action", async ({ page, request, runPhantom, targetApp }) => {
-  const session = await pair(page, request, runPhantom, targetApp.origin);
+test("a source probe exceeding the aggregate deadline withholds remaining pointers and grants no action", async ({ page, request, runPhantom, flowApp }) => {
+  const session = await pair(page, request, runPhantom, flowApp.origin);
   await page.evaluate(() => {
     const button = document.querySelector("#current")!;
     Object.defineProperty(button, "__reactFiber$deadline", { value: new Proxy({}, { getOwnPropertyDescriptor(_target, key) {
@@ -101,4 +133,33 @@ test("a source probe exceeding the aggregate deadline withholds remaining pointe
   const output = await command(request, runPhantom, session.id, { type: "semantic-snapshot" });
   expect(output.result!.elements.find(item => item.testId === "order-43")!.controlSource).toMatchObject({ status: "unavailable", reason: "probe-limit" });
   expect(await effects(page)).toEqual({ clicks: 0, focus: 0, inputs: 0 });
+});
+
+
+for (const mode of ["changed", "throwing", "mutating"] as const) test(`${mode} source probe stops before click, focus, fill and boundary`, async ({ page, request, runPhantom, flowApp }) => {
+    const session = await pair(page, request, runPhantom, flowApp.origin);
+    for (const fill of [false, true]) {
+      const testId = fill ? "note-42" : "order-42";
+      const target = fill ? "#note" : "#current";
+      await page.locator(target).evaluate(element => element.setAttribute("data-runphantom-source", "src/Checkout.tsx:12:5"));
+      const found = await command(request, runPhantom, session.id, { type: "find", query: { kind: "test-id", testId } });
+      expect(found.result?.status).toBe("unique");
+      await page.locator(target).evaluate((element, mode) => {
+        if (mode === "changed") { element.setAttribute("data-runphantom-source", "src/Changed.tsx:12:5"); return; }
+        const stateNode: { current?: object } = {};
+        const fiber = new Proxy({ return: null, stateNode }, { getOwnPropertyDescriptor(value, key) {
+          if (mode === "throwing") throw new Error("controlled source reflection failure");
+          if (key === "return") element.setAttribute("aria-label", "Changed by source probe");
+          return Object.getOwnPropertyDescriptor(value, key);
+        } });
+        stateNode.current = fiber;
+        Object.defineProperty(element, "__reactFiber$safety", { configurable: true, value: fiber });
+      }, mode);
+      const output = await command(request, runPhantom, session.id, fill ? { type: "ref-fill", ref: found.result!.ref!, value: "must-not-land" } : { type: "ref-click", ref: found.result!.ref! });
+      expect(output.ok, `${mode} source, ${fill ? "fill" : "click"}`).toBe(false);
+      expect(await effects(page)).toEqual({ clicks: 0, focus: 0, inputs: 0 });
+      await page.locator(target).evaluate(element => { Reflect.deleteProperty(element, "__reactFiber$safety"); element.removeAttribute("aria-label"); });
+    }
+    expect((await observe(request, runPhantom, session.id)).events.filter(event => event.type === "action.boundary")).toHaveLength(0);
+    await page.evaluate(() => window.runtime.disconnect());
 });

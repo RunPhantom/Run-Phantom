@@ -31,13 +31,14 @@ async function fixture() {
  const ws = new WebSocket(`${url.replace("http:", "ws:")}/verification/ws?sessionId=${created.id}`, { headers: { Origin: created.origin } });
  await once(ws, "open"); const ready = once(ws, "message"); ws.send(JSON.stringify({ type: "hello", version: 3, token: created.token, coverage: runtimeCoverage, capabilities: ["semantic-refs"] })); expect(JSON.parse((await ready)[0].toString())).toEqual({ type: "ready" });
  let snapshot: any = { source: "sdk-reported", nameModel: "partial-aria", documentGeneration: "2".repeat(32), count: 1, countExact: true, elements: [item], coverage };
+ let replyTruncated = false;
  const actions: string[] = [];
  ws.on("message", raw => { const msg = JSON.parse(raw.toString()); if (msg.type !== "command") return;
    if (["click", "ref-click", "fill", "ref-fill"].includes(msg.command.type)) { actions.push(msg.command.type); ws.send(JSON.stringify({ type: "event", event: { type: "action.boundary", data: {}, actionId: msg.id } })); ws.send(JSON.stringify({ type: "event", event: { type: "signal", data: { name: "finished" }, actionId: msg.id } })); }
-   ws.send(JSON.stringify({ type: "result", id: msg.id, ok: true, result: msg.command.type === "semantic-snapshot" ? snapshot : msg.command.type === "snapshot" ? { count: 0, selector: msg.command.selector ?? "button" } : undefined }));
+   ws.send(JSON.stringify({ type: "result", id: msg.id, ok: true, ...(replyTruncated && msg.command.type === "semantic-snapshot" ? { truncated: true } : {}), result: msg.command.type === "semantic-snapshot" ? snapshot : msg.command.type === "snapshot" ? { count: 0, selector: msg.command.selector ?? "button" } : undefined }));
  });
  const flow = (await api("/flows", { name: "Repair", origin: created.origin, steps })).body;
- return { service, api, created, flow, actions, setSnapshot(value: unknown) { snapshot = value; }, snapshot() { return structuredClone(snapshot); }, async propose() { return api(`/flows/${flow.id}/repair-proposals`, { sessionId: created.id, step: 0 }); }, async close() { ws.terminate(); service.close(); await new Promise<void>(resolve => server.close(() => resolve())); } };
+ return { service, api, created, flow, actions, setSnapshot(value: unknown, truncated = false) { snapshot = value; replyTruncated = truncated; }, snapshot() { return structuredClone(snapshot); }, async propose() { return api(`/flows/${flow.id}/repair-proposals`, { sessionId: created.id, step: 0 }); }, async close() { ws.terminate(); service.close(); await new Promise<void>(resolve => server.close(() => resolve())); } };
 }
 describe("explicit reviewed repair at real HTTP/socket/SQLite boundary", () => {
  test("legacy array read and canceled review keep original stored bytes exactly", async () => {
@@ -60,7 +61,7 @@ describe("explicit reviewed repair at real HTTP/socket/SQLite boundary", () => {
    const run = await f.api(`/flows/${f.flow.id}/run`, { sessionId: f.created.id }); expect(run.body.status).toBe("pass"); expect(f.actions).toEqual(["ref-click"]);
   } finally { await f.close(); }
  });
- for (const mode of ["ambiguous", "partial", "reloaded", "recreated", "conflict", "malformed", "wrong-selection"]) test(`${mode} repair refuses writes and performs zero actions`, async () => {
+ for (const mode of ["ambiguous", "partial", "reloaded", "recreated", "conflict", "malformed", "wrong-selection", "transport-gap"]) test(`${mode} repair refuses writes and performs zero actions`, async () => {
   const f = await fixture(); try {
    const proposal: FlowRepairProposal = (await f.propose()).body;
    if (mode === "conflict") rebindFlow(f.flow.id, proposal.revision, 0, anchorForCandidate({ ...item, testId: "another" }));
@@ -70,9 +71,18 @@ describe("explicit reviewed repair at real HTTP/socket/SQLite boundary", () => {
    if (mode === "reloaded") data.documentGeneration = "4".repeat(32);
    if (mode === "recreated") data.elements[0].ref = "rpref_" + "5".repeat(32);
    if (mode === "malformed") data.elements[0].depth = -1;
-   f.setSnapshot(data);
+   f.setSnapshot(data, mode === "transport-gap");
    const committed = await f.api(`/flows/${f.flow.id}/repair-proposals/${proposal.id}/commit`, { candidateId: mode === "wrong-selection" ? randomUUID() : proposal.candidates[0].id, revision: proposal.revision });
    expect([400, 409]).toContain(committed.status); expect(stored(f.flow.id)).toBe(before); expect(f.actions).toHaveLength(0);
+  } finally { await f.close(); }
+ });
+ test("transport loss marks proposals incomplete and disables every candidate without writes", async () => {
+  const f = await fixture(); try {
+   const before = stored(f.flow.id); f.setSnapshot(f.snapshot(), true);
+   const proposal = await f.propose(); expect(proposal.status).toBe(201);
+   expect(proposal.body.coverage).toMatchObject({ complete: false, truncated: true, reasons: ["transport-incomplete"] });
+   expect(proposal.body.candidates.every((candidate: { selectable: boolean }) => !candidate.selectable)).toBe(true);
+   expect(stored(f.flow.id)).toBe(before); expect(f.actions).toHaveLength(0);
   } finally { await f.close(); }
  });
  test("ambiguous and incomplete replay sends discovery only and stays inconclusive", async () => {

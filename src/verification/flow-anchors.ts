@@ -71,6 +71,7 @@ export function parseFlowDiscovery(value: unknown): SemanticResult {
     || !["visitedNodes", "openShadowRoots", "sameOriginFrames", "inaccessibleFrames", "hiddenSubtrees", "privateSubtrees"].every(key => whole(coverage[key]))
     || !Array.isArray(coverage.reasons) || coverage.reasons.length > 16 || !Array.isArray(coverage.unread) || coverage.unread.length > 32
     || Object.hasOwn(coverage, "unreadOverflow") && coverage.unreadOverflow !== true) throw new VerificationInputError("Invalid flow discovery coverage");
+  if (coverage.complete === true && (coverage.truncated === true || coverage.inaccessibleFrames !== 0 || coverage.reasons.length || coverage.unread.length || coverage.unreadOverflow === true || raw.countExact !== true)) throw new VerificationInputError("Contradictory complete flow coverage");
   coverage.reasons.forEach(reason => literal(reason, 128));
   coverage.unread.forEach(item => { const unread = flowObject(item, ["tag", "reason"], "unread region"); literal(unread.tag, 64); literal(unread.reason, 128); });
   const elements = raw.elements.map((item): SemanticSummary => {

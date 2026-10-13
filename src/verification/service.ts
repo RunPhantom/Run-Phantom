@@ -55,7 +55,12 @@ export class VerificationService {
       }
       const response = await this.bridge.command(session, { type: "semantic-snapshot" });
       if (!response.ok || generation !== session.generation) throw new VerificationHttpError(409, "Current application discovery unavailable");
-      return this.repairs.create(flow, step, sessionId, generation, response.result, cssCount);
+      const discovery = parseFlowDiscovery(response.result);
+      if (response.truncated) {
+        discovery.coverage.complete = false; discovery.coverage.truncated = true; discovery.countExact = false;
+        if (discovery.coverage.reasons.length < 16 && !discovery.coverage.reasons.includes("transport-incomplete")) discovery.coverage.reasons.push("transport-incomplete");
+      }
+      return this.repairs.create(flow, step, sessionId, generation, discovery, cssCount);
     });
   }
 
@@ -66,7 +71,7 @@ export class VerificationService {
       const flow = getFlow(id);
       if (flow.revision !== retained.view.revision || flow.origin !== session.origin || session.generation !== retained.generation) throw new VerificationHttpError(409, "Flow or application changed since review");
       const response = await this.bridge.command(session, { type: "semantic-snapshot" });
-      if (!response.ok) throw new VerificationHttpError(409, "Current candidate discovery unavailable");
+      if (!response.ok || response.truncated) throw new VerificationHttpError(409, "Current candidate discovery unavailable or incomplete");
       this.repairs.validateCurrent(retained, candidate, session.generation, response.result);
       const updated = rebindFlow(id, retained.view.revision, retained.view.step, candidate.anchor);
       this.repairs.cancel(id, proposalId);

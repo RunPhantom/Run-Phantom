@@ -1419,12 +1419,14 @@ class LiveElementRefs {
         this.#entries.delete(ref);
     }
   }
-  refFor(element) {
+  refFor(element, source) {
     if (!this.#owns(element, element.ownerDocument))
       throw new LiveRefError("Element is outside the active document scope");
     this.#prune();
+    const witness = source ? { signature: JSON.stringify(parseControlSourceObservation(source.observation)), read: source.read } : undefined;
     const existing = this.#reverse.get(element);
-    if (existing && this.#entries.get(existing)?.revision === (this.#listFingerprint === undefined ? undefined : this.#revision) && this.#entries.has(existing))
+    const old = existing ? this.#entries.get(existing) : undefined;
+    if (existing && old && old.revision === (this.#listFingerprint === undefined ? undefined : this.#revision) && old.source?.signature === witness?.signature)
       return existing;
     if (this.#issued.size >= MAX_LIVE_REFS)
       throw new LiveRefError("Live reference capacity exhausted; reconnect before discovering new references", "capacity");
@@ -1439,7 +1441,7 @@ class LiveElementRefs {
     if (!ref)
       throw new LiveRefError("Secure reference collision could not be resolved");
     this.#issued.add(ref);
-    this.#entries.set(ref, { element: new WeakRef(element), document: new WeakRef(element.ownerDocument), expires: this.#now() + LIVE_REF_TTL_MS, ...this.#listFingerprint === undefined ? {} : { revision: this.#revision } });
+    this.#entries.set(ref, { element: new WeakRef(element), document: new WeakRef(element.ownerDocument), expires: this.#now() + LIVE_REF_TTL_MS, ...witness ? { source: witness } : {}, ...this.#listFingerprint === undefined ? {} : { revision: this.#revision } });
     this.#reverse.set(element, ref);
     return ref;
   }
@@ -1457,6 +1459,20 @@ class LiveElementRefs {
       this.#entries.delete(ref);
       throw new LiveRefError("Live reference discovery list changed; discover and review a new selection");
     }
+    if (entry.source) {
+      let unchanged = false;
+      try {
+        unchanged = JSON.stringify(parseControlSourceObservation(entry.source.read(element))) === entry.source.signature;
+      } catch {}
+      if (!unchanged) {
+        this.#entries.delete(ref);
+        throw new LiveRefError("Live reference source identity changed or became unavailable; discover and review a new selection");
+      }
+      if (!this.#owns(element, owner) || this.#now() >= entry.expires || entry.revision !== undefined && (entry.revision !== this.#revision || this.#fingerprint(collectSemanticElements(this.document)) !== this.#listFingerprint)) {
+        this.#entries.delete(ref);
+        throw new LiveRefError("Live reference discovery list changed during source validation");
+      }
+    }
     return element;
   }
   invalidate() {
@@ -1467,14 +1483,14 @@ class LiveElementRefs {
 }
 
 // src/verification/browser/dom/snapshot.ts
-var DISCOVERY_SOURCE_LIMITS = { controls: 32, timeMs: 8 };
+var DISCOVERY_SOURCE_LIMITS = { controls: 16, timeMs: 8 };
 function incomplete(coverage, reason) {
   coverage.complete = false;
   coverage.truncated = true;
   if (!coverage.reasons.includes(reason))
     coverage.reasons.push(reason);
 }
-function summary(entry, refs, sanitize2, coverage, source) {
+function summary(entry, refs, sanitize2, coverage, source, revalidateSource) {
   let truncated = entry.nameTruncated;
   const text2 = (value) => {
     const safe = sanitize2(value);
@@ -1489,9 +1505,10 @@ function summary(entry, refs, sanitize2, coverage, source) {
   const testId = text2(entry.testId);
   const role = text2(entry.role);
   const tag = text2(entry.element.localName);
+  const controlSource = source?.(entry.element);
   let ref;
   try {
-    const raw = refs.refFor(entry.element);
+    const raw = refs.refFor(entry.element, controlSource && revalidateSource ? { observation: controlSource, read: revalidateSource } : undefined);
     const safe = sanitize2(raw);
     if (!safe.truncated && safe.value === raw)
       ref = raw;
@@ -1502,7 +1519,7 @@ function summary(entry, refs, sanitize2, coverage, source) {
   }
   if (truncated)
     incomplete(coverage, "summary-truncated-or-redacted");
-  return { ...ref ? { ref } : {}, tag, role, name, label, testId, depth: entry.depth, disabled: entry.disabled, readonly: entry.readonly, ...truncated ? { truncated: true } : {}, ...source ? { controlSource: source(entry.element) } : {} };
+  return { ...ref ? { ref } : {}, tag, role, name, label, testId, depth: entry.depth, disabled: entry.disabled, readonly: entry.readonly, ...truncated ? { truncated: true } : {}, ...controlSource ? { controlSource } : {} };
 }
 function result(refs, sanitize2, query, source) {
   const collected = collectSemanticElements(refs.document);
@@ -1529,7 +1546,7 @@ function result(refs, sanitize2, query, source) {
   if (matches.length > SEMANTIC_LIMITS.summaries)
     incomplete(output.coverage, "summary-limit");
   for (const entry of matches.slice(0, SEMANTIC_LIMITS.summaries)) {
-    const item = summary(entry, refs, sanitize2, output.coverage, boundedSource);
+    const item = summary(entry, refs, sanitize2, output.coverage, boundedSource, source);
     output.elements.push(item);
     if (new TextEncoder().encode(JSON.stringify(output)).byteLength > SEMANTIC_LIMITS.bytes - 1024) {
       output.elements.pop();
@@ -2066,6 +2083,8 @@ function connect(options) {
       const boundary = (element) => {
         if (sourceEnabled) {
           const observation = sanitizeControlSource(identifyReactControl(element, sourceRoot), (value) => String(prepare(value).value));
+          if ((command.type === "ref-click" || command.type === "ref-fill") && refs.resolve(command.ref) !== element)
+            throw new Error("Reference changed during source capture");
           if (!send({ type: "event", event: { type: "action.source", data: { observation }, actionId: id } }))
             disconnect();
         }

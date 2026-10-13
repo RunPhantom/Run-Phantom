@@ -29,6 +29,6 @@ describe("durable flow metadata never grants live authority", () => {
     expect(() => parseFlowSteps([{ ...step, command: { type: "fill", selector: "#name", value: "entered" }, anchor }])).toThrow();
   });
   test("strict snapshot rejects malformed candidate, unread coverage and byte/node overflow", () => {
-    for (const invalid of [{ ...snapshot(), count: NaN }, { ...snapshot(), elements: [{ ...item, extra: true }] }, { ...snapshot(), coverage: { ...coverage, visitedNodes: 10001 } }, { ...snapshot(), elements: [{ ...item, name: "x".repeat(241) }] }, { ...snapshot(), coverage: { ...coverage, unread: [{ tag: "iframe", reason: "x".repeat(129) }] } }]) expect(() => parseFlowDiscovery(invalid)).toThrow();
+    for (const invalid of [{ ...snapshot(), count: NaN }, { ...snapshot(), coverage: { ...coverage, complete: true, inaccessibleFrames: 1 } }, { ...snapshot(), coverage: { ...coverage, complete: true, unread: [{ tag: "iframe", reason: "inaccessible-frame" }] } }, { ...snapshot(), elements: [{ ...item, extra: true }] }, { ...snapshot(), coverage: { ...coverage, visitedNodes: 10001 } }, { ...snapshot(), elements: [{ ...item, name: "x".repeat(241) }] }, { ...snapshot(), coverage: { ...coverage, unread: [{ tag: "iframe", reason: "x".repeat(129) }] } }]) expect(() => parseFlowDiscovery(invalid)).toThrow();
   });
 });
