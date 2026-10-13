@@ -206,6 +206,7 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
       const boundary = (element: Element): void => {
         if (sourceEnabled) {
           const observation = sanitizeControlSource(identifyReactControl(element, sourceRoot), value => String(prepare(value).value));
+          if ((command.type === "ref-click" || command.type === "ref-fill") && refs.resolve(command.ref) !== element) throw new Error("Reference changed during source capture");
           if (!send({ type: "event", event: { type: "action.source", data: { observation }, actionId: id } })) disconnect();
         }
         currentActionId = id;
@@ -241,7 +242,7 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
         for (const target of command.targets) actionReading(id, "after", target);
       } else if (command.type === "find" || command.type === "semantic-snapshot" || command.type === "ref-click" || command.type === "ref-fill") {
         if (options.semanticRefs === false) throw new Error("Semantic references are not enabled for this runtime");
-        output = runSemanticDomCommand(command, refs, prepare, boundary);
+        output = runSemanticDomCommand(command, refs, prepare, boundary, sourceEnabled ? element => sanitizeControlSource(identifyReactControl(element, sourceRoot), value => String(prepare(value).value)) : undefined);
       } else output = runDomCommand(command, prepare, sourceEnabled ? boundary : undefined);
       // DOM commands redact their text fields before returning. Apply generic size limits
       // to the result envelope without exact-fill rewriting of its typed schema.
