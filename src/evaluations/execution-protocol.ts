@@ -8,7 +8,7 @@ export interface ExecutionDraft {
   datasetId: string; version: number; datasetHash: string; endpointName: string; operationKey: string;
   concurrency: number; timeoutMs: number; maxAttempts: number; maxTotalCostUsd: number; maxCostPerAttemptUsd: number; allowSideEffects: true;
 }
-export type AttemptStatus = "not_started" | "running" | "succeeded" | "failed" | "timed_out" | "cancelled" | "interrupted" | "unavailable";
+export type AttemptStatus = "not_started" | "running" | "transport_success" | "failed" | "timed_out" | "cancelled" | "interrupted" | "unavailable";
 export interface ExecutionAttempt {
   id: string; index: number; status: AttemptStatus; startedAt: number | null; completedAt: number | null;
   runId: string | null; actualCostUsd: number | null; reason: string; sideEffects: "not_dispatched" | "may_have_occurred";
@@ -23,4 +23,4 @@ export interface DatasetExecution {
   createdAt: number; completedAt: number | null; status: "queued" | "running" | "completed" | "cancelled" | "interrupted";
   reservedCostUsd: number; cases: ExecutionCase[];
 }
-export interface DispatchResult { status: "succeeded" | "failed" | "unavailable"; runId: string | null; actualCostUsd: number | null }
+export interface DispatchResult { status: "transport_success" | "failed" | "unavailable"; runId: string | null; actualCostUsd: number | null }

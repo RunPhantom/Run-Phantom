@@ -32,16 +32,16 @@ describe("explicit frozen dataset execution core", () => {
   });
   test("failure/timeout retains all original cases and late settlements cannot complete timed out work", async () => {
     const frozen = freezeExecution(revision(), parseExecutionDraft(draft({ concurrency: 1 })));
-    let late!: (value: { status: "succeeded"; runId: string | null; actualCostUsd: null }) => void;
+    let late!: (value: { status: "transport_success"; runId: string | null; actualCostUsd: null }) => void;
     const result = await executeFrozen(frozen, async (_request, item) => {
       if (item.case.id === "case-0") throw new Error("raw provider credential never public");
       if (item.case.id === "case-1") return new Promise(resolve => { late = resolve; });
-      return { status: "succeeded", runId: "fresh-run", actualCostUsd: null };
+      return { status: "transport_success", runId: "fresh-run", actualCostUsd: null };
     });
     expect(result.cases).toHaveLength(3);
     expect(result.cases[0].attempts[0].status).toBe("failed");
     expect(result.cases[1].attempts[0].status).toBe("timed_out");
-    late({ status: "succeeded", runId: "late", actualCostUsd: null });
+    late({ status: "transport_success", runId: "late", actualCostUsd: null });
     await Promise.resolve();
     expect(result.cases[1].attempts[0].runId).toBeNull();
     expect(JSON.stringify(result)).not.toContain("raw provider credential");
@@ -49,10 +49,10 @@ describe("explicit frozen dataset execution core", () => {
   test("cancel keeps queued cases and prevents late publication", async () => {
     const controller = new AbortController();
     const frozen = freezeExecution(revision(), parseExecutionDraft(draft({ concurrency: 1 })));
-    let finish!: (value: { status: "succeeded"; runId: string | null; actualCostUsd: null }) => void;
+    let finish!: (value: { status: "transport_success"; runId: string | null; actualCostUsd: null }) => void;
     const pending = executeFrozen(frozen, async () => new Promise(resolve => { finish = resolve; }), { signal: controller.signal });
     await Promise.resolve(); controller.abort(); const result = await pending;
-    finish({ status: "succeeded", runId: "late", actualCostUsd: null }); await Promise.resolve();
+    finish({ status: "transport_success", runId: "late", actualCostUsd: null }); await Promise.resolve();
     expect(result.status).toBe("cancelled");
     expect(result.cases).toHaveLength(3);
     expect(result.cases.every(item => item.attempts.every(attempt => attempt.status === "cancelled" && attempt.runId === null))).toBe(true);
@@ -64,7 +64,7 @@ test("redacts every retained case before serialization and never dispatches unav
   const frozen = freezeExecution(source, parseExecutionDraft(draft()));
   expect(JSON.stringify(frozen)).not.toContain("private-fixture-credential");
   let calls = 0;
-  const result = await executeFrozen(frozen, async () => { calls++; return { status: "succeeded", runId: null, actualCostUsd: null }; });
+  const result = await executeFrozen(frozen, async () => { calls++; return { status: "transport_success", runId: null, actualCostUsd: null }; });
   expect(calls).toBe(2); expect(result.cases[0].attempts[0].status).toBe("unavailable");
   expect(result.cases.every(item => item.grading.status === "inconclusive")).toBe(true);
 });
@@ -73,10 +73,10 @@ test("planned retries remain visible with distinct attempt IDs and explicit side
   const frozen = freezeExecution(revision(), parseExecutionDraft(draft({ maxAttempts: 3 })));
   let calls = 0;
   const result = await executeFrozen(frozen, async (_request, _item, attempt) => {
-    calls++; return { status: attempt.index === 1 ? "succeeded" : "failed", runId: null, actualCostUsd: null };
+    calls++; return { status: attempt.index === 1 ? "transport_success" : "failed", runId: null, actualCostUsd: null };
   });
   expect(calls).toBe(6); expect(result.cases.flatMap(item => item.attempts)).toHaveLength(9);
-  expect(result.cases[0].attempts.map(item => item.status)).toEqual(["failed", "succeeded", "not_started"]);
+  expect(result.cases[0].attempts.map(item => item.status)).toEqual(["failed", "transport_success", "not_started"]);
   expect(result.cases[0].attempts[2].sideEffects).toBe("not_dispatched");
 });
 
@@ -96,7 +96,7 @@ test("actual private HTTP calls share two global slots and admission deadline re
     const dispatch = async (_request: unknown, item: ReturnType<typeof freezeExecution>["cases"][number], attempt: ReturnType<typeof freezeExecution>["cases"][number]["attempts"][number]) => {
       // This URL is solely the private test injector. Production draft accepts only a registered name.
       const response = await fetch(`http://127.0.0.1:${address.port}/fixture`, { method: "POST", body: JSON.stringify({ attemptId: attempt.id, input: item.case.input }) });
-      await response.text(); return { status: "succeeded" as const, runId: null, actualCostUsd: null };
+      await response.text(); return { status: "transport_success" as const, runId: null, actualCostUsd: null };
     };
     const first = freezeExecution(revision(), parseExecutionDraft(draft({ operationKey: "http-1" })));
     const second = freezeExecution(revision(), parseExecutionDraft(draft({ operationKey: "http-2" })));

@@ -116,16 +116,16 @@ export async function executeFrozen(frozen: DatasetExecution, dispatch: Endpoint
         const value = await observed; controller.signal.removeEventListener("abort", stopped);
         if (!value || controller.signal.aborted) { finish(attempt, options.signal?.aborted ? "cancelled" : "timed_out", "Dispatch stopped; external side effects may have occurred"); }
         else {
-          if (!["succeeded", "failed", "unavailable"].includes(value.status) || (value.actualCostUsd !== null && (!Number.isFinite(value.actualCostUsd) || value.actualCostUsd < 0 || dollars(value.actualCostUsd) > dollars(result.request.maxCostPerAttemptUsd)))) {
+          if (!["transport_success", "failed", "unavailable"].includes(value.status) || (value.actualCostUsd !== null && (!Number.isFinite(value.actualCostUsd) || value.actualCostUsd < 0 || dollars(value.actualCostUsd) > dollars(result.request.maxCostPerAttemptUsd)))) {
             finish(attempt, "unavailable", "Endpoint completion or usage is outside the frozen contract"); controller.abort();
           } else {
-            finish(attempt, value.status, value.status === "succeeded" ? "Endpoint dispatch completed; captured grading is separate" : "Endpoint did not complete successfully");
+            finish(attempt, value.status, value.status === "transport_success" ? "Endpoint dispatch completed; captured grading is separate" : "Endpoint did not complete successfully");
             try { attempt.runId = value.runId === null ? null : parseId(value.runId); attempt.actualCostUsd = value.actualCostUsd; }
             catch { finish(attempt, "unavailable", "Endpoint returned an invalid capture identity"); attempt.runId = null; }
           }
         }
         publish();
-        if ((attempt as ExecutionAttempt).status === "succeeded") break;
+        if ((attempt as ExecutionAttempt).status === "transport_success") break;
       }
     }
   };
