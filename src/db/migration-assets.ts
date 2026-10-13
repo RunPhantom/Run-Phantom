@@ -12,6 +12,8 @@ import migration0006Path from "../../drizzle/0006_lying_proemial_gods.sql" with 
 import migration0007Path from "../../drizzle/0007_evidence_storage.sql" with { type: "file" };
 import migration0008Path from "../../drizzle/0008_otlp_evidence.sql" with { type: "file" };
 import migration0009Path from "../../drizzle/0009_finding_comparisons.sql" with { type: "file" };
+import migration0010Path from "../../drizzle/0010_coding_hooks.sql" with { type: "file" };
+import migration0011Path from "../../drizzle/0011_review_queues.sql" with { type: "file" };
 
 export const embeddedMigrationJournal = {
   "version": "7",
@@ -86,6 +88,20 @@ export const embeddedMigrationJournal = {
       "when": 1791766000000,
       "tag": "0009_finding_comparisons",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1791766000001,
+      "tag": "0010_coding_hooks",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1791766000002,
+      "tag": "0011_review_queues",
+      "breakpoints": true
     }
   ]
 } as const;
@@ -130,5 +146,13 @@ export const embeddedMigrationFiles = [
   {
     relativePath: "0009_finding_comparisons.sql",
     sourcePath: migration0009Path,
+  },
+  {
+    relativePath: "0010_coding_hooks.sql",
+    sourcePath: migration0010Path,
+  },
+  {
+    relativePath: "0011_review_queues.sql",
+    sourcePath: migration0011Path,
   },
 ] as const;
