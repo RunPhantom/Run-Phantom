@@ -71,7 +71,7 @@ async function fixture(cwd: string, options: { verifyRaw?: boolean } = {}) {
     return { status: response.status, body: response.headers.get("content-type")?.includes("json") ? JSON.parse(text) : text };
   };
   const raw = async (route: string, body: string | Uint8Array) => {
-    const response = await fetch(`${root}${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body });
+    const response = await fetch(`${root}${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: typeof body === "string" ? body : new Uint8Array(body) });
     const text = await response.text();
     return { status: response.status, body: response.headers.get("content-type")?.includes("json") ? JSON.parse(text) : text };
   };
