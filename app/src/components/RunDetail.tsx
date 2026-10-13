@@ -1335,15 +1335,23 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   // below is gated on the request still being the current one.
   const detailRequestRef = useRef(0);
   const detailAbortRef = useRef<AbortController | null>(null);
+  const detailReadRef = useRef<{ runId: string; controller: AbortController; queued: boolean } | null>(null);
 
   const connectionStatus = useRunPhantomConnectionStatus();
   const previousConnectionStatus = useRef(connectionStatus);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async function loadDetail(): Promise<void> {
     if (initialData || isRunDeleting(runId)) return; // Keep the visible trace during deletion.
+    const pending = detailReadRef.current;
+    if (pending?.runId === runId && !pending.controller.signal.aborted) {
+      pending.queued = true;
+      return;
+    }
     detailAbortRef.current?.abort();
     const controller = new AbortController();
     detailAbortRef.current = controller;
+    const read = { runId, controller, queued: false };
+    detailReadRef.current = read;
     const requestId = ++detailRequestRef.current;
     const isCurrent = () => detailRequestRef.current === requestId && !controller.signal.aborted;
     try {
@@ -1365,7 +1373,16 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
       setData(null);
       setNotFound(true);
     }
-    finally { if (isCurrent()) setLoading(false); }
+    finally {
+      if (detailReadRef.current === read) detailReadRef.current = null;
+      if (detailAbortRef.current === controller) detailAbortRef.current = null;
+      if (isCurrent()) {
+        setLoading(false);
+        // A handshake or span notification can arrive while the snapshot is in
+        // flight. Read once more after it settles without cancelling healthy work.
+        if (read.queued && !isRunDeleting(runId)) void loadDetail();
+      }
+    }
   }, [runId, initialData]);
 
   useEffect(() => {
