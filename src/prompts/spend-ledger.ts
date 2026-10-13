@@ -19,13 +19,13 @@ export function comparisonRate(targetValue: ComparisonTarget): FrozenRateRevisio
   return freezeRateRevision({ version: PRICING_VERSION, ...target, tier: "standard", revision: `comparison-standard-text-2026-10-13:${target.model}`, currency: "USD", unit: "usd_per_million_tokens",
     source: { kind: "manual", name: "Frozen official standard text quote", reference: quote.reference, observedAt },
     aliases: quote.alias ? [{ provider: target.provider, model: quote.alias, tier: "standard" }] : [],
-    bands: [{ maxContextTokens: null, categories: { input: priced(quote.input), output: priced(quote.output), cache_read: priced(quote.cache),
+    bands: [{ maxContextTokens: target.model === "gpt-5.4" ? 272000 : null, categories: { input: priced(quote.input), output: priced(quote.output), cache_read: priced(quote.cache),
       cache_write: { kind: "not_applicable" }, cache_write_5m: { kind: "not_applicable" }, cache_write_1h: { kind: "not_applicable" },
-      reasoning: { kind: "included" }, audio_input: { kind: "not_applicable" }, audio_output: { kind: "not_applicable" } } }] });
+      reasoning: { kind: "included" }, audio_input: { kind: "not_applicable" }, audio_output: { kind: "not_applicable" } } }, ...(target.model === "gpt-5.4" ? [{ maxContextTokens: null, categories: { input: { kind: "unavailable" as const }, output: { kind: "unavailable" as const }, cache_read: { kind: "unavailable" as const }, cache_write: { kind: "not_applicable" as const }, cache_write_5m: { kind: "not_applicable" as const }, cache_write_1h: { kind: "not_applicable" as const }, reasoning: { kind: "included" as const }, audio_input: { kind: "not_applicable" as const }, audio_output: { kind: "not_applicable" as const } } }] : [])] });
 }
 export interface ComparisonUsage {
   readonly model?: unknown; readonly inputTokens?: unknown; readonly outputTokens?: unknown; readonly cacheReadTokens?: unknown;
-  readonly cacheWriteTokens?: unknown; readonly reasoningTokens?: unknown; readonly tier?: unknown;
+  readonly cacheWriteTokens?: unknown; readonly reasoningTokens?: unknown; readonly tier?: unknown; readonly contextTokens?: unknown;
 }
 export function reserveComparisonAttempt(compiledValue: string, target: ComparisonTarget, outputValue: number): { microusd: number; inputTokenCeiling: number; rate: FrozenRateRevision } {
   const compiled = promptText(compiledValue, COMPARISON_LIMITS.inputBytes), output = promptInteger(outputValue, COMPARISON_LIMITS.outputTokens), rate = comparisonRate(target);
@@ -44,6 +44,7 @@ export function estimateComparisonUsage(target: ComparisonTarget, source: Compar
     ["cacheReadTokens", "runphantom.usage.cache_read_tokens"], ["cacheWriteTokens", "runphantom.usage.cache_write_tokens"], ["reasoningTokens", "runphantom.usage.reasoning_tokens"]] as const) {
     if (source[sourceKey] !== undefined) attributes[attribute] = source[sourceKey];
   }
+  if (source.contextTokens !== undefined) attributes["runphantom.usage.context_tokens"] = source.contextTokens;
   const usage = normalizeUsage(attributes), estimate = calculateCost(usage, rate);
   return { usage, estimate, invoiceUsd: null };
 }

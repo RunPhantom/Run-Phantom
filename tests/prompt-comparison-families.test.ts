@@ -55,3 +55,16 @@ test("unverified provider tier or inference geography preserves unknown pricing 
     }
   } finally { await server.stop(true); }
 });
+
+test("native GPT5.4 context threshold and missing/conflicting cache observations never use guessed standard rates", async () => {
+  for (const [inputTokens, cacheTokens, expected] of [[272000, 0, "complete"], [272001, 0, "unavailable"], [2, undefined, "unavailable"], [2, 3, "unavailable"], [0, 0, "complete"]] as const) {
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { return Response.json({ model: "gpt-5.4", choices: [{ message: { content: "Output" }, finish_reason: "stop" }], service_tier: "default", usage: { prompt_tokens: inputTokens, completion_tokens: 0, ...(cacheTokens === undefined ? {} : { prompt_tokens_details: { cached_tokens: cacheTokens } }) } }); } });
+    try {
+      const client = createComparisonProviderClient({ credentials: { openai: "fixture-token" }, transport: (_url, init) => fetch(server.url, init), provenance: "controlled-http-fixture" });
+      const result = await client.execute({ target: { provider: "openai", model: "gpt-5.4" }, compiled: "Frozen", options, signal: new AbortController().signal });
+      const cost = estimateComparisonUsage({ provider: "openai", model: "gpt-5.4" }, result.usage); expect(cost.estimate.coverage).toBe(expected); expect(cost.invoiceUsd).toBeNull();
+      if (inputTokens === 272000) expect(cost.estimate.totalUsd).toBe(0.68); if (inputTokens === 0) expect(cost.estimate.totalUsd).toBe(0);
+      if (expected === "unavailable") expect(cost.estimate.totalUsd).toBeNull();
+    } finally { await server.stop(true); }
+  }
+});

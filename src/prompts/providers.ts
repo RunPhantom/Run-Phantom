@@ -81,9 +81,10 @@ export function createComparisonProviderClient(client: ClientOptions = {}) {
         const observedTier = usage.service_tier ?? raw.service_tier;
         const tier = target.provider === "openai" ? observedTier === "default" ? "standard" : observedTier ?? "unknown"
           : observedTier === "standard" && usage.inference_geo === "global" ? "standard" : "unknown";
+        const contextTokens = target.provider === "openai" && typeof usage.prompt_tokens === "number" && Number.isSafeInteger(usage.prompt_tokens) && usage.prompt_tokens >= 0 && typeof cached === "number" && Number.isSafeInteger(cached) && cached >= 0 && cached <= usage.prompt_tokens ? usage.prompt_tokens : undefined;
         const result: ComparisonProviderResult = { output, finishReason, provenance, usage: { model: raw.model,
           inputTokens: target.provider === "openai" ? usage.prompt_tokens : usage.input_tokens, outputTokens: target.provider === "openai" ? usage.completion_tokens : usage.output_tokens,
-          cacheReadTokens: cached, ...(target.provider === "anthropic" ? { cacheWriteTokens: usage.cache_creation_input_tokens } : {}), reasoningTokens: reasoning, tier } };
+          cacheReadTokens: cached, ...(target.provider === "anthropic" ? { cacheWriteTokens: usage.cache_creation_input_tokens } : {}), reasoningTokens: reasoning, tier, contextTokens } };
         try { comparisonJson(result, COMPARISON_LIMITS.attemptPayloadBytes); } catch { throw new ComparisonProviderError("response_limit", true); }
         return result;
       } catch (error) {

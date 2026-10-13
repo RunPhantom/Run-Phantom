@@ -47,7 +47,7 @@ test("reserves an integer upper estimate before execution and keeps absent usage
   expect(Number.isSafeInteger(reserve.microusd)).toBe(true); expect(reserve.microusd).toBeGreaterThan(0); expect(reserve.inputTokenCeiling).toBe(1224);
   const missing = estimateComparisonUsage(target, { model: "gpt-5.4" });
   expect(missing.estimate.totalUsd).toBeNull(); expect(missing.invoiceUsd).toBeNull();
-  const zero = estimateComparisonUsage(target, { model: "gpt-5.4", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 });
+  const zero = estimateComparisonUsage(target, { model: "gpt-5.4", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, contextTokens: 0 });
   expect(zero.estimate.totalUsd).toBe(0); expect(zero.invoiceUsd).toBeNull();
   const mismatch = estimateComparisonUsage(target, { model: "unexpected-model", inputTokens: 1, outputTokens: 1 });
   expect(mismatch.estimate.totalUsd).toBeNull();

@@ -18,6 +18,7 @@ export async function acquireComparisonOwner(databasePath: string, signal?: Abor
   return Object.freeze({
     capture(): ComparisonOwnerFence { const fence = Object.freeze({ birth: lease.birth, generation }); assertCurrent(fence); return fence; },
     assertCurrent,
+    ownsDatabase(filename: string): boolean { return filename === lease.databasePath && lease.isActive(); },
     async dispatch<T>(fence: ComparisonOwnerFence, task: (signal: AbortSignal) => Promise<T>): Promise<T> {
       assertCurrent(fence);
       if (active.size >= COMPARISON_LIMITS.active) throw new ComparisonOwnerRefusal("busy");
