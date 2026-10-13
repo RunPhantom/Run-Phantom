@@ -1349,6 +1349,27 @@ class LiveElementRefs {
   #now;
   #random;
   #active = true;
+  #revision = 0;
+  #listFingerprint;
+  #elementIds = new WeakMap;
+  #elementSequence = 0;
+  #fingerprint(collection) {
+    return JSON.stringify([collection.coverage, collection.elements.map((item) => {
+      let identity = this.#elementIds.get(item.element);
+      if (identity === undefined) {
+        identity = ++this.#elementSequence;
+        this.#elementIds.set(item.element, identity);
+      }
+      return [identity, item.role, item.name, item.label, item.testId, item.nameTruncated, item.disabled, item.readonly];
+    })]);
+  }
+  beginDiscovery(collection) {
+    const fingerprint = this.#fingerprint(collection);
+    if (fingerprint !== this.#listFingerprint) {
+      this.#revision++;
+      this.#listFingerprint = fingerprint;
+    }
+  }
   constructor(sessionId, document2, options = {}) {
     this.sessionId = sessionId;
     this.document = document2;
@@ -1403,7 +1424,7 @@ class LiveElementRefs {
       throw new LiveRefError("Element is outside the active document scope");
     this.#prune();
     const existing = this.#reverse.get(element);
-    if (existing && this.#entries.has(existing))
+    if (existing && this.#entries.get(existing)?.revision === (this.#listFingerprint === undefined ? undefined : this.#revision) && this.#entries.has(existing))
       return existing;
     if (this.#issued.size >= MAX_LIVE_REFS)
       throw new LiveRefError("Live reference capacity exhausted; reconnect before discovering new references", "capacity");
@@ -1418,7 +1439,7 @@ class LiveElementRefs {
     if (!ref)
       throw new LiveRefError("Secure reference collision could not be resolved");
     this.#issued.add(ref);
-    this.#entries.set(ref, { element: new WeakRef(element), document: new WeakRef(element.ownerDocument), expires: this.#now() + LIVE_REF_TTL_MS });
+    this.#entries.set(ref, { element: new WeakRef(element), document: new WeakRef(element.ownerDocument), expires: this.#now() + LIVE_REF_TTL_MS, ...this.#listFingerprint === undefined ? {} : { revision: this.#revision } });
     this.#reverse.set(element, ref);
     return ref;
   }
@@ -1432,6 +1453,10 @@ class LiveElementRefs {
       this.#entries.delete(ref);
       throw new LiveRefError("Live reference is stale, expired, disconnected, or belongs to another session/document");
     }
+    if (entry.revision !== undefined && (entry.revision !== this.#revision || this.#fingerprint(collectSemanticElements(this.document)) !== this.#listFingerprint)) {
+      this.#entries.delete(ref);
+      throw new LiveRefError("Live reference discovery list changed; discover and review a new selection");
+    }
     return element;
   }
   invalidate() {
@@ -1442,13 +1467,14 @@ class LiveElementRefs {
 }
 
 // src/verification/browser/dom/snapshot.ts
+var DISCOVERY_SOURCE_LIMITS = { controls: 32, timeMs: 8 };
 function incomplete(coverage, reason) {
   coverage.complete = false;
   coverage.truncated = true;
   if (!coverage.reasons.includes(reason))
     coverage.reasons.push(reason);
 }
-function summary(entry, refs, sanitize2, coverage) {
+function summary(entry, refs, sanitize2, coverage, source) {
   let truncated = entry.nameTruncated;
   const text2 = (value) => {
     const safe = sanitize2(value);
@@ -1476,10 +1502,19 @@ function summary(entry, refs, sanitize2, coverage) {
   }
   if (truncated)
     incomplete(coverage, "summary-truncated-or-redacted");
-  return { ...ref ? { ref } : {}, tag, role, name, label, testId, depth: entry.depth, disabled: entry.disabled, readonly: entry.readonly, ...truncated ? { truncated: true } : {} };
+  return { ...ref ? { ref } : {}, tag, role, name, label, testId, depth: entry.depth, disabled: entry.disabled, readonly: entry.readonly, ...truncated ? { truncated: true } : {}, ...source ? { controlSource: source(entry.element) } : {} };
 }
-function result(refs, sanitize2, query) {
+function result(refs, sanitize2, query, source) {
   const collected = collectSemanticElements(refs.document);
+  let probes = 0;
+  const sourceStarted = performance.now();
+  const boundedSource = source ? (element) => {
+    if (probes >= DISCOVERY_SOURCE_LIMITS.controls || performance.now() - sourceStarted >= DISCOVERY_SOURCE_LIMITS.timeMs)
+      return sourceUnavailable("probe-limit");
+    probes++;
+    return source(element);
+  } : undefined;
+  refs.beginDiscovery(collected);
   const matches = query ? collected.elements.filter((element) => matchesSemanticQuery(element, query)) : collected.elements;
   const output = {
     source: "sdk-reported",
@@ -1494,7 +1529,7 @@ function result(refs, sanitize2, query) {
   if (matches.length > SEMANTIC_LIMITS.summaries)
     incomplete(output.coverage, "summary-limit");
   for (const entry of matches.slice(0, SEMANTIC_LIMITS.summaries)) {
-    const item = summary(entry, refs, sanitize2, output.coverage);
+    const item = summary(entry, refs, sanitize2, output.coverage, boundedSource);
     output.elements.push(item);
     if (new TextEncoder().encode(JSON.stringify(output)).byteLength > SEMANTIC_LIMITS.bytes - 1024) {
       output.elements.pop();
@@ -1524,11 +1559,11 @@ function result(refs, sanitize2, query) {
   output.countExact = output.coverage.complete;
   return { result: output, ...output.coverage.truncated ? { truncated: true } : {} };
 }
-function findSemantic(query, refs, sanitize2) {
-  return result(refs, sanitize2, query);
+function findSemantic(query, refs, sanitize2, source) {
+  return result(refs, sanitize2, query, source);
 }
-function snapshotSemantic(refs, sanitize2) {
-  return result(refs, sanitize2);
+function snapshotSemantic(refs, sanitize2, source) {
+  return result(refs, sanitize2, undefined, source);
 }
 
 // src/verification/browser/actions/index.ts
@@ -1629,11 +1664,11 @@ function semanticTarget(ref, refs, fill) {
   }
   return element;
 }
-function runSemanticDomCommand(command, refs, sanitize2, beforeMutation) {
+function runSemanticDomCommand(command, refs, sanitize2, beforeMutation, source) {
   if (command.type === "find")
-    return findSemantic(command.query, refs, sanitize2);
+    return findSemantic(command.query, refs, sanitize2, source);
   if (command.type === "semantic-snapshot")
-    return snapshotSemantic(refs, sanitize2);
+    return snapshotSemantic(refs, sanitize2, source);
   const element = semanticTarget(command.ref, refs, command.type === "ref-fill");
   beforeMutation(element);
   if (command.type === "ref-click") {
@@ -2074,7 +2109,7 @@ function connect(options) {
       } else if (command.type === "find" || command.type === "semantic-snapshot" || command.type === "ref-click" || command.type === "ref-fill") {
         if (options.semanticRefs === false)
           throw new Error("Semantic references are not enabled for this runtime");
-        output = runSemanticDomCommand(command, refs, prepare, boundary);
+        output = runSemanticDomCommand(command, refs, prepare, boundary, sourceEnabled ? (element) => sanitizeControlSource(identifyReactControl(element, sourceRoot), (value) => String(prepare(value).value)) : undefined);
       } else
         output = runDomCommand(command, prepare, sourceEnabled ? boundary : undefined);
       const safe = command.type === "state" ? { value: output.result } : sanitizeWithReport(output.result);

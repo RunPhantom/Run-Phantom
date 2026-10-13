@@ -1,18 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { anchorForCandidate, flowObject, parseFlowDiscovery, resolveFlowAnchor, sourceMatch } from "./flow-anchors";
-import type { FlowAnchor, SemanticResult, VerificationFlow } from "./protocol";
+import { relativeTargets } from "./protocol";
+import type { FlowRepairCandidate, FlowRepairProposal, VerificationFlow } from "./protocol";
 import { VerificationHttpError } from "./bridge";
 
-export interface FlowRepairCandidate {
-  id: string; anchor: Extract<FlowAnchor, { kind: "semantic" }>; selectable: boolean;
-  sourceMatch: "same" | "changed" | "unavailable" | "unrecorded"; reason: string;
-}
-export interface FlowRepairProposal {
-  id: string; flowId: string; revision: string; step: number; oldAnchor: FlowAnchor;
-  oldMatch: { matches: number | null; reason: string };
-  candidates: FlowRepairCandidate[]; coverage: SemanticResult["coverage"];
-  ambiguous: boolean; sourceIncomplete: boolean; expiresAt: number;
-}
+export type { FlowRepairCandidate, FlowRepairProposal } from "./protocol";
 interface RetainedProposal {
   view: FlowRepairProposal; sessionId: string; generation: number; documentGeneration: string;
   refs: Map<string, string>;
@@ -29,7 +21,7 @@ export class FlowRepairReviews {
     if (this.proposals.size >= 100) throw new VerificationHttpError(409, "Repair proposal limit reached; cancel or wait for an existing proposal");
     if (!Number.isSafeInteger(stepIndex) || stepIndex < 0 || stepIndex >= flow.steps.length) throw new VerificationHttpError(400, "Invalid repair step");
     const step = flow.steps[stepIndex];
-    if (!step.anchor || step.command?.type !== "click") throw new VerificationHttpError(400, "Review repair supports saved click steps without relative CSS baselines");
+    if (!step.anchor || step.command?.type !== "click" || relativeTargets(step.predicate).length) throw new VerificationHttpError(400, "Review repair supports saved click steps without relative CSS baselines");
     const data = parseFlowDiscovery(raw);
     const refs = new Map<string, string>();
     const candidates = data.elements.filter(item => item.role && !["heading", "generic", "main", "navigation", "status"].includes(item.role)).slice(0, 100).map(item => {

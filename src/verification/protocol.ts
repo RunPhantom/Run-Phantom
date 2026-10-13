@@ -155,6 +155,16 @@ export interface VerificationFlow {
   steps: FlowStep[];
   createdAt: number;
 }
+export interface FlowRepairCandidate {
+  id: string; anchor: Extract<FlowAnchor, { kind: "semantic" }>; selectable: boolean;
+  sourceMatch: "same" | "changed" | "unavailable" | "unrecorded"; reason: string;
+}
+export interface FlowRepairProposal {
+  id: string; flowId: string; revision: string; step: number; oldAnchor: FlowAnchor;
+  oldMatch: { matches: number | null; reason: string };
+  candidates: FlowRepairCandidate[]; coverage: SemanticCoverage;
+  ambiguous: boolean; sourceIncomplete: boolean; expiresAt: number;
+}
 export interface Verdict { status: VerificationStatus; reason: string; evidence: RuntimeEvent[] }
 export interface VerificationCheckContext {
   step: number;

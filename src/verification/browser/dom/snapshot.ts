@@ -1,9 +1,12 @@
-import type { SemanticQuery, SemanticSummary, SemanticResult } from "../../protocol.js";
+import type { SemanticQuery, SemanticSummary, SemanticResult, ControlSourceObservation } from "../../protocol.js";
 export type { SemanticSummary, SemanticResult } from "../../protocol.js";
+import { sourceUnavailable } from "../../build/source.js";
 import { sanitizeWithReport } from "../../serialization.js";
 import { collectSemanticElements, matchesSemanticQuery, SEMANTIC_LIMITS, type SemanticCoverage, type SemanticElement } from "./query.js";
 import { LiveElementRefs, LiveRefError } from "./refs.js";
 
+export const DISCOVERY_SOURCE_LIMITS = { controls: 32, timeMs: 8 } as const;
+type SourceReader = (element: Element) => ControlSourceObservation;
 type Sanitize = (value: unknown) => { value: unknown; truncated: boolean };
 
 function incomplete(coverage: SemanticCoverage, reason: string): void {
@@ -11,7 +14,7 @@ function incomplete(coverage: SemanticCoverage, reason: string): void {
   if (!coverage.reasons.includes(reason)) coverage.reasons.push(reason);
 }
 
-function summary(entry: SemanticElement, refs: LiveElementRefs, sanitize: Sanitize, coverage: SemanticCoverage): SemanticSummary {
+function summary(entry: SemanticElement, refs: LiveElementRefs, sanitize: Sanitize, coverage: SemanticCoverage, source?: SourceReader): SemanticSummary {
   let truncated = entry.nameTruncated;
   const text = (value: string): string => {
     const safe = sanitize(value);
@@ -28,17 +31,25 @@ function summary(entry: SemanticElement, refs: LiveElementRefs, sanitize: Saniti
     else truncated = true;
   } catch (error) { incomplete(coverage, error instanceof LiveRefError && error.code === "capacity" ? "reference-capacity-exhausted" : "reference-unavailable"); }
   if (truncated) incomplete(coverage, "summary-truncated-or-redacted");
-  return { ...(ref ? { ref } : {}), tag, role, name, label, testId, depth: entry.depth, disabled: entry.disabled, readonly: entry.readonly, ...(truncated ? { truncated: true } : {}) };
+  return { ...(ref ? { ref } : {}), tag, role, name, label, testId, depth: entry.depth, disabled: entry.disabled, readonly: entry.readonly, ...(truncated ? { truncated: true } : {}), ...(source ? { controlSource: source(entry.element) } : {}) };
 }
 
-function result(refs: LiveElementRefs, sanitize: Sanitize, query?: SemanticQuery): { result: SemanticResult; truncated?: boolean } {
+function result(refs: LiveElementRefs, sanitize: Sanitize, query?: SemanticQuery, source?: SourceReader): { result: SemanticResult; truncated?: boolean } {
   const collected = collectSemanticElements(refs.document);
+  let probes = 0;
+  const sourceStarted = performance.now();
+  const boundedSource: SourceReader | undefined = source ? element => {
+    if (probes >= DISCOVERY_SOURCE_LIMITS.controls || performance.now() - sourceStarted >= DISCOVERY_SOURCE_LIMITS.timeMs) return sourceUnavailable("probe-limit");
+    probes++;
+    return source(element);
+  } : undefined;
+  refs.beginDiscovery(collected);
   const matches = query ? collected.elements.filter(element => matchesSemanticQuery(element, query)) : collected.elements;
   const output: SemanticResult = { source: "sdk-reported", nameModel: "partial-aria", documentGeneration: refs.documentGeneration,
     ...(query ? { query } : {}), count: matches.length, countExact: collected.coverage.complete, elements: [], coverage: collected.coverage };
   if (matches.length > SEMANTIC_LIMITS.summaries) incomplete(output.coverage, "summary-limit");
   for (const entry of matches.slice(0, SEMANTIC_LIMITS.summaries)) {
-    const item = summary(entry, refs, sanitize, output.coverage);
+    const item = summary(entry, refs, sanitize, output.coverage, boundedSource);
     output.elements.push(item);
     if (new TextEncoder().encode(JSON.stringify(output)).byteLength > SEMANTIC_LIMITS.bytes - 1024) {
       output.elements.pop(); incomplete(output.coverage, "output-byte-limit"); break;
@@ -61,5 +72,5 @@ function result(refs: LiveElementRefs, sanitize: Sanitize, query?: SemanticQuery
   return { result: output, ...(output.coverage.truncated ? { truncated: true } : {}) };
 }
 
-export function findSemantic(query: SemanticQuery, refs: LiveElementRefs, sanitize: Sanitize) { return result(refs, sanitize, query); }
-export function snapshotSemantic(refs: LiveElementRefs, sanitize: Sanitize) { return result(refs, sanitize); }
+export function findSemantic(query: SemanticQuery, refs: LiveElementRefs, sanitize: Sanitize, source?: SourceReader) { return result(refs, sanitize, query, source); }
+export function snapshotSemantic(refs: LiveElementRefs, sanitize: Sanitize, source?: SourceReader) { return result(refs, sanitize, undefined, source); }
