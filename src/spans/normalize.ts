@@ -32,7 +32,7 @@ import { openInferenceLlmAdapter, openInferenceToolAdapter } from "./adapters/op
 import { genAiMetadataAdapter, genAiToolAdapter } from "./adapters/gen-ai";
 
 import { parseBoundedHookJson } from "../coding-hooks/shared";
-import { claudeHookAdapter, CLAUDE_HOOK_CAPTURE_CONTRACT } from "./adapters/claude-hook";
+import { claudeHookAdapter } from "./adapters/claude-hook";
 
 const ADAPTERS: SpanAdapter[] = [
   claudeHookAdapter,
@@ -71,8 +71,8 @@ export function adapterInputFromStoredSpan(row: {
   let attrs: Record<string, string | number | boolean> = {};
   if (row.attributes) {
     try { attrs = JSON.parse(row.attributes); } catch { /* leave empty */ }
-    if (attrs?.captureContract === CLAUDE_HOOK_CAPTURE_CONTRACT && parseBoundedHookJson(row.attributes, 16384).status !== "accepted") {
-      attrs = { captureContract: CLAUDE_HOOK_CAPTURE_CONTRACT, invalidCapture: true };
+    if (typeof attrs?.captureContract === "string" && attrs.captureContract.startsWith("runphantom.claude-hook.observation/") && parseBoundedHookJson(row.attributes, 16384).status !== "accepted") {
+      attrs = { captureContract: attrs.captureContract, invalidCapture: true };
     }
   }
   const spanType =

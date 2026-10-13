@@ -8,7 +8,7 @@ import { parseBoundedHookJson, type ClaudeHookInput } from "./shared";
 import type { HookAdmission } from "./store";
 
 export const CLIENT_LIMITS = Object.freeze({ responseBytes: 16384, requestMs: 300, transportBytes: 262144 });
-function post(capability: ClaudeCapabilityDescriptor, endpoint: "admission" | "publication", body: unknown, signal: AbortSignal): Promise<Record<string, unknown>> {
+export function postClaudeHook(capability: ClaudeCapabilityDescriptor, endpoint: "admission" | "publication", body: unknown, signal: AbortSignal): Promise<Record<string, unknown>> {
   const encoded = JSON.stringify(body);
   if (Buffer.byteLength(encoded) > CLIENT_LIMITS.transportBytes || capability.state !== "active" || !capability.origin || !capability.token || signal.aborted) return Promise.reject(new Error("unavailable"));
   return new Promise((resolve, reject) => {
@@ -35,7 +35,7 @@ function post(capability: ClaudeCapabilityDescriptor, endpoint: "admission" | "p
     if (signal.aborted) abort(); else client.end(encoded);
   });
 }
-function admitted(value: Record<string, unknown>, capability: ClaudeCapabilityDescriptor, hook: ClaudeHookInput, project: string): HookAdmission {
+export function validateMainAdmission(value: Record<string, unknown>, capability: ClaudeCapabilityDescriptor, hook: ClaudeHookInput, project: string): HookAdmission {
   const keys = ["version", "ownerGeneration", "installationGeneration", "sourceKey", "runId", "rootSpanId", "captureMode", "transcriptCursor", "incarnationKey", "prefixBytes", "prefixSha256", "observedFileBytes", "binding", "coverage", "producerVerified", "runtimeVerified"];
   if (Object.keys(value).sort().join() !== keys.sort().join() || value.version !== HOOK_PROTOCOL || value.ownerGeneration !== capability.ownerGeneration || value.installationGeneration !== capability.installationGeneration
     || !isHex(value.sourceKey, 64) || !isHex(value.runId, 32) || !isHex(value.rootSpanId, 16) || value.coverage !== "partial" || value.producerVerified !== false || value.runtimeVerified !== false) throw new Error("unavailable");
@@ -59,9 +59,9 @@ export async function captureClaudeHook(raw: string, hook: ClaudeHookInput, file
   if (!reported || !path.isAbsolute(reported) || path.normalize(reported) !== reported) return;
   const project = path.dirname(reported);
   const sourceSessionIdentity = hookDigest(JSON.stringify(["runphantom.claude.session-identity/v1", hook.sessionId]));
-  const reply = await post(capability, "admission", { version: HOOK_PROTOCOL, sourceSessionIdentity, workspaceClaim: hookDigest(JSON.stringify(["runphantom.claude.workspace-claim/v1", hook.cwd])), projectClaim: hookDigest(JSON.stringify(["runphantom.claude.project-claim/v1", project])) }, signal);
-  const admission = admitted(reply, capability, hook, project);
+  const reply = await postClaudeHook(capability, "admission", { version: HOOK_PROTOCOL, sourceSessionIdentity, workspaceClaim: hookDigest(JSON.stringify(["runphantom.claude.workspace-claim/v1", hook.cwd])), projectClaim: hookDigest(JSON.stringify(["runphantom.claude.project-claim/v1", project])) }, signal);
+  const admission = validateMainAdmission(reply, capability, hook, project);
   const acquired = await acquireRegisteredClaudeTranscript(hook, admission, signal); if (acquired.status !== "accepted" || signal.aborted) return;
   const normalized = normalizeClaudeHook(raw, { sourceKey: admission.sourceKey, captureMode: admission.captureMode }, acquired.value); if (normalized.status !== "accepted" || signal.aborted) return;
-  await post(capability, "publication", { version: HOOK_PROTOCOL, ownerGeneration: admission.ownerGeneration, installationGeneration: admission.installationGeneration, sourceKey: admission.sourceKey, batch: normalized.value }, signal);
+  await postClaudeHook(capability, "publication", { version: HOOK_PROTOCOL, ownerGeneration: admission.ownerGeneration, installationGeneration: admission.installationGeneration, sourceKey: admission.sourceKey, batch: normalized.value }, signal);
 }

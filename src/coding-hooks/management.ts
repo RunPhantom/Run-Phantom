@@ -6,6 +6,8 @@ import { inspectClaudeHookSettings, mergeClaudeSettings, readClaudeSettingsText,
 import { hookDigest, isHex, refuse } from "./protocol";
 import { encodeInstallationCatalog, registrationForBinding, validateCatalog, type SourceRegistration } from "./catalog";
 import { CodingHookStore, validateInstallationBinding, type InstallationBinding } from "./store";
+import { parseTransitionV2 } from "./context-v2";
+import { ContextTransitionStore, type ContextPauseGate, type FencedTransition } from "./context-transition";
 
 import { CAPABILITY_VERSION, capabilityOwnerKey, encodeClaudeCapability, readClaudeCapabilityDescriptor, validClaudeCapabilityOrigin, type ClaudeCapabilityDescriptor } from "./capability";
 const sameFile = (left: BigIntStats, right: BigIntStats) => left.dev === right.dev && left.ino === right.ino && left.birthtimeNs === right.birthtimeNs;
@@ -59,10 +61,67 @@ export class ClaudeHookManagement {
       await rename(temporary, file);
     } finally { const current = await lstat(temporary, { bigint: true }).catch(() => null); if (current && sameFile(current, temporaryStats!)) await unlink(temporary); }
   }
+  /** Inactive internal owner action; neither callback bodies nor normal startup can invoke it. */
+  async transitionContextV2(raw: string, gate: ContextPauseGate): Promise<{ status: "configured"; unchanged: boolean; captureVerified: false }> {
+    if (!this.store.contextOptions.contextTransport || !this.transportActive || this.transportOrigin === null) refuse("inactive", 503);
+    const transitions = new ContextTransitionStore(this.store), request = parseTransitionV2(raw), plan = transitions.plan(request);
+    const validateFiles = async (directory: string, ownerKey: string, fenced?: FencedTransition, committed = false) => {
+      for (const before of plan.installations) {
+        const selected = fenced?.selected.find(value => value.before.row.id === before.row.id);
+        if (!selected && before.row.state !== "active") continue;
+        const file = path.join(directory, before.row.id + ".json"), descriptor = await readClaudeCapabilityDescriptor(file, before.row.id, ownerKey);
+        const active = selected ? committed && before.row.state === "active" : before.row.state === "active";
+        if (active ? descriptor.state !== "active" || descriptor.token === null || hookDigest(descriptor.token) !== (selected ? hookDigest(selected.token) : before.row.token_sha256) || descriptor.installationGeneration !== (selected?.generation ?? before.row.generation) || descriptor.ownerGeneration !== (fenced?.ownerGeneration ?? request.expectedOwnerGeneration) || descriptor.origin !== this.transportOrigin : descriptor.state !== "disabled") refuse("stale");
+        if (hookDigest(await readClaudeSettingsText(before.binding.settingsPath) ?? "") !== before.row.config_sha256) refuse("stale");
+        const config = await inspectClaudeHookSettings(before.binding.settingsPath, { installationId: before.row.id, executable: before.binding.executable, capabilityFile: file });
+        if (config.configuration !== "installed") refuse("stale");
+      }
+    };
+    if (plan.unchanged) {
+      const directory = await this.directory(), ownerKey = capabilityOwnerKey(await realpath(this.store.db.filename));
+      await validateFiles(directory, ownerKey, undefined, true); transitions.plan(request);
+      return { status: "configured", unchanged: true, captureVerified: false };
+    }
+    // Pause and SQL fencing happen synchronously before the first filesystem/drain await.
+    gate.pause(); const fenced = transitions.fence(plan);
+    try {
+      await gate.drain();
+      const directory = await this.directory(), ownerKey = capabilityOwnerKey(await realpath(this.store.db.filename));
+      const required = plan.installations.filter(value => request.installationIds.includes(value.row.id) || value.row.state === "active");
+      const lock = async (offset: number): Promise<void> => {
+        if (offset < required.length) return this.lease(directory, required[offset].row.id, () => lock(offset + 1));
+        for (const before of required) {
+          const file = path.join(directory, before.row.id + ".json"), prior = await readClaudeCapabilityDescriptor(file, before.row.id, ownerKey), selected = fenced.selected.find(value => value.before.row.id === before.row.id);
+          if (before.row.state === "active" && (prior.state !== "active" || prior.token === null || hookDigest(prior.token) !== before.row.token_sha256 || prior.installationGeneration !== before.row.generation || prior.ownerGeneration !== request.expectedOwnerGeneration || prior.origin !== this.transportOrigin)) refuse("stale");
+          if (before.row.state === "disabled" && prior.state !== "disabled") refuse("stale");
+          if (hookDigest(await readClaudeSettingsText(before.binding.settingsPath) ?? "") !== before.row.config_sha256) refuse("stale");
+          const descriptor: ClaudeCapabilityDescriptor = selected
+            ? { version: CAPABILITY_VERSION, installationId: before.row.id, capabilityFile: file, ownerKey, state: "disabled", token: null, ownerGeneration: null, installationGeneration: null, origin: null }
+            : { ...prior, ownerGeneration: fenced.ownerGeneration };
+          await this.writeCapability(directory, descriptor);
+        }
+        await validateFiles(directory, ownerKey, fenced, false); transitions.commit(fenced);
+        for (const selected of fenced.selected) if (selected.before.row.state === "active") await this.writeCapability(directory, { version: CAPABILITY_VERSION, installationId: selected.before.row.id, capabilityFile: path.join(directory, selected.before.row.id + ".json"), ownerKey, state: "active", token: selected.token, ownerGeneration: fenced.ownerGeneration, installationGeneration: selected.generation, origin: this.transportOrigin });
+        await validateFiles(directory, ownerKey, fenced, true);
+        gate.resume(fenced.ownerGeneration, () => transitions.checkpoint(fenced, true));
+      };
+      await lock(0); return { status: "configured", unchanged: false, captureVerified: false };
+    } catch (error) { transitions.fail(fenced); throw error; }
+  }
   async install(input: InstallationBinding, options: { fullConsent?: boolean; registrations?: SourceRegistration[]; expectedInstallationGeneration?: string } = {}): Promise<{ status: "configured"; installationId: string; policy: "active" | "disabled"; captureMode: "metadata" | "full"; captureCoverage: "inactive" | "registered_workspace_only" | "registered_workspaces"; registrationCount: number; transport: "unavailable" | "available"; captureVerified: false; unchanged: boolean }> {
+    if (this.store.contextOptions.contextTransport) {
+      const candidate = validateInstallationBinding(input), registrations = validateCatalog(candidate, options.registrations), before = this.store.readInstallation(candidate.installationId);
+      if (options.expectedInstallationGeneration !== undefined && before?.row.generation !== options.expectedInstallationGeneration) refuse("stale");
+      if (candidate.captureMode === "full" && options.fullConsent !== true) refuse("unauthorized", 401);
+      const data = encodeInstallationCatalog(candidate, registrations, this.store.sharedCatalogVersion(candidate.installationId, registrations));
+      if (before && before.row.data !== data) {
+        this.store.fenceInstallationPreservingPolicy(candidate.installationId);
+        options = { ...options, expectedInstallationGeneration: this.store.readInstallation(candidate.installationId)!.row.generation };
+      }
+    }
     const binding = await this.binding(input), registrations = validateCatalog(binding, options.registrations);
     for (const registration of registrations) for (const directory of [registration.registeredWorkspace, registration.transcriptRoot, registration.projectDirectory, registration.homeDirectory]) { const stats = await lstat(directory); if (!stats.isDirectory() || stats.isSymbolicLink() || await realpath(directory) !== directory) refuse("unknown_scope", 409); }
-    const catalogData = encodeInstallationCatalog(binding, registrations);
+    const catalogData = encodeInstallationCatalog(binding, registrations, this.store.sharedCatalogVersion(binding.installationId, registrations));
     if (binding.captureMode === "full" && options.fullConsent !== true) refuse("unauthorized", 401);
     const directory = await this.directory(), capabilityPath = path.join(directory, binding.installationId + ".json"), ownerKey = capabilityOwnerKey(await realpath(this.store.db.filename));
     const authority = { executable: binding.executable, installationId: binding.installationId, capabilityFile: capabilityPath };
@@ -112,6 +171,7 @@ export class ClaudeHookManagement {
     return this.install({ ...before.binding, registeredWorkspace: primary.registeredWorkspace, transcriptRoot: primary.transcriptRoot, projectDirectory: primary.projectDirectory, homeDirectory: primary.homeDirectory }, { registrations, expectedInstallationGeneration: before.row.generation });
   }
   async uninstall(id: string, input?: InstallationBinding): Promise<{ status: "removed" | "configuration_preserved"; capturePolicy: "disabled"; captureVerified: false }> {
+    if (this.store.contextOptions.contextTransport && isHex(id, 32)) this.store.disableInstallation(id);
     if (!isHex(id, 32)) refuse("malformed", 400); const known = input === undefined ? null : await this.binding(input); if (known && known.installationId !== id) refuse("malformed", 400);
     const directory = await this.directory(), file = path.join(directory, id + ".json"), ownerKey = capabilityOwnerKey(await realpath(this.store.db.filename));
     return this.lease(directory, id, async () => {

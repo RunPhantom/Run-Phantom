@@ -3,6 +3,9 @@ import { isLoopbackRemoteAddress } from "../local-access";
 import { HOOK_LIMITS } from "./shared";
 import { HookRefusal, HOOK_PROTOCOL, parseHookAdmission, parseHookPublication } from "./protocol";
 import { CodingHookStore } from "./store";
+import { ContextHookStore } from "./context-store";
+import { parseAdmissionV2 } from "./context-v2";
+import { parseBoundedHookJson } from "./shared";
 
 export const SERVICE_LIMITS = Object.freeze({ active: 2, queued: 8, bodyMs: 1000, lifetimeMs: 2000, responseBytes: 16384 });
 interface Work { request: IncomingMessage; response: ServerResponse; token: string; signal: AbortController; run: () => void; cancel: () => void; }
@@ -28,6 +31,7 @@ function acquireBody(request: IncomingMessage, signal: AbortSignal): Promise<str
 /** Raw controller behind existing local guards, before general body parsing. */
 export class CodingHookController {
   private closed = false;
+  private paused = false;
   private active = new Set<Work>();
   private queued: Work[] = [];
   private pending = new Set<Promise<void>>();
@@ -47,7 +51,7 @@ export class CodingHookController {
   handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     request.pause();
     try {
-      if (this.closed) throw new HookRefusal("closed", 503);
+      if (this.closed || this.paused) throw new HookRefusal("closed", 503);
       const port = request.socket.localPort, host = request.headers.host, allowed = [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`];
       if (!isLoopbackRemoteAddress(request.socket.remoteAddress) || !host || !allowed.includes(host) || request.headers.origin !== undefined && !allowed.map(host => "http://" + host).includes(request.headers.origin)) throw new HookRefusal("unauthorized", 403);
       if (request.method !== "POST" || !["/api/coding-hooks/claude/admission", "/api/coding-hooks/claude/publication"].includes(request.url ?? "")) throw new HookRefusal("malformed", 404);
@@ -66,11 +70,26 @@ export class CodingHookController {
         void (async () => {
           try {
             const raw = await acquireBody(request, signal.signal);
-            if (signal.signal.aborted || this.closed) throw new HookRefusal(this.closed ? "closed" : "deadline", this.closed ? 503 : 408);
+            if (signal.signal.aborted || this.closed || this.paused) throw new HookRefusal(this.closed || this.paused ? "closed" : "deadline", this.closed || this.paused ? 503 : 408);
             if (request.url === "/api/coding-hooks/claude/admission") {
+              if (this.store.contextOptions.contextTransport) {
+                const candidate = parseBoundedHookJson(raw, 16384);
+                if (candidate.status === "accepted" && candidate.value && typeof candidate.value === "object" && !Array.isArray(candidate.value) && candidate.value.version === 2) {
+                  const result = new ContextHookStore(this.store).admit(token, parseAdmissionV2(raw));
+                  this.respond(request, response, 200, result); return;
+                }
+              }
               const parsed = parseHookAdmission(raw), admission = this.store.admit(token, parsed.sourceSessionIdentity, { workspaceClaim: parsed.workspaceClaim, projectClaim: parsed.projectClaim });
               this.respond(request, response, 200, { version: HOOK_PROTOCOL, ...admission, coverage: "partial", producerVerified: false, runtimeVerified: false });
             } else {
+              if (this.store.contextOptions.contextTransport) {
+                const candidate = parseBoundedHookJson(raw);
+                if (candidate.status === "accepted" && candidate.value && typeof candidate.value === "object" && !Array.isArray(candidate.value) && candidate.value.version === 2) {
+                  const result = new ContextHookStore(this.store).publish(token, raw);
+                  try { this.published(result.runId); } catch { /* Notifications confer no capture authority. */ }
+                  this.respond(request, response, 200, { version: 2, ...result, coverage: "partial", runtimeVerified: false }); return;
+                }
+              }
               const publication = parseHookPublication(raw);
               const result = this.store.publish(token, publication, publication.batch);
               try { this.published(result.runId); } catch { /* Notification failure cannot undo a committed observation. */ }
@@ -94,7 +113,17 @@ export class CodingHookController {
   private release(work: Work): void {
     const release = this.releases.get(work); if (!release) return;
     this.releases.delete(work); this.active.delete(work); const index = this.queued.indexOf(work); if (index >= 0) this.queued.splice(index, 1); release();
-    if (!this.closed) while (this.active.size < SERVICE_LIMITS.active && this.queued.length) this.queued.shift()!.run();
+    if (!this.closed && !this.paused) while (this.active.size < SERVICE_LIMITS.active && this.queued.length) this.queued.shift()!.run();
+  }
+  pause(): void {
+    if (this.closed) throw new HookRefusal("closed", 503);
+    this.paused = true;
+    for (const work of [...this.active, ...this.queued]) work.signal.abort("closed");
+  }
+  async drain(): Promise<void> { await Promise.all([...this.pending]); }
+  resume(ownerGeneration: string, checkpoint: () => void): void {
+    if (!this.paused || this.closed || this.pending.size || this.store.currentOwnerGeneration() !== ownerGeneration) throw new HookRefusal("stale");
+    checkpoint(); this.paused = false;
   }
   async close(): Promise<void> { this.closed = true; for (const work of [...this.active, ...this.queued]) work.signal.abort("closed"); await Promise.all([...this.pending]); }
 }
