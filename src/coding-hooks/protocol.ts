@@ -27,6 +27,7 @@ export function parseHookPublication(raw: unknown): { ownerGeneration: string; i
 }
 
 const reasons = (value: HookJson): value is string[] => Array.isArray(value) && value.length <= 64 && value.every(reason => typeof reason === "string" && COVERAGE_REASONS.has(reason));
+export const validCoverageReasons = reasons;
 function validateClaudeEntity(candidate: HookJson, sourceKey: string, context: { incarnationKey: HookJson; transcriptCursor: HookJson }): NormalizedClaudeEntity {
   if (!object(candidate) || Buffer.byteLength(JSON.stringify(candidate)) > NORMALIZATION_LIMITS.entityBytes) refuse("malformed", 400);
   closed(candidate, ["entityKey", "kind", "phase", "name", "model", "sourceKind", "incarnationKey", "sourceOffset", "reportedAt", "reportedDurationMs", "runtimeDurationMs", "runtimeVerified", "producerVerified", "usage", "body", "coverageReasons"]);

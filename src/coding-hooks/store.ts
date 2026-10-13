@@ -2,10 +2,11 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import type { Database } from "bun:sqlite";
 import type { NormalizedClaudeBatch, NormalizedClaudeEntity } from "./claude";
-import { CATALOG_VERSION, encodeInstallationCatalog, registrationForBinding, selectRegistration, sourceRootKey, validateCatalog, type SourceRegistration } from "./catalog";
+import { CATALOG_VERSION, CATALOG_CONTEXT_VERSION, encodeInstallationCatalog, registrationForBinding, selectRegistration, sourceRootKey, validateCatalog, type CatalogVersion, type SourceRegistration } from "./catalog";
 import type { HookSourceClaims } from "./protocol";
 import { parseBoundedHookJson } from "./shared";
 import { claudeEntityProjection } from "./projection";
+import { validateLegacySource } from "./retained-version";
 import { HookRefusal, hookDigest, isHex, refuse, validateClaudeBatch, validateClaudeRetainedEntity } from "./protocol";
 
 export const STORE_LIMITS = Object.freeze({ installations: 64, registrations: 64, sessions: 10000, sessionEntities: 1000, entities: 100000, bytes: 33554432 });
@@ -35,7 +36,7 @@ export function validateInstallationBinding(binding: InstallationBinding): Insta
 /** Uses the injected owner connection; never creates schema or selects a profile/database. */
 export class CodingHookStore {
   private readonly limits: StoreLimits;
-  constructor(readonly db: Database, limits: Partial<StoreLimits> = {}, private readonly ownerActive: () => boolean = () => false) {
+  constructor(readonly db: Database, limits: Partial<StoreLimits> = {}, private readonly ownerActive: () => boolean = () => false, readonly contextOptions: { contextTransport: boolean } = { contextTransport: false }) {
     this.limits = { ...STORE_LIMITS, ...limits };
     for (const key of Object.keys(STORE_LIMITS) as (keyof typeof STORE_LIMITS)[]) if (!Number.isSafeInteger(this.limits[key]) || this.limits[key] < 1 || this.limits[key] > STORE_LIMITS[key]) refuse("malformed", 400);
   }
@@ -62,19 +63,19 @@ export class CodingHookStore {
     if (!isHex(id, 32)) refuse("malformed", 400);
     return this.db.query("SELECT id,generation,capture_mode,state,source_root_key,token_sha256,config_sha256,CASE WHEN length(CAST(data AS BLOB))<=16384 THEN data END data FROM coding_hook_installations WHERE id=?").get(id) as InstallationRow | null;
   }
-  readInstallation(id: string): { row: InstallationRow; binding: InstallationBinding; registrations: SourceRegistration[] } | null {
+  readInstallation(id: string): { row: InstallationRow; binding: InstallationBinding; registrations: SourceRegistration[]; catalogVersion: CatalogVersion } | null {
     this.checkQuota(); const row = this.installation(id); if (!row) return null;
     if (!row.data || !isHex(row.generation, 32) || !isHex(row.source_root_key, 64) || !isHex(row.token_sha256, 64) || !isHex(row.config_sha256, 64)) refuse("corrupt", 503);
-    let binding: InstallationBinding, registrations: SourceRegistration[];
+    let binding: InstallationBinding, registrations: SourceRegistration[], catalogVersion: CatalogVersion;
     try {
-      const parsed = parseBoundedHookJson(row.data, 16384); if (parsed.status !== "accepted" || !parsed.value || typeof parsed.value !== "object" || Array.isArray(parsed.value) || Object.keys(parsed.value).sort().join(",") !== "binding,registrations,version" || parsed.value.version !== CATALOG_VERSION) refuse("corrupt", 503);
-      binding = validateInstallationBinding(parsed.value.binding as unknown as InstallationBinding); registrations = validateCatalog(binding, parsed.value.registrations as unknown as SourceRegistration[]);
-      if (encodeInstallationCatalog(binding, registrations) !== row.data) refuse("corrupt", 503);
+      const parsed = parseBoundedHookJson(row.data, 16384); if (parsed.status !== "accepted" || !parsed.value || typeof parsed.value !== "object" || Array.isArray(parsed.value) || Object.keys(parsed.value).sort().join(",") !== "binding,registrations,version" || parsed.value.version !== CATALOG_VERSION && (!this.contextOptions.contextTransport || parsed.value.version !== CATALOG_CONTEXT_VERSION)) refuse("corrupt", 503);
+      catalogVersion = parsed.value.version; binding = validateInstallationBinding(parsed.value.binding as unknown as InstallationBinding); registrations = validateCatalog(binding, parsed.value.registrations as unknown as SourceRegistration[]);
+      if (encodeInstallationCatalog(binding, registrations, catalogVersion) !== row.data) refuse("corrupt", 503);
     } catch { refuse("corrupt", 503); }
     if (binding.installationId !== id || binding.captureMode !== row.capture_mode || rootKey(binding) !== row.source_root_key || !["active", "disabled"].includes(row.state)) refuse("corrupt", 503);
-    return { row, binding, registrations };
+    return { row, binding, registrations, catalogVersion };
   }
-  authenticate(token: string): { row: InstallationRow; binding: InstallationBinding; registrations: SourceRegistration[]; ownerGeneration: string; sourceEpoch: string } {
+  authenticate(token: string): { row: InstallationRow; binding: InstallationBinding; registrations: SourceRegistration[]; catalogVersion: CatalogVersion; ownerGeneration: string; sourceEpoch: string } {
     if (!isHex(token, 64)) refuse("unauthorized", 401);
     this.checkQuota();
     const found = this.db.query("SELECT id FROM coding_hook_installations WHERE token_sha256=?").get(hookDigest(token)) as { id: string } | null;
@@ -83,14 +84,32 @@ export class CodingHookStore {
     const owner = this.owner(); return { ...installed, ownerGeneration: owner.generation, sourceEpoch: owner.source_epoch };
   }
   prepareInstallation(binding: InstallationBinding, token: string, configSha256: string, input: SourceRegistration[] = [registrationForBinding(binding)]): { installationGeneration: string; ownerGeneration: string; unchanged: boolean } {
-    binding = validateInstallationBinding(binding); const registrations = validateCatalog(binding, input), data = encodeInstallationCatalog(binding, registrations); if (!isHex(token, 64) || !isHex(configSha256, 64)) refuse("malformed", 400);
+    binding = validateInstallationBinding(binding); const registrations = validateCatalog(binding, input); if (!isHex(token, 64) || !isHex(configSha256, 64)) refuse("malformed", 400);
     return this.transaction(() => {
+      const data = encodeInstallationCatalog(binding, registrations, this.sharedCatalogVersion(binding.installationId, registrations));
       const owner = this.owner(); this.checkQuota(); const before = this.readInstallation(binding.installationId), tokenSha256 = hookDigest(token);
       if (before?.row.state === "active" && before.row.data === data && before.row.config_sha256 === configSha256 && before.row.token_sha256 === tokenSha256) return { installationGeneration: before.row.generation, ownerGeneration: owner.generation, unchanged: true };
       const generation = random();
       this.db.query("INSERT INTO coding_hook_installations VALUES(?,1,?,?,'disabled',?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,token_sha256=excluded.token_sha256,state='disabled',capture_mode=excluded.capture_mode,scope=excluded.scope,workspace=excluded.workspace,transcript_root=excluded.transcript_root,source_root_key=excluded.source_root_key,config_sha256=excluded.config_sha256,data=excluded.data,updated_at=excluded.updated_at").run(binding.installationId, generation, tokenSha256, binding.captureMode, binding.scope, binding.workspace, binding.transcriptRoot, rootKey(binding), configSha256, data, Date.now());
       this.checkQuota(); return { installationGeneration: generation, ownerGeneration: owner.generation, unchanged: false };
     });
+  }
+  /** Trusted management registrations inherit eligibility; callback/request bodies cannot select a version. */
+  sharedCatalogVersion(id: string, registrations: SourceRegistration[]): CatalogVersion {
+    if (!this.contextOptions.contextTransport) return CATALOG_VERSION;
+    const ids = this.db.query("SELECT id FROM coding_hook_installations LIMIT 65").all() as { id: string }[];
+    if (ids.length > 64) refuse("quota", 507);
+    const shared = new Set<CatalogVersion>();
+    for (const current of ids) {
+      const installed = this.readInstallation(current.id); if (!installed) refuse("corrupt", 503);
+      for (const root of installed.registrations) for (const candidate of registrations) {
+        if (root.registrationId === candidate.registrationId && JSON.stringify(root) !== JSON.stringify(candidate)
+          || root.registrationId !== candidate.registrationId && root.registeredWorkspace === candidate.registeredWorkspace) refuse("unknown_scope");
+      }
+      if (current.id === id || installed.registrations.some(root => registrations.some(candidate => root.registrationId === candidate.registrationId))) shared.add(installed.catalogVersion);
+    }
+    if (shared.size > 1) refuse("unknown_scope");
+    return shared.has(CATALOG_CONTEXT_VERSION) ? CATALOG_CONTEXT_VERSION : CATALOG_VERSION;
   }
   commitInstallation(id: string, generation: string, token: string, configSha256: string, ownerGeneration: string): void {
     this.transaction(() => { if (!isHex(ownerGeneration, 32) || this.owner().generation !== ownerGeneration) refuse("stale"); const installed = this.readInstallation(id); if (!installed || installed.row.generation !== generation || installed.row.token_sha256 !== hookDigest(token) || installed.row.config_sha256 !== configSha256) refuse("stale");
@@ -99,7 +118,12 @@ export class CodingHookStore {
   disableInstallation(id: string): void {
     this.transaction(() => { const before = this.readInstallation(id); if (!before) return;
       const binding = { ...before.binding, captureMode: "metadata" as const };
-      this.db.query("UPDATE coding_hook_installations SET state='disabled',capture_mode='metadata',generation=?,token_sha256=?,data=?,updated_at=? WHERE id=?").run(random(), hookDigest(randomBytes(32).toString("hex")), encodeInstallationCatalog(binding, before.registrations), Date.now(), id); });
+      this.db.query("UPDATE coding_hook_installations SET state='disabled',capture_mode='metadata',generation=?,token_sha256=?,data=?,updated_at=? WHERE id=?").run(random(), hookDigest(randomBytes(32).toString("hex")), encodeInstallationCatalog(binding, before.registrations, before.catalogVersion), Date.now(), id); });
+  }
+  fenceInstallationPreservingPolicy(id: string): void {
+    this.contextTransaction(() => { const before = this.readInstallation(id); if (!before) return;
+      this.db.query("UPDATE coding_hook_installations SET state='disabled',generation=?,token_sha256=?,updated_at=? WHERE id=?").run(random(), hookDigest(randomBytes(32).toString("hex")), Date.now(), id);
+    });
   }
   private session(sourceKey: string): SessionRow | null {
     if (!isHex(sourceKey, 64)) refuse("malformed", 400);
@@ -111,6 +135,10 @@ export class CodingHookStore {
     if (!isHex(identity, 64)) refuse("malformed", 400);
     return this.transaction(() => {
       const authority = this.authenticate(token), registration = selectRegistration(authority.registrations, claims), sourceKey = hookDigest(JSON.stringify(["runphantom.claude.session/v1", authority.sourceEpoch, registration.registrationId, identity]));
+      if (this.contextOptions.contextTransport) {
+        const retainedVersion = validateLegacySource(this.db, sourceKey, registration.registrationId);
+        if (retainedVersion === "context-v2" || retainedVersion === "absent" && authority.catalogVersion === CATALOG_CONTEXT_VERSION) refuse("unavailable", 409);
+      }
       let session = this.session(sourceKey);
       if (!session) {
         const runId = sourceKey.slice(0, 32), rootSpanId = hookDigest(sourceKey + "root").slice(0, 16);
@@ -122,7 +150,15 @@ export class CodingHookStore {
         transcriptCursor: session.source_cursor, incarnationKey: session.incarnation_key, prefixBytes: session.prefix_bytes, prefixSha256: session.prefix_sha256, observedFileBytes: session.observed_file_bytes, binding: { ...authority.binding, registeredWorkspace: registration.registeredWorkspace, transcriptRoot: registration.transcriptRoot, projectDirectory: registration.projectDirectory, homeDirectory: registration.homeDirectory } };
     });
   }
-  private checkQuota(): void {
+  contextTransaction<T>(work: () => T): T {
+    if (!this.contextOptions.contextTransport) refuse("inactive", 503);
+    return this.transaction(work);
+  }
+  assertContextQuota(canonicalBytes: number): void {
+    if (!this.contextOptions.contextTransport || !Number.isSafeInteger(canonicalBytes) || canonicalBytes < 0) refuse("inactive", 503);
+    if (this.checkQuota() + canonicalBytes > this.limits.bytes) refuse("quota", 507);
+  }
+  private checkQuota(): number {
     const count = (table: string) => (this.db.query(`SELECT count(*) count FROM ${table}`).get() as { count: number }).count;
     if (count("coding_hook_installations") > this.limits.installations || count("coding_hook_sessions") > this.limits.sessions || count("coding_hook_entities") > this.limits.entities) refuse("quota", 507);
     const registrations = this.db.query("SELECT COALESCE(sum(CASE WHEN length(CAST(data AS BLOB))>16384 OR NOT json_valid(data) THEN 65 WHEN json_type(data,'$.registrations')='array' THEN json_array_length(data,'$.registrations') ELSE 65 END),0) count FROM coding_hook_installations").get() as { count: number };
@@ -135,6 +171,7 @@ export class CodingHookStore {
       COALESCE((SELECT sum(2*length(CAST(source_key AS BLOB))+3*length(CAST(run_id AS BLOB))+length(CAST(source_root_key||root_span_id||state||COALESCE(incarnation_key,'')||COALESCE(prefix_sha256,'')||data AS BLOB))+40) FROM coding_hook_sessions),0)+
       COALESCE((SELECT sum(3*length(CAST(source_key AS BLOB))+2*length(CAST(entity_key AS BLOB))+2*length(CAST(span_id AS BLOB))+length(CAST(kind||phase||COALESCE(incarnation_key,'')||observation_sha256||projection_sha256||data AS BLOB))+16) FROM coding_hook_entities),0) bytes`).get() as { bytes: number };
     if (!Number.isSafeInteger(total.bytes) || total.bytes > this.limits.bytes) refuse("quota", 507);
+    return total.bytes;
   }
   private canonical(runId: string, spanId: string): Record<string, unknown> | null {
     const columns = ["id", "run_id", "parent_span_id", "name", "span_type", "status", "input_payload", "output_payload", "start_time_ms", "end_time_ms", "duration_ms", "model", "provider", "input_tokens", "output_tokens", "attributes", "otlp_evidence"];
@@ -185,6 +222,7 @@ export class CodingHookStore {
       const authority = this.authenticate(token), session = this.session(admission.sourceKey);
       if (authority.ownerGeneration !== admission.ownerGeneration || authority.row.generation !== admission.installationGeneration) refuse("stale");
       if (!session || !authority.registrations.some(registration => registration.registrationId === session.source_root_key)) refuse("unauthorized", 401); if (session.state === "suppressed") refuse("suppressed");
+      if (this.contextOptions.contextTransport && validateLegacySource(this.db, session.source_key, session.source_root_key) === "context-v2") refuse("corrupt", 503);
       const batch = validateClaudeBatch(JSON.stringify(input), admission.sourceKey, authority.row.capture_mode);
       this.upgradeLegacyProjections(session, checkDeadline);
       if (session.incarnation_key !== null && batch.incarnationKey !== null && (batch.incarnationKey !== session.incarnation_key || session.prefix_bytes > 0 && (batch.prefixBytes !== session.prefix_bytes || batch.prefixSha256 !== session.prefix_sha256) || batch.transcriptCursor! < session.source_cursor || batch.observedFileBytes! < session.observed_file_bytes)) refuse("source_changed");
