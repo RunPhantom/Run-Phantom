@@ -1,6 +1,8 @@
 import { LossyJsonNumberError, parseJsonEvidence } from "../evaluations/json-evidence";
 import { hasDuplicateJsonKeys } from "../json-keys";
 
+const encoder = new TextEncoder();
+
 export const HOOK_LIMITS = Object.freeze({
   stdinBytes: 262144,
   jsonDepth: 16,
@@ -49,7 +51,7 @@ function refusal<T>(reason: HookFailure): HookResult<T> { return { status: "unav
 /** The lexical limit runs before JSON.parse, which would otherwise erase duplicate members. */
 export function parseBoundedHookJson(input: unknown, byteLimit: number = HOOK_LIMITS.stdinBytes): HookResult<HookJson> {
   if (typeof input !== "string") return refusal("invalid_json");
-  if (!Number.isSafeInteger(byteLimit) || byteLimit < 1 || byteLimit > HOOK_LIMITS.stdinBytes || Buffer.byteLength(input, "utf8") > byteLimit) return refusal("byte_limit");
+  if (!Number.isSafeInteger(byteLimit) || byteLimit < 1 || byteLimit > HOOK_LIMITS.stdinBytes || input.length > byteLimit || encoder.encode(input).byteLength > byteLimit) return refusal("byte_limit");
   let depth = 0, quoted = false;
   for (let i = 0; i < input.length; i++) {
     const character = input[i];
