@@ -19,10 +19,10 @@ function database(version = 0): Database {
 const catalog = (db: Database) => db.query("SELECT name,type,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY name").all() as Array<{name: string;type: string;sql: string}>;
 const tables = ["team_review_queues", "team_review_items", "team_review_datasets", "team_review_dataset_revisions", "team_review_promotions"];
 
-test("fresh native Team storage installs exactly five project review tables at version4 and reopens", () => {
+test("fresh native Team storage installs exactly five project review tables at the current version and reopens", () => {
   const db = database(); initializeTeamSchema(db);
-  expect(TEAM_SCHEMA_VERSION).toBe(4);
-  expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 4 });
+  expect(TEAM_SCHEMA_VERSION).toBe(5);
+  expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: TEAM_SCHEMA_VERSION });
   expect(catalog(db).filter(row => row.name.startsWith("team_review_") && row.type === "table").map(row => row.name).sort()).toEqual([...tables].sort());
   const before = catalog(db); initializeTeamSchema(db); expect(catalog(db)).toEqual(before);
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -34,7 +34,7 @@ for (const version of [1, 2, 3]) test(`populated version${version} upgrade prese
   if (version === 3) db.exec("INSERT INTO prompt_scope_controls(scope_key,generation) VALUES('project:project',7)");
   const prior = catalog(db), data = db.query("SELECT * FROM projects").all(), accounts = db.query("SELECT * FROM accounts").all();
   initializeTeamSchema(db);
-  expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 4 });
+  expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: TEAM_SCHEMA_VERSION });
   const after = catalog(db);
   for (const row of prior) expect(after.find(value => value.name === row.name)).toEqual(row);
   expect(db.query("SELECT * FROM projects").all()).toEqual(data);
@@ -73,6 +73,6 @@ test("current catalog drift and future versions refuse without changing stored o
   const db = database(); initializeTeamSchema(db);
   db.exec("DROP INDEX team_review_items_state");
   const before = catalog(db); expect(() => initializeTeamSchema(db)).toThrow(); expect(catalog(db)).toEqual(before);
-  db.exec("PRAGMA user_version=5"); expect(() => initializeTeamSchema(db)).toThrow();
-  expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 5 }); expect(catalog(db)).toEqual(before);
+  db.exec(`PRAGMA user_version=${TEAM_SCHEMA_VERSION + 1}`); expect(() => initializeTeamSchema(db)).toThrow();
+  expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: TEAM_SCHEMA_VERSION + 1 }); expect(catalog(db)).toEqual(before);
 });
