@@ -23,7 +23,9 @@ async function observeRefresh(page: Page) {
   // Only the real built UI files are served here; daemon/API traffic is untouched.
   const ui = process.env.F49_SOURCE_UI_DIR;
   if (ui) await page.route("**/*", route => {
-    const pathname = new URL(route.request().url()).pathname;
+    const url = new URL(route.request().url());
+    if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) return route.fallback();
+    const pathname = url.pathname;
     if (["/api/", "/v1/", "/verification/"].some(prefix => pathname.startsWith(prefix))) return route.fallback();
     const candidate = path.resolve(ui, "." + pathname);
     const inside = candidate.startsWith(path.resolve(ui) + path.sep);
