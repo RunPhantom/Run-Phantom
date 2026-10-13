@@ -1,0 +1,111 @@
+{
+  "feature": "F29",
+  "sourceHead": "a89aa3b5a489ae980e2456909a0e5883ce0aa628",
+  "nativeArtifactSha256": "ef9fbb48b08c68e54f61e71538ef959624a672700c0267c191f5c723cb39eba4",
+  "host": "macOS arm64",
+  "screenshots": {
+    "frozen-source-320.png": {
+      "sha256": "4324d555a7effc146bab08607e1430b96cc7e331757f4c8769a374cff7bcf169",
+      "synthetic": true,
+      "copiedNative": true,
+      "sourceHead": "a89aa3b5a489ae980e2456909a0e5883ce0aa628"
+    },
+    "navigation-320.png": {
+      "sha256": "bdfee3b066ec216ee0ef44e20818cc631a09915faf6476e867b1d1713d2f507e",
+      "synthetic": true,
+      "copiedNative": true,
+      "sourceHead": "a89aa3b5a489ae980e2456909a0e5883ce0aa628"
+    },
+    "frozen-source-390.png": {
+      "sha256": "7f48228b346d1723a618d2f335aa2bddd678f5c5edda51bb7e4a311cf4389feb",
+      "synthetic": true,
+      "copiedNative": true,
+      "sourceHead": "a89aa3b5a489ae980e2456909a0e5883ce0aa628"
+    },
+    "navigation-390.png": {
+      "sha256": "d3c205e1e973727096c2e0e1a2776e1355424f32dd416cc7ce5e7284d4e2fa77",
+      "synthetic": true,
+      "copiedNative": true,
+      "sourceHead": "a89aa3b5a489ae980e2456909a0e5883ce0aa628"
+    },
+    "frozen-source-768.png": {
+      "sha256": "e2b478121c3273fc8a8ab35b35b059dcc318fd80969ce187beeccb4f046cfa63",
+      "synthetic": true,
+      "copiedNative": true,
+      "sourceHead": "a89aa3b5a489ae980e2456909a0e5883ce0aa628"
+    },
+    "navigation-768.png": {
+      "sha256": "39ddf36bd845e5f035f8f4e150ddf68016b3757ac040a6be97dd7d5f7b4ad232",
+      "synthetic": true,
+      "copiedNative": true,
+      "sourceHead": "a89aa3b5a489ae980e2456909a0e5883ce0aa628"
+    },
+    "frozen-source-1024.png": {
+      "sha256": "33ec554b509a047c83814f6500d235199a561f8c1c74e3f14c7318d24e975699",
+      "synthetic": true,
+      "copiedNative": true,
+      "sourceHead": "a89aa3b5a489ae980e2456909a0e5883ce0aa628"
+    },
+    "navigation-1024.png": {
+      "sha256": "1eadfd9a79e701ede640b826807fb214138f24e396b70ce83538b7fcf2973b16",
+      "synthetic": true,
+      "copiedNative": true,
+      "sourceHead": "a89aa3b5a489ae980e2456909a0e5883ce0aa628"
+    },
+    "frozen-source-1440.png": {
+      "sha256": "409043ec68c2f7380de4b4a062e078ad4cf9fd7ab9572734bd5f5c0b48fd540f",
+      "synthetic": true,
+      "copiedNative": true,
+      "sourceHead": "a89aa3b5a489ae980e2456909a0e5883ce0aa628"
+    },
+    "navigation-1440.png": {
+      "sha256": "b8dd858dae48176ed848b195e5176b5237a5cd7d2a09e8848a13f1f10939cce2",
+      "synthetic": true,
+      "copiedNative": true,
+      "sourceHead": "a89aa3b5a489ae980e2456909a0e5883ce0aa628"
+    },
+    "frozen-source-1920.png": {
+      "sha256": "ffe87e04b8c8ea05b34eb34ff172a711d6c402f45506237c76e30b53a405d913",
+      "synthetic": true,
+      "copiedNative": true,
+      "sourceHead": "a89aa3b5a489ae980e2456909a0e5883ce0aa628"
+    },
+    "navigation-1920.png": {
+      "sha256": "6f0d66be0f0d2bf5e555841c2f563c8818cca1584e7cfc3c19d72b600f62e154",
+      "synthetic": true,
+      "copiedNative": true,
+      "sourceHead": "a89aa3b5a489ae980e2456909a0e5883ce0aa628"
+    }
+  },
+  "backend": {
+    "passed": 1375,
+    "conditionalSkips": 3,
+    "failed": 0,
+    "assertions": 10567
+  },
+  "sourceBrowser": {
+    "head": "a740e7d43ba654acb480cd7840db8793a0e63e9a",
+    "productBytesIdenticalToCurrentHead": true,
+    "passed": 168,
+    "compiledConditionalSkips": 5,
+    "disabledProviderSkips": 7,
+    "unexpected": 0,
+    "flaky": 0,
+    "workers": 1,
+    "retries": 0
+  },
+  "copied": {
+    "originalCommon": 3,
+    "queueJourneys": 7,
+    "persistentReopen": 1,
+    "queryWorkerEachPhase": 1,
+    "originalPrivacyCases": 21,
+    "originalPrivacyAssertions": 2367,
+    "httpOperations": 346,
+    "assetBytesMatched": 320,
+    "distinctBoots": 2,
+    "sameDatabaseNoReseed": true
+  },
+  "globalAcceptance": false,
+  "providerCalls": 0
+}
