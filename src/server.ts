@@ -112,6 +112,8 @@ import { EvidenceSupervisor } from "./evaluations/evidence-supervisor";
 import { createLocalEvidenceOwner } from "./evaluations/evidence-inventory";
 import { createLocalPromptRegistry } from "./prompts/registry";
 import { createPromptRouter } from "./prompts/router";
+import { createComparisonRuntime, initializeComparisonScope, type ComparisonRuntime, type ComparisonRuntimeOptions } from "./prompts/comparison-runtime";
+import { createComparisonRouter } from "./prompts/comparison-router";
 import { EvidenceError } from "./evaluations/evidence-protocol";
 import { evidenceBinaryHandler, evidenceJsonBody } from "./evaluations/evidence-router";
 import { EVALUATION_LIMITS } from "./evaluations/protocol";
@@ -695,7 +697,7 @@ function demoChatHtml(): string {
 </html>`;
 }
 
-export async function createServer(port: number) {
+export async function createServer(port: number, options: { comparisons?: ComparisonRuntimeOptions } = {}) {
   const app = express();
   const server = http.createServer(app);
 
@@ -768,6 +770,12 @@ export async function createServer(port: number) {
   const evidenceOwner = createLocalEvidenceOwner(evidenceDatabase);
   const prompts = createLocalPromptRegistry(evidenceDatabase);
   prompts.capture("read");
+  let comparisons: ComparisonRuntime | null = null;
+  try {
+    comparisons = await createComparisonRuntime(evidenceDatabase, options.comparisons);
+    initializeComparisonScope({ database: evidenceDatabase, scope: { kind: "local", id: "local" }, authorize: () => {} });
+  } catch { await comparisons?.close(); comparisons = null; }
+  const comparisonStore = comparisons?.scope({ database: evidenceDatabase, scope: { kind: "local", id: "local" }, authorize: () => {} }) ?? null;
   const evidenceImports = new EvidenceImportService(new EvidenceSupervisor());
   evidenceImports.initialize(evidenceOwner);
   server.on("upgrade", (req, socket, head) => {
@@ -1002,6 +1010,7 @@ export async function createServer(port: number) {
 
   // This one identity binary transport remains behind every local-access guard.
   app.post("/api/evaluations/evidence/imports", evidenceBinaryHandler(evidenceImports, evidenceOwner));
+  app.use("/api/prompts/comparisons", createComparisonRouter(comparisonStore, comparisons?.coordinator ?? null));
   app.use("/api/prompts", createPromptRouter(prompts));
 
   // Keep the bounded review parser behind local access guards and ahead of the global JSON parser.
@@ -1062,7 +1071,7 @@ export async function createServer(port: number) {
   const nativeClose = server.close.bind(server);
   let closePromise: Promise<void> | undefined;
   server.close = ((callback?: (error?: Error) => void) => {
-    closePromise ??= evidenceImports.shutdown().then(() => {
+    closePromise ??= Promise.all([evidenceImports.shutdown(), comparisons?.close()]).then(() => {
       closeServices();
       return new Promise<void>((resolve, reject) => {
         nativeClose(error => { if (error) reject(error); else resolve(); });

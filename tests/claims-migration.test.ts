@@ -14,6 +14,7 @@ import { createLocalPromptRegistry } from "../src/prompts/registry";
 const checkout = path.resolve(import.meta.dir, ".."), migrations = path.join(checkout, "drizzle");
 const journal = JSON.parse(readFileSync(path.join(migrations, "meta/_journal.json"), "utf8"));
 const entry = journal.entries.find((row: { idx: number }) => row.idx === 13);
+const currentHistory = () => journal.entries.map((row: { tag: string; when: number }) => ({ hash: digest(readFileSync(path.join(migrations, row.tag + ".sql"))), created_at: row.when }));
 const digest = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 let directory: string, prior: string | undefined;
 beforeEach(() => { closeDb(); directory = realpathSync(mkdtempSync(path.join(tmpdir(), "completion-canonical13-"))); prior = process.env.RUNPHANTOM_DB_PATH; process.env.RUNPHANTOM_DB_PATH = path.join(directory, "actual.db"); });
@@ -40,7 +41,7 @@ function seed(db: Database) {
 }
 function retained(db: Database) { return JSON.stringify(witnessTables.map(table => db.query(`SELECT * FROM ${table}`).all())); }
 test("canonical13 appends only the approved two-table suffix while every0..12 migration and prior37 snapshot tables stay exact", () => {
-  expect(journal.entries.map((row: { idx: number }) => row.idx)).toEqual(Array.from({ length: 14 }, (_, idx) => idx));
+  expect(journal.entries.slice(0, 14).map((row: { idx: number }) => row.idx)).toEqual(Array.from({ length: 14 }, (_, idx) => idx));
   expect(entry).toEqual({ idx: 13, version: "6", when: 1791766000004, tag: "0013_completion_reports", breakpoints: true });
   const pins = JSON.parse(readFileSync(`${import.meta.dir}/fixtures/claims-prefix12-pins.json`, "utf8")) as { journal: { entries: unknown[] }; files: Record<string, string> };
   expect(journal.entries.slice(0, 13)).toEqual(pins.journal.entries);
@@ -55,7 +56,7 @@ test("actual fresh migration installs two completion tables and four triggers wi
   const db = getDrizzleDb().$client;
   expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'evaluation_completion_%' ORDER BY name").all()).toEqual(["evaluation_completion_payloads", "evaluation_completion_reports"].map(name => ({ name })));
   expect(db.query("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'evaluation_completion_%' ORDER BY name").all()).toHaveLength(4);
-  expect(history(db)).toHaveLength(14); expect(history(db).at(-1)).toEqual({ hash: digest(readFileSync(path.join(migrations, entry.tag + ".sql"))), created_at: entry.when });
+  expect(history(db)).toEqual(currentHistory()); expect(history(db).find(row => (row as { created_at: number }).created_at === entry.when)).toEqual({ hash: digest(readFileSync(path.join(migrations, entry.tag + ".sql"))), created_at: entry.when });
   expect(db.query("SELECT * FROM evaluation_completion_reports").all()).toEqual([]); expect(db.query("SELECT * FROM evaluation_completion_payloads").all()).toEqual([]);
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]); expect(db.query("SELECT * FROM coding_hook_owner").all()).toEqual([]);
 });
@@ -63,7 +64,7 @@ test("actual prefix12 upgrade preserves source, frozen verdict, queue, prompt wi
   const old = new Database(process.env.RUNPHANTOM_DB_PATH!); apply(old, prefix(12)); seed(old);
   const before = retained(old), receipts = history(old), objects = old.query("SELECT type,name,sql FROM sqlite_master ORDER BY name").all() as Array<{ name: string }>;
   old.close(true); let db = getDrizzleDb().$client;
-  expect(retained(db)).toBe(before); expect(history(db).slice(0, 13)).toEqual(receipts); expect(history(db)).toHaveLength(14);
+  expect(retained(db)).toBe(before); expect(history(db).slice(0, 13)).toEqual(receipts); expect(history(db)).toEqual(currentHistory());
   const names = new Set(objects.map(row => row.name)); expect(db.query("SELECT type,name,sql FROM sqlite_master ORDER BY name").all().filter(row => names.has((row as { name: string }).name))).toEqual(objects);
   const fullHistory = history(db); closeDb(); db = getDrizzleDb().$client;
   expect(retained(db)).toBe(before); expect(history(db)).toEqual(fullHistory); expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -73,7 +74,7 @@ test("late migration13 failure rolls back both tables, indexes, four triggers an
   const before = retained(db), receipts = history(db), objects = db.query("SELECT type,name,sql FROM sqlite_master ORDER BY name").all();
   const broken = prefix(13, "broken"), filename = path.join(broken, "0013_completion_reports.sql"); writeFileSync(filename, readFileSync(filename, "utf8") + "\n--> statement-breakpoint\nSELECT * FROM intentional_f08_missing_table;\n");
   try { expect(() => apply(db, broken)).toThrow(); expect(retained(db)).toBe(before); expect(history(db)).toEqual(receipts); expect(db.query("SELECT type,name,sql FROM sqlite_master ORDER BY name").all()).toEqual(objects); } finally { db.close(true); }
-  const repaired = getDrizzleDb().$client; expect(retained(repaired)).toBe(before); expect(history(repaired)).toHaveLength(14); expect(repaired.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  const repaired = getDrizzleDb().$client; expect(retained(repaired)).toBe(before); expect(history(repaired)).toEqual(currentHistory()); expect(repaired.query("PRAGMA foreign_key_check").all()).toEqual([]);
 });
 const indexes = [
   { table: "evaluation_completion_reports", name: "completion_report_operation_unique", columns: ["scope_key", "scope_generation", "operation_key"], unique: 1 },
@@ -88,7 +89,7 @@ test("actual completion named indexes match snapshot uniqueness and exact column
   }
 });
 test("real next Drizzle generation has no delta and can drop and recreate both actual completion indexes", async () => {
-  const db = getDrizzleDb().$client, snapshot = JSON.parse(readFileSync(path.join(migrations, "meta/0013_snapshot.json"), "utf8"));
+  const db = getDrizzleDb().$client, snapshot = JSON.parse(readFileSync(path.join(migrations, "meta/0014_snapshot.json"), "utf8"));
   const generated = await generateSQLiteDrizzleJson(typedSchema, snapshot.id); expect(await generateSQLiteMigration(snapshot, generated)).toEqual([]);
   const changed = structuredClone(snapshot); for (const index of indexes) delete changed.tables[index.table].indexes[index.name];
   const removal = await generateSQLiteMigration(snapshot, changed); expect(removal).toHaveLength(2);
@@ -104,7 +105,7 @@ test("two distinct actual server processes reopen the same migrated DB without r
   const fixture = path.join(import.meta.dir, "fixtures/claims-native-process.ts");
   const invoke = (action: string) => { const result = Bun.spawnSync([process.execPath, fixture, action], { cwd: directory, env: { PATH: process.env.PATH, RUNPHANTOM_DB_PATH: process.env.RUNPHANTOM_DB_PATH!, RUNPHANTOM_CLAUDE_CLI_CHAT: "0" }, timeout: 15000 }); expect(new TextDecoder().decode(result.stderr)).toBe(""); expect(result.exitCode).toBe(0); return JSON.parse(new TextDecoder().decode(result.stdout)); };
   const first = invoke("write"), second = invoke("read-retain-clear");
-  expect(first.pid).not.toBe(second.pid); expect(first.pid).not.toBe(process.pid); expect(second.history).toHaveLength(14); expect(second.history).toEqual(first.history);
+  expect(first.pid).not.toBe(second.pid); expect(first.pid).not.toBe(process.pid); expect(second.history).toEqual(currentHistory()); expect(second.history).toEqual(first.history);
   expect(second.saved).toEqual(first.saved); expect(second.saved.request.summary).toBe("Original α summary.\nNot all tests pass."); expect(second.immutableRefused).toBe(true);
   expect(second.oversizeStatus).toBe(413); expect(second.wrongRevisionStatus).toBe(409); expect(second.normalizedDeleteStatus).toBe(200); expect(second.deletedReadStatus).toBe(404);
   expect(second.tombstone.items[0].payloadAvailable).toBe(false); expect(second.livePayloads).toEqual([]); expect(second.afterClear).toEqual([]); expect(second.foreignKeys).toEqual([]);

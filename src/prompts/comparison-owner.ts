@@ -7,7 +7,7 @@ export class ComparisonOwnerRefusal extends Error {
   constructor(readonly reason: "busy" | "inactive") { super(reason); this.code = reason; }
 }
 const DRAIN_MS = 5000;
-/** Trusted owner startup only. Acquisition precedes recovery; no route installs this foundation yet. */
+/** Trusted owner startup only. Acquisition precedes recovery and request admission. */
 export async function acquireComparisonOwner(databasePath: string, signal?: AbortSignal) {
   const lease = await acquireCodingHookOwner(databasePath, signal, "prompt-comparisons");
   let generation = 1, closing = false, drained: Promise<void> | undefined, closeResult: Promise<void> | undefined;

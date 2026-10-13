@@ -1,4 +1,4 @@
-/** Inactive reviewed suffix: migration coordinators alone may install it after canonical13/Teamv4. */
+/** Reviewed shared SQL: only canonical14 and Teamv5 migration coordinators install it. */
 export const COMPARISON_STORAGE_SQL = `
 -- Proposed only: canonical suffix 14 AFTER actual qualified 13; Team v5 AFTER actual qualified v4.
 CREATE TABLE comparison_scope_controls (

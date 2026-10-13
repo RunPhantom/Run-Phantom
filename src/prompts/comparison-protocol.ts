@@ -10,22 +10,8 @@ export const COMPARISON_MODELS = Object.freeze([
   Object.freeze({ provider: "openai", model: "gpt-5.4" }), Object.freeze({ provider: "openai", model: "gpt-4.1" }),
   Object.freeze({ provider: "anthropic", model: "claude-opus-4-6" }), Object.freeze({ provider: "anthropic", model: "claude-sonnet-4-6" }),
 ] as const);
-export type ComparisonProvider = "openai" | "anthropic";
-export interface ComparisonTarget { readonly provider: ComparisonProvider; readonly model: string }
-export interface ComparisonOptions { readonly maxOutputTokens: number; readonly temperature: number }
-export interface ComparisonRequest {
-  readonly operationKey: string; readonly promptId: string; readonly revision: number; readonly variables: Readonly<Record<string, string>>;
-  readonly targets: readonly ComparisonTarget[]; readonly options: ComparisonOptions; readonly operationBudgetMicrousd: number; readonly expectedGeneration: number;
-}
-export interface FrozenComparisonRequest extends ComparisonRequest {
-  readonly policy: typeof COMPARISON_POLICY; readonly prompt: { readonly id: string; readonly revision: number; readonly name: string; readonly templateSha256: string };
-  readonly compiled: string; readonly families: readonly ComparisonFamily[];
-}
-export interface ComparisonFamily extends ComparisonTarget {
-  readonly version: "standard-text/v1"; readonly endpoint: "chat-completions" | "messages";
-  readonly reasoningEffort: "none" | null; readonly thinking: "disabled" | null;
-  readonly tier: "default" | "standard_only"; readonly inferenceGeo: "global" | null; readonly store: false;
-}
+import type { ComparisonTarget, ComparisonRequest, FrozenComparisonRequest, ComparisonFamily } from "./comparison-types";
+export type { ComparisonProvider, ComparisonTarget, ComparisonOptions, ComparisonRequest, FrozenComparisonRequest, ComparisonFamily } from "./comparison-types";
 export function comparisonFamily(targetValue: ComparisonTarget): ComparisonFamily {
   const target = comparisonTarget(targetValue);
   return Object.freeze({ ...target, version: "standard-text/v1", endpoint: target.provider === "openai" ? "chat-completions" : "messages",

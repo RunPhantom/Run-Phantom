@@ -3,24 +3,17 @@ import { createHash, randomUUID } from "node:crypto";
 import { strictEvidenceJson } from "../evaluations/evidence-reader/json";
 import { readerLimits } from "../evaluations/evidence-reader/limits";
 import { freezeRateRevision } from "../pricing/rates";
-import type { FrozenRateRevision } from "../pricing/protocol";
 import { PromptRegistry, type PromptOwner } from "./registry";
 import { promptId, promptInteger, promptObject, promptText, type PromptCapability, type PromptFence } from "./protocol";
-import { COMPARISON_LIMITS as L, ComparisonError, comparisonJson, parseComparisonRequest, freezeComparisonRequest, type FrozenComparisonRequest, type ComparisonProvider } from "./comparison-protocol";
+import { COMPARISON_LIMITS as L, COMPARISON_MODELS, ComparisonError, comparisonFamily, comparisonJson, comparisonTarget, parseComparisonRequest, freezeComparisonRequest, type ComparisonProvider } from "./comparison-protocol";
 import { reserveComparisonAttempt, estimateComparisonUsage } from "./spend-ledger";
 import type { acquireComparisonOwner, ComparisonOwnerFence } from "./comparison-owner";
 import type { ComparisonProviderResult } from "./providers";
 
 type LiveOwner = Awaited<ReturnType<typeof acquireComparisonOwner>>;
 export interface ComparisonFence extends PromptFence { readonly comparisonGeneration: number; readonly owner: ComparisonOwnerFence }
-export type ComparisonAttemptStatus = "queued" | "running" | "completed" | "failed" | "timeout" | "cancelled" | "unavailable" | "budget_refused" | "interrupted" | "authority_lost";
-interface FrozenExecution extends FrozenComparisonRequest { readonly rates: readonly FrozenRateRevision[] }
-export interface ComparisonAttempt {
-  position: number; provider: ComparisonProvider; model: string; status: ComparisonAttemptStatus; reason: string | null; payload: unknown;
-  reserveMicrousd: number; holdMicrousd: number; chargeMicrousd: number; accountingState: string; observedEstimateUsd: string | null;
-  budgetBreach: boolean; deadlineAt: number; startedAt: number | null; finishedAt: number | null;
-}
-export interface ComparisonReceipt { id: string; operationKey: string; createdAt: number; tombstone: boolean; request: FrozenExecution | null; attempts: ComparisonAttempt[] }
+import type { FrozenExecution, ComparisonAttemptStatus, ComparisonAttempt, ComparisonReceipt, ComparisonAttemptSummary, ComparisonSummary, ComparisonPage } from "./comparison-types";
+export type { ComparisonAttemptStatus, ComparisonAttempt, ComparisonReceipt, ComparisonAttemptSummary, ComparisonSummary, ComparisonPage } from "./comparison-types";
 interface StoreOptions { readonly budgets: Readonly<Record<ComparisonProvider, number>>; readonly availability: Readonly<Record<ComparisonProvider, boolean>> }
 interface Head { id: string; operation_key: string; request_digest: string; frozen_request: string | null; tombstone: number; target_count: number; created_at: number; prompt_generation: number; evidence_generation: number; comparison_generation: number; bounded: number }
 interface Row { position: number; provider: ComparisonProvider; model: string; status: ComparisonAttemptStatus; reason: string | null; payload: string | null; reserve_microusd: number; hold_microusd: number; charge_microusd: number; accounting_state: string; observed_estimate_usd: string | null; budget_breach: number; deadline_at: number; started_at: number | null; finished_at: number | null; bounded: number }
@@ -42,7 +35,21 @@ const attemptColumns = [integer("position", 0, 3), cell("provider", 16), cell("m
   "CASE WHEN finished_at IS NULL OR typeof(finished_at)='integer' AND finished_at BETWEEN 0 AND 9007199254740991 THEN finished_at ELSE -1 END AS finished_at",
   `CASE WHEN (payload IS NULL OR typeof(payload)='text' AND ${bytes("payload")}<=${L.attemptPayloadBytes}) AND (reason IS NULL OR typeof(reason)='text' AND ${bytes("reason")}<=64) AND (observed_estimate_usd IS NULL OR typeof(observed_estimate_usd)='text' AND ${bytes("observed_estimate_usd")}<=64) THEN 1 ELSE 0 END AS bounded`].join(",");
 
-/** Trusted actual owner connection only. This store remains unregistered pending canonical14/Teamv5. */
+function databaseTotals(database: Database, scope?: string) {
+  const get = <T>(sql: string, ...parameters: SQLQueryBindings[]) => database.query(sql).get(...parameters) as T;
+    const count = (table: string) => get<{ n: number }>(`SELECT count(*) n FROM ${table}`)!.n;
+    const operations = count("prompt_comparisons"), attempts = count("prompt_comparison_attempts"), controls = count("comparison_scope_controls");
+    const scoped = scope === undefined ? get<{ n: number }>("SELECT coalesce(max(n),0) n FROM (SELECT count(*) n FROM prompt_comparisons GROUP BY scope_key)").n : get<{ n: number }>("SELECT count(*) n FROM prompt_comparisons WHERE scope_key=?", scope).n;
+    if (operations > L.operationsGlobal || attempts > L.attemptsGlobal || controls > L.controlsGlobal || scoped > L.operationsPerScope) throw new ComparisonError("integrity");
+    const invalid = get<{ n: number }>(`SELECT EXISTS(SELECT 1 FROM prompt_comparison_attempts WHERE typeof(charge_microusd)<>'integer' OR charge_microusd NOT BETWEEN 0 AND ${chargeCap} OR typeof(hold_microusd)<>'integer' OR hold_microusd NOT BETWEEN 0 AND ${L.providerBudgetMicrousd} OR hold_microusd<>0 AND charge_microusd<>0 LIMIT 1) n`)!.n;
+    if (invalid) throw new ComparisonError("integrity");
+    const sums = (columns: string[]) => columns.map(column => `coalesce(${bytes(column)},0)`).join("+");
+    const total = get<{ n: number }>(`SELECT (SELECT coalesce(sum(${sums(["scope_key", "id", "operation_key", "request_digest", "prompt_id", "frozen_request"])}+80),0) FROM prompt_comparisons)+(SELECT coalesce(sum(${sums(["scope_key", "comparison_id", "provider", "model", "status", "reason", "payload", "accounting_state", "observed_estimate_usd"])}+96),0) FROM prompt_comparison_attempts)+(SELECT coalesce(sum(${bytes("scope_key")}+8),0) FROM comparison_scope_controls) n`)!.n;
+    if (!Number.isSafeInteger(total) || total < 0 || total > L.retainedBytes) throw new ComparisonError("integrity");
+    return { operations, attempts, scoped, bytes: total };
+  }
+
+/** Trusted actual owner connection only. Native startup and the private Team facade own each scope. */
 export class ComparisonStore {
   readonly #db: Database; readonly #scope: string; readonly #owner: PromptOwner; readonly #live: LiveOwner;
   readonly #options: StoreOptions; readonly #prompts: PromptRegistry;
@@ -62,24 +69,26 @@ export class ComparisonStore {
     catch { throw new ComparisonError("integrity"); }
   }
   capture(capability: PromptCapability): ComparisonFence { return this.#db.transaction(() => this.#generation(capability)).immediate(); }
+  capabilities(fence: ComparisonFence) {
+    return this.#transaction("read", fence, current => {
+      const budgets = this.#budgetTotals();
+      return { enabled: true as const, generation: current.comparisonGeneration, limits: L,
+        models: COMPARISON_MODELS.map(target => {
+          const budget = budgets[target.provider], available = this.#options.availability[target.provider];
+          const admissionReason = !available ? "credentials_unavailable" : budget.ceilingMicrousd === 0 ? "budget_not_configured"
+            : budget.breached ? "overage_fuse" : budget.chargeMicrousd + budget.holdMicrousd >= budget.ceilingMicrousd ? "ceiling_reached" : null;
+          return { ...target, family: comparisonFamily(target), available, spendingEnabled: admissionReason === null, admissionReason,
+            reservationCeilingMicrousd: reserveComparisonAttempt("x".repeat(L.inputBytes), target, L.outputTokens).microusd };
+        }), invoiceAvailable: false as const };
+    });
+  }
   #transaction<T>(capability: PromptCapability, fence: ComparisonFence, work: (current: ComparisonFence) => T): T {
     return this.#db.transaction(() => {
       const current = this.#generation(capability); if (!same(current, fence)) throw new ComparisonError("authority_changed");
       this.#totals(); const result = work(current); this.#totals(); if (!same(current, this.#generation(capability))) throw new ComparisonError("authority_changed"); comparisonJson(result); return result;
     }).immediate();
   }
-  #totals() {
-    const count = (table: string) => this.#get<{ n: number }>(`SELECT count(*) n FROM ${table}`)!.n;
-    const operations = count("prompt_comparisons"), attempts = count("prompt_comparison_attempts"), controls = count("comparison_scope_controls");
-    const scoped = this.#get<{ n: number }>("SELECT count(*) n FROM prompt_comparisons WHERE scope_key=?", this.#scope)!.n;
-    if (operations > L.operationsGlobal || attempts > L.attemptsGlobal || controls > L.controlsGlobal || scoped > L.operationsPerScope) throw new ComparisonError("integrity");
-    const invalid = this.#get<{ n: number }>(`SELECT EXISTS(SELECT 1 FROM prompt_comparison_attempts WHERE typeof(charge_microusd)<>'integer' OR charge_microusd NOT BETWEEN 0 AND ${chargeCap} OR typeof(hold_microusd)<>'integer' OR hold_microusd NOT BETWEEN 0 AND ${L.providerBudgetMicrousd} OR hold_microusd<>0 AND charge_microusd<>0 LIMIT 1) n`)!.n;
-    if (invalid) throw new ComparisonError("integrity");
-    const sums = (columns: string[]) => columns.map(column => `coalesce(${bytes(column)},0)`).join("+");
-    const total = this.#get<{ n: number }>(`SELECT (SELECT coalesce(sum(${sums(["scope_key", "id", "operation_key", "request_digest", "prompt_id", "frozen_request"])}+80),0) FROM prompt_comparisons)+(SELECT coalesce(sum(${sums(["scope_key", "comparison_id", "provider", "model", "status", "reason", "payload", "accounting_state", "observed_estimate_usd"])}+96),0) FROM prompt_comparison_attempts)+(SELECT coalesce(sum(${bytes("scope_key")}+8),0) FROM comparison_scope_controls) n`)!.n;
-    if (!Number.isSafeInteger(total) || total < 0 || total > L.retainedBytes) throw new ComparisonError("integrity");
-    return { operations, attempts, scoped, bytes: total };
-  }
+  #totals() { return databaseTotals(this.#db, this.#scope); }
   #pendingRetention() {
     // Reserve every pending replacement, including its terminal reason and accounting cells.
     const current = attemptContent.map(column => `coalesce(${bytes(column)},0)`).join("+");
@@ -160,6 +169,65 @@ export class ComparisonStore {
     });
   }
   get(idValue: unknown, fence: ComparisonFence): ComparisonReceipt { const id = promptId(idValue); return this.#transaction("read", fence, () => this.#receipt(this.#head(id))); }
+  /** History acquires finite metadata in SQL; frozen inputs and provider outputs never leave their cells. */
+  list(cursor: unknown, fence: ComparisonFence): ComparisonPage {
+    let anchor: [number, string] | null = null;
+    if (cursor !== undefined) {
+      try {
+        if (typeof cursor !== "string" || cursor.length > 256 || !/^[A-Za-z0-9_-]+$/.test(cursor)) throw new Error();
+        const bytes = Buffer.from(cursor, "base64url");
+        if (bytes.toString("base64url") !== cursor) throw new Error();
+        const value = strictEvidenceJson(new TextDecoder("utf-8", { fatal: true }).decode(bytes), readerLimits({ maxDepth: 2 }));
+        if (!Array.isArray(value) || value.length !== 2) throw new Error();
+        anchor = [promptInteger(value[0]), promptId(value[1])];
+        if (JSON.stringify(anchor) !== bytes.toString("utf8")) throw new Error();
+      } catch { throw new ComparisonError("invalid_request"); }
+    }
+    return this.#transaction("read", fence, () => {
+      const valid = `typeof(frozen_request)='text' AND ${bytes("frozen_request")}<=${L.frozenRequestBytes} AND json_valid(frozen_request)`;
+      const metadata = `CASE WHEN ${valid} THEN CASE WHEN json_type(frozen_request,'$.prompt.name')='text'
+        AND length(CAST(json_extract(frozen_request,'$.prompt.name') AS BLOB)) BETWEEN 1 AND 256
+        AND json_type(frozen_request,'$.prompt.revision')='integer' AND json_extract(frozen_request,'$.prompt.revision') BETWEEN 1 AND 32 THEN 1 ELSE 0 END ELSE 0 END`;
+      interface SummaryHead { id: string | null; created_at: number | null; tombstone: number | null; target_count: number | null; name: string | null; revision: number | null; bounded: number }
+      const rows = this.#db.query(`SELECT ${cell("id", 36)},${integer("created_at", 1)},${integer("tombstone", 0, 1)},${integer("target_count", 1, 4)},
+        CASE WHEN tombstone=0 AND (${metadata})=1 THEN json_extract(frozen_request,'$.prompt.name') ELSE NULL END name,
+        CASE WHEN tombstone=0 AND (${metadata})=1 THEN json_extract(frozen_request,'$.prompt.revision') ELSE NULL END revision,
+        CASE WHEN tombstone=1 AND frozen_request IS NULL OR tombstone=0 AND (${metadata})=1 THEN 1 ELSE 0 END bounded
+        FROM prompt_comparisons WHERE scope_key=?${anchor ? " AND (created_at<? OR (created_at=? AND id<?))" : ""}
+        ORDER BY created_at DESC,id DESC LIMIT 21`).all(this.#scope, ...(anchor ? [anchor[0], anchor[0], anchor[1]] : [])) as SummaryHead[];
+      const heads = rows.slice(0, 20);
+      for (const row of rows) {
+        if (row.bounded !== 1 || row.id === null || row.created_at === null || row.tombstone === null || row.target_count === null) throw new ComparisonError("integrity");
+        try { promptId(row.id); if (row.tombstone === 0) { promptText(row.name, 256, false); promptInteger(row.revision, 32); } } catch { throw new ComparisonError("integrity"); }
+      }
+      // NULL projection is intentional: even a valid 8 KiB output is not acquired for a history page.
+      const columns = attemptColumns.replace(cell("payload", L.attemptPayloadBytes), "NULL AS payload");
+      const attempts = heads.length ? this.#db.query(`SELECT ${cell("comparison_id", 36)},${columns} FROM prompt_comparison_attempts
+        WHERE scope_key=? AND comparison_id IN(${heads.map(() => "?").join(",")}) ORDER BY comparison_id,position LIMIT 81`)
+        .all(this.#scope, ...heads.map(row => row.id!)) as (Row & { comparison_id: string | null })[] : [];
+      if (attempts.length > 80) throw new ComparisonError("integrity");
+      const items = heads.map((head): ComparisonSummary => {
+        const selected = attempts.filter(row => row.comparison_id === head.id);
+        if (selected.length !== head.target_count) throw new ComparisonError("integrity");
+        const summaries = selected.map((row, position): ComparisonAttemptSummary => {
+          const optional = new Set(["reason", "payload", "observed_estimate_usd", "started_at", "finished_at"]);
+          if (row.bounded !== 1 || row.position !== position || Object.entries(row).some(([key, value]) => !optional.has(key) && value === null)
+            || row.started_at === -1 || row.finished_at === -1 || !["openai", "anthropic"].includes(row.provider)
+            || !terminal.has(row.status) && !["queued", "running"].includes(row.status)
+            || !["not_started", "measured_estimate", "conservative", "unrepresentable_overage"].includes(row.accounting_state)) throw new ComparisonError("integrity");
+          try { comparisonTarget({ provider: row.provider, model: row.model }); } catch { throw new ComparisonError("integrity"); }
+          return { position, provider: row.provider, model: row.model, status: row.status, reason: row.reason,
+            reserveMicrousd: row.reserve_microusd, holdMicrousd: row.hold_microusd, chargeMicrousd: row.charge_microusd,
+            accountingState: row.accounting_state, observedEstimateUsd: row.observed_estimate_usd, budgetBreach: row.budget_breach === 1,
+            deadlineAt: row.deadline_at, startedAt: row.started_at, finishedAt: row.finished_at };
+        });
+        return { id: head.id!, createdAt: head.created_at!, tombstone: head.tombstone === 1,
+          prompt: head.tombstone === 1 ? null : { name: head.name!, revision: head.revision! }, attempts: summaries };
+      });
+      const last = items.at(-1), hasMore = rows.length > 20;
+      return { items, hasMore, cursor: hasMore && last ? Buffer.from(JSON.stringify([last.createdAt, last.id])).toString("base64url") : null };
+    });
+  }
   export(idValue: unknown, fence: ComparisonFence) { return { format: "runphantom-model-comparison/v1" as const, operation: this.get(idValue, fence) }; }
   start(idValue: unknown, positionInput: unknown, fence: ComparisonFence): { request: FrozenExecution; position: number; remainingMs: number } | null {
     const id = promptId(idValue), position = positionValue(positionInput);
@@ -250,10 +318,13 @@ export class ComparisonStore {
     }).immediate();
   }
   /** Trusted startup only, after exclusive live lease; no retry or route can invoke recovery. */
-  recoverPending(): void {
-    const owner = this.#live.capture(); this.#db.transaction(() => {
-      this.#live.assertCurrent(owner); this.#totals();
-      this.#db.query("UPDATE prompt_comparison_attempts SET status='interrupted',reason='interrupted',hold_microusd=0,finished_at=? WHERE status IN('queued','running')").run(Date.now()); this.#totals(); this.#live.assertCurrent(owner);
+  recoverPending(): void { ComparisonStore.recoverPendingDatabase(this.#db, this.#live); }
+  /** Trusted owner startup only. Acquires no scope and never installs storage. */
+  static recoverPendingDatabase(database: Database, live: LiveOwner): void {
+    const owner = live.capture(); database.transaction(() => {
+      live.assertCurrent(owner); if (!live.ownsDatabase(database.filename)) throw new ComparisonError("unavailable"); databaseTotals(database);
+      database.query("UPDATE prompt_comparison_attempts SET status='interrupted',reason='interrupted',hold_microusd=0,finished_at=? WHERE status IN('queued','running')").run(Date.now());
+      databaseTotals(database); live.assertCurrent(owner);
     }).immediate();
   }
 }

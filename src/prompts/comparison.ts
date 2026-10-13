@@ -8,7 +8,7 @@ import { ComparisonProviderError, type createComparisonProviderClient } from "./
 type Owner = Awaited<ReturnType<typeof acquireComparisonOwner>>;
 type ProviderClient = ReturnType<typeof createComparisonProviderClient>;
 interface Entry { store: ComparisonStore; id: string; position: number; fence: ComparisonFence; cancel: AbortController }
-/** Inactive single owner coordinator. Every operation shares the kernel owner's two fetch slots. */
+/** Every operation and scope shares the real kernel owner's two fetch slots. */
 export class ComparisonCoordinator {
   readonly #owner: Owner; readonly #client: ProviderClient;
   #pending: Entry[] = []; readonly #running = new Map<Entry, Promise<void>>(); readonly #scheduled: { store: ComparisonStore; id: string }[] = [];
@@ -41,7 +41,7 @@ export class ComparisonCoordinator {
           if (this.#closed) return; // Recovery after the next exclusive acquisition retains uncertain started charges.
           try {
             const code = error instanceof ComparisonProviderError ? error.code : error instanceof Error && "code" in error ? error.code : undefined;
-            if (code === "authority_changed" || code === "deleted" || code === "not_found" || code === "inactive" || !this.#canRead(entry)) { entry.store.terminatePending(entry.id); return; }
+            if (code === "authority_changed" || code === "deleted" || code === "not_found" || code === "inactive" || !this.#canPublish(entry)) { entry.store.terminatePending(entry.id); return; }
             entry.store.finish(entry.id, entry.position, entry.fence, { status: code === "timeout" ? "timeout" : code === "cancelled" ? "cancelled" : "failed", reason: code === "timeout" || code === "cancelled" ? code : code === "response_limit" || code === "limit_refused" ? "response_limit" : code === "protected_content" || code === "credentials" ? "protected_content" : "provider_error" });
           } catch { if (!this.#closed) { try { entry.store.terminatePending(entry.id); } catch { /* Invalid owner authority cannot publish or repair persisted content. */ } } }
         }
@@ -57,13 +57,13 @@ export class ComparisonCoordinator {
     if (this.#timer || this.#closed) return;
     this.#timer = setTimeout(() => { this.#timer = undefined; this.retireInvalidated(); this.#pump(); }, delay);
   }
-  #canRead(entry: Entry): boolean { try { return !entry.store.get(entry.id, entry.fence).tombstone; } catch { return false; } }
+  #canPublish(entry: Entry): boolean { try { entry.store.capture("edit"); return !entry.store.get(entry.id, entry.fence).tombstone; } catch { return false; } }
   /** Native owner call after actual prompt/scope mutations; finite polling also fences external changes. */
   retireInvalidated(): void {
     if (this.#closed) return;
     const rejected: Entry[] = [];
     for (const entry of [...this.#pending, ...this.#running.keys()]) {
-      if (rejected.some(candidate => candidate.id === entry.id && candidate.store.sameScope(entry.store)) || this.#canRead(entry)) continue;
+      if (rejected.some(candidate => candidate.id === entry.id && candidate.store.sameScope(entry.store)) || this.#canPublish(entry)) continue;
       rejected.push(entry); try { entry.store.terminatePending(entry.id); } catch { /* Lease loss requires the next owner's recovery. */ }
       for (const candidate of [...this.#pending, ...this.#running.keys()]) if (candidate.id === entry.id && candidate.store.sameScope(entry.store)) candidate.cancel.abort();
     }
