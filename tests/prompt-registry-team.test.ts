@@ -149,7 +149,7 @@ test("paused actual Team compile loses session authority and does not publish ou
     } finally { spy.mockRestore(); }
   } finally { await f.close(); }
 });
-test("genuine frozen Team v2 upgrades atomically to v3, preserves exact old rows and refuses altered schemas", () => {
+test("genuine frozen Team v2 upgrades atomically through v3 to v4, preserves exact old rows and refuses altered schemas", () => {
   const directory = mkdtempSync(path.join(tmpdir(), "runphantom-prompts-v2-")), filename = path.join(directory, "team.sqlite");
   let database = new Database(filename);
   try {
@@ -157,7 +157,7 @@ test("genuine frozen Team v2 upgrades atomically to v3, preserves exact old rows
     database.exec("INSERT INTO projects(id,name,created_at) VALUES('historical-project','Preserved',1); UPDATE evaluation_evidence_scopes SET generation=7 WHERE scope_key='project:historical-project'; INSERT INTO evaluation_evidence_inventory_heads VALUES('project:historical-project','retained',0)");
     const old = database.query("SELECT * FROM evaluation_evidence_scopes").all(), projects = database.query("SELECT * FROM projects").all();
     initializeTeamSchema(database); database.close(); database = new Database(filename); database.exec("PRAGMA foreign_keys=ON"); initializeTeamSchema(database);
-    expect(database.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
+    expect(database.query("PRAGMA user_version").get()).toEqual({ user_version: 4 });
     expect(database.query("SELECT * FROM evaluation_evidence_scopes").all()).toEqual(old);
     expect(database.query("SELECT p.scope_key,p.generation,e.generation AS evidence_generation FROM prompt_scope_controls p JOIN evaluation_evidence_scopes e ON e.scope_key=p.scope_key").all()).toEqual([{ scope_key: "project:historical-project", generation: 1, evidence_generation: 7 }]);
     expect(database.query("SELECT * FROM projects").all()).toEqual(projects);
@@ -184,7 +184,7 @@ test("an interrupted v2 prompt upgrade rolls back new tables and leaves the orig
     expect(database.query("SELECT name,sql FROM sqlite_master ORDER BY name").all()).toEqual(before);
     expect(database.query("SELECT name FROM projects").get()).toEqual({ name: "Original project" });
     initializeTeamSchema(database);
-    expect(database.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
+    expect(database.query("PRAGMA user_version").get()).toEqual({ user_version: 4 });
     expect(database.query("SELECT name FROM projects").get()).toEqual({ name: "Original project" });
   } finally { database.close(); }
 });
