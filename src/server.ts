@@ -1015,7 +1015,7 @@ export async function createServer(port: number) {
     }
     next();
   });
-  app.use(["/api/evaluations/evidence", "/api/evaluations/findings"], evidenceJsonBody());
+  app.use(["/api/evaluations/evidence", "/api/evaluations/findings", "/api/evaluations/claims"], evidenceJsonBody());
   app.use("/api/verification", express.json({ limit: VERIFICATION_LIMITS.MAX_FRAME_BYTES }));
   app.use("/api/evaluations", express.json({
     limit: EVALUATION_LIMITS.MAX_REQUEST,

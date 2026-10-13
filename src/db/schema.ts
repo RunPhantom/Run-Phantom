@@ -524,3 +524,39 @@ export const prompt_revisions = sqliteTable("prompt_revisions", {
   check("prompt_revisions_digest", sql`length(${t.request_digest})=64`),
   check("prompt_revisions_created", sql`${t.created_at}>=0`),
 ]);
+
+export const evaluation_completion_reports = sqliteTable("evaluation_completion_reports", {
+  scope_key: text("scope_key").notNull(), scope_generation: integer("scope_generation").notNull(),
+  id: text("id").notNull(), operation_key: text("operation_key").notNull(), request_digest: text("request_digest").notNull(),
+  attachment_kind: text("attachment_kind", { enum: ["run", "inspection", "experiment", "check"] }).notNull(), attachment_id: text("attachment_id").notNull(),
+  set_id: text("set_id").notNull(), set_revision: integer("set_revision").notNull(), detector_version: text("detector_version").notNull(),
+  summary_sha256: text("summary_sha256").notNull(), payload_digest: text("payload_digest").notNull(), payload_bytes: integer("payload_bytes").notNull(),
+  created_at: integer("created_at").notNull(),
+}, t => [
+  primaryKey({ columns: [t.scope_key, t.id] }),
+  foreignKey({ columns: [t.scope_key], foreignColumns: [evaluation_evidence_scopes.scope_key] }).onDelete("cascade"),
+  foreignKey({ columns: [t.scope_key, t.set_id, t.set_revision], foreignColumns: [evaluation_evidence_sets.scope_key, evaluation_evidence_sets.id, evaluation_evidence_sets.revision] }).onDelete("cascade"),
+  uniqueIndex("completion_report_operation_unique").on(t.scope_key, t.scope_generation, t.operation_key),
+  index("completion_report_attachment").on(t.scope_key, t.scope_generation, t.attachment_kind, t.attachment_id, t.created_at, t.id),
+  check("evaluation_completion_reports_generation", sql`${t.scope_generation}>0`),
+  check("evaluation_completion_reports_id", sql`length(cast(${t.id} AS BLOB)) BETWEEN 1 AND 128`),
+  check("evaluation_completion_reports_operation", sql`length(cast(${t.operation_key} AS BLOB)) BETWEEN 1 AND 128`),
+  check("evaluation_completion_reports_request_digest", sql`length(${t.request_digest})=64`),
+  check("evaluation_completion_reports_attachment_kind", sql`${t.attachment_kind} IN ('run','inspection','experiment','check')`),
+  check("evaluation_completion_reports_attachment_id", sql`length(cast(${t.attachment_id} AS BLOB)) BETWEEN 1 AND 128`),
+  check("evaluation_completion_reports_set_id", sql`length(cast(${t.set_id} AS BLOB)) BETWEEN 1 AND 128`),
+  check("evaluation_completion_reports_set_revision", sql`${t.set_revision}>0`),
+  check("evaluation_completion_reports_detector", sql`length(cast(${t.detector_version} AS BLOB)) BETWEEN 1 AND 64`),
+  check("evaluation_completion_reports_summary_sha256", sql`length(${t.summary_sha256})=64`),
+  check("evaluation_completion_reports_payload_digest", sql`length(${t.payload_digest})=64`),
+  check("evaluation_completion_reports_payload_bytes", sql`${t.payload_bytes} BETWEEN 1 AND 65536`),
+  check("evaluation_completion_reports_created", sql`${t.created_at} BETWEEN 0 AND 9007199254740991`),
+]);
+
+export const evaluation_completion_payloads = sqliteTable("evaluation_completion_payloads", {
+  scope_key: text("scope_key").notNull(), report_id: text("report_id").notNull(), data: text("data").notNull(),
+}, t => [
+  primaryKey({ columns: [t.scope_key, t.report_id] }),
+  foreignKey({ columns: [t.scope_key, t.report_id], foreignColumns: [evaluation_completion_reports.scope_key, evaluation_completion_reports.id] }).onDelete("cascade"),
+  check("evaluation_completion_payloads_data", sql`typeof(${t.data})='text' AND length(cast(${t.data} AS BLOB)) BETWEEN 1 AND 65536`),
+]);
