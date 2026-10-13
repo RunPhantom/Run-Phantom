@@ -77,6 +77,11 @@ function encoded(value: DatasetExecution): string {
 export class ExecutionStore {
   readonly #db: Database; readonly #authority: ExecutionAuthority;
   constructor(database: Database, authority: ExecutionAuthority) { this.#db = database; this.#authority = authority; }
+  /** Capture helpers use the global native connection; a different profile cannot supply evidence. */
+  assertDatabase(database: Database): void {
+    this.#authority.assertCurrent();
+    if (database !== this.#db) throw new EvaluationError("Execution capture database does not match its owner", 409);
+  }
   private transaction<T>(work: () => T): T { return this.#db.transaction(() => { this.#authority.assertCurrent(); return work(); }).immediate(); }
   private receipt(id: string): Receipt {
     const row = this.#db.query("SELECT * FROM dataset_execution_receipts WHERE execution_id=? AND scope_key='local:local'").get(id) as Receipt | null;
