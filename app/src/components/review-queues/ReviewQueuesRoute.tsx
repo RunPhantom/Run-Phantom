@@ -4,7 +4,6 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Button } from "../ui/button";
 import { ReviewQueues } from "./ReviewQueues";
 
-/** Production route adapter; registration remains coordinator owned. */
 export function ReviewQueuesRoute() {
   const [params] = useSearchParams();
   const [pending, setPending] = useState({ retained: 0, inFlight: 0 });
