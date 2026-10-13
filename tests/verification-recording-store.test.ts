@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { recordingStoreFixture } from "./helpers/recording-store-fixture";
 import { type RecordingAdmission } from "../src/verification/recording";
@@ -65,6 +65,27 @@ describe("guarded native recording persistence (AC-4, AC-5, AC-8)", () => {
       fixture.db.exec("DROP TRIGGER browser_recording_batch_immutable"); fixture.db.query("UPDATE browser_recording_batches SET digest=? WHERE recording_id=?").run("0".repeat(64), lease.summary.id);
       expect(() => store.batches(lease.summary.id)).toThrow("integrity"); store.delete(lease.summary.id);
       expect((fixture.db.query("SELECT count(*) n FROM browser_recording_batches").get() as { n: number }).n).toBe(0);
+    } finally { fixture.close(); }
+  });
+  test("corrupt counters refuse payload materialization and allow privacy deletion", () => {
+    const fixture = recordingStoreFixture();
+    try {
+      const store = fixture.store(), lease = store.admit(admission());
+      store.publish(lease.summary.id, lease.token, JSON.stringify(batch()));
+      fixture.db.query("UPDATE browser_recordings SET retained_bytes=1 WHERE recording_id=?").run(lease.summary.id);
+      const nativeQuery = fixture.db.query.bind(fixture.db); let payloadReads = 0;
+      const monitor = spyOn(fixture.db, "query").mockImplementation(sql => { if (sql.startsWith("SELECT sequence,CASE WHEN")) payloadReads++; return nativeQuery(sql); });
+      try { expect(() => store.batches(lease.summary.id)).toThrow("accounting"); expect(payloadReads).toBe(0); }
+      finally { monitor.mockRestore(); }
+      store.delete(lease.summary.id); expect(store.get(lease.summary.id)).toMatchObject({ status: "deleted", bytes: 0, batches: 0 });
+    } finally { fixture.close(); }
+  });
+  test("loss with no producer cause remains unavailable rather than inventing queue pressure", () => {
+    const fixture = recordingStoreFixture();
+    try {
+      const store = fixture.store(), lease = store.admit(admission());
+      store.publish(lease.summary.id, lease.token, JSON.stringify({ ...batch(), loss: true, dropped: null }));
+      expect(store.get(lease.summary.id)).toMatchObject({ loss: true, reason: "unavailable", dropped: null });
     } finally { fixture.close(); }
   });
   test("empty observations and document transitions remain truthful", () => {

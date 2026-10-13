@@ -175,13 +175,15 @@ export class RecordingStore {
       const documentChange = previous !== null && previous.document !== batch.document;
       const lost = Boolean(head.loss) || batch.loss || documentChange;
       const dropped = head.dropped_count === null || batch.dropped === null ? null : Math.max(head.dropped_count, batch.dropped);
-      this.#db.query("UPDATE browser_recordings SET next_sequence=next_sequence+1,event_count=event_count+?,retained_bytes=retained_bytes+?,loss=?,reason_code=?,dropped_count=? WHERE scope_key=? AND recording_id=?").run(batch.events.length, bytes, lost ? 1 : 0, documentChange ? "document" : batch.loss && head.reason_code === "none" ? "queue" : head.reason_code, dropped, this.#scope, id);
+      this.#db.query("UPDATE browser_recordings SET next_sequence=next_sequence+1,event_count=event_count+?,retained_bytes=retained_bytes+?,loss=?,reason_code=?,dropped_count=? WHERE scope_key=? AND recording_id=?").run(batch.events.length, bytes, lost ? 1 : 0, documentChange ? "document" : batch.loss && head.reason_code === "none" ? "unavailable" : head.reason_code, dropped, this.#scope, id);
       return { accepted: true, duplicate: false };
     });
   }
   batches(id: string): { summary: RecordingSummary; entries: { batch: RecordingBatch; digest: string }[] } {
     return this.transaction("read", () => {
       const head = this.head(id); if (head.status === "deleted") throw new RecordingInputError("Masked recording content was deleted", 410);
+      const footprint = this.#db.query("SELECT count(*) n,coalesce(sum(event_count),0) events,coalesce(sum(length(cast(data AS BLOB))),0) bytes FROM browser_recording_batches WHERE scope_key=? AND recording_id=?").get(this.#scope, id) as { n: number; events: number; bytes: number };
+      if (footprint.n > L.batches || footprint.events > L.events || footprint.bytes > L.recordingBytes || footprint.n !== head.next_sequence || footprint.events !== head.event_count || footprint.bytes !== head.retained_bytes) throw new RecordingInputError("Masked recording accounting is inconsistent", 409);
       const rows = this.rows(id); const entries = rows.map(row => ({ batch: this.decode(row), digest: row.digest }));
       if (rows.length !== head.next_sequence || rows.length > L.batches || rows.some((row, index) => row.sequence !== index) || rows.reduce((sum, row) => sum + Buffer.byteLength(row.data!), 0) !== head.retained_bytes || rows.reduce((sum, row) => sum + row.event_count, 0) !== head.event_count) throw new RecordingInputError("Masked recording accounting is inconsistent", 409);
       for (let index = 0; index < entries.length; index++) continuity(entries[index].batch, index === 0 ? null : entries[index - 1].batch, head.started_at);
