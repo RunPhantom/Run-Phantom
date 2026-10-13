@@ -54,7 +54,7 @@ async function runBackend(): Promise<void> {
   const requestedPort = getConfiguredPort();
   const port = hasExplicitPort() ? requestedPort : await findFreePort(requestedPort);
   const bindHost = getConfiguredBindHost();
-  const { server } = await createServer(port);
+  const { server, close } = await createServer(port);
 
   server.listen(port, bindHost, () => {
     printPortFallback(requestedPort, port);
@@ -73,11 +73,10 @@ async function runBackend(): Promise<void> {
   });
   process.on("uncaughtException", (err) => {
     console.error("[runphantom] uncaught exception, shutting down:", err?.stack ?? err);
-    try { server.close(); } catch { /* already closing */ }
-    process.exit(1);
+    void close().then(() => process.exit(1), () => process.exit(1));
   });
 
-  const shutdown = () => { server.close(); process.exit(0); };
+  const shutdown = () => { void close().then(() => process.exit(0), () => process.exit(1)); };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
   process.on("SIGUSR2", shutdown); // nodemon/tsx watch sends SIGUSR2
@@ -94,6 +93,8 @@ async function runMcp(): Promise<void> {
   // "Failed to reconnect"). Auto-start the daemon so the plugin is robust to
   // machine restarts. All progress goes to stderr — stdout is reserved for
   // JSON-RPC frames.
+  const acpGrant = process.env.RUNPHANTOM_ACP_MCP_GRANT;
+  if (acpGrant && !process.env.RUNPHANTOM_URL) throw new Error("Scoped verification MCP requires its owned daemon origin.");
   if (!process.env.RUNPHANTOM_URL) {
     try {
       const result = await ensureDaemonRunning();
@@ -112,7 +113,8 @@ async function runMcp(): Promise<void> {
   }
 
   const { runMcpServer } = await import("./mcp");
-  const handle = await runMcpServer();
+  const handle = await runMcpServer(acpGrant ? { acpGrant: { origin: process.env.RUNPHANTOM_URL!, token: acpGrant } } : {});
+  if (acpGrant) { await handle.closed; return; }
   const shutdown = async () => { await handle.close(); process.exit(0); };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);

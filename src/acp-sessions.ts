@@ -56,9 +56,17 @@ export interface AcpProcessOptions {
   onProcess?(pid: number): void;
 }
 
+export interface AcpMcpServer {
+  name: "runphantom_verification";
+  command: string;
+  args: string[];
+  env: Array<{ name: string; value: string }>;
+}
+
 export interface AcpScope {
   isCurrent(): boolean;
   abortSignal?: AbortSignal;
+  mcpServers?: AcpMcpServer[];
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -444,14 +452,15 @@ export class OpenCodeAcpSessions {
       };
       const initialized = await initialize(connection);
       checkScope();
+      const mcpServers = scope?.mcpServers ?? [];
       if (input.abortSignal?.aborted) throw new AcpSessionError("cancelled");
       if (id) {
         if (!initialized.loadSession) throw new AcpSessionError("unsupported_protocol");
-        await connection.request("session/load", { cwd, sessionId: id, mcpServers: [] }, 30_000);
+        await connection.request("session/load", { cwd, sessionId: id, mcpServers }, 30_000);
         connection.assertHealthy();
         checkScope();
       } else {
-        id = sessionId(object(await connection.request("session/new", { cwd, mcpServers: [] }, 30_000)).sessionId);
+        id = sessionId(object(await connection.request("session/new", { cwd, mcpServers }, 30_000)).sessionId);
         connection.assertHealthy();
         checkScope();
         const nextKey = `${cwd}\0${id}`;
@@ -464,6 +473,7 @@ export class OpenCodeAcpSessions {
         this.sessions.set(key, { id, path: "", cwd, created_at: timestamp, updated_at: timestamp, message_count: 0, last_prompt: null, preview: null, messages: [] });
       }
       handlers.onProviderSession(id);
+      if (mcpServers.length) emit({ type: "loadout", tools: ["runphantom_verification.app_observe", "runphantom_verification.app_assert"], mcps: ["runphantom_verification"], skills: [], plugins: [], slash_commands: [] });
       replaying = false;
       if (input.abortSignal?.aborted) throw new AcpSessionError("cancelled");
       promptSent = true;
