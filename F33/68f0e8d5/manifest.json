@@ -1,0 +1,97 @@
+{
+  "feature": "F33",
+  "publicationHead": "68f0e8d53defcd05b0dfb5d41190d187c54a2302",
+  "qualifiedSourceHead": "17044ad2b95b795653f410519d5bb309ad1f0973",
+  "sourceTreeIdentical": true,
+  "host": "macOS arm64",
+  "nativeArtifactSha256": "1f1f3ebe713967645dbaab700f39cdbdcc8e3f7d38e0424976d02d44a97440e2",
+  "screenshots": {
+    "local-prompts-1440.png": {
+      "sha256": "6034f858be71a8e6c4b065c824b7d68c0c5f585339f7d17045bf7ebd074e22a9",
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "team-prompts-1440.png": {
+      "sha256": "ae21904f072d4633b226bb8e41315b5eaac04e98118e5997712f69835321d79e",
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "local-prompts-1280.png": {
+      "sha256": "1761552be242a7d3da7ed5aa53ff47df95cee4655ddc569c839714bfae8f6ea2",
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "team-prompts-1280.png": {
+      "sha256": "d172f7944407dcaff972f70ac32c3567ff7cd9de926e219ee362c10de5aed3d7",
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "local-prompts-1024.png": {
+      "sha256": "3b8366b741536375e540b44ce804928d9a19b2427bf52f0a20f585cefd130a1f",
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "team-prompts-1024.png": {
+      "sha256": "5acdc7e66e358038da1f5ab611f228720c4abafa1ad25b3c9547bea139b1a7b7",
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "local-prompts-768.png": {
+      "sha256": "b32222fe55d0cf8f0a52d14612fc68cbacef77eabe8988fc03d95e49b5e7e960",
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "team-prompts-768.png": {
+      "sha256": "80c5ae8dce18a255d8bc0912025eab1f06970e4d2893461ae65782b3e5ec512f",
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "local-prompts-390.png": {
+      "sha256": "db38d137fa99aaef2a3bcb2bc5cec98932e52f2d95c145146972bd9ef444adcd",
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "team-prompts-390.png": {
+      "sha256": "b15ae04048c37e65e9e9a4c6910951c01442dab7ffadcb36fa5cf2f655c1bdb0",
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "local-prompts-320.png": {
+      "sha256": "e9767ea28d178658f8a44eb5983c44b5849810185aaf94724da3284030729a20",
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "team-prompts-320.png": {
+      "sha256": "b0e38e719d4eeff6db9d401aa14b41f20237c8232e9b6691d1dc4120490e8699",
+      "synthetic": true,
+      "copiedNative": true
+    }
+  },
+  "backend": {
+    "pass": 1486,
+    "skip": 1,
+    "fail": 0,
+    "assertions": 11881,
+    "files": 125,
+    "skipReason": "existing Windows-only test on macOS",
+    "isolatedHome": true,
+    "nativeBinaryOptInCasesActivated": true
+  },
+  "sourceBrowser": {
+    "pass": 171,
+    "skip": 12,
+    "fail": 0,
+    "discovered": 183,
+    "existingOptInSkips": true,
+    "workers": 1,
+    "retries": 0,
+    "defaultTimeoutMs": 90000,
+    "reviewQueueSixScope": "actual mounted component and real SQLite fixture at inherited16947; no later connectedF29 activation",
+    "promptLocalTeamScope": "actual source daemon journeys"
+  },
+  "copiedOriginalCommon": 3,
+  "copiedOriginalPromptLocalTeam": 3,
+  "distinctNativeBoots": 6,
+  "globalAcceptance": false,
+  "providerCalls": 0
+}
