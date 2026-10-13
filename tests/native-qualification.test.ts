@@ -76,7 +76,8 @@ test("Windows ownership queries reject nonlocal selectors before constructing a 
   for (const script of [selected, snapshot]) {
     expect(script).toContain("$ErrorActionPreference='Stop'");
     expect(script).toContain("$rows.Count -ge 8192");
-    expect(script).toContain("ConvertTo-Json -InputObject @($rows.ToArray())");
+    expect(script).toContain("$json=[System.Text.StringBuilder]::new()");
+    expect(script).not.toMatch(/ConvertTo-Json|ToArray\(\)/);
     expect(script).not.toMatch(/ComputerName|CimSession|ExecutablePath|CommandLine/);
   }
 });
@@ -211,10 +212,48 @@ test("cold Windows ownership uses trusted framework WQL with exact births and bo
     expect(script.indexOf(firstBirthMarkers[0])).toBeLessThan(script.indexOf("[System.Reflection.Assembly]::Load"));
     expect(script.indexOf(firstBirthMarkers[1])).toBeLessThan(script.indexOf("$results=$searcher.Get()"));
     expect(script.indexOf(firstBirthMarkers[2])).toBeGreaterThan(script.indexOf("$rows.Add("));
-    expect(script.indexOf(firstBirthMarkers[2])).toBeLessThan(script.indexOf("ConvertTo-Json"));
-    expect(script.indexOf(firstBirthMarkers[3])).toBeGreaterThan(script.indexOf("ConvertTo-Json"));
+    expect(script.indexOf(firstBirthMarkers[2])).toBeLessThan(script.indexOf("$json=[System.Text.StringBuilder]::new()"));
+    expect(script.indexOf(firstBirthMarkers[3])).toBeGreaterThan(script.indexOf("$wire=$json.ToString()"));
   }
 });
+
+test("Windows fixed ownership serialization validates original typed fields and emits only after disposal", () => {
+  const markers = ["entered", "before-query", "after-query", "before-serialization", "after-serialization", "before-disposal", "after-disposal", "before-output", "after-output"];
+  for (const selector of [71, "all"] as const) {
+    const script = windowsOwnershipQuery(selector);
+    let prior = -1;
+    for (const phase of markers) {
+      const marker = `[Console]::Error.WriteLine('rp-first:${phase}')`;
+      expect(script.split(marker).length).toBe(2);
+      expect(script.indexOf(marker)).toBeGreaterThan(prior); prior = script.indexOf(marker);
+    }
+    expect(script).toContain(`$limit=${selector === "all" ? 512 * 1024 : 64 * 1024}`);
+    expect(script).toContain("$processId -isnot [uint32] -or $processId -eq 0 -or $parentId -isnot [uint32]");
+    expect(script.match(/\.ToString\(\[System.Globalization.CultureInfo\]::InvariantCulture\)/g)).toHaveLength(2);
+    expect(script).toContain("$birthValue -isnot [string]");
+    expect(script).toContain("'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{7}Z\\z'");
+    expect(script).toContain("if($null -eq $birthValue){[void]$json.Append('null')}");
+    expect(script).toContain("if($json.Length -ge $limit){throw 'fixture_process_snapshot_limit'}");
+    expect(script).toContain("[void]$json.Append(']');if($json.Length -gt $limit)");
+    expect(script.match(/\[void\]\$json\.Append\(/g)?.length).toBe(script.match(/\$json\.Append\(/g)?.length);
+    expect(script).not.toMatch(/ConvertTo-Json|ToArray\(\)|JavaScriptSerializer|JsonConvert|System\.Text\.Json|Import-Module|\[uint32\]\$/);
+    const output = script.indexOf("[Console]::Out.Write($wire)");
+    expect(output).toBeGreaterThan(script.indexOf("$results.Dispose()"));
+    expect(output).toBeGreaterThan(script.indexOf("$searcher.Dispose()"));
+    expect(output).toBeGreaterThan(script.indexOf("rp-first:after-disposal"));
+    expect(script.match(/\[Console\]::Out\.Write\(/g)).toHaveLength(1);
+  }
+});
+test("first Windows birth telemetry includes only closed complete serialization, disposal and output phases", () => {
+  const phases = ["before-serialization", "after-serialization", "before-disposal", "after-disposal", "before-output", "after-output"];
+  const stderr = phases.map(phase => `rp-first:${phase}\r\nrp-first:${phase}\n`).join("") +
+    "PRIVATE_SERIALIZER rp-first:before-output\nrp-first:after-disposalX\nrp-first:arbitrary\nrp-first:after-output\u001b\n";
+  const record = runtime.nativeCommandFailure(runtime.makeNativeCommandFailure({}, {}, "", stderr, 1));
+  expect(record!.phases).toEqual(phases);
+  expect(Object.isFrozen(record!.phases)).toBe(true);
+  expect(JSON.stringify(record)).not.toContain("PRIVATE_SERIALIZER");
+});
+
 test("first Windows birth telemetry retains only a closed immutable record for the particular refusal", () => {
   const failure = runtime.makeNativeCommandFailure({ code: "ENOENT", signal: "SIGTERM", killed: true,
     message: "PRIVATE_FIRST_MESSAGE", cmd: "PRIVATE_FIRST_COMMAND", path: "PRIVATE_FIRST_PATH", cause: "PRIVATE_FIRST_CAUSE" },

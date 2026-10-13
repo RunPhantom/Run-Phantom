@@ -76,7 +76,7 @@ export type NativeCommandFailureRecord = Readonly<{
   probe: "windows-first-birth-command"; errorCode: "ETIMEDOUT" | "ENOENT" | "EACCES" | "other";
   status: number | null; signal: "SIGTERM" | "SIGKILL" | "other" | null; killed: boolean | null;
   wallMs: number | null; stdoutUtf8Bytes: number | null; stderrUtf8Bytes: number | null;
-  phases: readonly ("entered" | "before-query" | "after-query" | "after-serialization")[];
+  phases: readonly ("entered" | "before-query" | "after-query" | "before-serialization" | "after-serialization" | "before-disposal" | "after-disposal" | "before-output" | "after-output")[];
 }>;
 const commandFailures = new WeakMap<Error, NativeCommandFailureRecord>();
 function ownData(value: unknown, key: string): unknown {
@@ -91,10 +91,10 @@ function callbackUtf8Bytes(value: unknown): number | null {
 }
 export function makeNativeCommandFailure(error: unknown, child: unknown, stdout: unknown, stderr: unknown, elapsed: unknown): Error {
   const code = ownData(error, "code"), signal = ownData(error, "signal"), killed = ownData(error, "killed"), status = ownData(child, "exitCode");
-  const phases: Array<"entered" | "before-query" | "after-query" | "after-serialization"> = [];
+  const phases: Array<"entered" | "before-query" | "after-query" | "before-serialization" | "after-serialization" | "before-disposal" | "after-disposal" | "before-output" | "after-output"> = [];
   const stderrUtf8Bytes = callbackUtf8Bytes(stderr);
   if (typeof stderr === "string" && stderrUtf8Bytes !== null) {
-    const names = ["entered", "before-query", "after-query", "after-serialization"] as const;
+    const names = ["entered", "before-query", "after-query", "before-serialization", "after-serialization", "before-disposal", "after-disposal", "before-output", "after-output"] as const;
     for (const line of stderr.split("\n")) {
       const phase = names.find(name => line === `rp-first:${name}` || line === `rp-first:${name}\r`);
       if (phase && !phases.includes(phase)) phases.push(phase);
@@ -229,8 +229,21 @@ try{
   if($null -ne $raw){if($raw -isnot [string] -or $raw -cnotmatch '^[0-9]{14}\\.[0-9]{6}[+-][0-9]{3}$'){throw 'fixture_process_birth'};$birth=[System.Management.ManagementDateTimeConverter]::ToDateTime($raw).ToUniversalTime().ToString('o')};
   $rows.Add(@{pid=$row.ProcessId;parent=$row.ParentProcessId;birth=$birth})
  }}finally{$row.Dispose()}}
- [Console]::Error.WriteLine('rp-first:after-query');ConvertTo-Json -InputObject @($rows.ToArray()) -Compress;[Console]::Error.WriteLine('rp-first:after-serialization');
-}finally{if($null -ne $results){$results.Dispose()};if($null -ne $searcher){$searcher.Dispose()}};`;
+ [Console]::Error.WriteLine('rp-first:after-query');[Console]::Error.WriteLine('rp-first:before-serialization');
+ $json=[System.Text.StringBuilder]::new();$limit=${pid === "all" ? 512 * 1024 : 64 * 1024};$first=$true;[void]$json.Append('[');
+ foreach($entry in $rows){
+  $processId=$entry.pid;$parentId=$entry.parent;$birthValue=$entry.birth;
+  if($processId -isnot [uint32] -or $processId -eq 0 -or $parentId -isnot [uint32]){throw 'fixture_process_birth'};
+  if($null -ne $birthValue -and ($birthValue -isnot [string] -or $birthValue -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{7}Z\\z')){throw 'fixture_process_birth'};
+  if(-not $first){[void]$json.Append(',')};$first=$false;
+  [void]$json.Append('{"pid":');[void]$json.Append($processId.ToString([System.Globalization.CultureInfo]::InvariantCulture));
+  [void]$json.Append(',"parent":');[void]$json.Append($parentId.ToString([System.Globalization.CultureInfo]::InvariantCulture));[void]$json.Append(',"birth":');
+  if($null -eq $birthValue){[void]$json.Append('null')}else{[void]$json.Append('"');[void]$json.Append($birthValue);[void]$json.Append('"')};[void]$json.Append('}');
+  if($json.Length -ge $limit){throw 'fixture_process_snapshot_limit'};
+ }
+ [void]$json.Append(']');if($json.Length -gt $limit){throw 'fixture_process_snapshot_limit'};$wire=$json.ToString();[Console]::Error.WriteLine('rp-first:after-serialization');
+}finally{try{[Console]::Error.WriteLine('rp-first:before-disposal')}finally{if($null -ne $results){$results.Dispose()};if($null -ne $searcher){$searcher.Dispose()}};[Console]::Error.WriteLine('rp-first:after-disposal')};
+[Console]::Error.WriteLine('rp-first:before-output');[Console]::Out.Write($wire);[Console]::Error.WriteLine('rp-first:after-output');`;
 }
 type Ownership = { root: ChildProcess; pid: number | undefined; identity: Promise<string | null>; descendants: Map<number, string>; pending: Promise<void>; running?: boolean; timer?: ReturnType<typeof setInterval>; failure?: Error };
 const ownership = new WeakMap<OwnedProcess, Ownership>();
