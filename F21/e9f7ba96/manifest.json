@@ -1,0 +1,50 @@
+{
+  "feature": "F21",
+  "sourceHead": "e9f7ba96c9bf7a68fd83cb34ae02cd95beaedd7d",
+  "host": "macOS arm64",
+  "nativeArtifactSha256": "75021a79ae527a1611b00585b770ae0a9c97794c659fd79ed2c5f993b226ce14",
+  "screenshots": {
+    "response-320.png": {
+      "sha256": "f58857a882508b125ca3b05401aa5afb0e0725e3e269569d4a06b7f2a1bee4f8",
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "response-390.png": {
+      "sha256": "bcba8ea67f90f888219084a044995b429b4182c83e38ee2c5e1b23f61d26c6df",
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "response-1440.png": {
+      "sha256": "94225fdf88eada908dae41f5ead0f167459b3811765a4e9c408a3fd9e0882562",
+      "synthetic": true,
+      "copiedNative": true
+    },
+    "response-css-200.png": {
+      "sha256": "7e3efaf649d9d2b1703a5c8fb1e1032eb1fbb1bfa734bcb64b4c6c7abe353ab0",
+      "synthetic": true,
+      "copiedNative": true
+    }
+  },
+  "backend": {
+    "pass": 1044,
+    "skip": 1,
+    "fail": 0
+  },
+  "sourceBrowser": {
+    "pass": 191,
+    "skip": 8,
+    "fail": 0,
+    "workers": 1,
+    "retries": 0
+  },
+  "copiedBrowser": {
+    "pass": 30,
+    "skip": 0,
+    "fail": 0
+  },
+  "distinctNativeBoots": 2,
+  "physicalTablesExact": 27,
+  "globalAcceptance": false,
+  "providerCalls": 0,
+  "visualLimits": "CSS scaling is not toolbar zoom; inherited launcher overlaps advisory at CSS200; ordinary scrolling exposes lower content."
+}
