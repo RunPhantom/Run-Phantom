@@ -7,8 +7,12 @@ import { VERIFICATION_LIMITS as L } from "./protocol";
 import { isLoopbackRemoteAddress } from "../local-access";
 import { ChangeContextReader, verifyChangeContextJson } from "./change-context";
 
+const verifiedChangeRequests = new WeakSet<Request>();
 export function verifyVerificationChangeRequest(req: Request, _res: Response, raw: Buffer): void {
-  if (req.method === "POST" && /^\/api\/verification\/reports\/[^/]{1,128}\/change-context(?:\?|$)/.test(req.originalUrl)) verifyChangeContextJson(raw);
+  if (req.method === "POST" && /^\/api\/verification\/reports\/[^/?]+\/change-context\/?(?:\?|$)/i.test(req.originalUrl)) {
+    verifyChangeContextJson(raw);
+    verifiedChangeRequests.add(req);
+  }
 }
 
 function object(value: unknown, allowed: string[]): Record<string, unknown> {
@@ -44,9 +48,10 @@ export function createVerificationRouter(service: VerificationService, options: 
     }));
     router.post("/reports/:id/change-context", route(async (req, res) => {
       local(req); if (Object.keys(req.query).length) throw new VerificationHttpError(400, "Workspace paths and options are not accepted");
+      // A parsed object cannot prove that original JSON had no duplicate keys.
+      if (!verifiedChangeRequests.has(req)) throw new VerificationHttpError(400, "Change context requires verified original JSON bytes");
       const body = object(req.body, ["workspaceId"]);
       if (typeof body.workspaceId !== "string") throw new VerificationHttpError(400, "Invalid workspace selection");
-      verifyChangeContextJson(Buffer.from(JSON.stringify(body)));
       const id = text(req.params.id, "reportId");
       const controller = new AbortController();
       const abort = () => controller.abort(); res.once("close", abort);

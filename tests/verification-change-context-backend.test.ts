@@ -50,13 +50,16 @@ function project(changes: boolean) {
   }
   return { cwd: realpathSync(cwd), head };
 }
-async function fixture(cwd: string) {
+async function fixture(cwd: string, options: { verifyRaw?: boolean } = {}) {
   const service = createVerificationService({ broadcast() {}, checkTimeoutMs: 500, commandTimeoutMs: 500 });
   const workspace = { cwd, revision: "selected-1" };
   const authority = { id: "local-owner", role: "owner" as "owner" | "reader", generation: 1 };
   const changes = new ChangeContextReader({ workspace: () => workspace, authority: () => authority, report: id => listReports().find(item => item.id === id) });
-  const app = express(); app.use(express.json({ verify: verifyVerificationChangeRequest }));
+  const app = express(); app.use(express.json(options.verifyRaw === false ? {} : { verify: verifyVerificationChangeRequest }));
   app.use("/api/verification", createVerificationRouter(service, { changeContext: changes }));
+  app.use((error: { status?: number; message?: string }, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    res.status(error.status ?? 500).json({ error: error.message ?? "Native fixture request failed" });
+  });
   const server = http.createServer(app);
   server.on("upgrade", (req, socket, head) => service.bridge.handleUpgrade(req, socket, head));
   server.listen(0, "127.0.0.1"); await once(server, "listening");
@@ -64,6 +67,11 @@ async function fixture(cwd: string) {
   const root = `http://127.0.0.1:${address.port}`;
   const api = async (route: string, body?: unknown) => {
     const response = await fetch(`${root}/api/verification${route}`, { method: body === undefined ? "GET" : "POST", headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    const text = await response.text();
+    return { status: response.status, body: response.headers.get("content-type")?.includes("json") ? JSON.parse(text) : text };
+  };
+  const raw = async (route: string, body: string | Uint8Array) => {
+    const response = await fetch(`${root}${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body });
     const text = await response.text();
     return { status: response.status, body: response.headers.get("content-type")?.includes("json") ? JSON.parse(text) : text };
   };
@@ -85,7 +93,7 @@ async function fixture(cwd: string) {
   const report = (await api(`/sessions/${created.id}/assert`, { name: "Measured failing checkout", predicate: { kind: "console", level: "error", absent: true }, since: acted.cursor })).body;
   expect(report.status).toBe("fail");
   const stored = JSON.stringify(listReports().find(item => item.id === report.id));
-  return { api, report, stored, workspace, authority, async close() { changes.close(); ws.terminate(); service.close(); await new Promise<void>(resolve => server.close(() => resolve())); } };
+  return { api, raw, report, stored, workspace, authority, async close() { changes.close(); ws.terminate(); service.close(); await new Promise<void>(resolve => server.close(() => resolve())); } };
 }
 
 describe("explicit change context preserves measured report authority", () => {
@@ -121,6 +129,66 @@ describe("explicit change context preserves measured report authority", () => {
       expect(captured.status).toBe(200); expect(captured.body.changes).toEqual([]); expect(captured.body.complete).toBe(true);
       expect(captured.body.handoff.status).toBe("fail"); expect(captured.body.testedRevision).toBeNull();
       expect(captured.body.relatedTests.every((hint: { advisory: boolean }) => hint.advisory)).toBe(true);
+      expect(JSON.stringify(listReports().find(item => item.id === f.report.id))).toBe(f.stored);
+    } finally { await f.close(); }
+  });
+});
+
+describe("change-context original HTTP bytes cover every accepted route form", () => {
+  const routes = [
+    { name: "canonical", path: (id: string) => `/api/verification/reports/${id}/change-context` },
+    { name: "uppercase leaf", path: (id: string) => `/api/verification/reports/${id}/CHANGE-CONTEXT` },
+    { name: "trailing slash", path: (id: string) => `/api/verification/reports/${id}/change-context/` },
+    { name: "mixed-case mount and trailing slash", path: (id: string) => `/API/Verification/REPORTS/${id}/CHANGE-CONTEXT/` },
+  ];
+  const rejected = [
+    { name: "duplicate workspaceId", status: 400, body: (id: string) => `{"workspaceId":"${id}","workspaceId":"${id}"}` },
+    { name: "escaped duplicate workspaceId", status: 400, body: (id: string) => `{"workspaceId":"${id}","work\\u0073paceId":"${id}"}` },
+    { name: "escaped field name", status: 400, body: (id: string) => `{"work\\u0073paceId":"${id}"}` },
+    { name: "extra field", status: 400, body: (id: string) => `{"workspaceId":"${id}","extra":true}` },
+    { name: "oversized whitespace", status: 413, body: (id: string) => `${" ".repeat(257)}{"workspaceId":"${id}"}` },
+    { name: "malformed JSON", status: 400, body: (id: string) => `{"workspaceId":"${id}"` },
+    { name: "invalid UTF-8", status: 400, body: (id: string) => Buffer.concat([Buffer.from(`{"workspaceId":"${id}"`), Buffer.from([0xc3, 0x28]), Buffer.from("}")]) },
+  ];
+  for (const route of routes) {
+    test(`${route.name} preserves a valid raw request and the measured failure`, async () => {
+      const repo = project(false); const f = await fixture(repo.cwd);
+      try {
+        const offered = await f.api("/change-workspace"); expect(offered.status).toBe(200);
+        const captured = await f.raw(route.path(f.report.id), ` { "workspaceId" : "${offered.body.workspaceId}" } `);
+        expect(captured.status).toBe(200); expect(captured.body.head).toBe(repo.head);
+        expect(captured.body.handoff.reportId).toBe(f.report.id); expect(captured.body.handoff.status).toBe("fail");
+        expect(JSON.stringify(listReports().find(item => item.id === f.report.id))).toBe(f.stored);
+      } finally { await f.close(); }
+    });
+    for (const rejectedBody of rejected) {
+      test(`${route.name} refuses original ${rejectedBody.name} before capture`, async () => {
+        const repo = project(false); const f = await fixture(repo.cwd);
+        try {
+          const offered = await f.api("/change-workspace"); expect(offered.status).toBe(200);
+          const refused = await f.raw(route.path(f.report.id), rejectedBody.body(offered.body.workspaceId));
+          expect(refused.status).toBe(rejectedBody.status); expect(refused.body.handoff).toBeUndefined();
+          expect(JSON.stringify(listReports().find(item => item.id === f.report.id))).toBe(f.stored);
+        } finally { await f.close(); }
+      });
+    }
+  }
+  test("a parsed valid object without original-byte validation proof cannot capture", async () => {
+    const repo = project(false); const f = await fixture(repo.cwd, { verifyRaw: false });
+    try {
+      const offered = await f.api("/change-workspace"); expect(offered.status).toBe(200);
+      const refused = await f.api(`/reports/${f.report.id}/change-context`, { workspaceId: offered.body.workspaceId });
+      expect(refused.status).toBe(400); expect(refused.body.handoff).toBeUndefined();
+      expect(JSON.stringify(listReports().find(item => item.id === f.report.id))).toBe(f.stored);
+    } finally { await f.close(); }
+  });
+  test("existing session endpoints keep case-insensitive and trailing-slash routing", async () => {
+    const repo = project(false); const f = await fixture(repo.cwd);
+    try {
+      const listed = await f.api("/SeSsIoNs/"); expect(listed.status).toBe(200);
+      expect(listed.body.some((session: { id: string }) => session.id === f.report.sessionId)).toBe(true);
+      const created = await f.api("/SeSsIoNs/", { origin: "http://localhost:4812" });
+      expect(created.status).toBe(201); expect(created.body.id).toBeString();
       expect(JSON.stringify(listReports().find(item => item.id === f.report.id))).toBe(f.stored);
     } finally { await f.close(); }
   });
