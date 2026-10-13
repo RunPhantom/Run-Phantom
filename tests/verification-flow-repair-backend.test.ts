@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -32,13 +32,19 @@ async function fixture() {
  await once(ws, "open"); const ready = once(ws, "message"); ws.send(JSON.stringify({ type: "hello", version: 3, token: created.token, coverage: runtimeCoverage, capabilities: ["semantic-refs"] })); expect(JSON.parse((await ready)[0].toString())).toEqual({ type: "ready" });
  let snapshot: any = { source: "sdk-reported", nameModel: "partial-aria", documentGeneration: "2".repeat(32), count: 1, countExact: true, elements: [item], coverage };
  let replyTruncated = false;
+ let holdDiscovery: ((reply: () => void) => void) | undefined;
  const actions: string[] = [];
  ws.on("message", raw => { const msg = JSON.parse(raw.toString()); if (msg.type !== "command") return;
    if (["click", "ref-click", "fill", "ref-fill"].includes(msg.command.type)) { actions.push(msg.command.type); ws.send(JSON.stringify({ type: "event", event: { type: "action.boundary", data: {}, actionId: msg.id } })); ws.send(JSON.stringify({ type: "event", event: { type: "signal", data: { name: "finished" }, actionId: msg.id } })); }
-   ws.send(JSON.stringify({ type: "result", id: msg.id, ok: true, ...(replyTruncated && msg.command.type === "semantic-snapshot" ? { truncated: true } : {}), result: msg.command.type === "semantic-snapshot" ? snapshot : msg.command.type === "snapshot" ? { count: 0, selector: msg.command.selector ?? "button" } : undefined }));
+   const reply = () => ws.send(JSON.stringify({ type: "result", id: msg.id, ok: true, ...(replyTruncated && msg.command.type === "semantic-snapshot" ? { truncated: true } : {}), result: msg.command.type === "semantic-snapshot" ? snapshot : msg.command.type === "snapshot" ? { count: 0, selector: msg.command.selector ?? "button" } : undefined }));
+   if (msg.command.type === "semantic-snapshot" && holdDiscovery) { const hold = holdDiscovery; holdDiscovery = undefined; hold(reply); } else reply();
  });
  const flow = (await api("/flows", { name: "Repair", origin: created.origin, steps })).body;
- return { service, api, created, flow, actions, setSnapshot(value: unknown, truncated = false) { snapshot = value; replyTruncated = truncated; }, snapshot() { return structuredClone(snapshot); }, async propose() { return api(`/flows/${flow.id}/repair-proposals`, { sessionId: created.id, step: 0 }); }, async close() { ws.terminate(); service.close(); await new Promise<void>(resolve => server.close(() => resolve())); } };
+ return { service, api, created, flow, actions, holdNextDiscovery() {
+   let releaseReply: (() => void) | undefined;
+   const arrived = new Promise<void>(resolve => { holdDiscovery = reply => { releaseReply = reply; resolve(); }; });
+   return { arrived, release() { if (!releaseReply) throw new Error("Discovery response is not held"); const reply = releaseReply; releaseReply = undefined; reply(); } };
+ }, setSnapshot(value: unknown, truncated = false) { snapshot = value; replyTruncated = truncated; }, snapshot() { return structuredClone(snapshot); }, async propose() { return api(`/flows/${flow.id}/repair-proposals`, { sessionId: created.id, step: 0 }); }, async close() { ws.terminate(); service.close(); await new Promise<void>(resolve => server.close(() => resolve())); } };
 }
 describe("explicit reviewed repair at real HTTP/socket/SQLite boundary", () => {
  test("legacy array read and canceled review keep original stored bytes exactly", async () => {
@@ -60,6 +66,25 @@ describe("explicit reviewed repair at real HTTP/socket/SQLite boundary", () => {
    const raw = stored(f.flow.id); closeDb(); getDrizzleDb(); expect(stored(f.flow.id)).toBe(raw); expect(getFlow(f.flow.id)).toEqual(committed.body);
    const run = await f.api(`/flows/${f.flow.id}/run`, { sessionId: f.created.id }); expect(run.body.status).toBe("pass"); expect(f.actions).toEqual(["ref-click"]);
   } finally { await f.close(); }
+ });
+ for (const mode of ["canceled", "cleared", "expired"] as const) test(`${mode} proposal while awaiting current discovery refuses CAS and preserves exact legacy bytes`, async () => {
+  const f = await fixture(); let clock: ReturnType<typeof spyOn<typeof Date, "now">> | undefined;
+  try {
+   const raw = '[  ' + JSON.stringify(steps[0]) + '  ]'; getDrizzleDb().$client.query("UPDATE verification_flows SET steps = ? WHERE id = ?").run(raw, f.flow.id);
+   const proposal: FlowRepairProposal = (await f.propose()).body;
+   const held = f.holdNextDiscovery();
+   const committing = f.api(`/flows/${f.flow.id}/repair-proposals/${proposal.id}/commit`, { candidateId: proposal.candidates[0].id, revision: proposal.revision });
+   await held.arrived;
+   if (mode === "canceled") expect((await f.api(`/flows/${f.flow.id}/repair-proposals/${proposal.id}`, undefined, "DELETE")).status).toBe(200);
+   if (mode === "cleared") f.service.repairs.clear();
+   // Controlled absolute-clock boundary, not a claimed 60-second wall-clock wait.
+   if (mode === "expired") clock = spyOn(Date, "now").mockReturnValue(proposal.expiresAt);
+   expect(stored(f.flow.id)).toBe(raw); expect(f.actions).toHaveLength(0);
+   held.release(); const committed = await committing;
+   expect(committed.status).toBe(409); expect(committed.body.error).toContain("proposal");
+   expect(stored(f.flow.id)).toBe(raw); expect(f.actions).toHaveLength(0);
+   expect(getFlow(f.flow.id).steps[0].anchor).toEqual({ kind: "css", selector: "#original" });
+  } finally { clock?.mockRestore(); await f.close(); }
  });
  for (const mode of ["ambiguous", "partial", "reloaded", "recreated", "conflict", "malformed", "wrong-selection", "transport-gap"]) test(`${mode} repair refuses writes and performs zero actions`, async () => {
   const f = await fixture(); try {

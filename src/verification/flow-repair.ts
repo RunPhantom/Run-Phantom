@@ -50,6 +50,7 @@ export class FlowRepairReviews {
     return { retained, candidate };
   }
   validateCurrent(retained: RetainedProposal, candidate: FlowRepairCandidate, generation: number, raw: unknown): void {
+    if (this.proposals.get(retained.view.id) !== retained || retained.view.expiresAt <= Date.now()) throw new VerificationHttpError(409, "Repair proposal canceled, expired or unavailable; review a new proposal");
     const data = parseFlowDiscovery(raw);
     const resolution = resolveFlowAnchor(candidate.anchor, data);
     if (generation !== retained.generation || data.documentGeneration !== retained.documentGeneration || !resolution.ref || resolution.ref !== retained.refs.get(candidate.id)) throw new VerificationHttpError(409, "Application or candidate changed since review; request a new repair proposal");
