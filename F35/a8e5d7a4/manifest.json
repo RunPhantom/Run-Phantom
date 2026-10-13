@@ -1,0 +1,89 @@
+{
+  "feature": "F35",
+  "sourceHead": "a8e5d7a48038312ef1f6bb99bcc65b3085c78fac",
+  "host": "macOS arm64",
+  "nativeArtifactSha256": "81cb4c91516d5b13fdc3dfe7a63445d7d4a7afc589c9619b3e08332d3ed37295",
+  "nativeArtifactVersion": "0.1.0-f35-a8e5d7a-qualified",
+  "backendOriginal": {
+    "passed": 1018,
+    "failed": 5,
+    "conditional": 1
+  },
+  "backendSameCasesAfterFixtureParentCreation": {
+    "passed": 5,
+    "failed": 0
+  },
+  "sourceBrowser": {
+    "passed": 174,
+    "conditional": 13,
+    "workers": 1,
+    "retries": 0
+  },
+  "copiedOriginalAccessibilityJourneys": 12,
+  "copiedAdditionalCssomControls": 3,
+  "copiedAdditionalPrivacyCapControls": 1,
+  "physicalTables": 28,
+  "physicalSchemaEntries": 87,
+  "canonicalReceipts": 10,
+  "assetsPerMainBoot": 319,
+  "mainPersistentBoots": 2,
+  "screenshots": {
+    "f35-findings-320.png": {
+      "sha256": "cd6b3d0d122baf83e77b3f0c8613fb411477b840e2d0d144811e1d06ffcdf505",
+      "bytes": 58307,
+      "width": 320,
+      "height": 740,
+      "syntheticFixture": true,
+      "copiedNative": true,
+      "pixelsEdited": false
+    },
+    "f35-findings-390.png": {
+      "sha256": "b9c3a7e47042f58a3518f1bfb46f9a1b6c365bcc92c253677e5d8be435b9ea38",
+      "bytes": 63860,
+      "width": 390,
+      "height": 844,
+      "syntheticFixture": true,
+      "copiedNative": true,
+      "pixelsEdited": false
+    },
+    "f35-findings-768.png": {
+      "sha256": "499e60deef74e96a33c0dba2bc1e289de7f85a773b3a1e880674dfbadbf33ab9",
+      "bytes": 101110,
+      "width": 768,
+      "height": 1024,
+      "syntheticFixture": true,
+      "copiedNative": true,
+      "pixelsEdited": false
+    },
+    "f35-findings-1024.png": {
+      "sha256": "166c3e90ccecf871d430593122cab7e0789082f6a77c39b5912fc9bb84bc2b5b",
+      "bytes": 89030,
+      "width": 1024,
+      "height": 768,
+      "syntheticFixture": true,
+      "copiedNative": true,
+      "pixelsEdited": false
+    },
+    "f35-findings-1280.png": {
+      "sha256": "0582193a0d3400083b5b2749a4dc05369432f5de398c22bb61df29cb5c460ba6",
+      "bytes": 94456,
+      "width": 1280,
+      "height": 800,
+      "syntheticFixture": true,
+      "copiedNative": true,
+      "pixelsEdited": false
+    },
+    "f35-findings-1440.png": {
+      "sha256": "e1db9f86875e655637d508dc0afa5f8bce7283ceb7f7eab43a5334ed21f0bb55",
+      "bytes": 105244,
+      "width": 1440,
+      "height": 900,
+      "syntheticFixture": true,
+      "copiedNative": true,
+      "pixelsEdited": false
+    }
+  },
+  "providerCalls": 0,
+  "initialOwnedChromiumScannerOnly": true,
+  "globalAcceptance": false
+}
