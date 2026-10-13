@@ -1,4 +1,5 @@
-import type { VerificationReportContext } from "../../api/verification";
+import { useEffect, useRef, useState } from "react";
+import { verificationApi, type ChangeWorkspaceOffer, type VerificationChangeContext, type VerificationReport, type VerificationReportContext } from "../../api/verification";
 
 const sourceReasons = {
   "not-react": "Control has no accessible React metadata.",
@@ -36,7 +37,7 @@ function expectedOutcome(value: unknown, depth = 0): string {
   }
 }
 
-export function ReportContext({ context }: { context?: VerificationReportContext }) {
+function SavedReportContext({ context }: { context?: VerificationReportContext }) {
   if (!context) return <p className="text-[11px] text-[color:var(--rp-ink-muted)]">Saved check details are unavailable for this report.</p>;
   return <div className="space-y-3 pt-1 text-xs">
     <p className="break-words text-[color:var(--rp-ink-soft)]">App: {context.origin}</p>
@@ -74,4 +75,90 @@ export function ReportContext({ context }: { context?: VerificationReportContext
       </dl></details>
     </li>)}</ol>
   </div>;
+}
+
+const unavailableReasons: Record<string, string> = {
+  "not-git": "The selected directory is not a Git repository.", "workspace-is-not-git-root": "Select the repository root explicitly.",
+  "unborn-head": "This repository has no committed revision.", "unsupported-git-storage": "This Git storage or remote object configuration is unsupported.",
+  "git-metadata-unavailable": "Required Git metadata is unavailable or exceeds its bound.", "git-metadata-changed": "Git metadata changed during this read.",
+  "git-read-failed": "Git could not provide this metadata.", "git-unavailable": "Git is unavailable.", "deadline": "The one-second read deadline was reached.",
+  "git-output-limit": "Git output exceeded its byte limit.", "git-error-limit": "Git error output exceeded its byte limit.", "invalid-utf8": "Git output was not valid UTF-8.",
+  "invalid-git-records": "Git records could not be safely interpreted.", "invalid-head": "The revision metadata was invalid.", "invalid-git-count": "A change count was invalid.",
+  "path-unavailable": "Sensitive, unsafe or oversized paths were withheld.", "row-limit": "The changed-file row limit was reached.",
+  "untracked-content-unavailable": "Untracked content is unavailable; only file metadata is retained.", "untracked-metadata-unavailable": "Some untracked file metadata is unavailable.",
+  "untracked-metadata-limit": "The untracked metadata limit was reached.", "merge-conflict": "Some files have unresolved conflicts.",
+  "test-inventory-limit": "The tracked test inventory limit was reached.", "related-test-limit": "The related-test hint limit was reached.", "response-limit": "Some rows were omitted to keep this response bounded.",
+};
+
+function ChangeReview({ report }: { report: VerificationReport }) {
+  const [offer, setOffer] = useState<ChangeWorkspaceOffer>();
+  const [selected, setSelected] = useState(false);
+  const [result, setResult] = useState<VerificationChangeContext>();
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const request = useRef<AbortController | null>(null);
+  const revision = useRef(""); revision.current = JSON.stringify(report);
+  useEffect(() => () => request.current?.abort(), []);
+  const actionStyle = { minHeight: 44, padding: "10px 14px", borderRadius: 8, border: "1px solid #CDD5E4", fontWeight: 600 };
+  const cancel = () => { request.current?.abort(); request.current = null; setBusy(false); setOffer(undefined); setSelected(false); setResult(undefined); setMessage("Review cancelled. The saved report is unchanged."); };
+  const run = async (capture: boolean) => {
+    request.current?.abort(); const controller = new AbortController(); request.current = controller;
+    const retainedRevision = revision.current; const retainedOffer = offer;
+    const current = () => !controller.signal.aborted && request.current === controller && revision.current === retainedRevision;
+    setBusy(true); setMessage(""); setResult(undefined);
+    try {
+      if (capture) {
+        if (!selected || !retainedOffer || retainedOffer.expiresAt <= Date.now()) throw new Error("Choose the current workspace again before reviewing changes.");
+        const value = await verificationApi.captureChangeContext(report.id, retainedOffer.workspaceId, controller.signal);
+        if (!current()) return;
+        if (value.handoff.reportId !== report.id || value.handoff.status !== report.status) throw new Error("The retained report changed. Review it again.");
+        setResult(value); setOffer(undefined); setSelected(false);
+      } else {
+        const value = await verificationApi.changeWorkspace(controller.signal);
+        if (!current()) return; setOffer(value); setSelected(false);
+      }
+    } catch (error) { if (current()) { setOffer(undefined); setSelected(false); setMessage(error instanceof Error ? error.message : "Workspace context is unavailable."); } }
+    finally { if (current()) { setBusy(false); request.current = null; } }
+  };
+  const copy = async () => {
+    if (!result) return; const retainedRevision = revision.current; const retained = result;
+    try { await navigator.clipboard.writeText(JSON.stringify(retained.handoff)); if (revision.current === retainedRevision) setMessage("Measured failure handoff copied."); }
+    catch { if (revision.current === retainedRevision) setMessage("Clipboard is unavailable. Select the handoff text below to copy it."); }
+  };
+  return <section aria-label="Change-aware QA and failure handoff" className="space-y-3 rounded-lg border p-4" style={{ background: "#F9FAFC", color: "#1D2739", borderColor: "#CDD5E4", fontFamily: "Inter, sans-serif" }}>
+    <style>{'@font-face{font-family:Syne;src:url(/fonts/syne-variable.ttf) format("truetype");font-weight:400 800;font-display:swap}'}</style>
+    <h3 style={{ fontFamily: "Syne, sans-serif", fontWeight: 700, fontSize: 18 }}>Change-aware QA</h3>
+    <p className="text-xs leading-relaxed">Review bounded metadata from the workspace you explicitly selected. Related tests are filename suggestions. This review runs no tests and changes no saved verdict.</p>
+    {!offer && !busy && <button type="button" style={{ ...actionStyle, background: "#0021CC", color: "white" }} onClick={() => void run(false)}>Prepare failure handoff</button>}
+    {offer && <div className="space-y-3 rounded-md border p-3">
+      <label className="flex min-h-11 items-center gap-3"><input type="checkbox" checked={selected} disabled={busy} onChange={event => setSelected(event.target.checked)} /><span className="min-w-0 break-words">Use selected workspace: <strong>{offer.label}</strong></span></label>
+      <p className="text-xs">The selection expires after one minute. Git may read worktree files to compute counts; retained output contains metadata only.</p>
+      <button type="button" disabled={!selected || busy} style={{ ...actionStyle, background: "#0021CC", color: "white", opacity: !selected || busy ? 0.5 : 1 }} onClick={() => void run(true)}>Review selected changes</button>
+    </div>}
+    {busy && <p role="status">Reading bounded workspace metadata…</p>}
+    {(busy || offer) && <button type="button" style={actionStyle} onClick={cancel}>Cancel review</button>}
+    {message && <p role="status" className="break-words text-xs">{message}</p>}
+    {result && <div className="space-y-3 text-xs">
+      <p><strong>Saved measured outcome: {result.handoff.status}</strong>. {result.handoff.reason}</p>
+      <p className="break-all">Git HEAD observed after the saved report: {result.head ?? "unavailable"}. Tested revision: unavailable.</p>
+      <p>{result.complete ? "Metadata capture complete within its bounds." : "Metadata capture incomplete."} {result.withheldPaths} path records withheld; at least {result.omittedRows} rows omitted.</p>
+      {result.reasons.length > 0 && <ul className="list-disc space-y-1 pl-5">{result.reasons.map(reason => <li key={reason}>{unavailableReasons[reason] ?? "Some metadata is unavailable."}</li>)}</ul>}
+      <p className="break-all">Metadata-only fingerprint: {result.fingerprint ?? "unavailable"}. It does not fingerprint untracked contents.</p>
+      {!result.changes.length && <p>No changed-file rows were retained.</p>}
+      <ul className="space-y-2" aria-label="Changed file metadata">{result.changes.map((row, index) => <li key={index} className="break-all rounded border p-2"><code>{row.previousPath ? `${row.previousPath} → ` : ""}{row.path}</code><p>Index {row.index}; worktree {row.worktree}; {row.binary === true ? "binary" : row.binary === false ? `+${row.added} / −${row.deleted}` : "counts unavailable"}{row.bytes === undefined ? "" : `; ${row.bytes} bytes`}. Contents unavailable.</p></li>)}</ul>
+      <h4 className="font-semibold">Advisory related tests</h4>
+      {!result.relatedTests.length && <p>No filename match was retained. This does not establish test coverage.</p>}
+      <ul className="space-y-1">{result.relatedTests.map(hint => <li className="break-all" key={hint.path}><code>{hint.path}</code> · Filename match; not executed</li>)}</ul>
+      <ul className="list-disc space-y-1 pl-5">{result.suggestions.map(hint => <li key={hint.kind}>{hint.text}</li>)}</ul>
+      <h4 className="font-semibold">Measured failure handoff</h4><p>{result.handoff.reproductionNote}</p>
+      {(result.handoff.redacted || result.handoff.truncated) && <p>Some retained details were redacted or omitted. {result.handoff.checksOmitted} checks omitted.</p>}
+      <button type="button" style={actionStyle} onClick={() => void copy()}>Copy measured handoff</button>
+      <details><summary className="min-h-11 cursor-pointer py-3">Retained handoff JSON</summary><pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded border p-3">{JSON.stringify(result.handoff, null, 2)}</pre></details>
+    </div>}
+  </section>;
+}
+
+/** Optional report integration stays inactive until the application explicitly supplies a saved report. */
+export function ReportContext({ context, report }: { context?: VerificationReportContext; report?: VerificationReport }) {
+  return <div className="space-y-4"><SavedReportContext context={context} />{report && <ChangeReview key={`${report.id}:${JSON.stringify(report)}`} report={report} />}</div>;
 }
