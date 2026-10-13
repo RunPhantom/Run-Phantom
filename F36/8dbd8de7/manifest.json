@@ -1,0 +1,72 @@
+{
+  "feature": "F36",
+  "sourceHead": "8dbd8de7448434352dafd1012c29d8a91cc08362",
+  "nativeArtifactSha256": "1776876b9f4c1aae7341f85f6a93729972b138289625d768f6d994a1cf890140",
+  "host": "macOS arm64",
+  "screenshots": {
+    "guard-advisory-320.png": {
+      "sha256": "ca20e3347f9882cb9ba9870aa9d3099a3e78fe8592dcd9a4fa6e5752f72721c7",
+      "synthetic": true,
+      "copiedNative": true,
+      "sourceHead": "8dbd8de7448434352dafd1012c29d8a91cc08362"
+    },
+    "guard-advisory-768.png": {
+      "sha256": "f731b46d7ab4e2368bcf50b399760f2cbb37d9870ac6a58475e7082285c01cdb",
+      "synthetic": true,
+      "copiedNative": true,
+      "sourceHead": "8dbd8de7448434352dafd1012c29d8a91cc08362"
+    },
+    "guard-advisory-1920.png": {
+      "sha256": "8cbd6d35d89fe4a6bbdbdc2ed0e781d6df24c568cf7b2a59010919d077377da8",
+      "synthetic": true,
+      "copiedNative": true,
+      "sourceHead": "8dbd8de7448434352dafd1012c29d8a91cc08362"
+    },
+    "guard-advisory-390.png": {
+      "sha256": "aa509a9f5131d7033827f967bd6bb7d1c59aa11021daad9691b7e61b98a09092",
+      "synthetic": true,
+      "copiedNative": true,
+      "sourceHead": "8dbd8de7448434352dafd1012c29d8a91cc08362"
+    },
+    "guard-advisory-1440.png": {
+      "sha256": "83a7a8fe55bc3082ee0087559ccd1495aa6edaa36218014001bd9dbe820e2a47",
+      "synthetic": true,
+      "copiedNative": true,
+      "sourceHead": "8dbd8de7448434352dafd1012c29d8a91cc08362"
+    },
+    "guard-advisory-1024.png": {
+      "sha256": "e27286452b52d9e200e345ff91d5169fd20eb84a54193d64b34b8436000bf50a",
+      "synthetic": true,
+      "copiedNative": true,
+      "sourceHead": "8dbd8de7448434352dafd1012c29d8a91cc08362"
+    }
+  },
+  "backend": {
+    "passed": 960,
+    "skipped": 1,
+    "failed": 0,
+    "assertions": 6708,
+    "cases": 961,
+    "files": 80,
+    "skipReason": "Windows-only native ancestor junction traversal test on macOS"
+  },
+  "sourceBrowser": {
+    "passed": 149,
+    "compiledConditionalSkips": 5,
+    "disabledProviderSkips": 7,
+    "unexpected": 0,
+    "flaky": 0,
+    "workers": 1,
+    "retries": 0
+  },
+  "copied": {
+    "common": 3,
+    "http": 14,
+    "feature": 7,
+    "persistent": 4,
+    "differentBoots": 2,
+    "sameDatabaseNoReseed": true
+  },
+  "globalAcceptance": false,
+  "providerCalls": 0
+}
