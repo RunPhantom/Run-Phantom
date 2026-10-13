@@ -1,6 +1,6 @@
 import { parseRecordingBatch, RecordingInputError, type RecordingBatch } from "../recording-types";
 
-export type RecorderInstall = { key: string; secret: string };
+export type RecorderInstall = { key: string; secret: string; publish?: boolean };
 export type ProducerPull = {
   batch: string | null; loss: boolean; dropped: number | null; stopped: boolean;
   reason: "none" | "queue" | "capacity" | "timeout" | "unavailable" | "node-cap" | "visit-cap";
@@ -9,6 +9,7 @@ export type ProducerPull = {
 export type MaskedProducer = {
   pull(secret: string, sequence: number, document: number, ordinalBase: number): string;
   stop(secret: string): void;
+  discard(secret: string): void;
 };
 
 export function parseProducerPull(raw: string): ProducerPull {
@@ -26,7 +27,7 @@ export function parseProducerPull(raw: string): ProducerPull {
 }
 
 /** Serialize this self-contained function into a pre-author native realm, never a late page world. */
-export function installMaskedRecorder(config: RecorderInstall): void {
+export function installMaskedRecorder(config: RecorderInstall): MaskedProducer {
   // Capture functions AND receiver handles. No page callback or callable host authority is exposed.
   /* eslint-disable @typescript-eslint/unbound-method -- Captured receiver handles are used with captured Reflect.apply below. */
   const apply = Reflect.apply, define = Object.defineProperty, descriptor = Object.getOwnPropertyDescriptor;
@@ -56,7 +57,7 @@ export function installMaskedRecorder(config: RecorderInstall): void {
   const colorPattern = /^rgba?\(([0-9]{1,3}), ([0-9]{1,3}), ([0-9]{1,3})(?:, ([0-9.]{1,8}))?\)$/;
   const number = Number;
   const key = config.key, secret = config.secret;
-  if (!/^[a-f0-9]{64}$/.test(secret) || !/^__rp_[a-f0-9]{32}$/.test(key)) throw new NativeError("Invalid host recorder identity");
+  if (!/^[a-f0-9]{64}$/.test(secret) || !/^__rp_[a-f0-9]{32}$/.test(key) || (config.publish !== undefined && typeof config.publish !== "boolean")) throw new NativeError("Invalid host recorder identity");
   if (!documentElement || !nodeType || !firstChild || !rectX || !rectY || !rectW || !rectH || !width || !height || !eventTarget || !clientX || !clientY) throw new NativeError("Native recorder intrinsics unavailable");
   const originEpoch = apply(dateNow, Date, []) as number, originPerf = apply(perfNow, perf, []) as number;
   const epochLimit = 8_640_000_000_000_000;
@@ -195,10 +196,103 @@ export function installMaskedRecorder(config: RecorderInstall): void {
       return stringify(plain({ batch, loss, dropped, stopped, reason, clock: plain({ anchorEpochMs: originEpoch, nowEpochMs: now(), monotonicElapsedMs: max(0, (apply(perfNow, perf, []) as number) - originPerf) }) }));
     },
     stop(token: string): void { if (token !== secret) throw new NativeError("Recorder authority refused"); end(); },
+    discard(token: string): void { if (token !== secret) throw new NativeError("Recorder authority refused"); end(); queue.length = 0; pending.length = 0; bytes = 0; },
   });
   freeze(producer);
-  define(windowHandle, key, { value: producer, configurable: false, writable: false, enumerable: false });
+  if (config.publish !== false) define(windowHandle, key, { value: producer, configurable: false, writable: false, enumerable: false });
   register("pointermove", 1); register("click", 2); register("input", 3); register("change", 4); register("focusin", 5); register("scroll", 6); register("keydown", 7);
   emit(plain({ ordinal: 0, epochMs: now(), kind: 8, target: null, x: null, y: null }));
   tick();
+  return producer;
+}
+
+type SelectedMethod = "Page.createIsolatedWorld" | "Runtime.evaluate" | "Runtime.callFunctionOn" | "Runtime.releaseObject";
+export interface SelectedRecorderClient { send(method: SelectedMethod, params: Record<string, unknown>): Promise<unknown> }
+export interface SelectedRecorderAuthority { readonly mainFrameId: string; assertCurrent(): void }
+export type SelectedRecorder = { pull(sequence: number, document: number, ordinalBase: number): Promise<ProducerPull>; stop(): Promise<void>; close(): Promise<{ discarded: boolean; released: boolean; joined: boolean }> };
+function nativeObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new RecordingInputError("Native selected recorder response unavailable", 503);
+  return value as Record<string, unknown>;
+}
+function opaque(value: unknown): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_.:-]{1,128}$/.test(value)) throw new RecordingInputError("Native selected recorder identity unavailable", 503);
+  return value;
+}
+
+/** Caller supplies the actual selected native main-frame authority, never a request-chosen frame or script. */
+export async function createSelectedMaskedRecorder(client: SelectedRecorderClient, authority: SelectedRecorderAuthority, config: RecorderInstall): Promise<SelectedRecorder> {
+  authority.assertCurrent(); const frameId = opaque(authority.mainFrameId);
+  if (!/^[a-f0-9]{64}$/.test(config.secret) || !/^__rp_[a-f0-9]{32}$/.test(config.key)) throw new RecordingInputError("Invalid host recorder identity");
+  const hostKey = config.key, hostSecret = config.secret;
+  let objectId: string | undefined, closed = false, closing: Promise<{ discarded: boolean; released: boolean; joined: boolean }> | undefined;
+  const pending = new Set<Promise<unknown>>();
+  // Two outstanding native protocol calls at most, including cleanup. Timeout never implies a joined call.
+  async function send(method: SelectedMethod, params: Record<string, unknown>): Promise<unknown> {
+    if (pending.size >= 2) throw new RecordingInputError("Selected recorder native pressure unavailable", 503);
+    const task = client.send(method, params); pending.add(task);
+    let expired = false;
+    void task.then(value => {
+      pending.delete(task);
+      if (expired && method === "Runtime.evaluate") {
+        try {
+          const reply = nativeObject(value), remote = nativeObject(reply.result);
+          if (reply.exceptionDetails === undefined && remote.type === "object") {
+            // A timed-out installation may still return its own object later. It can only be discarded.
+            objectId = opaque(remote.objectId);
+            if (closed) { closing = undefined; void close(); }
+          }
+        } catch {}
+      }
+    }, () => pending.delete(task));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try { return await Promise.race([task, new Promise<never>((_resolve, reject) => { timer = setTimeout(() => { expired = true; reject(new RecordingInputError("Selected recorder native response timed out", 503)); }, 5000); })]); }
+    finally { clearTimeout(timer); }
+  }
+  function current() {
+    if (closed) throw new RecordingInputError("Selected recording authority closed", 409);
+    try { authority.assertCurrent(); } catch { throw new RecordingInputError("Selected recording authority changed", 409); }
+  }
+  const close = () => closing ??= (async () => {
+    closed = true; const owned = objectId; objectId = undefined;
+    let discarded = false, released = false;
+    if (owned) {
+      // Revocation permits cleanup of this captured object only; it cannot select or install another realm.
+      try { const reply = nativeObject(await send("Runtime.callFunctionOn", { objectId: owned, functionDeclaration: "function(secret){this.discard(secret)}", arguments: [{ value: hostSecret }], returnByValue: true, silent: true })); discarded = reply.exceptionDetails === undefined; } catch {}
+      try { await send("Runtime.releaseObject", { objectId: owned }); released = true; } catch {}
+    }
+    return { discarded, released, joined: pending.size === 0 };
+  })();
+  let operating = false;
+  async function operation(functionDeclaration: string, args: unknown[]): Promise<Record<string, unknown>> {
+    // Refuse concurrent observation before dispatch; do not close the legitimate in-flight operation.
+    if (operating) throw new RecordingInputError("Selected recorder operation is busy", 409);
+    operating = true;
+    try {
+      current();
+      const reply = nativeObject(await send("Runtime.callFunctionOn", { objectId, functionDeclaration, arguments: args.map(value => ({ value })), returnByValue: true, silent: true }));
+      current(); if (reply.exceptionDetails !== undefined) throw new RecordingInputError("Selected recorder native operation unavailable", 503);
+      return nativeObject(reply.result);
+    } catch (cause) { await close(); throw cause instanceof RecordingInputError ? cause : new RecordingInputError("Selected recorder native operation unavailable", 503); }
+    finally { operating = false; }
+  }
+  try {
+    const world = nativeObject(await send("Page.createIsolatedWorld", { frameId, worldName: `runphantom-masked-${hostKey}`, grantUniveralAccess: false }));
+    current(); const contextId = world.executionContextId;
+    if (!Number.isSafeInteger(contextId) || (contextId as number) < 1) throw new RecordingInputError("Selected native realm unavailable", 503);
+    current();
+    // Fixed Run Phantom source and host-generated hexadecimal identity; no caller executable payload.
+    const evaluation = nativeObject(await send("Runtime.evaluate", { contextId, expression: `(${installMaskedRecorder.toString()})(${JSON.stringify({ key: hostKey, secret: hostSecret, publish: false })})`, returnByValue: false, silent: true, timeout: 5000 }));
+    if (evaluation.exceptionDetails !== undefined) throw new RecordingInputError("Selected native recorder installation unavailable", 503);
+    const remote = nativeObject(evaluation.result); if (remote.type !== "object") throw new RecordingInputError("Selected native recorder object unavailable", 503);
+    // Retain only the owned object ID for cleanup before checking an after-await revocation.
+    objectId = opaque(remote.objectId); current();
+    return {
+      async pull(sequence, document, ordinalBase) {
+        const result = await operation("function(secret,sequence,document,ordinalBase){return this.pull(secret,sequence,document,ordinalBase)}", [hostSecret, sequence, document, ordinalBase]);
+        if (result.type !== "string" || typeof result.value !== "string") { await close(); throw new RecordingInputError("Selected native recorder payload unavailable", 503); }
+        try { return parseProducerPull(result.value); } catch { await close(); throw new RecordingInputError("Selected native recorder payload unavailable", 503); }
+      },
+      async stop() { await operation("function(secret){this.stop(secret)}", [hostSecret]); }, close,
+    };
+  } catch (cause) { await close(); throw cause instanceof RecordingInputError ? cause : new RecordingInputError("Selected native recorder unavailable", 503); }
 }
