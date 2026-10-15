@@ -213,6 +213,10 @@ export function FlameTimeline({ spans }: { spans: Span[] }) {
 
   if (!hasVizSpans) return null;
 
+  // The axis spans the plotted LLM and tool bars only, not the agent root, so
+  // its extent can read shorter than the run header and span tree root (6.1s
+  // against 6.2s for demo_review). That is deliberate: this is the scale the
+  // bars are drawn on, and stretching it to the root would add empty margin.
   const minT = Math.min(...vizSpans.map(s => s.start_time_ms));
   const maxT = Math.max(...vizSpans.map(s => s.end_time_ms));
   // A corrupt span (end before start, or an out-of-range future timestamp) must not
