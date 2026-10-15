@@ -23,7 +23,8 @@ import { SavePopover } from "./SavePopover";
 import { RotateCcw, Bookmark, Download, Pencil, ChevronDown, ArrowDown, ChevronRight, MessageCircle, SearchX } from "lucide-react";
 import { LocalAgentSetupCTA, SetupReplayModal } from "./LocalAgentSetupCTA";
 import { C } from "../utils/colors";
-import { fmt, isActive, plural, runDisplayName, isoTimestamp, safeDecodeParam } from "../utils/helpers";
+import { fmt, isActive, plural, replayOutcome, runDisplayName, isoTimestamp, safeDecodeParam } from "../utils/helpers";
+import type { RunStatus } from "../utils/helpers";
 import { useQueryClient } from "@tanstack/react-query";
 import { parseReplayMetadata } from "../utils/types";
 import { deleteRun, renameRun } from "../api/runs";
@@ -680,8 +681,14 @@ function ViewHeader({
     };
   }, [optionsOpen]);
   const displayTitle = cleanTitle(title);
-  const statusLabel = active ? "Run live" : stats.errors > 0 ? "Run failed" : "Run complete";
-  const statusColor = active ? C.green : stats.errors > 0 ? C.red : C.fg1;
+  const status: RunStatus = (run && replayOutcome(run)) || (active ? "live" : stats.errors > 0 ? "failed" : "complete");
+  const statusLabel = { live: "Run live", failed: "Run failed", cancelled: "Run cancelled", complete: "Run complete" }[status];
+  const statusColor = status === "live" ? C.green : status === "failed" ? C.red : C.fg1;
+  const statusBackground = status === "live"
+    ? "color-mix(in oklch, var(--rp-success) 12%, transparent)"
+    : status === "failed"
+      ? "color-mix(in oklch, var(--rp-danger) 10%, transparent)"
+      : "var(--rp-ink-wash)";
   return (
     <div className="flex-shrink-0" style={{ padding: isReplay ? "8px 16px" : "10px 16px", borderBottom: `1px solid ${C.border}` }}>
       {parentName && onBack ? (
@@ -697,14 +704,7 @@ function ViewHeader({
                 <h2 style={{ fontSize: "18px", fontWeight: 600, color: C.fg5 }}>{displayTitle}</h2>
                 {model && <span className="text-[10px] px-2 py-0.5 rounded font-mono" style={{ background: "var(--rp-ink-a04)", color: C.fg1 }}>{model}</span>}
                 <span className="text-[10px] px-2 py-0.5 rounded-full font-medium"
-                  style={{
-                    background: active
-                      ? "color-mix(in oklch, var(--rp-success) 12%, transparent)"
-                      : stats.errors > 0
-                        ? "color-mix(in oklch, var(--rp-danger) 10%, transparent)"
-                        : "var(--rp-ink-wash)",
-                    color: statusColor,
-                  }}>
+                  style={{ background: statusBackground, color: statusColor }}>
                   {statusLabel}
                 </span>
               </div>
@@ -742,7 +742,7 @@ function ViewHeader({
               <span
                 data-run-status
                 className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium"
-                style={{ color: statusColor, background: active ? "color-mix(in oklch, var(--rp-success) 12%, transparent)" : stats.errors > 0 ? "color-mix(in oklch, var(--rp-danger) 10%, transparent)" : "var(--rp-ink-wash)" }}
+                style={{ color: statusColor, background: statusBackground }}
               >
                 {statusLabel}
               </span>

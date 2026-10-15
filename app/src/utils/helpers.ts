@@ -46,17 +46,45 @@ export function ago(t: number): string {
   return `${Math.floor(d / 31536000000)}y ago`;
 }
 
-export function isActive(run: {
+type RunActivity = {
   last_updated_at: number;
   finished?: number | null;
   live_event_count?: number | null;
-}): boolean {
+  metadata?: string | null;
+};
+
+// A replay placeholder that failed or was cancelled never gets spans, an ERROR
+// status or a finish flag; the daemon records the outcome only as `replay.error`
+// in its metadata (src/replay.ts recordPlaceholderError). Without reading it the
+// placeholder showed "Run live" for 30 s and then "Run complete".
+export function replayOutcome(run: { metadata?: string | null }): "failed" | "cancelled" | null {
+  if (!run.metadata) return null;
+  try {
+    const error = JSON.parse(run.metadata)?.replay?.error;
+    if (!error) return null;
+    return error.code === "replay_cancelled" ? "cancelled" : "failed";
+  } catch {
+    return null;
+  }
+}
+
+export function isActive(run: RunActivity): boolean {
+  if (replayOutcome(run)) return false;
   const recencyMs = Date.now() - run.last_updated_at;
   if (recencyMs < AFTERGLOW_MS) return true;
   if ((run.live_event_count ?? 0) > 0) return recencyMs < INACTIVE_MS;
   if (run.finished) return false;
   // Time-based fallback for SDKs that never emit a finish() / root-span close.
   return recencyMs < INACTIVE_MS;
+}
+
+export type RunStatus = "live" | "failed" | "cancelled" | "complete";
+
+export function runStatus(run: RunActivity, errorCount: number): RunStatus {
+  const outcome = replayOutcome(run);
+  if (outcome) return outcome;
+  if (isActive(run)) return "live";
+  return errorCount > 0 ? "failed" : "complete";
 }
 
 export function runDisplayName(
