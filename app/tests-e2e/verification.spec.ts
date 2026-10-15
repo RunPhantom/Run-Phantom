@@ -146,6 +146,17 @@ test("runtime verification: real cross-origin SDK observes actions, fails broken
   }
 });
 
+test("runtime verification: a flow saved by another client appears in the open page without a reload", async ({ page, request, runPhantom }) => {
+  await page.goto(`${runPhantom.url}/verification`);
+  await expect(page.getByText(/^No saved flows\./)).toBeVisible();
+  const response = await request.post(`${runPhantom.url}/api/verification/flows`, { data: {
+    name: "Agent-saved checkout", origin: "http://127.0.0.1:4173",
+    steps: [{ command: { type: "click", selector: "#checkout" }, predicate: { kind: "network", urlContains: "/api/checkout", method: "POST", status: 200 } }],
+  } });
+  expect(response.ok()).toBe(true);
+  await expect(page.getByRole("button", { name: "Replay Agent-saved checkout", exact: true })).toBeVisible({ timeout: 10_000 });
+});
+
 test("runtime verification: capture includes XHR, routes, signals, and console errors; quiet checks await delayed errors", async ({ page, request, runPhantom, targetApp }) => {
   const session = await connectTarget(page, request, runPhantom, targetApp.origin);
   const xhrCursor = await act(request, runPhantom, session.id, { type: "click", selector: "#xhr" });
