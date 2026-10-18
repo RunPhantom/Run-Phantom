@@ -10,6 +10,7 @@ import { EVIDENCE_READER_IDENTITY, EVIDENCE_IMPORT_CONTENT_TYPE } from "../src/e
 import { canonicalEvidenceJson, evidenceDigest } from "../src/evaluations/evidence-validation";
 import { parseExternalEvidence } from "../src/evaluations/external-evidence";
 import { evidenceExportJUnit } from "../src/evaluations/evidence-export";
+import { TEAM_LIMITS } from "../src/team/protocol";
 
 interface Identity { cookie: string; csrf: string; userId: string }
 const runId = "1".repeat(32), spanId = "2".repeat(16);
@@ -104,6 +105,28 @@ async function fixture() {
   return { get handle() { return handle; }, get url() { return url; }, directory, config, call, owner, project, base, member, capture, frame, completed, sql, mutate, restart, held, admitted,
     close: async () => { await handle.close(); fs.rmSync(directory, { recursive: true, force: true }); } };
 }
+
+test("authenticated evidence polling exposes the unchanged session rate budget", async () => {
+  const f = await fixture();
+  try {
+    // Project creation already used one authenticated request in this fixture.
+    const successfulReads = TEAM_LIMITS.REQUESTS_PER_SESSION - 1;
+    for (let index = 0; index < successfulReads; index++) {
+      expect((await f.call("GET", `${f.base}/capabilities`, undefined, f.owner)).status).toBe(200);
+    }
+    const limited = await f.call("GET", `${f.base}/capabilities`, undefined, f.owner);
+    expect(limited.status).toBe(429);
+    expect(limited.json.error.code).toBe("rate_limited");
+    expect(limited.json).not.toHaveProperty("job");
+    const retryAfter = Number(limited.headers.get("retry-after"));
+    expect(retryAfter).toBeGreaterThanOrEqual(1);
+    expect(retryAfter).toBeLessThanOrEqual(TEAM_LIMITS.RATE_WINDOW_MS / 1000);
+    const refused = await f.completed("00000000-0000-4000-8000-000000000001");
+    expect(refused.status).toBe(429);
+    expect(refused.json).not.toHaveProperty("job");
+    console.info(JSON.stringify({ proof: "team-evidence-authenticated-poll-budget", requestsPerSession: TEAM_LIMITS.REQUESTS_PER_SESSION, windowMs: TEAM_LIMITS.RATE_WINDOW_MS, successfulReads, refusalStatus: limited.status, refusalCode: limited.json.error.code, completedStatus: refused.status, completedJobAbsent: !Object.hasOwn(refused.json, "job") }));
+  } finally { await f.close(); }
+});
 
 test("Team evidence capabilities authenticate and derive current roles", async () => {
   const f = await fixture();
