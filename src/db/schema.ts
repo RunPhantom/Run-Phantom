@@ -1,5 +1,5 @@
 import { asc, desc, sql } from "drizzle-orm";
-import { index, integer, primaryKey, real, sqliteTable, sqliteView, text } from "drizzle-orm/sqlite-core";
+import { blob, check, foreignKey, index, integer, primaryKey, real, sqliteTable, sqliteView, text, unique } from "drizzle-orm/sqlite-core";
 
 export const runs = sqliteTable(
   "runs",
@@ -213,3 +213,65 @@ export const runs_with_hints = sqliteView("runs_with_hints", {
      FROM spans s WHERE s.run_id = r.id) AS payload_total_chars
   FROM runs r
 `);
+
+export const evaluation_evidence_scopes = sqliteTable("evaluation_evidence_scopes", {
+  scope_key: text("scope_key").primaryKey(),
+  generation: integer("generation").notNull(), active: integer("active").notNull(),
+}, table => [check("evidence_scope_generation", sql`${table.generation}>0`), check("evidence_scope_active", sql`${table.active} IN (0,1)`)]);
+
+export const evaluation_evidence_inventory_heads = sqliteTable("evaluation_evidence_inventory_heads", {
+  scope_key: text("scope_key").notNull().references(() => evaluation_evidence_scopes.scope_key, { onDelete: "cascade" }),
+  id: text("id").notNull(), revision: integer("revision").notNull(),
+}, table => [primaryKey({ columns: [table.scope_key, table.id] }), check("evidence_head_revision", sql`${table.revision}>=0`)]);
+
+export const evaluation_evidence_inventories = sqliteTable("evaluation_evidence_inventories", {
+  scope_key: text("scope_key").notNull(), id: text("id").notNull(), revision: integer("revision").notNull(),
+  data: text("data").notNull(), digest: text("digest").notNull(), created_at: integer("created_at").notNull(),
+}, table => [primaryKey({ columns: [table.scope_key, table.id, table.revision] }), check("evidence_inventory_revision", sql`${table.revision}>0`),
+  foreignKey({ columns: [table.scope_key, table.id], foreignColumns: [evaluation_evidence_inventory_heads.scope_key, evaluation_evidence_inventory_heads.id] }).onDelete("cascade")]);
+
+export const evaluation_evidence_jobs = sqliteTable("evaluation_evidence_jobs", {
+  id: text("id").primaryKey(), scope_key: text("scope_key").notNull().references(() => evaluation_evidence_scopes.scope_key, { onDelete: "cascade" }),
+  scope_generation: integer("scope_generation").notNull(), operation_key: text("operation_key").notNull(),
+  request_digest: text("request_digest").notNull(), request_data: text("request_data").notNull(), inventory_data: text("inventory_data"),
+  status: text("status", { enum: ["queued", "running", "completed", "cancelled", "failed"] }).notNull(), job_token: text("job_token").notNull(),
+  admitted_at: integer("admitted_at").notNull(), deadline_at: integer("deadline_at").notNull(),
+  reserved_raw_bytes: integer("reserved_raw_bytes").notNull(), reserved_normalized_bytes: integer("reserved_normalized_bytes").notNull(),
+  set_id: text("set_id"), failure_code: text("failure_code"),
+}, table => [unique("evidence_job_operation").on(table.scope_key, table.scope_generation, table.operation_key),
+  index("evaluation_evidence_jobs_status").on(table.status), check("evidence_job_status", sql`${table.status} IN ('queued','running','completed','cancelled','failed')`),
+  check("evidence_job_raw_reservation", sql`${table.reserved_raw_bytes}>=0`), check("evidence_job_normalized_reservation", sql`${table.reserved_normalized_bytes}>=0`)]);
+
+export const evaluation_evidence_artifacts = sqliteTable("evaluation_evidence_artifacts", {
+  scope_key: text("scope_key").notNull(), id: text("id").notNull(), job_id: text("job_id").notNull().references(() => evaluation_evidence_jobs.id, { onDelete: "cascade" }),
+  source_id: text("source_id").notNull(), sha256: text("sha256").notNull(), byte_length: integer("byte_length").notNull(),
+}, table => [primaryKey({ columns: [table.scope_key, table.id] }), unique("evidence_artifact_source").on(table.job_id, table.source_id),
+  check("evidence_artifact_length", sql`${table.byte_length}>=0`)]);
+
+export const evaluation_evidence_blobs = sqliteTable("evaluation_evidence_blobs", {
+  scope_key: text("scope_key").notNull(), artifact_id: text("artifact_id").notNull(), bytes: blob("bytes", { mode: "buffer" }).notNull(),
+}, table => [primaryKey({ columns: [table.scope_key, table.artifact_id] }),
+  foreignKey({ columns: [table.scope_key, table.artifact_id], foreignColumns: [evaluation_evidence_artifacts.scope_key, evaluation_evidence_artifacts.id] }).onDelete("cascade")]);
+
+export const evaluation_evidence_interpretations = sqliteTable("evaluation_evidence_interpretations", {
+  scope_key: text("scope_key").notNull(), id: text("id").notNull(), artifact_id: text("artifact_id").notNull(), normalized_sha256: text("normalized_sha256").notNull(),
+  parser_version: text("parser_version").notNull(), policy_version: text("policy_version").notNull(), configuration_sha256: text("configuration_sha256").notNull(), dialect: text("dialect").notNull(),
+}, table => [primaryKey({ columns: [table.scope_key, table.id] }),
+  foreignKey({ columns: [table.scope_key, table.artifact_id], foreignColumns: [evaluation_evidence_artifacts.scope_key, evaluation_evidence_artifacts.id] }).onDelete("cascade")]);
+
+export const evaluation_evidence_payloads = sqliteTable("evaluation_evidence_payloads", {
+  scope_key: text("scope_key").notNull(), interpretation_id: text("interpretation_id").notNull(), data: text("data").notNull(),
+}, table => [primaryKey({ columns: [table.scope_key, table.interpretation_id] }),
+  foreignKey({ columns: [table.scope_key, table.interpretation_id], foreignColumns: [evaluation_evidence_interpretations.scope_key, evaluation_evidence_interpretations.id] }).onDelete("cascade")]);
+
+export const evaluation_evidence_sets = sqliteTable("evaluation_evidence_sets", {
+  scope_key: text("scope_key").notNull(), id: text("id").notNull(), revision: integer("revision").notNull(),
+  job_id: text("job_id").notNull().unique("evidence_set_job").references(() => evaluation_evidence_jobs.id, { onDelete: "cascade" }),
+  data: text("data").notNull(), digest: text("digest").notNull(), created_at: integer("created_at").notNull(),
+}, table => [primaryKey({ columns: [table.scope_key, table.id, table.revision] }), check("evidence_set_revision", sql`${table.revision}>0`)]);
+
+export const evaluation_evidence_retention_events = sqliteTable("evaluation_evidence_retention_events", {
+  id: text("id").primaryKey(), scope_key: text("scope_key").notNull().references(() => evaluation_evidence_scopes.scope_key, { onDelete: "cascade" }),
+  set_id: text("set_id").notNull(), revision: integer("revision").notNull(), target_id: text("target_id").notNull(),
+  kind: text("kind", { enum: ["raw_removed", "normalized_removed"] }).notNull(), actor_id: text("actor_id").notNull(), created_at: integer("created_at").notNull(),
+}, table => [check("evidence_retention_kind", sql`${table.kind} IN ('raw_removed','normalized_removed')`)]);

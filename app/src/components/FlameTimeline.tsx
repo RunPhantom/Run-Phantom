@@ -3,7 +3,7 @@ import { Copy, Check } from "lucide-react";
 import { C, spanColor } from "../utils/colors";
 import { displayPayload, fmt, plural, tryJson } from "../utils/helpers";
 import { setMeridian, clearMeridian } from "../utils/meridian";
-import type { Span } from "../utils/types";
+import type { Span, SubAgent } from "../utils/types";
 
 // Half the width of the widest axis label ("1.0s"/"10.0s" at 9px mono). A label
 // whose centre falls within this of the right edge is right-aligned instead.
@@ -165,9 +165,10 @@ function SpanTooltip({
   );
 }
 
-export function FlameTimeline({ spans }: { spans: Span[] }) {
+export function FlameTimeline({ spans, subAgents }: { spans: Span[]; subAgents?: SubAgent[] }) {
   const colorMap = useMemo(() => new Map<string, string>(), []);
   const vizSpans = useMemo(() => spans.filter(s => s.span_type === "TRACE" || s.span_type === "TOOL_CALL" || s.span_type?.includes("LLM")), [spans]);
+  const subAgentSpanIds = useMemo(() => new Set(subAgents?.flatMap(a => a.span_ids)), [subAgents]);
   const hasVizSpans = vizSpans.length > 0;
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerW, setContainerW] = useState(0);
@@ -213,6 +214,10 @@ export function FlameTimeline({ spans }: { spans: Span[] }) {
 
   if (!hasVizSpans) return null;
 
+  // The axis spans the plotted LLM and tool bars only, not the agent root, so
+  // its extent can read shorter than the run header and span tree root (6.1s
+  // against 6.2s for demo_review). That is deliberate: this is the scale the
+  // bars are drawn on, and stretching it to the root would add empty margin.
   const minT = Math.min(...vizSpans.map(s => s.start_time_ms));
   const maxT = Math.max(...vizSpans.map(s => s.end_time_ms));
   // A corrupt span (end before start, or an out-of-range future timestamp) must not
@@ -377,7 +382,7 @@ export function FlameTimeline({ spans }: { spans: Span[] }) {
             const isErr = span.status === "ERROR";
             const isLLM = span.span_type?.includes("LLM");
             const focusBarTool = () => {
-              if (span.span_type === "TOOL_CALL") {
+              if (span.span_type === "TOOL_CALL" || subAgentSpanIds.has(span.id)) {
                 focusTool(span.id);
               }
             };
