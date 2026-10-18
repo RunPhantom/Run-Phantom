@@ -24,10 +24,11 @@ async function fixture() {
   const address = handle.server.address();
   if (!address || typeof address === "string") throw new Error("Missing listener");
   let url = `http://127.0.0.1:${address.port}`;
+  const sessionRequests = new Map<Identity, number>();
   async function call(method: string, endpoint: string, body?: unknown, identity?: Identity, extra: Record<string, string> = {}) {
     const headers: Record<string, string> = { Host: new URL(config.publicOrigin).host };
     if (method !== "GET") headers.Origin = config.publicOrigin;
-    if (identity) { headers.Cookie = identity.cookie; headers["X-RunPhantom-CSRF"] = identity.csrf; }
+    if (identity) { headers.Cookie = identity.cookie; headers["X-RunPhantom-CSRF"] = identity.csrf; sessionRequests.set(identity, (sessionRequests.get(identity) ?? 0) + 1); }
     let data: BodyInit | undefined;
     if (body instanceof Uint8Array) data = body;
     else if (body !== undefined) { headers["Content-Type"] = "application/json"; data = JSON.stringify(body); }
@@ -63,10 +64,20 @@ async function fixture() {
   }
   async function completed(id: string, who = owner) {
     const deadline = Date.now() + 5000;
+    let delay = 100;
     while (Date.now() < deadline) {
       const response = await call("GET", `${base}/imports/${id}`, undefined, who);
-      if (response.status !== 200 || !["queued", "running"].includes(response.json.job.status)) return response;
-      await Bun.sleep(100);
+      if (response.status !== 200) {
+        const code = typeof response.json?.error?.code === "string" ? response.json.error.code : "unclassified_response";
+        throw new Error(`Actual Team import status read returned HTTP ${response.status} (${code})`);
+      }
+      if (typeof response.json?.job?.status !== "string") throw new Error("Actual Team import status response has no job status");
+      if (!["queued", "running"].includes(response.json.job.status)) return response;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await Bun.sleep(Math.min(delay, remaining));
+      // Eight quota imports must share the same 120-request authenticated window.
+      delay = Math.min(delay * 2, 1000);
     }
     throw new Error("Actual Team import did not terminate");
   }
@@ -102,7 +113,7 @@ async function fixture() {
     }
     throw new Error("Held frame did not acquire metadata");
   }
-  return { get handle() { return handle; }, get url() { return url; }, directory, config, call, owner, project, base, member, capture, frame, completed, sql, mutate, restart, held, admitted,
+  return { get handle() { return handle; }, get url() { return url; }, directory, config, call, owner, project, base, member, capture, frame, completed, sql, mutate, restart, held, admitted, requests: (who = owner) => sessionRequests.get(who) ?? 0,
     close: async () => { await handle.close(); fs.rmSync(directory, { recursive: true, force: true }); } };
 }
 
@@ -121,10 +132,10 @@ test("authenticated evidence polling exposes the unchanged session rate budget",
     const retryAfter = Number(limited.headers.get("retry-after"));
     expect(retryAfter).toBeGreaterThanOrEqual(1);
     expect(retryAfter).toBeLessThanOrEqual(TEAM_LIMITS.RATE_WINDOW_MS / 1000);
-    const refused = await f.completed("00000000-0000-4000-8000-000000000001");
-    expect(refused.status).toBe(429);
-    expect(refused.json).not.toHaveProperty("job");
-    console.info(JSON.stringify({ proof: "team-evidence-authenticated-poll-budget", requestsPerSession: TEAM_LIMITS.REQUESTS_PER_SESSION, windowMs: TEAM_LIMITS.RATE_WINDOW_MS, successfulReads, refusalStatus: limited.status, refusalCode: limited.json.error.code, completedStatus: refused.status, completedJobAbsent: !Object.hasOwn(refused.json, "job") }));
+    const refusal = await f.completed("00000000-0000-4000-8000-000000000001").then(() => null, (cause: unknown) => cause);
+    expect(refusal).toBeInstanceOf(Error);
+    expect(refusal instanceof Error ? refusal.message : "").toBe("Actual Team import status read returned HTTP 429 (rate_limited)");
+    console.info(JSON.stringify({ proof: "team-evidence-authenticated-poll-budget", requestsPerSession: TEAM_LIMITS.REQUESTS_PER_SESSION, windowMs: TEAM_LIMITS.RATE_WINDOW_MS, successfulReads, refusalStatus: limited.status, refusalCode: limited.json.error.code, helperRefusedExplicitly: true }));
   } finally { await f.close(); }
 });
 
@@ -468,7 +479,8 @@ test("actual32-source near4MiB publication expands to a bounded transport DTO an
     expect(ledger.bytes + 4 * 1024 * 1024).toBeGreaterThan(32 * 1024 * 1024);
     expect((await f.call("POST", f.base + "/imports", f.frame("normalized-quota-overflow"), f.owner, { "Content-Type": EVIDENCE_IMPORT_CONTENT_TYPE })).status).toBe(409);
     expect(f.sql("SELECT coalesce(sum(reserved_raw_bytes),0) AS raw,coalesce(sum(reserved_normalized_bytes),0) AS normalized FROM evaluation_evidence_jobs")).toEqual({ raw: 0, normalized: 0 });
-    console.info(JSON.stringify({ proof: "team-evidence-max-population", sources: 32, leaves: count * 32, selectedStoredBytes: held.bytes, detailDtoBytes: Buffer.byteLength(view.text), projectNormalizedBytes: ledger.bytes, normalizedQuotaBytes: 32 * 1024 * 1024 }));
+    expect(f.requests()).toBeLessThanOrEqual(TEAM_LIMITS.REQUESTS_PER_SESSION);
+    console.info(JSON.stringify({ authenticatedRequests: f.requests(), proof: "team-evidence-max-population", sources: 32, leaves: count * 32, selectedStoredBytes: held.bytes, detailDtoBytes: Buffer.byteLength(view.text), projectNormalizedBytes: ledger.bytes, normalizedQuotaBytes: 32 * 1024 * 1024 }));
   } finally { await f.close(); }
 }, 20_000);
 
@@ -492,7 +504,8 @@ test("actual retained raw2MiB sources fill separate64MiB project quota without c
     const excess = Buffer.concat([raw, Buffer.from(" ")]);
     expect((await f.call("POST", f.base + "/imports", f.frame("raw-byte-excess", { sources: [{ ...sources[0], byteLength: excess.byteLength, artifactSha256: evidenceDigest(excess) }] }, [excess]), f.owner, { "Content-Type": EVIDENCE_IMPORT_CONTENT_TYPE })).status).toBe(400);
     expect(f.sql("SELECT evidence_bytes,run_count,span_count,check_count FROM projects WHERE id=?", f.project.id)).toEqual(before);
-    console.info(JSON.stringify({ proof: "team-evidence-raw-quota", actualImportJobs: 8, importedSources: 32, retainedRawBytes: 64 * 1024 * 1024, rawExportBytes: Buffer.byteLength(exported.text), overflowStatus: 409, captureCountersUnchanged: true }));
+    expect(f.requests()).toBeLessThanOrEqual(TEAM_LIMITS.REQUESTS_PER_SESSION);
+    console.info(JSON.stringify({ authenticatedRequests: f.requests(), proof: "team-evidence-raw-quota", actualImportJobs: 8, importedSources: 32, retainedRawBytes: 64 * 1024 * 1024, rawExportBytes: Buffer.byteLength(exported.text), overflowStatus: 409, captureCountersUnchanged: true }));
     expect((await f.call("DELETE", `${f.base}/sets/${firstId}/retention/raw?revision=1`, undefined, f.owner)).json.removed).toBe(4);
     expect((await f.call("POST", f.base + "/imports", f.frame("raw-after-retention"), f.owner, { "Content-Type": EVIDENCE_IMPORT_CONTENT_TYPE })).status).toBe(202);
   } finally { await f.close(); }
