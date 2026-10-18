@@ -114,9 +114,14 @@ import verificationSdk from "./verification/browser-sdk.js" with { type: "text" 
 import { VERIFICATION_LIMITS } from "./verification/protocol";
 import { createEvaluationService } from "./evaluations/service";
 import { createEvaluationRouter } from "./evaluations/router";
+import { createReviewQueueRouter } from "./review-queues/router";
 import { EvidenceImportService } from "./evaluations/evidence-import";
 import { EvidenceSupervisor } from "./evaluations/evidence-supervisor";
 import { createLocalEvidenceOwner } from "./evaluations/evidence-inventory";
+import { createLocalPromptRegistry } from "./prompts/registry";
+import { createPromptRouter } from "./prompts/router";
+import { createComparisonRuntime, initializeComparisonScope, type ComparisonRuntime, type ComparisonRuntimeOptions } from "./prompts/comparison-runtime";
+import { createComparisonRouter } from "./prompts/comparison-router";
 import { EvidenceError } from "./evaluations/evidence-protocol";
 import { evidenceBinaryHandler, evidenceJsonBody } from "./evaluations/evidence-router";
 import { EVALUATION_LIMITS } from "./evaluations/protocol";
@@ -697,7 +702,7 @@ function demoChatHtml(): string {
 </html>`;
 }
 
-export async function createServer(port: number) {
+export async function createServer(port: number, options: { comparisons?: ComparisonRuntimeOptions } = {}) {
   const app = express();
   const server = http.createServer(app);
   const hookOwner = await startCodingHookOwner(getDrizzleDb().$client, undefined, { contextTransport: true });
@@ -769,8 +774,19 @@ export async function createServer(port: number) {
   const verification = createVerificationService({ broadcast, allowedSourceIps, allowedHosts });
   const evaluations = createEvaluationService();
   const evidenceDatabase = getDrizzleDb().$client;
-  evidenceDatabase.query("INSERT OR IGNORE INTO evaluation_evidence_scopes(scope_key,generation,active) VALUES('local:local',1,1)").run();
+  evidenceDatabase.transaction(() => {
+    evidenceDatabase.query("INSERT OR IGNORE INTO evaluation_evidence_scopes(scope_key,generation,active) VALUES('local:local',1,1)").run();
+    evidenceDatabase.query("INSERT INTO prompt_scope_controls(scope_key,generation) SELECT scope_key,1 FROM evaluation_evidence_scopes WHERE scope_key='local:local' ON CONFLICT(scope_key) DO NOTHING").run();
+  }).immediate();
   const evidenceOwner = createLocalEvidenceOwner(evidenceDatabase);
+  const prompts = createLocalPromptRegistry(evidenceDatabase);
+  prompts.capture("read");
+  let comparisons: ComparisonRuntime | null = null;
+  try {
+    comparisons = await createComparisonRuntime(evidenceDatabase, options.comparisons);
+    initializeComparisonScope({ database: evidenceDatabase, scope: { kind: "local", id: "local" }, authorize: () => {} });
+  } catch { await comparisons?.close(); comparisons = null; }
+  const comparisonStore = comparisons?.scope({ database: evidenceDatabase, scope: { kind: "local", id: "local" }, authorize: () => {} }) ?? null;
   const evidenceImports = new EvidenceImportService(new EvidenceSupervisor());
   evidenceImports.initialize(evidenceOwner);
   server.on("upgrade", (req, socket, head) => {
@@ -1005,6 +1021,11 @@ export async function createServer(port: number) {
 
   // This one identity binary transport remains behind every local-access guard.
   app.post("/api/evaluations/evidence/imports", evidenceBinaryHandler(evidenceImports, evidenceOwner));
+  app.use("/api/prompts/comparisons", createComparisonRouter(comparisonStore, comparisons?.coordinator ?? null));
+  app.use("/api/prompts", createPromptRouter(prompts));
+
+  // Keep the bounded review parser behind local access guards and ahead of the global JSON parser.
+  app.use("/api/review-queues", createReviewQueueRouter());
   app.post(["/api/coding-hooks/claude/admission", "/api/coding-hooks/claude/publication", "/api/coding-hooks/claude/transport"], (req, res) => { void hookController.handle(req, res); });
   app.post("/api/coding-hooks/claude/manage", express.raw({ type: "application/json", limit: 16384 }), (req, res) => {
     if (clearingHooks || !hookOwner.store.isOwnerActive() || hookManagementWork.size >= 2) { res.status(503).json({ status: "unavailable", reason: "unavailable" }); return; }
@@ -1033,7 +1054,7 @@ export async function createServer(port: number) {
     }
     next();
   });
-  app.use(["/api/evaluations/evidence", "/api/evaluations/findings"], evidenceJsonBody());
+  app.use(["/api/evaluations/evidence", "/api/evaluations/findings", "/api/evaluations/claims"], evidenceJsonBody());
   app.use("/api/verification", express.json({ limit: VERIFICATION_LIMITS.MAX_FRAME_BYTES }));
   app.use("/api/evaluations", express.json({
     limit: EVALUATION_LIMITS.MAX_REQUEST,
@@ -1084,7 +1105,7 @@ export async function createServer(port: number) {
       // Revoke current in-flight calls synchronously, before any shutdown await.
       let revocationError: Error | undefined;
       try { hookOwner.store.rotateOwner(); } catch (error) { revocationError = error instanceof Error ? error : new Error("Hook revocation unavailable"); } finally { hookOwner.revoke(); }
-      closePromise = Promise.all([hookController.close(), evidenceImports.shutdown(), ...hookManagementWork]).then(() => {
+      closePromise = Promise.all([hookController.close(), evidenceImports.shutdown(), comparisons?.close(), ...hookManagementWork]).then(() => {
       closeServices();
       return new Promise<void>((resolve, reject) => {
         nativeClose(error => { if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") reject(error); else resolve(); });

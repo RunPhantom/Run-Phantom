@@ -1034,6 +1034,7 @@ export function clearAll() {
   getDrizzleDb().transaction((tx) => {
     // Keep source epochs and suppression tombstones while fencing every old callback.
     tx.update(schema.coding_hook_owner).set({ generation: drizzleSql`lower(hex(randomblob(16)))`, updated_at: Date.now() }).where(eq(schema.coding_hook_owner.id, 1)).run();
+    tx.delete(schema.review_queues).run();
     tx.delete(schema.evaluation_reviews).run();
     tx.delete(schema.evaluation_experiments).run();
     tx.delete(schema.evaluation_revisions).run();

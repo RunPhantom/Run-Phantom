@@ -11,11 +11,11 @@ import {
   SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { Activity, Bookmark, Search, Settings, CheckCircle2, FlaskConical } from "lucide-react";
+import { Activity, Bookmark, Search, Settings, CheckCircle2, FlaskConical, ClipboardCheck, FileCode2 } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { RunPhantomMark } from "./RunPhantomMark";
 
-export type Page = "runs" | "search" | "saved" | "settings" | "verification" | "evaluations";
+export type Page = "runs" | "search" | "saved" | "settings" | "verification" | "evaluations" | "review-queues" | "prompts";
 
 export const NAV_ITEMS: { id: Page; label: string; path: string; icon: typeof Activity }[] = [
   { id: "runs", label: "Runs", path: "/runs", icon: Activity },
@@ -23,6 +23,8 @@ export const NAV_ITEMS: { id: Page; label: string; path: string; icon: typeof Ac
   { id: "saved", label: "Saved", path: "/saved", icon: Bookmark },
   { id: "verification", label: "Verification", path: "/verification", icon: CheckCircle2 },
   { id: "evaluations", label: "Evaluations", path: "/evaluations", icon: FlaskConical },
+  { id: "review-queues", label: "Review queues", path: "/review-queues", icon: ClipboardCheck },
+  { id: "prompts", label: "Prompts", path: "/prompts", icon: FileCode2 },
 ];
 
 function isNavPathActive(pathname: string, path: string): boolean {

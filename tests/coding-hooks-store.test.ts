@@ -15,7 +15,7 @@ import { parseHookAdmission, parseHookPublication, validateClaudeBatch, hookDige
 let directory: string, store: CodingHookStore, db: ReturnType<typeof getDrizzleDb>["$client"], prior: string | undefined;
 const admit = (token: string, identity: string) => store.admit(token, identity, claimsForRegistration(store.authenticate(token).binding));
 const token = "a".repeat(64), id = "a".repeat(32), sourceIdentity = "b".repeat(64);
-const binding = (mode: "metadata" | "full" = "metadata", installationId = id): InstallationBinding => ({ installationId, scope: "local", captureMode: mode, workspace: "/private/project", registeredWorkspace: "/private/project", transcriptRoot: "/private/projects", projectDirectory: "/private/projects/project", homeDirectory: "/private/home", settingsPath: "/private/project/.claude/settings.local.json", executable: "/private/bin/runphantom" });
+const binding = (mode: "metadata" | "full" = "metadata", installationId = id): InstallationBinding => ({ installationId, scope: "local", captureMode: mode, workspace: "/private/project", registeredWorkspace: "/private/project", transcriptRoot: "/private/projects", projectDirectory: "/private/projects/project", homeDirectory: "/private/fixture-home", settingsPath: "/private/project/.claude/settings.local.json", executable: "/private/bin/runphantom" });
 beforeEach(() => { closeDb(); prior = process.env.RUNPHANTOM_DB_PATH; directory = mkdtempSync(path.join(tmpdir(), "runphantom-f11-store-")); process.env.RUNPHANTOM_DB_PATH = path.join(directory, "owner.sqlite"); db = getDrizzleDb().$client; store = new CodingHookStore(db, {}, () => true); store.beginOwner(); });
 afterEach(() => { closeDb(); if (prior === undefined) delete process.env.RUNPHANTOM_DB_PATH; else process.env.RUNPHANTOM_DB_PATH = prior; rmSync(directory, { recursive: true, force: true }); });
 function active(mode: "metadata" | "full" = "metadata") {
@@ -66,7 +66,7 @@ test("identical management preserves policy generation; changed policy and token
   store.commitInstallation(id, changed.installationGeneration, changedToken, "c".repeat(64), changed.ownerGeneration); expect(admit(changedToken, sourceIdentity).captureMode).toBe("metadata");
 });
 test("global target and local full authority over the same registered project deduplicate identities without sharing policy", () => {
-  const local = active("full"), globalId = "e".repeat(32), globalToken = "e".repeat(64), globalBinding = { ...binding("metadata", globalId), scope: "global" as const, workspace: null, settingsPath: "/private/profile/.claude/settings.json" };
+  const local = active("full"), globalId = "e".repeat(32), globalToken = "e".repeat(64), globalBinding = { ...binding("metadata", globalId), scope: "global" as const, workspace: null, settingsPath: "/private/fixture-home/.claude/settings.json" };
   const receipt = store.prepareInstallation(globalBinding, globalToken, "f".repeat(64)); store.commitInstallation(globalId, receipt.installationGeneration, globalToken, "f".repeat(64), receipt.ownerGeneration);
   const global = admit(globalToken, sourceIdentity); expect(global.sourceKey).toBe(local.sourceKey); expect(global.runId).toBe(local.runId); expect(global.captureMode).toBe("metadata");
   const foreignId = "f".repeat(32), foreignToken = "f".repeat(64), foreignBinding = { ...binding("full", foreignId), workspace: "/private/other-project", registeredWorkspace: "/private/other-project", projectDirectory: "/private/projects/other-project", settingsPath: "/private/other-project/.claude/settings.local.json" };
