@@ -122,7 +122,7 @@ function main() {
     process.exitCode = result.status ?? 1; return;
   }
   if (process.env.RUNPHANTOM_F47_LOCK_PID !== String(process.ppid)) throw new Error("Owned canonical browser lock supervisor required");
-  const inventory = engineInventory(repo), outcomes: Partial<Record<Engine, Outcome>> = {};
+  const inventory = engineInventory(repo), chromiumIdentity = inventory.identities.find(identity => identity.engine === "chromium")!, outcomes: Partial<Record<Engine, Outcome>> = {};
   const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" });
   const binary = args.find(arg => arg.startsWith("--binary="))?.slice(9);
   if (binary && (!path.isAbsolute(binary) || !existsSync(binary))) throw new Error("Copied artifact unavailable");
@@ -133,7 +133,7 @@ function main() {
   for (const identity of inventory.identities) {
     if (!identity.available) continue;
     const report = path.join(output, `${identity.engine}-playwright.json`), artifacts = path.join(output, identity.engine);
-    const env = { ...process.env, RUNPHANTOM_F47_MODULE: inventory.moduleEntry, RUNPHANTOM_F47_BUN: process.execPath, RUNPHANTOM_F47_HEAD: head.stdout.trim(), RUNPHANTOM_F47_OUTPUT: output, RUNPHANTOM_F47_UI_EXECUTABLE: identity.executable, PLAYWRIGHT_JSON_OUTPUT_NAME: report, ...(binary ? { RUNPHANTOM_F47_BINARY: binary } : {}) };
+    const env = { ...process.env, RUNPHANTOM_F47_MODULE: inventory.moduleEntry, RUNPHANTOM_F47_BUN: process.execPath, RUNPHANTOM_F47_HEAD: head.stdout.trim(), RUNPHANTOM_F47_OUTPUT: output, RUNPHANTOM_F47_UI_EXECUTABLE: identity.executable, RUNPHANTOM_F47_CHROMIUM_EXECUTABLE: chromiumIdentity.executable, RUNPHANTOM_F47_CHROMIUM_SHA256: chromiumIdentity.executableSha256 ?? "", PLAYWRIGHT_JSON_OUTPUT_NAME: report, ...(binary ? { RUNPHANTOM_F47_BINARY: binary } : {}) };
     const result = spawnSync(process.execPath, ["--no-env-file", cli, "test", "--config", path.join(repo, "app/playwright.engines.config.ts"), `--project=${identity.engine}`, `--output=${artifacts}`], { cwd: repo, env, encoding: "utf8", timeout: 180_000, maxBuffer: 16 * 1024 * 1024 });
     writeFileSync(path.join(output, `${identity.engine}-stdout.log`), result.stdout ?? ""); writeFileSync(path.join(output, `${identity.engine}-stderr.log`), result.stderr ?? "");
     outcomes[identity.engine] = existsSync(report) ? reportOutcome(JSON.parse(readFileSync(report, "utf8")) as JsonSuite, result.status) : { collected: 0, passed: 0, failed: 1, skipped: 0, retries: 0, exitCode: result.status };

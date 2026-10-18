@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { TRUSTED_BROWSER_FIXTURE_HTML } from "../../../tests/helpers/trusted-browser-fixture-html";
-import { cleanupStages, processGone as gone, reapOwnedProcess, preserveFixtureFailure, waitForOwned } from "./lifecycle";
+import { cleanupStages, processGone as gone, reapOwnedProcess, preserveFixtureFailure, waitForOwned, observeOwnedHttpServer, closeOwnedHttpServer, httpServerProof, type OwnedHttpServer } from "./lifecycle";
 import type { BrowserSummary, BrowserObservation } from "../../../src/verification/browser-types";
 export const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 export const RUN_ID = "47000000000000000000000000000001", SPAN_ID = "4700000000000002", OUTPUT = "F47 captured response Café 東京";
@@ -28,8 +28,7 @@ async function until(check: () => Promise<boolean> | boolean, ms = 15_000) {
   const end = Date.now() + ms; while (!await check()) { if (Date.now() >= end) throw new Error("Owned qualification condition exceeded its finite deadline"); await new Promise(resolve => setTimeout(resolve, 25)); }
 }
 async function port() { const server = reserveServer(); server.listen(0, "127.0.0.1"); await once(server, "listening"); const value = (server.address() as { port: number }).port; await new Promise<void>(resolve => server.close(() => resolve())); return value; }
-async function closeServer(server: Server) { if (!server.listening) return; server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
-export interface External { browser: Browser; server: BrowserServer; pages: Page[]; endpoint: string; pid: number }
+export interface External { browser: Browser; server: BrowserServer; pages: Page[]; endpoint: string; pid: number; executable: string; executableSha256: string; version: string }
 export interface Backend {
   url: string; profile: string; events: NativeEvent[]; target: string; external: External | null;
   api<T>(route: string, body?: unknown, method?: string): Promise<{ status: number; body: T }>;
@@ -48,8 +47,8 @@ export const test = base.extend<{ backend: Backend; attached: boolean }>({
       if (route === "/accepted") { response.writeHead(202); response.end("accepted"); return; }
       if (route === "/duplicate") { const current = ++duplicate; setTimeout(() => { const status = current === 1 ? 201 : 202; completions.push(status); response.writeHead(status); response.end("recorded fact"); }, current === 1 ? 200 : 10); return; }
       response.setHeader("Content-Type", "text/html; charset=utf-8"); response.end(TRUSTED_BROWSER_FIXTURE_HTML.replace("</body>", '<button id="remove-marker" onclick="document.querySelector(\'#always\').remove()">Remove marker</button><section id="audit-invalid"><button id="unnamed"></button></section><button id="fix-audit">Fix audit</button><script>document.querySelector("#fix-audit").onclick=()=>document.querySelector("#unnamed").setAttribute("aria-label","Named control")</script></body>'));
-    }); let targetUrl = "";
-    let external: External | null = null, daemon: ChildProcess | undefined, sentinelTarget: Server | undefined;
+    }); const ownedTarget = observeOwnedHttpServer(target); let targetUrl = "";
+    let external: External | null = null, daemon: ChildProcess | undefined, sentinelTarget: Server | undefined, ownedSentinel: OwnedHttpServer | undefined;
     let externalServer: BrowserServer | undefined, externalBrowser: Browser | undefined, externalPid: number | undefined;
     let externalLaunchAttempted = false, daemonSpawnAttempted = false, daemonClosed = false, daemonReap: { forced: boolean; closeObserved: boolean } | undefined;
     const sampled = new Map<number, ProcessRow>(), externalSampled = new Map<number, ProcessRow>(); let logs = "", primaryError: Error | undefined, daemonSpawnError: Error | undefined, forcedRemaining = false;
@@ -58,16 +57,22 @@ export const test = base.extend<{ backend: Backend; attached: boolean }>({
       target.listen(0, "127.0.0.1"); await once(target, "listening"); targetUrl = `http://127.0.0.1:${(target.address() as { port: number }).port}`;
       if (attached) {
         const appRequire = createRequire(path.join(repo, "app/package.json")); const runtime = appRequire("@playwright/test") as { chromium: typeof import("@playwright/test").chromium };
-        const cdpPort = await port(); externalLaunchAttempted = true;
-        externalServer = await runtime.chromium.launchServer({ headless: true, args: [`--remote-debugging-port=${cdpPort}`] });
-        externalPid = externalServer.process().pid;
-        externalBrowser = await runtime.chromium.connect(externalServer.wsEndpoint(), { timeout: 15_000 });
+        const executable = process.env.RUNPHANTOM_F47_CHROMIUM_EXECUTABLE, expectedSha256 = process.env.RUNPHANTOM_F47_CHROMIUM_SHA256;
+        if (!executable || !expectedSha256) throw new Error("BLOCKED: independently pinned external Chromium identity required");
+        const executableSha256 = fileHash(executable); expect(executableSha256).toBe(expectedSha256);
+        expect(runtime.chromium.executablePath()).toBe(executable);
+        const setup = (phase: string) => writeFileSync(info.outputPath("external-setup.json"), JSON.stringify({ phase, productEngine: "chromium", uiEngine: browserName, executable, executableSha256, expectedSha256, externalPid, serverRegistered: Boolean(externalServer), connectionRegistered: Boolean(externalBrowser), version: externalBrowser?.version() ?? null }, null, 2));
+        const cdpPort = await port(); externalLaunchAttempted = true; setup("launching-explicit-Chromium");
+        externalServer = await runtime.chromium.launchServer({ executablePath: executable, timeout: 15_000, headless: true, args: [`--remote-debugging-port=${cdpPort}`] });
+        externalPid = externalServer.process().pid; setup("server-registered-connecting");
+        externalBrowser = await runtime.chromium.connect(externalServer.wsEndpoint(), { timeout: 15_000 }); setup("connection-registered-creating-context");
+        expect(externalBrowser.browserType().name()).toBe("chromium"); const version = externalBrowser.version(); expect(version).not.toBe("");
         const context = await externalBrowser.newContext(), pages: Page[] = [];
-        for (let index = 0; index < 3; index++) pages.push(await context.newPage());
-        sentinelTarget = createServer((_request, response) => { response.setHeader("Content-Type", "text/html"); response.end(TRUSTED_BROWSER_FIXTURE_HTML); }); sentinelTarget.listen(0, "127.0.0.1"); await once(sentinelTarget, "listening");
+        for (let index = 0; index < 3; index++) { setup(`creating-page-${index}`); pages.push(await context.newPage()); }
+        sentinelTarget = createServer((_request, response) => { response.setHeader("Content-Type", "text/html"); response.end(TRUSTED_BROWSER_FIXTURE_HTML); }); ownedSentinel = observeOwnedHttpServer(sentinelTarget); sentinelTarget.listen(0, "127.0.0.1"); await once(sentinelTarget, "listening");
         const sentinelUrl = `http://127.0.0.1:${(sentinelTarget.address() as { port: number }).port}`;
-        for (const [i, page] of pages.entries()) { await page.goto(i === 2 ? sentinelUrl : targetUrl); await page.evaluate(index => { document.body.dataset.physicalTab = String(index); document.body.insertAdjacentHTML("beforeend", `<div id="physical${index}">Physical tab ${index}</div>`); }, i); }
-        external = { browser: externalBrowser, server: externalServer, pages, endpoint: `http://127.0.0.1:${cdpPort}`, pid: externalPid! };
+        for (const [i, page] of pages.entries()) { setup(`navigating-page-${i}`); await page.goto(i === 2 ? sentinelUrl : targetUrl); await page.evaluate(index => { document.body.dataset.physicalTab = String(index); document.body.insertAdjacentHTML("beforeend", `<div id="physical${index}">Physical tab ${index}</div>`); }, i); }
+        external = { browser: externalBrowser, server: externalServer, pages, endpoint: `http://127.0.0.1:${cdpPort}`, pid: externalPid!, executable, executableSha256, version }; setup("ready");
       }
       const daemonPort = await port(), binary = process.env.RUNPHANTOM_F47_BINARY, bun = process.env.RUNPHANTOM_F47_BUN;
       const env: Record<string, string> = { HOME: profile, USERPROFILE: profile, TMPDIR: profile, PATH: process.env.PATH!, LANG: "C.UTF-8", TZ: "UTC", BUN_INSTALL_AUTO: "disable", RUNPHANTOM_DB_PATH: path.join(profile, "runs.sqlite"), RUNPHANTOM_SECRET_STORE_PATH: path.join(profile, "secrets.json"), RUNPHANTOM_PORT: String(daemonPort), RUNPHANTOM_BIND_HOST: "127.0.0.1", RUNPHANTOM_BROWSER_MODULE: process.env.RUNPHANTOM_F47_MODULE, RUNPHANTOM_BROWSER_ARTIFACTS: path.join(profile, "artifacts"), RUNPHANTOM_SKIP_WORKSPACE_ACTIVATE: "1", RUNPHANTOM_CLAUDE_CLI_CHAT: "0", ...(process.env.PLAYWRIGHT_BROWSERS_PATH ? { RUNPHANTOM_BROWSER_CACHE: process.env.PLAYWRIGHT_BROWSERS_PATH } : {}), ...(external ? { RUNPHANTOM_BROWSER_CDP: external.endpoint } : {}) };
@@ -96,8 +101,8 @@ export const test = base.extend<{ backend: Backend; attached: boolean }>({
           for (const pid of pids) if (!gone(pid)) { forcedRemaining = true; try { process.kill(pid, "SIGKILL"); } catch (error) { if (!gone(pid)) throw error; } }
           await waitForOwned(() => pids.every(gone), 4000);
         } },
-        { stage: "target-close", close: () => closeServer(target) },
-        { stage: "sentinel-close", close: async () => { if (sentinelTarget) await closeServer(sentinelTarget); } },
+        { stage: "target-close", close: () => closeOwnedHttpServer(ownedTarget) },
+        { stage: "sentinel-close", close: async () => { if (ownedSentinel) await closeOwnedHttpServer(ownedSentinel); } },
       ]);
       const unknownOwnership = (externalLaunchAttempted && (!externalServer || !externalPid)) || (daemonSpawnAttempted && !daemon?.pid);
       const proof = { daemonPid: daemon?.pid, daemonSpawnAttempted, daemonRegistered: Boolean(daemon?.pid), daemonReaped: daemon?.pid ? gone(daemon.pid) : !daemonSpawnAttempted,
@@ -105,6 +110,8 @@ export const test = base.extend<{ backend: Backend; attached: boolean }>({
         processes: [...sampled.values(), ...externalSampled.values()].map(row => ({ ...row, reaped: gone(row.pid) })), externalLaunchAttempted,
         externalServerRegistered: Boolean(externalServer), externalConnectionRegistered: Boolean(externalBrowser), externalPid,
         externalReaped: externalPid ? gone(externalPid) : !externalLaunchAttempted, unknownOwnership, cleanup,
+        httpTargets: { target: httpServerProof(ownedTarget), sentinel: ownedSentinel ? httpServerProof(ownedSentinel) : null },
+        externalIdentity: external ? { executable: external.executable, executableSha256: external.executableSha256, version: external.version } : null,
         primaryFailure: primaryError ? { name: primaryError.name, message: primaryError.message } : null,
         targetCompletions: completions, controlledEvents: events.map(({ type, trusted }) => ({ type, trusted })), forcedCleanup: (daemonReap?.forced ?? false) || forcedRemaining };
       const clean = !unknownOwnership && proof.daemonReaped && proof.daemonCloseObserved && proof.externalReaped && proof.processes.every(row => row.reaped) && cleanup.every(stage => stage.completed) && !proof.forcedCleanup;

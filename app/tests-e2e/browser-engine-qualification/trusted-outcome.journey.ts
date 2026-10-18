@@ -8,7 +8,7 @@ import type { AccessibilityEvidence } from "../../../src/verification/accessibil
 test("trusted-outcome: normal UI dispatch, real private-input primitives, masked artifact and saved report remain distinct", async ({ page, backend, browserName }, info) => {
   await page.goto(backend.url + "/verification");
   const panel = page.getByRole("region", { name: "Trusted browser", exact: true });
-  await panel.getByLabel("Browser engine", { exact: true }).selectOption(browserName);
+  await panel.getByRole("combobox", { name: "Browser engine", exact: true }).selectOption(browserName);
   await panel.getByLabel(/^Browser target URL/).fill(backend.target); await panel.getByRole("button", { name: "Open browser", exact: true }).click();
   await expect(panel.getByRole("combobox", { name: "Browser connection", exact: true })).toContainText("ready");
   const sessions = (await backend.api<BrowserSummary[]>("/api/verification/browser/sessions")).body; expect(sessions).toHaveLength(1); const session = sessions[0]; expect(session.engine).toBe(browserName); expect(session.engineVersion).not.toBe(""); backend.sample();

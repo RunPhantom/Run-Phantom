@@ -84,3 +84,23 @@ test("TERM-resistant daemon and inherited-pipe descendant are escalated and clos
   ], 1500);
   preserveFixtureFailure(primary, cleanup);
 }, 5000);
+
+test("actual Bun HTTP graceful close observes callback, close event and zero sockets without double close", async () => {
+  const { createServer } = await import("node:http");
+  const { observeOwnedHttpServer, closeOwnedHttpServer, httpServerProof } = await import("../app/tests-e2e/browser-engine-qualification/lifecycle");
+  const owned = observeOwnedHttpServer(createServer((_request, response) => response.end("actual owned HTTP response")));
+  owned.server.listen(0, "127.0.0.1"); await once(owned.server, "listening");
+  try {
+    const address = owned.server.address() as { port: number }; const response = await fetch(`http://127.0.0.1:${address.port}`);
+    expect(response.status).toBe(200); expect(await response.text()).toBe("actual owned HTTP response"); expect(httpServerProof(owned).listeningObserved).toBe(true);
+    expect(await closeOwnedHttpServer(owned)).toEqual({ listeningObserved: true, connectionsObserved: 1, listening: false, closeObserved: true, closeCallbackObserved: true, fallbackUsed: false, liveSockets: 0 });
+  } finally { if (owned.server.listening) await closeOwnedHttpServer(owned); }
+});
+test("unobserved HTTP acquisition cannot manufacture a successful close receipt", async () => {
+  const { createServer } = await import("node:http");
+  const { observeOwnedHttpServer, closeOwnedHttpServer, httpServerProof } = await import("../app/tests-e2e/browser-engine-qualification/lifecycle");
+  const owned = observeOwnedHttpServer(createServer());
+  let failure: unknown; try { await closeOwnedHttpServer(owned); } catch (error) { failure = error; }
+  expect(failure).toBeInstanceOf(Error); expect((failure as Error).message).toContain("HTTP listener acquisition was not observed");
+  expect(httpServerProof(owned)).toMatchObject({ listeningObserved: false, closeObserved: false, closeCallbackObserved: false, liveSockets: 0 });
+});
