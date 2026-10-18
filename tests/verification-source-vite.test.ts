@@ -49,7 +49,8 @@ let result;
 ${mode === "dev" ? `const server = await vite.createServer({ ...config, server: { host: "127.0.0.1", port: 0 } });
 try { await server.listen(); result = await server.transformRequest("/src/main.tsx"); } finally { await server.close(); }` : `let mappingCalls = 0;
 const custom = { format: "es", entryFileNames: "first-[name].js", sourcemapPathTransform(source, map) { mappingCalls++; return path.resolve(path.dirname(map), source); } };
-try { const output = await vite.build({ ...config, build: { write: false, sourcemap: true, rollupOptions: { output: ${mode === "multi" ? '[custom, { format: "es", entryFileNames: "second-[name].js" }]' : "custom"} } } });
+// Vite realpaths HTML entry assets outside an aliased root; exercise the aliased module directly.
+try { const output = await vite.build({ ...config, build: { write: false, sourcemap: true, rollupOptions: { ...(aliasRoot ? { input: path.join(aliasRoot, "src/main.tsx") } : {}), output: ${mode === "multi" ? '[custom, { format: "es", entryFileNames: "second-[name].js" }]' : "custom"} } } });
 result = { bundles: Array.isArray(output) ? output : [output], mappingCalls }; } catch (error) { result = { buildError: error.message }; }`}
 process.stdout.write(JSON.stringify({ root, result }));
 } finally { if (aliasRoot) rmSync(aliasRoot, { recursive: true, force: true }); }`;
@@ -69,7 +70,9 @@ describe("actual Vite composition and production asset privacy", () => {
     expect(path.resolve(root, "src", source.originalSource)).toBe(path.join(root, "src/main.tsx"));
   }, 30_000);
   for (const [mode, aliasedRoot] of [["multi", false], ["single-disabled", false], ["multi", true]] as const) test(`real ${mode}${aliasedRoot ? " aliased-root" : ""} custom-map builds omit source contents without replacing requested maps`, async () => {
-    const { root, result: { bundles, mappingCalls } } = await runVite(mode, code, aliasedRoot);
+    const { root, result } = await runVite(mode, code, aliasedRoot);
+    expect(result.buildError).toBeUndefined();
+    const { bundles, mappingCalls } = result;
     expect(bundles).toHaveLength(mode === "multi" ? 2 : 1); expect(mappingCalls).toBeGreaterThan(0);
     let externalSources: string[] | undefined;
     for (const bundle of bundles) {
