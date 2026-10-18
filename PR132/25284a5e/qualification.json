@@ -2,36 +2,38 @@
   "pr": 132,
   "source": "25284a5e1508343b81437848b306450d49a29bc7",
   "feature": "F49",
-  "state": "OPEN DRAFT; no merge authorized",
-  "scope": "One actual targeted Mac coarse-pointer definition-pane regression; staticpost-pan screenshot. FullF49 andWindowsqualification not established.",
+  "scope": "Actual native Windows source-browser original coarse-pointer definition navigation, one passing result/retry0; static post-pan screenshot. Full feature/copied/provider/assembled acceptance remains incomplete.",
   "actual_case": {
     "passed": 1,
     "failed": 0,
-    "skipped": 0,
     "retries": 0,
+    "duration_ms": 4203,
     "pan_offsets": [
       408,
       740,
       1041
     ],
-    "retained_event_receipts": true,
-    "trace_retained": false,
-    "forced_outer_cleanup": false,
-    "secondary_faults": false,
-    "owned_closure_confirmed": true
+    "delivered_move_counts": [
+      11,
+      12
+    ],
+    "observer_disposed": true,
+    "fixture_and_context_cleanup_steps": "passed without reported errors",
+    "final_os_process_group_absence": "NOT_RETAINED"
   },
   "open_gates": [
-    "Fresh nativeWindows CI",
-    "Separate native capture-visibility case",
-    "FullF49/assembled/provider qualification"
+    "Independent final Windows process absence not retained",
+    "Separate capture-visibility case",
+    "FullF49/copied/provider/assembled qualification"
   ],
   "screenshots": [
     {
-      "file": "definition-touch-post-pan.png",
-      "sha256": "0cf62f7c481b5dbffba17f62ea6660a829de4232f6d8fa1038b5138557d9e7e0",
-      "bytes": 54475,
-      "platform": "Darwin arm64",
-      "profile": "Actual390x844 post-pan definition pane; temporal gesture and IO are separately asserted"
+      "file": "windows-definition-touch-post-pan.png",
+      "sha256": "f142e43f576c60ad7c4fcbf1c3298e89eb9f0b9d87b9a9f9b04e5993e1f8e71d",
+      "bytes": 51143,
+      "platform": "Native Windows CI Chromium",
+      "run_id": 39126863235,
+      "profile": "Actual390x844 static post-pan pane/source-link witness; temporal gesture and captured IO independently asserted in retained report"
     }
   ]
 }
