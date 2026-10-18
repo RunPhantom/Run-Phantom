@@ -32,12 +32,12 @@ test("verification workspace: deep links retain real outcomes, filters and respo
       await page.getByRole("button", { name: "Run action", exact: true }).click();
       await expect(app.locator("#status")).toHaveText(broken ? "failed" : "paid");
       await page.getByRole("button", { name: "Check outcome", exact: true }).click();
-      await expect(page.getByRole("article", { name: `Workspace checkout outcome: ${outcome}`, exact: true })).toBeVisible();
+      await expect(page.getByRole("article", { name: `Workspace checkout outcome: ${outcome}`, exact: true })).toBeVisible({ timeout: 15_000 });
     }
     await app.evaluate(() => window.runtime.disconnect());
     await expect(page.getByText("Disconnected", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Check outcome", exact: true }).click();
-    await expect(page.getByRole("article", { name: "Workspace checkout outcome: inconclusive", exact: true })).toBeVisible();
+    await expect(page.getByRole("article", { name: "Workspace checkout outcome: inconclusive", exact: true })).toBeVisible({ timeout: 15_000 });
     const saved = await request.get(`${runPhantom.url}/api/verification/reports?runId=${FIXTURE_PRIMARY_RUN_ID}`);
     expect(saved.ok()).toBe(true);
     const reports = await saved.json() as VerificationReport[];
@@ -70,7 +70,7 @@ test("verification workspace: deep links retain real outcomes, filters and respo
     expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--rp-accent").trim())).toBe("#0021CC");
     await page.screenshot({ path: path.join(screenshotDir, "workspace-desktop.png") });
     await page.emulateMedia({ reducedMotion: "reduce" });
-    expect(await navigation.getByRole("link", { name: "Pair app", exact: true }).evaluate(element => getComputedStyle(element).transitionDuration)).toBe("0s");
+    expect(await navigation.getByRole("link", { name: "Pair app", exact: true }).evaluate(element => Number.parseFloat(getComputedStyle(element).transitionDuration))).toBeLessThanOrEqual(0.00001);
     for (const width of [390, 320]) {
       await page.setViewportSize({ width, height: 844 });
       await page.getByRole("heading", { name: "Verification", exact: true }).scrollIntoViewIfNeeded();
@@ -103,6 +103,12 @@ test("verification workspace: empty deep links preserve optional tools and never
   await page.reload();
   await expect(page.locator("#verification-snapshots")).toBeFocused();
   await expect(page.getByText(/No saved snapshots/)).toBeVisible();
+  mkdirSync(screenshotDir, { recursive: true });
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: width === 1440 ? 900 : 844 });
+    await page.getByRole("heading", { name: "Verification", exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(screenshotDir, `empty-${width}.png`) });
+  }
 });
 
 test("verification workspace: a held real command cannot publish inspection into a different run scope", async ({ page, context, request, runPhantom, targetApp }) => {

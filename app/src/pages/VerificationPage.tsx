@@ -105,7 +105,7 @@ export function VerificationPage() {
   const connected = observation.data?.session.connected ?? session?.connected ?? false;
 
   useEffect(() => () => { operationEpoch.current++; busyRef.current = false; }, []);
-  useEffect(() => { setRunId(linkedRunId); }, [linkedRunId]);
+  useEffect(() => { setRunId(linkedRunId); setSetup(null); }, [linkedRunId]);
   useEffect(() => {
     operationEpoch.current++; busyRef.current = false; setBusy(""); setError(null);
     setSince(undefined);
@@ -214,15 +214,15 @@ export function VerificationPage() {
   return <div className="mx-auto flex min-h-full w-full max-w-[1440px] min-w-0 flex-col gap-6 p-4 pt-14 sm:p-8 sm:pt-14 lg:px-10 lg:pt-8" style={{ background: C.bg, color: C.fg2 }}>
     <header className="flex flex-wrap items-start justify-between gap-5">
       <div className="max-w-2xl space-y-3"><span className="inline-flex items-center gap-2 text-[11px] font-medium text-[color:var(--rp-accent)]"><ShieldCheck aria-hidden="true" className="size-4" />Application verification</span><h1 className="text-[28px] font-semibold leading-tight tracking-tight" style={{ color: C.fg3, fontFamily: "var(--font-display)" }}>Verification</h1><p className="max-w-[65ch] text-sm leading-relaxed" style={{ color: C.fg1 }}>Exercise your app. Check the outcome. Keep the observed evidence with the agent run.</p></div>
-      <div className="flex min-h-11 items-center gap-2 rounded-[5px] border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] px-3 text-xs text-[color:var(--rp-ink-soft)]"><Radio aria-hidden="true" className="size-3.5" />{sessions.isLoading ? "Reading connections…" : sessions.isError ? "Connections unavailable" : `${sessions.data?.filter(item => item.connected).length ?? 0} connected apps`}</div>
+      <div className="flex min-h-11 items-center gap-2 rounded-[5px] border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] px-3 text-xs text-[color:var(--rp-ink-soft)]"><Radio aria-hidden="true" className="size-3.5" />{sessions.isLoading ? "Reading connections…" : sessions.isError ? "Connections unavailable" : `${sessions.data?.filter(item => item.connected).length ?? 0} connected ${sessions.data?.filter(item => item.connected).length === 1 ? "app" : "apps"}`}</div>
     </header>
-    <WorkspaceNavigation sessionId={session?.id} reports={reports.isSuccess ? reports.data.length : undefined} />
+    <WorkspaceNavigation ready={!sessions.isLoading} sessionId={session?.id} reports={reports.isSuccess ? reports.data.length : undefined} />
 
     <div className="sr-only" role="status" aria-live="polite">{busy || notice}</div>
     {(error || queryError) && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3 text-sm" style={{ borderColor: C.red, color: C.red }}><span>{error ?? queryError?.message}</span><Button variant="ghost" onClick={() => { setError(null); void refresh(); }}>Retry refresh</Button></div>}
     {notice && <p className="break-words text-xs leading-relaxed" style={{ color: C.fg1 }}>{notice}</p>}
 
-    <section id="verification-pair" tabIndex={-1} aria-labelledby="pair-heading" className="min-w-0 scroll-mt-6 space-y-4 rounded-[7px] border bg-[color:var(--rp-surface)] p-4 sm:p-5" style={{ borderColor: C.border }}>
+    <section id="verification-pair" tabIndex={-1} aria-labelledby="pair-heading" className="min-w-0 scroll-mt-20 space-y-4 rounded-[7px] border bg-[color:var(--rp-surface)] p-4 sm:p-5" style={{ borderColor: C.border }}>
       <div className="flex flex-wrap items-center justify-between gap-2"><h2 id="pair-heading" className="text-sm font-semibold" style={{ color: C.fg3 }}>Pair an application</h2><span className="text-[11px] text-[color:var(--rp-ink-muted)]">Local app · explicit connection</span></div>
       <form onSubmit={pair} className="flex flex-wrap items-end gap-3">
         <div className="min-w-[200px] flex-1"><Field label="App origin" hint="Exact local origin, including the port."><Input required type="url" placeholder="http://localhost:3000" value={origin} onChange={event => setOrigin(event.target.value)} /></Field></div>
@@ -248,7 +248,7 @@ export function VerificationPage() {
 
     {session && <div className="flex flex-wrap items-start gap-8">
       <div className="min-w-0 flex-[2_1_420px] space-y-6">
-        <div id="verification-inspect" tabIndex={-1} className="min-w-0 scroll-mt-6"><SemanticInspector sessionId={session.id} connected={connected} capable={(observation.data?.session.capabilities ?? session.capabilities)?.includes("semantic-refs") ?? false} disabled={!!busy} onAction={cursor => { setSince(cursor); setInspection(null); }} /></div>
+        <div id="verification-inspect" tabIndex={-1} className="min-w-0 scroll-mt-20"><SemanticInspector sessionId={session.id} connected={connected} capable={(observation.data?.session.capabilities ?? session.capabilities)?.includes("semantic-refs") ?? false} disabled={!!busy} onAction={cursor => { setSince(cursor); setInspection(null); }} /></div>
         <section aria-labelledby="action-heading" className="min-w-0 space-y-4 rounded-[7px] border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] p-4 sm:p-5">
           <h2 id="action-heading" className="text-sm font-semibold" style={{ color: C.fg3 }}>1. Exercise the app</h2>
           <fieldset disabled={!!busy || !connected} className="space-y-3">
@@ -259,7 +259,7 @@ export function VerificationPage() {
           </fieldset>
           {inspection && <Inspection response={inspection} onSelect={value => setSelector(value)} />}
         </section>
-        <section id="verification-checks" tabIndex={-1} aria-labelledby="outcome-heading" className="min-w-0 scroll-mt-6 space-y-4 rounded-[7px] border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] p-4 sm:p-5">
+        <section id="verification-checks" tabIndex={-1} aria-labelledby="outcome-heading" className="min-w-0 scroll-mt-20 space-y-4 rounded-[7px] border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] p-4 sm:p-5">
           <h2 id="outcome-heading" className="text-sm font-semibold" style={{ color: C.fg3 }}>2. Check the outcome</h2>
           <p className="text-xs leading-relaxed" style={{ color: C.fg1 }}>{since === undefined ? "Check the current app and captured interval." : "Checks use evidence captured after the last action."} Missing coverage, a disconnected app, or incomplete capture produces an inconclusive result. An absence check covers the observed quiet interval.</p>
           <fieldset disabled={!!busy} className="space-y-4">
@@ -286,13 +286,13 @@ export function VerificationPage() {
       </section>
     </div>}
 
-    <div id="verification-browser" tabIndex={-1} className="min-w-0 scroll-mt-6"><TrustedBrowser runId={linkedRunId || undefined} onReport={() => void reports.refetch()} /></div>
-    <div id="verification-snapshots" tabIndex={-1} className="min-w-0 scroll-mt-6"><SnapshotDiff sessionId={session?.id} connected={connected} capable={(observation.data?.session.capabilities ?? session?.capabilities)?.includes("semantic-tree") ?? false} disabled={!!busy} runId={linkedRunId || undefined} /></div>
-    <section id="verification-flows" tabIndex={-1} aria-labelledby="flows-heading" className="min-w-0 scroll-mt-6 space-y-3 border-t pt-5" style={{ borderColor: C.border }}>
+    <div id="verification-browser" tabIndex={-1} className="min-w-0 scroll-mt-20"><TrustedBrowser runId={linkedRunId || undefined} onReport={() => void reports.refetch()} /></div>
+    <div id="verification-snapshots" tabIndex={-1} className="min-w-0 scroll-mt-20"><SnapshotDiff sessionId={session?.id} connected={connected} capable={(observation.data?.session.capabilities ?? session?.capabilities)?.includes("semantic-tree") ?? false} disabled={!!busy} runId={linkedRunId || undefined} /></div>
+    <section id="verification-flows" tabIndex={-1} aria-labelledby="flows-heading" className="min-w-0 scroll-mt-20 space-y-3 border-t pt-5" style={{ borderColor: C.border }}>
       <h2 id="flows-heading" className="text-sm font-semibold" style={{ color: C.fg3 }}>Saved flows</h2>
       {flows.isLoading ? <p role="status" className="text-xs">Loading saved flows…</p> : flows.isError ? <p className="text-xs" style={{ color: C.red }}>Saved flows could not load. Refresh before replaying or deleting a flow.</p> : !flows.data?.length ? <p className="text-xs" style={{ color: C.fg1 }}>No saved flows. Add an expected outcome to a flow draft above to reuse it.</p> : <ul className="divide-y divide-[color:var(--rp-border)]">{flows.data.map(flow => <li key={flow.id} className="flex flex-wrap items-center justify-between gap-3 py-3"><div className="min-w-0 space-y-1"><h3 className="break-words text-sm font-medium">{flow.name}</h3><p className="break-words text-[11px]" style={{ color: C.fg1 }}>{flow.origin} · {flow.steps.length} {flow.steps.length === 1 ? "step" : "steps"}</p>{session && session.origin !== flow.origin && <p className="text-[11px]" style={{ color: C.orange }}>Select a connected session at this origin to replay.</p>}</div><div className="flex gap-2"><Button variant="outline" disabled={!!busy || !connected || !session || session.origin !== flow.origin} aria-label={`Replay ${flow.name}`} onClick={() => void perform("Replaying flow…", async current => { const report = await verificationApi.runFlow(flow.id, session!.id); if (!current()) return; await refresh(); if (current()) setNotice(`${flow.name}: ${report.status}. ${report.reason}`); })}><Play aria-hidden="true" />Replay</Button><Button variant="ghost" disabled={!!busy} aria-label={`Delete ${flow.name}`} onClick={() => void perform("Deleting flow…", async current => { await verificationApi.deleteFlow(flow.id); if (!current()) return; await refresh(); if (current()) setNotice("Flow deleted. Its previous reports remain available."); })}>Delete</Button></div></li>)}</ul>}
     </section>
-    <section id="verification-reports" tabIndex={-1} aria-labelledby="reports-heading" className="min-w-0 scroll-mt-6 space-y-3">
+    <section id="verification-reports" tabIndex={-1} aria-labelledby="reports-heading" className="min-w-0 scroll-mt-20 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="reports-heading" className="text-sm font-semibold" style={{ color: C.fg3 }}>Verification reports</h2>{linkedRunId && <Link to="/verification" className="text-xs underline underline-offset-2">Show reports for all runs</Link>}</div>
       <p className="max-w-[70ch] text-xs leading-relaxed" style={{ color: C.fg1 }}>{linkedRunId ? "Showing the latest 100 reports for the linked run." : "The latest 100 saved reports remain available after a session disconnects."} Filters apply to this loaded population.</p>
       <div className="flex min-w-0 flex-wrap items-end gap-3 rounded-[7px] border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] p-4">
