@@ -1,0 +1,116 @@
+{
+  "pr": 48,
+  "source": "2c10c320b582e93fc042d876edb35f9f94bf6a32",
+  "receiving_main": "c520f607623b5d7150efa043c36f99c8a652ffac",
+  "receiving_branch": "main",
+  "tested_pr_merge": "21c4545f8ad0648b7d498792e2d8d141fe4834be",
+  "source_tree": "834a3d81ea0acdec8d2dbf4a9ea2381f77aa669f",
+  "scope": "Question prompting, dedicated deny-only MCP helper and missing-server guidance. Synthetic local hook caller and compiled synthetic CLI; no authenticated provider calls. Existing three installed smoke cases pass; question-specific browser case targets source daemon. Broader product/platform/live-provider acceptance remains open.",
+  "native_macos": {
+    "tested_base": "d7d106c076ce1c9ecd6127d22c762ef48080033c",
+    "question_browser_passed": 1,
+    "browser_retries": 0,
+    "permission_tests_passed": 4,
+    "permission_assertions": 42,
+    "root_app_browser_types": "passed",
+    "lint": "passed",
+    "build": "passed",
+    "final_core_sdk_app_db_scripts_manifests_locks_identical": true
+  },
+  "runs": [
+    {
+      "platform": "Linux",
+      "event": "push",
+      "id": 39092513318,
+      "attempt": 1,
+      "conclusion": "success",
+      "backend": {
+        "passed": 720,
+        "skipped": 1,
+        "failed": 0
+      },
+      "four_permission_cases_passed": true
+    },
+    {
+      "platform": "Linux",
+      "event": "pull_request",
+      "id": 39092516269,
+      "attempt": 1,
+      "conclusion": "success",
+      "backend": {
+        "passed": 720,
+        "skipped": 1,
+        "failed": 0
+      },
+      "four_permission_cases_passed": true
+    },
+    {
+      "platform": "Windows",
+      "event": "push",
+      "id": 39092513270,
+      "attempt": 1,
+      "conclusion": "success",
+      "backend": {
+        "passed": 688,
+        "skipped": 33,
+        "failed": 0
+      },
+      "four_permission_cases_passed": true,
+      "browser": {
+        "passed": 130,
+        "skipped": 10,
+        "failed": 0,
+        "flaky": 0
+      },
+      "compiled_browser": {
+        "passed": 3,
+        "failed": 0
+      },
+      "question_browser": "passed; actual hook response and passive-page resolution verified"
+    },
+    {
+      "platform": "Windows",
+      "event": "pull_request",
+      "id": 39092516472,
+      "attempt": 1,
+      "conclusion": "success",
+      "backend": {
+        "passed": 688,
+        "skipped": 33,
+        "failed": 0
+      },
+      "four_permission_cases_passed": true,
+      "browser": {
+        "passed": 130,
+        "skipped": 10,
+        "failed": 0,
+        "flaky": 0
+      },
+      "compiled_browser": {
+        "passed": 3,
+        "failed": 0
+      },
+      "question_browser": "passed; actual hook response and passive-page resolution verified"
+    }
+  ],
+  "screenshots": [
+    {
+      "file": "ask-user-question-options.png",
+      "sha256": "b068ca6b519fe7f03a381a4273bc84f44cc41cc919c29b40b51a8b4bb1ac8b16",
+      "bytes": 37144,
+      "platform": "Windows x64",
+      "run_id": 39092516472,
+      "artifact_id": 12123168983,
+      "profile": "Source Chromium PR checkout; real local hook/WS/keyboard flow with synthetic questions and CLI disabled; visible workdir is the public hosted runner checkout."
+    },
+    {
+      "file": "ask-user-question-answered.png",
+      "sha256": "52d17d22a46dec402776478f0f26843fd762967b5b23caf6a1547deaefcf7569",
+      "bytes": 13906,
+      "platform": "Windows x64",
+      "run_id": 39092516472,
+      "artifact_id": 12123168983,
+      "profile": "Source Chromium PR checkout; real local hook/WS/keyboard flow with synthetic questions and CLI disabled; visible workdir is the public hosted runner checkout."
+    }
+  ]
+}
