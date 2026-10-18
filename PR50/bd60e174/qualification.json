@@ -1,0 +1,125 @@
+{
+  "pr": 50,
+  "source": "bd60e17480c049656f6b3e6927ad952c60d56b14",
+  "receiving_main": "aca0c1233052c24e2be50bb675396f7cf0f0b624",
+  "receiving_branch": "main",
+  "tested_pr_merge": "640851531e65925959188d32742b320f3833a5a4",
+  "source_tree": "c36406a9c4ce5f9958f81e0a3c6a7cdd03aa3bca",
+  "scope": "Sub-agent failed-tool markers and complete compact footer. Synthetic fixture; five affected nativeWindows source journeys pass initially in both contexts. Existing installed smoke is not popover-specific installed qualification; full product/provider/platform acceptance remains open.",
+  "native_macos": {
+    "target_browser_passed": 5,
+    "capture_browser_passed": 2,
+    "browser_retries": 0,
+    "focused_backend_tests": 18,
+    "focused_assertions": 150,
+    "types_lint_build": "passed",
+    "final_two_feature_blobs_equal_reviewed_capture_source": true
+  },
+  "runs": [
+    {
+      "id": 39095454304,
+      "event": "push",
+      "platform": "Linux",
+      "attempt": 1,
+      "conclusion": "success",
+      "backend": {
+        "passed": 720,
+        "skipped": 1,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39095456217,
+      "event": "pull_request",
+      "platform": "Linux",
+      "attempt": 1,
+      "conclusion": "success",
+      "backend": {
+        "passed": 720,
+        "skipped": 1,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39095454345,
+      "event": "push",
+      "platform": "Windows",
+      "attempt": 1,
+      "conclusion": "success",
+      "backend": {
+        "passed": 688,
+        "skipped": 33,
+        "failed": 0
+      },
+      "source_browser": {
+        "passed": 136,
+        "skipped": 10,
+        "failed": 0,
+        "flaky": 0,
+        "retry_attempts": 0
+      },
+      "target_popover_trajectory": {
+        "passed": 5,
+        "failed": 0,
+        "retries": 0
+      },
+      "native_compile": "passed",
+      "copied_executable": {
+        "passed": 3,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39095456216,
+      "event": "pull_request",
+      "platform": "Windows",
+      "attempt": 1,
+      "conclusion": "success",
+      "backend": {
+        "passed": 688,
+        "skipped": 33,
+        "failed": 0
+      },
+      "source_browser": {
+        "passed": 135,
+        "skipped": 10,
+        "failed": 0,
+        "flaky": 1,
+        "retry_attempts": 1
+      },
+      "target_popover_trajectory": {
+        "passed": 5,
+        "failed": 0,
+        "retries": 0
+      },
+      "native_compile": "passed",
+      "copied_executable": {
+        "passed": 3,
+        "failed": 0
+      }
+    }
+  ],
+  "observed_flaky_case": {
+    "run_id": 39095456216,
+    "case": "Existing runphantom-ui trajectory tooltip",
+    "initial_failure": "ECONNRESET during GET /api/runs/detail/demo_review before first page navigation",
+    "retry": "passed",
+    "root_cause": "unknown",
+    "feature_five_target_cases": "all initially passed"
+  },
+  "artifact_qualification": {
+    "published_screenshot_push_archive": "API size and SHA256 and all30 ZIP entry CRCs verified",
+    "large_pr_browser_trace_archive": "metadata retained; retrieval pending and archive unverified at publication; not used for this screenshot or qualification claims"
+  },
+  "screenshots": [
+    {
+      "file": "sub-agent-status-and-footer.png",
+      "sha256": "12f3c366c45c15d913daa76e01a210b1ca53086df94031780b575220ef18a616",
+      "bytes": 15579,
+      "platform": "Windows x64",
+      "run_id": 39095454345,
+      "artifact_id": 12124149707,
+      "profile": "Source Chromium PUSH checkout bd60e17. Synthetic release-note prompt; red failed tool versus successful check and complete one-line footer. One unique frame; two case names and push/PR output are not presented as distinct images."
+    }
+  ]
+}
