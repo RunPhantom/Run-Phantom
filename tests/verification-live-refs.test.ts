@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { ControlSourceObservation } from "../src/verification/protocol";
 import { LIVE_REF_TTL_MS, MAX_LIVE_REFS, LiveElementRefs } from "../src/verification/browser/dom/refs";
 
 function documentScope() {
@@ -21,6 +22,29 @@ describe("connection-owned live element references", () => {
     const foreign = new LiveElementRefs("session-b", doc, { random: () => "f".repeat(32) });
     expect(() => foreign.resolve(ref)).toThrow("another session/document");
     expect(() => refs.resolve("button:nth-child(1)")).toThrow("Invalid live reference");
+  });
+
+  test("source witnesses issue a fresh selection and never revive changed or throwing metadata", () => {
+    const { doc } = documentScope(); const target = element(doc);
+    const refs = new LiveElementRefs("session-a", doc, { random: random() });
+    let current: ControlSourceObservation = { source: "sdk-reported", framework: "react", status: "captured", mechanism: "dev-stamp", scope: "control", file: "src/Order.tsx", line: 12, column: 5 };
+    const read = () => current;
+    const old = refs.refFor(target, { observation: current, read }); expect(refs.resolve(old)).toBe(target);
+    current = { ...current, file: "src/Changed.tsx" };
+    const fresh = refs.refFor(target, { observation: current, read }); expect(fresh).not.toBe(old);
+    expect(() => refs.resolve(old)).toThrow("source identity"); expect(refs.resolve(fresh)).toBe(target);
+    current = { ...current, file: "src/Order.tsx" }; expect(() => refs.resolve(old)).toThrow("stale");
+    const throwing = refs.refFor(target, { observation: current, read: () => { throw new Error("reflection failure"); } });
+    expect(() => refs.resolve(throwing)).toThrow("source identity");
+  });
+
+  test("a source probe cannot keep a selection alive after disconnecting its target", () => {
+    const { doc } = documentScope(); const target = element(doc);
+    const refs = new LiveElementRefs("session-a", doc, { random: random() });
+    const observation: ControlSourceObservation = { source: "sdk-reported", framework: "react", status: "unavailable", reason: "not-react" };
+    const ref = refs.refFor(target, { observation, read: () => { Object.assign(target, { isConnected: false }); return observation; } });
+    expect(() => refs.resolve(ref)).toThrow("during source validation");
+    Object.assign(target, { isConnected: true }); expect(() => refs.resolve(ref)).toThrow("stale");
   });
 
   test("expiry is absolute rather than refreshed by reads or rediscovery", () => {

@@ -1,12 +1,13 @@
 import { useEffect } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ArrowDownRight, CheckCheck, FileCheck2, Fingerprint, Globe2, Layers2, Plug, Route } from "lucide-react";
+import { Activity, ArrowDownRight, CheckCheck, FileCheck2, Fingerprint, Globe2, Layers2, Plug, Route } from "lucide-react";
 
 const sections = [
   { id: "pair", label: "Pair app", Icon: Plug },
   { id: "inspect", label: "Inspect", Icon: Fingerprint },
   { id: "checks", label: "Check outcomes", Icon: CheckCheck },
   { id: "flows", label: "Saved flows", Icon: Route },
+  { id: "performance", label: "Performance", Icon: Activity },
   { id: "browser", label: "Trusted browser", Icon: Globe2 },
   { id: "snapshots", label: "Snapshots", Icon: Layers2 },
   { id: "reports", label: "Reports", Icon: FileCheck2 },
