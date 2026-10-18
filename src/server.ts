@@ -1231,7 +1231,7 @@ export async function createServer(port: number) {
         getStringMetadata(metadata, "eventId") ??
         getStringMetadata(metadata, "event_id");
 
-      upsertLiveEvent({
+      const persistedId = upsertLiveEvent({
         traceId: normalizedTraceId,
         spanId: normalizedSpanId,
         type,
@@ -1249,6 +1249,7 @@ export async function createServer(port: number) {
         last_updated_at: ts,
       });
       broadcast("live", {
+        persistedId,
         traceId: normalizedTraceId,
         spanId: normalizedSpanId,
         type,
@@ -1513,11 +1514,22 @@ export async function createServer(port: number) {
       // Fall back to saved run cache
       const cached = getCachedRun(id);
       if (cached) {
-        try { const data = JSON.parse(cached); if (data.run) { res.json(data); return; } } catch {}
+        try {
+          const data = JSON.parse(cached);
+          if (data.run) {
+            // A live-only run can reuse cached presentation, but its live rows
+            // must come from this store. Saved-only history survives clears.
+            const body = run ? { ...data, liveEvents: getLiveEvents(id) } : data;
+            res.setHeader("X-RunPhantom-Live-Events", run ? "current-store" : "saved-cache");
+            res.json(body);
+            return;
+          }
+        } catch {}
       }
       if (!run) { res.status(404).json({ error: "Not found" }); return; }
     }
     const subAgents = detectSubAgents(spans as any);
+    res.setHeader("X-RunPhantom-Live-Events", "current-store");
     res.json({ run, spans: spans.map(compactSpanForDetail), liveEvents: getLiveEvents(id), subAgents });
   });
   app.get("/api/runs/:id/outline", (req, res) => {
