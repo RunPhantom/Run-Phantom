@@ -1,3 +1,4 @@
+import { hookVendorForSettings } from "./vendor";
 import { randomBytes } from "node:crypto";
 import { CATALOG_CONTEXT_VERSION, encodeInstallationCatalog } from "./catalog";
 import { ContextHookStore } from "./context-store";
@@ -17,6 +18,7 @@ export class ContextTransitionStore {
    if(this.store.currentOwnerGeneration()!==request.expectedOwnerGeneration)refuse("stale");
    const ids=this.store.db.query("SELECT id FROM coding_hook_installations ORDER BY id LIMIT 65").all() as {id:string}[];if(ids.length>64)refuse("quota",507);
    const installations=ids.map(({id})=>{const installed=this.store.readInstallation(id);if(!installed)refuse("corrupt",503);return installed;}),selected=request.installationIds.map(id=>{const installed=installations.find(value=>value.row.id===id);if(!installed)refuse("unknown_scope");return installed;});
+   if(selected.some(value=>hookVendorForSettings(value.binding.settingsPath)!=="claude"))refuse("unknown_scope");
    if(!selected.some(value=>value.row.state==="active"))refuse("inactive");
    const roots=new Set(selected.flatMap(value=>value.registrations.map(root=>root.registrationId)));
    if(installations.some(value=>!request.installationIds.includes(value.row.id)&&value.registrations.some(root=>roots.has(root.registrationId))))refuse("unknown_scope");

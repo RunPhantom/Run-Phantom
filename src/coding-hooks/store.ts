@@ -6,6 +6,7 @@ import { CATALOG_VERSION, CATALOG_CONTEXT_VERSION, encodeInstallationCatalog, re
 import type { HookSourceClaims } from "./protocol";
 import { parseBoundedHookJson } from "./shared";
 import { claudeEntityProjection } from "./projection";
+import { hookVendorForSettings } from "./vendor";
 import { validateLegacySource } from "./retained-version";
 import { assertHookCanonicalQuota } from "./context-integrity";
 import { HookRefusal, hookDigest, isHex, refuse, validateClaudeBatch, validateClaudeRetainedEntity } from "./protocol";
@@ -87,7 +88,7 @@ export class CodingHookStore {
   prepareInstallation(binding: InstallationBinding, token: string, configSha256: string, input: SourceRegistration[] = [registrationForBinding(binding)]): { installationGeneration: string; ownerGeneration: string; unchanged: boolean } {
     binding = validateInstallationBinding(binding); const registrations = validateCatalog(binding, input); if (!isHex(token, 64) || !isHex(configSha256, 64)) refuse("malformed", 400);
     return this.transaction(() => {
-      const data = encodeInstallationCatalog(binding, registrations, this.sharedCatalogVersion(binding.installationId, registrations));
+      const data = encodeInstallationCatalog(binding, registrations, this.sharedCatalogVersion(binding.installationId, registrations, hookVendorForSettings(binding.settingsPath)));
       const owner = this.owner(); this.checkQuota(); const before = this.readInstallation(binding.installationId), tokenSha256 = hookDigest(token);
       if (before?.row.state === "active" && before.row.data === data && before.row.config_sha256 === configSha256 && before.row.token_sha256 === tokenSha256) return { installationGeneration: before.row.generation, ownerGeneration: owner.generation, unchanged: true };
       const generation = random();
@@ -96,13 +97,14 @@ export class CodingHookStore {
     });
   }
   /** Trusted management registrations inherit eligibility; callback/request bodies cannot select a version. */
-  sharedCatalogVersion(id: string, registrations: SourceRegistration[]): CatalogVersion {
+  sharedCatalogVersion(id: string, registrations: SourceRegistration[], vendor: "claude" | "cursor" = "claude"): CatalogVersion {
     if (!this.contextOptions.contextTransport) return CATALOG_VERSION;
     const ids = this.db.query("SELECT id FROM coding_hook_installations LIMIT 65").all() as { id: string }[];
     if (ids.length > 64) refuse("quota", 507);
     const shared = new Set<CatalogVersion>();
     for (const current of ids) {
       const installed = this.readInstallation(current.id); if (!installed) refuse("corrupt", 503);
+      if (hookVendorForSettings(installed.binding.settingsPath) !== vendor) continue;
       for (const root of installed.registrations) for (const candidate of registrations) {
         if (root.registrationId === candidate.registrationId && JSON.stringify(root) !== JSON.stringify(candidate)
           || root.registrationId !== candidate.registrationId && root.registeredWorkspace === candidate.registeredWorkspace) refuse("unknown_scope");
@@ -235,7 +237,8 @@ export class CodingHookStore {
       const run = this.db.query("SELECT id FROM runs WHERE id=?").get(session.run_id);
       const entityCount = (this.db.query("SELECT count(*) count FROM coding_hook_entities WHERE source_key=?").get(session.source_key) as { count: number }).count;
       if (run && entityCount === 0) refuse("projection_conflict");
-      const now = Date.now(); if (!run) this.db.query("INSERT INTO runs(id,name,started_at,last_updated_at,metadata) VALUES(?,'Claude session',?,?,?)").run(session.run_id, now, now, '{"source":"claude_hook","runtimeVerified":false,"coverage":"partial"}');
+      const vendor = hookVendorForSettings(authority.binding.settingsPath);
+      const now = Date.now(); if (!run) this.db.query("INSERT INTO runs(id,name,started_at,last_updated_at,metadata) VALUES(?,?,?,?,?)").run(session.run_id, vendor === "cursor" ? "Cursor session" : "Claude session", now, now, vendor === "cursor" ? '{"source":"cursor_hook","runtimeVerified":false,"coverage":"partial"}' : '{"source":"claude_hook","runtimeVerified":false,"coverage":"partial"}');
       for (const observed of batch.entities) {
         checkDeadline();
         const spanId = observed.kind === "session" ? session.root_span_id : observed.entityKey.slice(0, 16);
@@ -258,7 +261,7 @@ export class CodingHookStore {
           if (observed.sourceKind === "hook" && prior.sourceKind === "hook" && terminal(prior.phase) && next.phase !== "conflict" && priorRow.observation_sha256 !== hookDigest(JSON.stringify(observed))) continue;
         }
         const retained = JSON.stringify(next); if (Buffer.byteLength(retained) > 16384) refuse("malformed", 400);
-        const projection = claudeEntityProjection(next, { runId: session.run_id, rootSpanId: session.root_span_id }, authority.row.capture_mode, retained);
+        const projection = claudeEntityProjection(next, { runId: session.run_id, rootSpanId: session.root_span_id }, authority.row.capture_mode, retained, vendor);
         const columns = Object.keys(projection), values = Object.values(projection);
         this.db.query(`INSERT INTO spans(${columns.join(",")}) VALUES(${columns.map(() => "?").join(",")}) ON CONFLICT(run_id,id) DO UPDATE SET ${columns.filter(column => !["id", "run_id"].includes(column)).map(column => `${column}=excluded.${column}`).join(",")}`).run(...values);
         this.db.query("INSERT INTO coding_hook_entities VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_key,entity_key) DO UPDATE SET phase=excluded.phase,incarnation_key=excluded.incarnation_key,source_offset=excluded.source_offset,observation_sha256=excluded.observation_sha256,projection_sha256=excluded.projection_sha256,data=excluded.data,updated_at=excluded.updated_at").run(session.source_key, next.entityKey, spanId, next.kind, next.phase, next.incarnationKey, next.sourceOffset, hookDigest(JSON.stringify(observed)), hookDigest(JSON.stringify(projection)), retained, now);

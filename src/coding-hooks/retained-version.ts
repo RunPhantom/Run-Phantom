@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { Database } from "bun:sqlite";
 import { sanitizeClaudeRetention } from "./claude";
+import { hookVendorForSource } from "./vendor";
 import { claudeEntityProjection } from "./projection";
 import { hookDigest, isHex, refuse, validateClaudeRetainedEntity, validCoverageReasons } from "./protocol";
 import { parseBoundedHookJson } from "./shared";
@@ -62,7 +63,7 @@ export function validateLegacySource(db: Database, key: string, registration: st
   const canonical = readCanonical(db,row.run_id,spanId); if (!canonical || hookDigest(JSON.stringify(canonical)) !== entry.projection_sha256) refuse("corrupt",503);
   const attrs = parseBoundedHookJson(canonical.attributes,16384);
   if (attrs.status !== "accepted" || !attrs.value || typeof attrs.value !== "object" || Array.isArray(attrs.value) || (attrs.value.currentCapturePolicy !== "full" && attrs.value.currentCapturePolicy !== "metadata")) refuse("corrupt",503);
-  const projection = claudeEntityProjection(entity,{runId:row.run_id,rootSpanId:row.root_span_id},attrs.value.currentCapturePolicy,entry.data);
+  const projection = claudeEntityProjection(entity,{runId:row.run_id,rootSpanId:row.root_span_id},attrs.value.currentCapturePolicy,entry.data,hookVendorForSource(db,registration));
   // The existing witness-bound publisher also supports this exact older projection.
   const legacyAttributes = JSON.parse(projection.attributes);
   delete legacyAttributes.captureContract; delete legacyAttributes.entityKind; delete legacyAttributes.sourceKind; delete legacyAttributes.captureModel;
