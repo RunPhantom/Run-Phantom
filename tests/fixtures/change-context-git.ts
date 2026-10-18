@@ -17,9 +17,9 @@ function archiveReceipt(destination: string | undefined, receipt: unknown): void
 }
 
 export function compileChangeGitFixture() {
-  const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-change-git-native-")));
   const git = Bun.which("git");
   if (!git) throw new Error("Native fixture Git is unavailable");
+  const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-change-git-native-")));
   const binary = path.join(directory, `fixture${process.platform === "win32" ? ".exe" : ""}`);
   try {
     const build = spawnSync(process.execPath, ["build", "--compile", "--minify", import.meta.path, "--outfile", binary],

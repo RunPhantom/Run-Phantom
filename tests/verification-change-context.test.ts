@@ -9,8 +9,8 @@ import { compileChangeGitFixture } from "./fixtures/change-context-git";
 
 let native: ReturnType<typeof compileChangeGitFixture>;
 beforeAll(() => { native = compileChangeGitFixture(); }, 30_000);
-afterEach(() => { native.assertClosed(); });
-afterAll(() => { native.close(); });
+afterEach(() => { native?.assertClosed(); });
+afterAll(() => { native?.close(); });
 
 const report: VerificationReport = { id: "00000000-0000-4000-8000-000000000001", sessionId: "fixture", runId: null, flowId: null,
   name: "Synthetic measured-handoff shape fixture", createdAt: 1, status: "fail", reason: "Retained failing outcome", evidence: [] };
