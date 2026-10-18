@@ -1,0 +1,95 @@
+{
+  "pr": 43,
+  "source": "b4e993a0a414a747e59a1b76bd7d3ca9e524d0b9",
+  "receiving_main": "31977cf0615c976c5666b0d401232c6031274f1f",
+  "tested_pr_merge": "767d9c2",
+  "runs": [
+    {
+      "id": 39086671362,
+      "platform": "Linux",
+      "event": "pull_request",
+      "backend": {
+        "passed": 706,
+        "skipped": 1,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39086668867,
+      "platform": "Linux",
+      "event": "push",
+      "backend": {
+        "passed": 706,
+        "skipped": 1,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39086671355,
+      "platform": "Windows",
+      "event": "pull_request",
+      "backend": {
+        "passed": 674,
+        "skipped": 33,
+        "failed": 0
+      },
+      "browser": {
+        "passed": 127,
+        "skipped": 10,
+        "flaky": 0
+      },
+      "compiled_browser": {
+        "passed": 3
+      }
+    },
+    {
+      "id": 39086668874,
+      "platform": "Windows",
+      "event": "push",
+      "backend": {
+        "passed": 674,
+        "skipped": 33,
+        "failed": 0
+      },
+      "browser": {
+        "passed": 127,
+        "skipped": 10,
+        "flaky": 0
+      },
+      "compiled_browser": {
+        "passed": 3
+      }
+    }
+  ],
+  "native_macos": {
+    "source": "b4e993a0a414a747e59a1b76bd7d3ca9e524d0b9",
+    "backend": {
+      "passed": 706,
+      "skipped": 1,
+      "failed": 0
+    },
+    "assertions": 3648,
+    "telemetry_browser_journeys": {
+      "passed": 3,
+      "retried": 0
+    },
+    "typecheck_lint_build": "passed"
+  },
+  "scope": "Current PR43 only. All displayed provider failures and sk-bad are synthetic fixture data; no paid provider calls. Conditional skips and remaining full-product qualification remain separate.",
+  "screenshots": [
+    {
+      "file": "llm-error-provider-reason.png",
+      "sha256": "0ad4846b9df0bf48a3fb8cc7d2becee96b6302d96507a8ac1b5d9741947e8c13",
+      "bytes": 67611,
+      "platform": "macOS arm64",
+      "profile": "Native source Chromium, exact committed candidate, no retries"
+    },
+    {
+      "file": "llm-error-status-message-tooltip.png",
+      "sha256": "de4689dc4f006d73a9163da56204a8fff5984b2ccfb5f69b38d3a72de01c5be3",
+      "bytes": 80487,
+      "platform": "macOS arm64",
+      "profile": "Native source Chromium, exact committed candidate, no retries"
+    }
+  ]
+}
