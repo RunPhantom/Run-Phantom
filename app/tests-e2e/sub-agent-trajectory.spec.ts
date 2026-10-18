@@ -75,7 +75,7 @@ test.beforeEach(async ({ runPhantom }) => {
   await seedSubAgentTrace(runPhantom.url);
 });
 
-test("Run Phantom UI: clicking a sub-agent's Trajectory bar in the parent view focuses that sub-agent", async ({ page, runPhantom }) => {
+test("Run Phantom UI: clicking a sub-agent's Trajectory bar in the parent view focuses that sub-agent", async ({ page, runPhantom }, testInfo) => {
   await page.goto(`${runPhantom.url}/runs/${TRACE_ID}`);
   const chip = page.getByRole("button", { name: /^agent\s*researcher/ });
   const details = page.getByRole("dialog", { name: "researcher sub-agent details" });
@@ -87,6 +87,7 @@ test("Run Phantom UI: clicking a sub-agent's Trajectory bar in the parent view f
     await bar(id).click();
     await expect(details, `bar ${id} opens the sub-agent details`).toBeVisible();
     await expect(chip).toBeFocused();
+    if (id === SUB_AGENT_FAILED_TOOL) await testInfo.attach("trajectory-click-researcher-dialog", { body: await page.screenshot({ animations: "disabled" }), contentType: "image/png" });
     await page.keyboard.press("Escape");
     await expect(details).toBeHidden();
   }
@@ -104,9 +105,10 @@ test("Run Phantom UI: clicking a sub-agent's Trajectory bar in the parent view f
   await details.getByRole("button", { name: /Open Sub-Agent/ }).click();
   await expect(page.getByRole("button", { name: /Show Parent Agent/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "Expand tool call read_changelog" })).toBeVisible();
+  await testInfo.attach("trajectory-open-sub-agent-drill-in", { body: await page.screenshot({ animations: "disabled" }), contentType: "image/png" });
 });
 
-test("Run Phantom UI: a sub-agent's Trajectory bar opens it from the keyboard", async ({ page, runPhantom }) => {
+test("Run Phantom UI: a sub-agent's Trajectory bar opens it from the keyboard", async ({ page, runPhantom }, testInfo) => {
   await page.goto(`${runPhantom.url}/runs/${TRACE_ID}`);
   const chip = page.getByRole("button", { name: /^agent\s*researcher/ });
   const details = page.getByRole("dialog", { name: "researcher sub-agent details" });
@@ -120,11 +122,12 @@ test("Run Phantom UI: a sub-agent's Trajectory bar opens it from the keyboard", 
 
   await page.keyboard.press("Tab");
   await expect(details.getByRole("button", { name: /Open Sub-Agent/ })).toBeFocused();
+  await testInfo.attach("trajectory-keyboard-dialog-focus", { body: await page.screenshot({ animations: "disabled" }), contentType: "image/png" });
   await page.keyboard.press("Enter");
   await expect(page.getByRole("button", { name: /Show Parent Agent/ })).toBeVisible();
 });
 
-test("Run Phantom UI: a nested sub-agent's Trajectory bar opens only the innermost sub-agent", async ({ page, runPhantom }) => {
+test("Run Phantom UI: a nested sub-agent's Trajectory bar opens only the innermost sub-agent", async ({ page, runPhantom }, testInfo) => {
   const traceId = "5ab0000000000000000000000000d006";
   const nestedId = (slot: number) => `5ab10000${slot.toString(16).padStart(8, "0")}`;
   const innerRoot = nestedId(4);
@@ -153,6 +156,7 @@ test("Run Phantom UI: a nested sub-agent's Trajectory bar opens only the innermo
   await expect(page.getByRole("dialog", { name: "reader sub-agent details" })).toBeVisible();
   await expect(innerChip).toBeFocused();
   await expect(page.getByRole("dialog")).toHaveCount(1);
+  await testInfo.attach("trajectory-nested-reader-only-dialog", { body: await page.screenshot({ animations: "disabled" }), contentType: "image/png" });
 
   await page.keyboard.press("Escape");
   await page.locator(`button.timeline-bar[data-meridian-key="${nestedId(2)}"]`).click();
