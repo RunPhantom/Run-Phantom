@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { closeDb, getDrizzleDb, upsertRun } from "../src/db";
 import { createServer } from "../src/server";
+import { removeOwnedDirectory } from "../app/tests-e2e/owned-directory";
 
 test("trace-query HTTP boundary preserves literal values and rejects private-table syntax", async () => {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "runphantom-query-http-")));
@@ -44,10 +45,13 @@ test("trace-query HTTP boundary preserves literal values and rejects private-tab
     expect((await traces.json() as { rows: unknown[] }).rows).toEqual([{ id: "fixture-run" }]);
   } finally {
     server?.closeAllConnections();
-    if (server) await new Promise<void>(resolve => server!.close(() => resolve()));
-    closeDb();
-    keys.forEach((key, index) => { if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index]; });
-    fs.rmSync(directory, { recursive: true, force: true });
+    try {
+      if (server?.listening) await new Promise<void>((resolve, reject) => server!.close(error => error ? reject(error) : resolve()));
+    } finally {
+      closeDb();
+      keys.forEach((key, index) => { if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index]; });
+    }
+    await removeOwnedDirectory(directory);
   }
 });
 
