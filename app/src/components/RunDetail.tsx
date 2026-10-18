@@ -23,7 +23,7 @@ import { SavePopover } from "./SavePopover";
 import { RotateCcw, Bookmark, Download, Pencil, ChevronDown, ArrowDown, ChevronRight, MessageCircle, SearchX } from "lucide-react";
 import { LocalAgentSetupCTA, SetupReplayModal } from "./LocalAgentSetupCTA";
 import { C } from "../utils/colors";
-import { fmt, isActive, plural, replayOutcome, runDisplayName, isoTimestamp, safeDecodeParam } from "../utils/helpers";
+import { fmt, isActive, plural, replayOutcome, runDisplayName, isoTimestamp, safeDecodeParam, spanErrorReason } from "../utils/helpers";
 import type { RunStatus } from "../utils/helpers";
 import { useQueryClient } from "@tanstack/react-query";
 import { parseReplayMetadata } from "../utils/types";
@@ -153,13 +153,7 @@ function getTokensByModel(spans: Span[]): Map<string, { inTok: number; outTok: n
 }
 
 function ErrorMessage({ span }: { span: Span }) {
-  let msg = span.output_payload;
-  if (!msg && span.attributes) {
-    try {
-      const attrs = JSON.parse(span.attributes);
-      msg = String(attrs["error.message"] ?? attrs["ai.response.error"] ?? attrs["exception.message"] ?? "");
-    } catch {}
-  }
+  const msg = spanErrorReason(span);
   if (!msg) return null;
   return (
     <div className="text-[10px] font-mono mt-1 whitespace-pre-wrap break-words" style={{ color: C.red }}>
