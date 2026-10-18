@@ -1,0 +1,98 @@
+{
+  "pr": 61,
+  "source": "6f27b2036b299cc4131b0ff708b6b41879875f38",
+  "receiving_main": "19cd47fe9e75138c42dbaa0e51dc0b08d2d698e8",
+  "receiving_branch": "main",
+  "source_tree": "9b861abc3d41dd4c2be481e82c1236c04e4fd620",
+  "scope": "Frozen evidence, unavailable evidence and two-client revision conflict regression coverage; three test files only, production and workflow unchanged against receiving main. Full mobile/theme/product acceptance remains open.",
+  "ci": {
+    "linux_push": 39101695437,
+    "linux_pr": 39101698323,
+    "windows_push": 39101695359,
+    "windows_pr": 39101698114,
+    "all4_success_attempt1": true,
+    "linux_each_backend": {
+      "pass": 732,
+      "skip": 1,
+      "fail": 0
+    },
+    "windows_each_backend": {
+      "pass": 700,
+      "skip": 33,
+      "fail": 0
+    },
+    "windows_push_source": {
+      "pass": 137,
+      "flaky": 2,
+      "skip": 10
+    },
+    "windows_pr_source": {
+      "pass": 139,
+      "flaky": 0,
+      "skip": 10,
+      "retry": 0
+    },
+    "copied_native_each": {
+      "pass": 3,
+      "skip": 0,
+      "flaky": 0,
+      "retry": 0
+    },
+    "MCP13_nativeProtected4_R07_all_once_pass_each": true,
+    "protected_browser2_firstpass_each": true
+  },
+  "retained_initial_failures": [
+    {
+      "case": "whole span ID",
+      "phase": "demo completion polling before ID assertions",
+      "error": "fetch failed / ECONNRESET",
+      "retry": "passed",
+      "cause": "unknown"
+    },
+    {
+      "case": "run IDs",
+      "phase": "page.goto load before ID assertions",
+      "error": "20000ms navigation timeout",
+      "retry": "passed",
+      "cause": "unknown"
+    }
+  ],
+  "native_macos": "One fresh37backend batch510assertions+sixfilelint; previous exact-input protected2UI/type/build qualification retained. No fresh UI run for disjoint root MCP fixture refresh.",
+  "artifact": {
+    "id": 12127221489,
+    "bytes": 3075938,
+    "sha256": "6ff08b3286cc9095e302b46d31ddbe7fcefaa4135302347ef0e3ef821f7b0964",
+    "all52_members_crc_verified": true
+  },
+  "receiving_main_ci": "Both actualmain19 push workflows green without browser retries; independently sealed.",
+  "provider_calls": 0,
+  "screenshots": [
+    {
+      "file": "protected-evidence-unknown-desktop.png",
+      "sha256": "494743c0ad07dfdf998d8462f5bb0807119965a0646b9f2ee6559a828d65b23d",
+      "bytes": 89402,
+      "platform": "native Windows x64 Chromium",
+      "run_id": 39101698114,
+      "artifact_id": 12127221489,
+      "profile": "Actual protected evaluation journey with synthetic checkout data, initial pass/retry0; root individually viewed"
+    },
+    {
+      "file": "protected-evidence-frozen-mobile.png",
+      "sha256": "e489c7f35ae1e5914d9d12e08b4af95b61464ba3981c5f8844370eb895a39fe5",
+      "bytes": 66889,
+      "platform": "native Windows x64 Chromium",
+      "run_id": 39101698114,
+      "artifact_id": 12127221489,
+      "profile": "Actual protected evaluation journey with synthetic checkout data, initial pass/retry0; root individually viewed"
+    },
+    {
+      "file": "protected-revision-conflict.png",
+      "sha256": "5bf3741cf4e88e0f36aea1c027af3ceefad4b5e1b5d227eab12cd542189172a7",
+      "bytes": 90535,
+      "platform": "native Windows x64 Chromium",
+      "run_id": 39101698114,
+      "artifact_id": 12127221489,
+      "profile": "Actual protected evaluation journey with synthetic checkout data, initial pass/retry0; root individually viewed"
+    }
+  ]
+}
