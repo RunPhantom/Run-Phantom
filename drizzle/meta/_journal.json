@@ -50,6 +50,34 @@
       "when": 1788826316549,
       "tag": "0006_lying_proemial_gods",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1791756634149,
+      "tag": "0007_evidence_storage",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1791757794360,
+      "tag": "0008_otlp_evidence",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1791766000000,
+      "tag": "0009_finding_comparisons",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1791766000001,
+      "tag": "0010_coding_hooks",
+      "breakpoints": true
     }
   ]
 }

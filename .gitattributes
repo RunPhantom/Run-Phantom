@@ -1,0 +1,4 @@
+# Early refusal must run before Bun caches a module at 4 KiB.
+src/index.ts text eol=lf
+src/evaluations/evidence-worker.ts text eol=lf
+src/evaluations/evidence-worker-environment.ts text eol=lf

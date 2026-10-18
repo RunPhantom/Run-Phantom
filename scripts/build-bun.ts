@@ -39,6 +39,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const APP_DIR = path.join(REPO_ROOT, "app");
 const APP_DIST = path.join(APP_DIR, "dist");
 const ENTRY = path.join(REPO_ROOT, "src", "index.ts");
+const QUERY_WORKER_ENTRY = path.join(REPO_ROOT, "src", "query-worker.ts");
 const OUT_DIR = path.join(REPO_ROOT, "build", "bun");
 // UI assets are tarballed and embedded into the binary at compile time
 // (via an `import ... with { type: "file" }` in src/ui-assets.ts). Path
@@ -195,11 +196,14 @@ function buildOne(target: Target, version: string): string {
     "build",
     "--compile",
     "--minify",
+    // The runtime worker URL retains .ts; Bun otherwise embeds this entry as .js.
+    "--entry-naming=[name].ts",
     `--target=${target}`,
     `--define=__RUNPHANTOM_VERSION__="${version}"`,
     "--define=__RUNPHANTOM_PACKAGED__=true",
     "--define=__RUNPHANTOM_SOURCE_ROOT__=\"/runphantom\"",
     ENTRY,
+    QUERY_WORKER_ENTRY,
     "--outfile",
     outfile,
   ]);

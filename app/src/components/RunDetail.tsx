@@ -43,7 +43,7 @@ import { AnnotationCreatePopover, TraceAnnotations } from "./TraceAnnotations";
 import { useAnnotations } from "../hooks/use-annotations";
 import type { Annotation, AnnotationKind } from "../hooks/use-annotations";
 import { useAgentForEvent } from "../hooks/use-agents";
-import { useRunPhantomEvent } from "../hooks/use-runphantom-ws";
+import { useRunPhantomConnectionStatus, useRunPhantomEvent } from "../hooks/use-runphantom-ws";
 import { getCostBreakdown, fmtCost, fmtRate } from "../utils/costs";
 import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
 import { useDialogFocus } from "../hooks/use-dialog-focus";
@@ -1431,6 +1431,9 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   const detailRequestRef = useRef(0);
   const detailAbortRef = useRef<AbortController | null>(null);
 
+  const connectionStatus = useRunPhantomConnectionStatus();
+  const previousConnectionStatus = useRef(connectionStatus);
+
   const fetchData = useCallback(async () => {
     if (initialData || isRunDeleting(runId)) return; // Keep the visible trace during deletion.
     detailAbortRef.current?.abort();
@@ -1459,6 +1462,14 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
     }
     finally { if (isCurrent()) setLoading(false); }
   }, [runId, initialData]);
+
+  useEffect(() => {
+    const recovered = previousConnectionStatus.current !== "connected" && connectionStatus === "connected";
+    previousConnectionStatus.current = connectionStatus;
+    // Spans committed before the handshake or during an outage have no replayed
+    // notification. Reload the snapshot without resetting the selected view.
+    if (recovered) void fetchData();
+  }, [connectionStatus, fetchData]);
 
   useEffect(() => {
     // The selected view owns navigation: the menu that started deletion may

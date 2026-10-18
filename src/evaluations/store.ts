@@ -1,10 +1,12 @@
+import { parseCapturedAgentDefinitions } from "../agent-definitions";
 import { randomUUID, createHash } from "node:crypto";
-import { and, asc, desc, eq, inArray, count, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, notInArray, count, sql } from "drizzle-orm";
 import { getDrizzleDb } from "../db";
 import { evaluation_datasets as datasets, evaluation_revisions as revisions, evaluation_experiments as experiments, evaluation_reviews as reviews } from "../db/schema";
 import { canonicalCaseDefinitions, EvaluationError } from "./validation";
 import { EVALUATION_LIMITS as L, type Dataset, type DatasetCase, type DatasetRevision, type Experiment, type ExperimentSummary, type Review } from "./protocol";
 import { MAX_TRIAL_ACQUISITION_BYTES, parseTrialSelection } from "./trials";
+import { activeLocalEvidenceAttachmentIds } from "./evidence-inventory";
 
 export function listDatasets(): Dataset[] {
   return getDrizzleDb().select().from(datasets).orderBy(desc(datasets.created_at)).all()
@@ -54,7 +56,14 @@ function summarize(experiment: Experiment): ExperimentSummary {
   const { results: _results, ...summary } = experiment;
   return summary;
 }
+function validateFrozenDefinitions(experiment: Experiment): void {
+  for (const result of experiment.results) if (result.snapshot.agentDefinitions !== undefined) {
+    try { parseCapturedAgentDefinitions(result.snapshot.agentDefinitions); }
+    catch { throw new EvaluationError("Frozen definition provenance is invalid", 409); }
+  }
+}
 function encoded(experiment: Experiment): string {
+  validateFrozenDefinitions(experiment);
   const data = JSON.stringify(experiment);
   if (Buffer.byteLength(data) > L.MAX_EXPERIMENT) throw new EvaluationError("Experiment exceeds the retained result size limit", 413);
   return data;
@@ -67,7 +76,8 @@ export function insertExperiment(experiment: Experiment, token: string): void {
     if (active >= L.MAX_ACTIVE_JOBS) throw new EvaluationError("Two experiments are already queued or running", 409);
     const total = tx.select({ n: count() }).from(experiments).get()?.n ?? 0;
     if (total >= L.MAX_EXPERIMENTS) {
-      const victims = tx.select({ id: experiments.id }).from(experiments).where(inArray(experiments.status, ["completed", "cancelled"]))
+      const protectedIds = [...activeLocalEvidenceAttachmentIds(getDrizzleDb().$client, "experiment")];
+      const victims = tx.select({ id: experiments.id }).from(experiments).where(and(inArray(experiments.status, ["completed", "cancelled"]), protectedIds.length ? notInArray(experiments.id, protectedIds) : undefined))
         .orderBy(asc(experiments.created_at)).limit(total - L.MAX_EXPERIMENTS + 1).all();
       if (victims.length < total - L.MAX_EXPERIMENTS + 1) throw new EvaluationError("Experiment retention is full", 409);
       tx.delete(experiments).where(inArray(experiments.id, victims.map((row) => row.id))).run();
@@ -80,7 +90,8 @@ export function insertExperiment(experiment: Experiment, token: string): void {
 export function getExperimentRecord(id: string) {
   const row = getDrizzleDb().select().from(experiments).where(eq(experiments.id, id)).get();
   if (!row) throw new EvaluationError("Experiment not found", 404);
-  return { experiment: JSON.parse(row.data) as Experiment, token: row.job_token, completedChecks: row.completed_checks };
+  const experiment = JSON.parse(row.data) as Experiment; validateFrozenDefinitions(experiment);
+  return { experiment, token: row.job_token, completedChecks: row.completed_checks };
 }
 export function getExperiment(id: string): Experiment { return getExperimentRecord(id).experiment; }
 export function readExperimentSelection(ids: string[], consume: (experiment: Experiment) => void): void {
@@ -92,7 +103,7 @@ export function readExperimentSelection(ids: string[], consume: (experiment: Exp
     if (bound.bytes > MAX_TRIAL_ACQUISITION_BYTES) throw new EvaluationError("Selected experiment evidence exceeds 8 MiB", 413);
     for (const id of ids) {
       const row = tx.select({ data: experiments.data }).from(experiments).where(eq(experiments.id, id)).get()!;
-      consume(JSON.parse(row.data) as Experiment);
+      const experiment = JSON.parse(row.data) as Experiment; validateFrozenDefinitions(experiment); consume(experiment);
     }
   });
 }

@@ -17,6 +17,7 @@ import { stopRunPhantomStartup } from "./runphantom-startup";
 import { registerReplayProject } from "./agents-config";
 import { openInBrowser } from "./open-browser";
 import { SOURCE_ENTRY } from "./source-paths";
+import { cmdCodingHooks } from "./coding-hooks/commands";
 
 const STATE_DIR = path.join(os.homedir(), ".runphantom");
 const PID_PATH = path.join(STATE_DIR, "runphantom.pid");
@@ -71,16 +72,22 @@ async function runBackend(): Promise<void> {
     console.error("[runphantom] unhandled promise rejection (continuing):",
       reason instanceof Error ? (reason.stack ?? reason.message) : reason);
   });
+  let closing = false, exitStatus = 0;
+  const shutdown = (status = 0) => {
+    exitStatus = Math.max(exitStatus, status);
+    if (closing) return;
+    closing = true;
+    try { server.close(error => { if (error) console.error("[runphantom] daemon shutdown failed:", error); process.exit(error ? 1 : exitStatus); }); }
+    catch { process.exit(1); }
+  };
   process.on("uncaughtException", (err) => {
     console.error("[runphantom] uncaught exception, shutting down:", err?.stack ?? err);
-    try { server.close(); } catch { /* already closing */ }
-    process.exit(1);
+    shutdown(1);
   });
 
-  const shutdown = () => { server.close(); process.exit(0); };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-  process.on("SIGUSR2", shutdown); // nodemon/tsx watch sends SIGUSR2
+  process.on("SIGINT", () => shutdown());
+  process.on("SIGTERM", () => shutdown());
+  process.on("SIGUSR2", () => shutdown()); // nodemon/tsx watch sends SIGUSR2
 
   // Block forever. Caller (`process.exit(await dispatchRunPhantom(...))`) would
   // otherwise kill us the moment server.listen schedules its callback.
@@ -759,6 +766,9 @@ async function dispatchRunPhantom(verb: string | undefined, rest: string[]): Pro
     case "version":
       console.log(VERSION);
       process.exit(0);
+      break;
+    case "hooks":
+      process.exit(await cmdCodingHooks(process.argv.slice(3)));
       break;
     case "setup":
       process.exit(await cmdSetup(process.argv.slice(3)));

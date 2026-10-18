@@ -9,6 +9,7 @@ import { randomUUID } from "crypto";
 import { normalizeOtelId } from "./ids";
 import { searchRuns, RunSearchError } from "./run-search";
 import { getRunComparison, RunComparisonError } from "./run-comparison";
+import { withholdAgentDefinitionCapture } from "./agent-definitions";
 import { parseOtlpRequest } from "./parse";
 import { decodeOtlpProtobuf } from "./otlp-protobuf";
 import {
@@ -16,7 +17,9 @@ import {
   insertSpan,
   getRuns,
   getDrizzleDb,
+  closeDb,
   getRunWithSpans,
+  SpanSearchLimitError,
   getRunsByConvoId,
   clearAll,
   upsertLiveEvent,
@@ -49,6 +52,13 @@ import {
   queryTracesBounded,
 } from "./db";
 import { sliceSpanPayload } from "./payload-slice";
+import { startCodingHookOwner } from "./coding-hooks/owner";
+import { CodingHookController } from "./coding-hooks/service";
+import { ClaudeHookManagement } from "./coding-hooks/management";
+import { executeHookManagement, parseHookManagementCommand } from "./coding-hooks/configuration";
+import { parseBoundedHookJson } from "./coding-hooks/shared";
+import { HookRefusal } from "./coding-hooks/protocol";
+import { capabilityOwnerKey } from "./coding-hooks/capability";
 import { exportTrace, importTrace, InvalidTraceImportError } from "./trace-export";
 import { detectSubAgents } from "./agents";
 import { detectProvider, getProviderBaseURL, getProviderHeaders, isSupportedProvider } from "./provider-options";
@@ -104,6 +114,11 @@ import verificationSdk from "./verification/browser-sdk.js" with { type: "text" 
 import { VERIFICATION_LIMITS } from "./verification/protocol";
 import { createEvaluationService } from "./evaluations/service";
 import { createEvaluationRouter } from "./evaluations/router";
+import { EvidenceImportService } from "./evaluations/evidence-import";
+import { EvidenceSupervisor } from "./evaluations/evidence-supervisor";
+import { createLocalEvidenceOwner } from "./evaluations/evidence-inventory";
+import { EvidenceError } from "./evaluations/evidence-protocol";
+import { evidenceBinaryHandler, evidenceJsonBody } from "./evaluations/evidence-router";
 import { EVALUATION_LIMITS } from "./evaluations/protocol";
 import { parseJsonEvidence, LossyJsonNumberError } from "./evaluations/json-evidence";
 import {
@@ -685,6 +700,11 @@ function demoChatHtml(): string {
 export async function createServer(port: number) {
   const app = express();
   const server = http.createServer(app);
+  const hookOwner = await startCodingHookOwner(getDrizzleDb().$client, undefined, { contextTransport: true });
+  let hookController: CodingHookController;
+  let clearingHooks = false;
+  const hookManagementWork = new Set<Promise<void>>();
+  try {
 
   const currentServerPort = (): number | null => {
     const address = server.address();
@@ -744,9 +764,15 @@ export async function createServer(port: number) {
     const msg = JSON.stringify({ event, data });
     for (const ws of clients) { if (ws.readyState === WebSocket.OPEN) ws.send(msg); }
   }
+  hookController = new CodingHookController(hookOwner.store, runId => broadcast("spans", { runIds: [runId] }));
 
   const verification = createVerificationService({ broadcast, allowedSourceIps, allowedHosts });
   const evaluations = createEvaluationService();
+  const evidenceDatabase = getDrizzleDb().$client;
+  evidenceDatabase.query("INSERT OR IGNORE INTO evaluation_evidence_scopes(scope_key,generation,active) VALUES('local:local',1,1)").run();
+  const evidenceOwner = createLocalEvidenceOwner(evidenceDatabase);
+  const evidenceImports = new EvidenceImportService(new EvidenceSupervisor());
+  evidenceImports.initialize(evidenceOwner);
   server.on("upgrade", (req, socket, head) => {
     let pathname: string;
     try { pathname = new URL(req.url ?? "", "http://localhost").pathname; } catch { socket.destroy(); return; }
@@ -977,6 +1003,28 @@ export async function createServer(port: number) {
     next();
   });
 
+  // This one identity binary transport remains behind every local-access guard.
+  app.post("/api/evaluations/evidence/imports", evidenceBinaryHandler(evidenceImports, evidenceOwner));
+  app.post(["/api/coding-hooks/claude/admission", "/api/coding-hooks/claude/publication", "/api/coding-hooks/claude/transport"], (req, res) => { void hookController.handle(req, res); });
+  app.post("/api/coding-hooks/claude/manage", express.raw({ type: "application/json", limit: 16384 }), (req, res) => {
+    if (clearingHooks || !hookOwner.store.isOwnerActive() || hookManagementWork.size >= 2) { res.status(503).json({ status: "unavailable", reason: "unavailable" }); return; }
+    const work = (async () => {
+      try {
+        if (req.headers["x-runphantom-hook-owner"] !== capabilityOwnerKey(hookOwner.store.db.filename)) throw new HookRefusal("unauthorized", 403);
+        if (!Buffer.isBuffer(req.body)) throw new HookRefusal("malformed", 400);
+        const parsed = parseBoundedHookJson(new TextDecoder("utf-8", { fatal: true }).decode(req.body), 16384);
+        if (parsed.status !== "accepted") throw new HookRefusal("malformed", 400);
+        const currentPort = currentServerPort(); if (!currentPort) throw new HookRefusal("inactive", 503);
+        const manager = new ClaudeHookManagement(hookOwner.store, `http://127.0.0.1:${currentPort}`, true);
+        if (parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value) && parsed.value.action === "activate-context-v2") {
+          // The trusted owner action is distinct from hook bodies and never promotes capture policy.
+          res.json(await manager.transitionContextV2(new TextDecoder("utf-8", { fatal: true }).decode(req.body), hookController));
+        } else res.json(await executeHookManagement(manager, parseHookManagementCommand(parsed.value)));
+      } catch (error) { res.status(error instanceof HookRefusal ? error.status : 503).json({ status: "unavailable", reason: error instanceof HookRefusal ? error.reason : "unavailable" }); }
+    })();
+    hookManagementWork.add(work); void work.finally(() => hookManagementWork.delete(work));
+  });
+
   app.use(["/api/verification", "/api/evaluations"], (req, res, next) => {
     const hasBody = req.headers["transfer-encoding"] !== undefined || Number(req.headers["content-length"] ?? 0) > 0;
     if (hasBody && !req.is("application/json")) {
@@ -985,6 +1033,7 @@ export async function createServer(port: number) {
     }
     next();
   });
+  app.use(["/api/evaluations/evidence", "/api/evaluations/findings"], evidenceJsonBody());
   app.use("/api/verification", express.json({ limit: VERIFICATION_LIMITS.MAX_FRAME_BYTES }));
   app.use("/api/evaluations", express.json({
     limit: EVALUATION_LIMITS.MAX_REQUEST,
@@ -1017,14 +1066,40 @@ export async function createServer(port: number) {
     res.status(status >= 400 && status < 600 ? status : 500).json({ error: "request failed" });
   });
 
-  server.on("close", () => {
+  let closedServices = false;
+  const closeServices = () => {
+    if (closedServices) return;
+    closedServices = true;
     askUserQuestions.closeAll();
     verification.close();
     evaluations.close();
-  });
+    for (const client of clients) client.terminate();
+    wss.close();
+  };
+  server.on("close", closeServices);
+  const nativeClose = server.close.bind(server);
+  let closePromise: Promise<void> | undefined;
+  server.close = ((callback?: (error?: Error) => void) => {
+    if (!closePromise) {
+      // Revoke current in-flight calls synchronously, before any shutdown await.
+      let revocationError: Error | undefined;
+      try { hookOwner.store.rotateOwner(); } catch (error) { revocationError = error instanceof Error ? error : new Error("Hook revocation unavailable"); } finally { hookOwner.revoke(); }
+      closePromise = Promise.all([hookController.close(), evidenceImports.shutdown(), ...hookManagementWork]).then(() => {
+      closeServices();
+      return new Promise<void>((resolve, reject) => {
+        nativeClose(error => { if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") reject(error); else resolve(); });
+        // Register close completion before terminating sockets; Bun's force-close also stops its listener.
+        server.closeAllConnections();
+      });
+      }).finally(async () => { closeDb(); await hookOwner.close(); }).then(() => { if (revocationError) throw revocationError; });
+    }
+    if (callback) void closePromise.then(() => callback(), error => callback(error));
+    else void closePromise.catch(() => {});
+    return server;
+  }) as typeof server.close;
 
   app.use("/api/verification", createVerificationRouter(verification));
-  app.use("/api/evaluations", createEvaluationRouter(evaluations));
+  app.use("/api/evaluations", createEvaluationRouter(evaluations, { service: evidenceImports, owner: evidenceOwner }));
 
   // Health check endpoint — used by SDKs to auto-detect a running debugger
   app.get("/health", (_req, res) => {
@@ -1052,6 +1127,7 @@ export async function createServer(port: number) {
       const result = replayDefaultDemoTraces({ broadcast });
       res.json({ ok: true, ...result });
     } catch (err) {
+      if (err instanceof EvidenceError) { res.status(err.status).json({ error: err.message }); return; }
       console.error("[runphantom] demo trace replay failed:", err);
       res.status(500).json({ error: (err as Error).message || "Failed to replay demo traces." });
     }
@@ -1168,6 +1244,7 @@ export async function createServer(port: number) {
             model: s.model, provider: s.provider,
             input_tokens: s.inputTokens, output_tokens: s.outputTokens,
             attributes: JSON.stringify(s.attributes),
+            otlp_evidence: JSON.stringify(s.otlpEvidence),
           });
         }
 
@@ -1419,7 +1496,7 @@ export async function createServer(port: number) {
     if (!row) { res.status(404).json({ error: "Span not found" }); return; }
     const { input_head, output_head, input_chars, output_chars, ...rest } = row;
     res.json({
-      ...rest,
+      ...withholdAgentDefinitionCapture(rest),
       input_chars,
       output_chars,
       input_preview: input_chars > 80 ? input_head.slice(0, 80) + "…" : input_head,
@@ -1487,6 +1564,7 @@ export async function createServer(port: number) {
   // through get_span_payload.
   const MAX_DETAIL_ATTR_CHARS = 2_000;
   function compactSpanForDetail(span: any): any {
+    span = withholdAgentDefinitionCapture(span);
     if (typeof span?.attributes !== "string" || span.attributes.length <= MAX_DETAIL_ATTR_CHARS) return span;
     let parsed: Record<string, unknown>;
     try {
@@ -1513,7 +1591,7 @@ export async function createServer(port: number) {
       // Fall back to saved run cache
       const cached = getCachedRun(id);
       if (cached) {
-        try { const data = JSON.parse(cached); if (data.run) { res.json(data); return; } } catch {}
+        try { const data = JSON.parse(cached); if (data.run) { res.json({ ...data, spans: Array.isArray(data.spans) ? data.spans.map(withholdAgentDefinitionCapture) : data.spans }); return; } } catch {}
       }
       if (!run) { res.status(404).json({ error: "Not found" }); return; }
     }
@@ -1600,7 +1678,7 @@ export async function createServer(port: number) {
       opts.max_matches = n;
     }
     try { res.json(searchRun(req.params.id, opts)); }
-    catch (err: any) { res.status(400).json({ error: err.message }); }
+    catch (err: any) { res.status(err instanceof SpanSearchLimitError ? err.status : 400).json({ error: err.message }); }
   });
   app.get("/api/runs/:id/events", (req, res) => {
     const opts: any = {};
@@ -1624,9 +1702,14 @@ export async function createServer(port: number) {
     res.json(tailLiveEvents(req.params.id, opts));
   });
   app.post("/api/clear", (_req, res) => {
-    evaluations.reset();
-    for (const id of verification.bridge.sessions.keys()) verification.bridge.remove(id);
-    clearAll(); broadcast("clear", {}); res.json({ ok: true });
+    hookOwner.store.rotateOwner();
+    clearingHooks = true;
+    const draining = hookController.close();
+    void Promise.all([draining, evidenceImports.clear(evidenceOwner), ...hookManagementWork]).then(() => {
+      evaluations.reset();
+      for (const id of verification.bridge.sessions.keys()) verification.bridge.remove(id);
+      clearAll(); hookController = new CodingHookController(hookOwner.store, runId => broadcast("spans", { runIds: [runId] })); clearingHooks = false; broadcast("clear", {}); res.json({ ok: true });
+    }).catch(() => res.status(500).json({ error: "Workspace clear failed" }));
   });
 
   app.get("/api/workspace/active", (_req, res) => {
@@ -2229,13 +2312,12 @@ export async function createServer(port: number) {
   });
 
   app.delete("/api/runs/:id", (req, res) => {
-    try {
+    const checks = evidenceDatabase.query("SELECT id FROM verification_reports WHERE run_id=?").all(req.params.id) as { id: string }[];
+    void evidenceImports.invalidateAttachments(evidenceOwner, [{ kind: "run", id: req.params.id }, { kind: "inspection", id: req.params.id }, ...checks.map(check => ({ kind: "check" as const, id: check.id }))]).then(() => {
       deleteRun(req.params.id);
       broadcast("spans", { runIds: [req.params.id] });
       res.json({ ok: true });
-    } catch (err) {
-      res.status(500).json({ error: String(err) });
-    }
+    }).catch(() => res.status(500).json({ error: "Run deletion failed" }));
   });
 
   app.patch("/api/runs/:id", (req, res) => {
@@ -2776,10 +2858,12 @@ export async function createServer(port: number) {
   return {
     app,
     server,
+    codingHooks: { store: hookOwner.store, get controller() { return hookController; }, management: () => new ClaudeHookManagement(hookOwner.store, server.listening && currentServerPort() ? `http://127.0.0.1:${currentServerPort()}` : null, server.listening) },
     get port() {
       return currentServerPort() ?? port;
     },
   };
+  } catch (error) { closeDb(); await hookOwner.close(); throw error; }
 }
 
 export const _serverInternal = { createReplayAbortLifecycle, extractAgentAskContinuation };

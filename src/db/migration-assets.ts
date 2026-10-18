@@ -9,6 +9,10 @@ import migration0003Path from "../../drizzle/0003_span_identity_per_run.sql" wit
 import migration0004Path from "../../drizzle/0004_spotty_thunderbolt.sql" with { type: "file" };
 import migration0005Path from "../../drizzle/0005_sweet_smasher.sql" with { type: "file" };
 import migration0006Path from "../../drizzle/0006_lying_proemial_gods.sql" with { type: "file" };
+import migration0007Path from "../../drizzle/0007_evidence_storage.sql" with { type: "file" };
+import migration0008Path from "../../drizzle/0008_otlp_evidence.sql" with { type: "file" };
+import migration0009Path from "../../drizzle/0009_finding_comparisons.sql" with { type: "file" };
+import migration0010Path from "../../drizzle/0010_coding_hooks.sql" with { type: "file" };
 
 export const embeddedMigrationJournal = {
   "version": "7",
@@ -62,6 +66,34 @@ export const embeddedMigrationJournal = {
       "when": 1788826316549,
       "tag": "0006_lying_proemial_gods",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1791756634149,
+      "tag": "0007_evidence_storage",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1791757794360,
+      "tag": "0008_otlp_evidence",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1791766000000,
+      "tag": "0009_finding_comparisons",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1791766000001,
+      "tag": "0010_coding_hooks",
+      "breakpoints": true
     }
   ]
 } as const;
@@ -94,5 +126,21 @@ export const embeddedMigrationFiles = [
   {
     relativePath: "0006_lying_proemial_gods.sql",
     sourcePath: migration0006Path,
+  },
+  {
+    relativePath: "0007_evidence_storage.sql",
+    sourcePath: migration0007Path,
+  },
+  {
+    relativePath: "0008_otlp_evidence.sql",
+    sourcePath: migration0008Path,
+  },
+  {
+    relativePath: "0009_finding_comparisons.sql",
+    sourcePath: migration0009Path,
+  },
+  {
+    relativePath: "0010_coding_hooks.sql",
+    sourcePath: migration0010Path,
   },
 ] as const;
