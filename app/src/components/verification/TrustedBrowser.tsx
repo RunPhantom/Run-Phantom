@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AccessibilityEvidence } from "./AccessibilityEvidence";
 import { useQuery } from "@tanstack/react-query";
 import { Globe, Camera, Square, Play } from "lucide-react";
@@ -15,6 +15,7 @@ export function TrustedBrowser({ runId, onReport }: { runId?: string; onReport: 
   const sessions = useQuery({ queryKey: ["trusted-browser-sessions"], queryFn: api.sessions, refetchInterval: 1000 });
   const artifacts = useQuery({ queryKey: ["trusted-browser-artifacts"], queryFn: api.artifacts });
   const epoch = useRef(0);
+  useEffect(() => () => { epoch.current++; }, []);
   const [url, setUrl] = useState(""); const [engine, setEngine] = useState<"chromium" | "firefox" | "webkit">("chromium");
   const [record, setRecord] = useState(false); const [videoConsent, setVideoConsent] = useState(false);
   const [selected, setSelected] = useState(""); const [draftScope, setDraftScope] = useState("");

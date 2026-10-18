@@ -31,6 +31,7 @@ export function SnapshotDiff({ sessionId, connected, capable, disabled = false, 
   const [name, setName] = useState(""); const [beforeId, setBeforeId] = useState(""); const [afterId, setAfterId] = useState("");
   const [result, setResult] = useState<SnapshotDiffResult | null>(null); const [busy, setBusy] = useState(""); const [notice, setNotice] = useState(""); const [error, setError] = useState("");
   const sequence = useRef(0); const running = useRef(false); const fileInput = useRef<HTMLInputElement>(null);
+  useEffect(() => () => { sequence.current++; running.current = false; }, []);
   const scope = `${sessionId ?? ""}:${connected}:${capable}:${runId ?? ""}`; const currentScope = useRef(scope); currentScope.current = scope;
   useEffect(() => { sequence.current++; running.current = false; setBusy(""); }, [scope]);
   const saved = snapshots.data ?? []; const before = saved.find(item => item.id === beforeId); const after = saved.find(item => item.id === afterId);
