@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { once } from "node:events";
+import { VERIFICATION_LIMITS } from "../src/verification/protocol";
 import { fileURLToPath } from "node:url";
 import { accepted, ENGINES, matrix, reportOutcome, summarize, privateEnvironment, runEngineSeries, type EngineIdentity } from "../scripts/qualification/browser-engines";
 const identities: EngineIdentity[] = ENGINES.map(engine => ({ engine, executable: `/installed/${engine}`, executableSha256: "a".repeat(64), nativeBinary: `/installed/${engine}`, nativeSha256: "a".repeat(64), available: true, reason: null }));
@@ -122,4 +123,43 @@ test("a terminal failed engine child fences the next admission without fabricate
     const pending = matrix("darwin-arm64", identities, outcomes, 5).filter(cell => cell.platform === "darwin-arm64" && cell.engine === "webkit");
     expect(pending.every(cell => cell.status === "BLOCKED")).toBe(true); expect(summarize(matrix("darwin-arm64", identities, outcomes, 5)).exitCode).toBe(1);
   }
+});
+
+function syntheticMarkerObservation(zero: number[], one: number[]): import("../src/verification/browser-types").BrowserObservation {
+  return { session: { id: "component-session", origin: "http://127.0.0.1:5949", runId: null, ownership: "attached", engine: "chromium", providerVersion: "component", engineVersion: "component", generation: 1, state: "ready", coverage: { network: false, console: true, dom: true, state: false, signal: false, route: true }, history: "from-selection", loss: false, pending: 0, video: "off", networkProfile: "bounded-http-v1", compatibility: { qualification: "initial-only", sameOrigin: "cookie-free", foreign: "unavailable", webSocket: "denied", redirects: "unavailable" } }, events: [...zero.map((count, index) => ({ t: index * VERIFICATION_LIMITS.POLL_MS, type: "dom", data: { selector: "#physical0", count } })), ...one.map((count, index) => ({ t: index * VERIFICATION_LIMITS.POLL_MS, type: "dom", data: { selector: "#physical1", count } }))].sort((a, b) => a.t - b.t), cursor: zero.length + one.length, complete: true, dropped: 0 };
+}
+test("temporal marker sampling accepts every consistent sample within the existing check bound", async () => {
+  const { selectedPhysicalIndex, MAX_SELECTED_MARKER_SAMPLES } = await import("../app/tests-e2e/browser-engine-qualification/selected-marker-observation");
+  const expected = { id: "component-session", generation: 1, origin: "http://127.0.0.1:5949" };
+  for (const count of [1, 3, MAX_SELECTED_MARKER_SAMPLES - 1, MAX_SELECTED_MARKER_SAMPLES]) {
+    expect(selectedPhysicalIndex(syntheticMarkerObservation(Array.from({ length: count }, () => 0), Array.from({ length: count }, () => 1)), expected)).toBe(1);
+    expect(selectedPhysicalIndex(syntheticMarkerObservation(Array.from({ length: count }, () => 1), Array.from({ length: count }, () => 0)), expected)).toBe(0);
+  }
+});
+test("missing, drifting, unavailable or ambiguous marker observations cannot choose a physical page", async () => {
+  const { selectedPhysicalIndex, MAX_SELECTED_MARKER_SAMPLES } = await import("../app/tests-e2e/browser-engine-qualification/selected-marker-observation");
+  const expected = { id: "component-session", generation: 1, origin: "http://127.0.0.1:5949" };
+  const invalid = [syntheticMarkerObservation([], []), syntheticMarkerObservation([0], []), syntheticMarkerObservation([], [1]), syntheticMarkerObservation([0, 1, 0], [1, 1, 1]), syntheticMarkerObservation([0], [2]), syntheticMarkerObservation([0], [NaN]), syntheticMarkerObservation([0], [0]), syntheticMarkerObservation([1], [1]), syntheticMarkerObservation(Array.from({ length: MAX_SELECTED_MARKER_SAMPLES + 1 }, () => 0), [1])];
+  for (const change of ["complete", "dropped", "loss", "dom", "network", "observer.error", "capture.loss", "truncated", "unexpected-selector", "wrong-id", "wrong-generation", "wrong-origin", "wrong-engine", "wrong-ownership", "wrong-history", "wrong-state", "non-numeric", "time-regression"]) {
+    const value = syntheticMarkerObservation([0, 0], [1, 1]);
+    if (change === "complete") value.complete = false;
+    if (change === "dropped") value.dropped = 1;
+    if (change === "loss") value.session.loss = true;
+    if (change === "dom") value.session.coverage.dom = false;
+    if (change === "network") value.session.coverage.network = true;
+    if (change === "observer.error" || change === "capture.loss") value.events.push({ t: 2 * VERIFICATION_LIMITS.POLL_MS, type: change, data: { reason: "component-unavailable" } });
+    if (change === "truncated") value.events[0].truncated = true;
+    if (change === "unexpected-selector") value.events.push({ t: 2 * VERIFICATION_LIMITS.POLL_MS, type: "dom", data: { selector: "#unrequested", count: 1 } });
+    if (change === "wrong-id") value.session.id = "other-session";
+    if (change === "wrong-generation") value.session.generation++;
+    if (change === "wrong-origin") value.session.origin = "http://127.0.0.1:5950";
+    if (change === "wrong-engine") value.session.engine = "firefox";
+    if (change === "wrong-ownership") value.session.ownership = "owned";
+    if (change === "wrong-history") value.session.history = "from-open";
+    if (change === "wrong-state") value.session.state = "closed";
+    if (change === "non-numeric") value.events[0].data.count = "0";
+    if (change === "time-regression") value.events[2].t = -1;
+    invalid.push(value);
+  }
+  for (const value of invalid) expect(() => selectedPhysicalIndex(value, expected)).toThrow();
 });

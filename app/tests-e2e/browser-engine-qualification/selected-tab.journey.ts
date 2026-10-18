@@ -1,4 +1,5 @@
 import { test, expect } from "./fixtures";
+import { selectedPhysicalIndex } from "./selected-marker-observation";
 import { writeFileSync } from "node:fs";
 import type { BrowserSummary } from "../../../src/verification/browser-types";
 test.use({ attached: true });
@@ -12,10 +13,13 @@ test("selected-tab: UI explicitly chooses opaque identical-URL tab and closes on
   await panel.getByRole("combobox", { name: "Attached page", exact: true }).selectOption(twins[1].pageId); await panel.getByRole("button", { name: "Select attached page", exact: true }).click();
   await expect(panel).toContainText("Selected attached page");
   const chosen = (await backend.api<BrowserSummary[]>("/api/verification/browser/sessions")).body.find(item => item.id === listing.session.id)!; expect(chosen).toMatchObject({ ownership: "attached", engine: "chromium", history: "from-selection", coverage: { network: false } }); backend.sample();
+  for (const [index, physical] of external.pages.entries()) { expect(physical.isClosed()).toBe(false); await expect(physical.locator(`#physical${index}`)).toHaveCount(1); }
   const checked = await backend.api<{ report: { status: string } }>(`/api/verification/browser/sessions/${chosen.id}/check`, { generation: chosen.generation, predicate: { kind: "anyOf", predicates: [{ kind: "element", selector: "#physical0", state: "present" }, { kind: "element", selector: "#physical1", state: "present" }] } });
   expect(checked.body.report.status).toBe("inconclusive");
-  const observed = await backend.observe(chosen.id), markers = observed.events.filter(event => event.type === "dom" && ["#physical0", "#physical1"].includes(String(event.data.selector))); expect(markers.map(event => event.data.count).sort()).toEqual([0, 1]);
-  const selectedIndex = markers.find(event => event.data.selector === "#physical1")!.data.count === 1 ? 1 : 0;
+  const observed = await backend.observe(chosen.id);
+  writeFileSync(info.outputPath("actual-selected-raw-observation.json"), JSON.stringify({ listing, chosen, checked, observed }, null, 2));
+  const selectedIndex = selectedPhysicalIndex(observed, { id: chosen.id, generation: chosen.generation, origin: backend.target });
+  const markers = observed.events.filter(event => event.type === "dom" && ["#physical0", "#physical1"].includes(String(event.data.selector)));
   await panel.getByLabel(/^Browser control target/).fill("#pay"); await panel.getByRole("button", { name: "Send input only", exact: true }).click(); await expect(panel.getByLabel("Browser input result", { exact: true })).toContainText("Dispatch: completed · Input: trusted-browser");
   await expect(external.pages[selectedIndex].locator("#paid")).toHaveCount(1); expect(await external.pages[1 - selectedIndex].locator("#paid").count()).toBe(0); expect(await external.pages[2].locator("#paid").count()).toBe(0);
   await panel.getByRole("button", { name: "Cancel and close", exact: true }).click(); await expect(panel.getByRole("status")).toContainText("Browser authority closed");
