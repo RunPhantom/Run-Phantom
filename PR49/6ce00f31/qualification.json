@@ -1,0 +1,124 @@
+{
+  "pr": 49,
+  "source": "6ce00f3101972b247b04098b63e2d46a5d93066e",
+  "receiving_main": "a359dd8cb920f9e76057bb65f9a9cf38b9e41e31",
+  "receiving_branch": "main",
+  "tested_pr_merge": "9fecbb10bf7019eb6459001e199f3c89d1a7921e",
+  "source_tree": "db20b7826b6c7dc610afe6960f3efaaf8c5c8655",
+  "scope": "Run header identifier row and replay row wrapping. Synthetic fixtures; source Chromium and existing copied-executable smoke coverage. Full product/platform/provider acceptance remains open.",
+  "native_macos": {
+    "tested_source": "c1493454477c99ee40fbbc604127eae10a06a143",
+    "target_browser_passed": 34,
+    "browser_retries": 0,
+    "app_browser_types": "passed",
+    "lint": "passed",
+    "focused_run_id_tests": "passed",
+    "build": "passed",
+    "final_five_marginal_blobs_identical": true
+  },
+  "runs": [
+    {
+      "id": 39093298208,
+      "event": "push",
+      "platform": "Linux",
+      "attempt": 1,
+      "conclusion": "success",
+      "backend": {
+        "passed": 720,
+        "skipped": 1,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39093301512,
+      "event": "pull_request",
+      "platform": "Linux",
+      "attempt": 1,
+      "conclusion": "success",
+      "backend": {
+        "passed": 720,
+        "skipped": 1,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39093298253,
+      "event": "push",
+      "platform": "Windows",
+      "attempt": 1,
+      "conclusion": "success",
+      "backend": {
+        "passed": 688,
+        "skipped": 33,
+        "failed": 0
+      },
+      "browser": {
+        "passed": 134,
+        "skipped": 10,
+        "failed": 0,
+        "flaky": 0,
+        "retry_attempts": 0
+      },
+      "target_browser": {
+        "passed": 34,
+        "failed": 0,
+        "skipped": 0,
+        "retry_attempts": 0
+      },
+      "compiled_browser": {
+        "passed": 3,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39093301531,
+      "event": "pull_request",
+      "platform": "Windows",
+      "attempt": 1,
+      "conclusion": "success",
+      "backend": {
+        "passed": 688,
+        "skipped": 33,
+        "failed": 0
+      },
+      "browser": {
+        "passed": 134,
+        "skipped": 10,
+        "failed": 0,
+        "flaky": 0,
+        "retry_attempts": 0
+      },
+      "target_browser": {
+        "passed": 34,
+        "failed": 0,
+        "skipped": 0,
+        "retry_attempts": 0
+      },
+      "compiled_browser": {
+        "passed": 3,
+        "failed": 0
+      }
+    }
+  ],
+  "duration_image_observation": "Both Windows duration screenshots show a disconnected badge at capture while header/root both read6.2s. The case does not await WebSocket readiness; actual cause at either instant is unknown. Related realtime/readiness cases passed. Originals retained privately; no persistent connection-failure or intentional offline claim.",
+  "screenshots": [
+    {
+      "file": "distinct-run-identifiers-and-complete-header.png",
+      "sha256": "50c54d61f436136468083bdcbc4e20bab2fed9588cb9efcbebc36ae2314935bb",
+      "bytes": 97676,
+      "platform": "Windows x64",
+      "run_id": 39093301531,
+      "artifact_id": 12124286454,
+      "profile": "Source Chromium PR checkout; synthetic live run header with complete identifiers and connected status."
+    },
+    {
+      "file": "replay-row-layout-1024.png",
+      "sha256": "043acf42532279283aaa3bbe128170d4d52083b8f9d1ce53f2b32a12abb91dfe",
+      "bytes": 41952,
+      "platform": "Windows x64",
+      "run_id": 39093301531,
+      "artifact_id": 12124286454,
+      "profile": "Source Chromium PR checkout; synthetic local replay at1024px. Visible HTTP503 is the deliberate unsafe-checkout refusal; list row wrapping remains under test."
+    }
+  ]
+}
