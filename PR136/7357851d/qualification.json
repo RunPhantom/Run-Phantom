@@ -1,0 +1,44 @@
+{
+  "pr": 136,
+  "source": "7357851dd98dd3d1e6a8ca552b94eb93128ec1ad",
+  "feature": "F43",
+  "state": "OPEN DRAFT; no merge authorized",
+  "scope": "Actual original uninstrumented Firefox UI case; HTTP201 ready and unsupported accessibility-adapter explanation. Product and assets unchanged from prior images.",
+  "qualification": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0,
+    "retries": 0,
+    "http_status": 201,
+    "engine": "Firefox153.0",
+    "open_response_ms": 3294.61,
+    "loss": false,
+    "pending": 0,
+    "historical_full_cohort": {
+      "passed": 51,
+      "failed": 4,
+      "skipped": 3
+    },
+    "historical_affected_cohort": {
+      "passed": 3,
+      "failed": 1
+    },
+    "single_final_head_full_cohort": false
+  },
+  "open_gates": [
+    "Three compiled opt-in cases",
+    "Installed/native platform qualification",
+    "Historical503 cause remains unestablished",
+    "This does not qualify Firefox accessibility engine support"
+  ],
+  "screenshots": [
+    {
+      "file": "firefox-audit-unavailable.png",
+      "sha256": "43012c8d4bb58940bb161375721fa696fac512314390cb692d74d74e91541414",
+      "bytes": 84666,
+      "platform": "Darwin arm64",
+      "profile": "Actual native Firefox153.0; unsupported audit adapter disabled after201/ready;1280x720"
+    }
+  ]
+}
