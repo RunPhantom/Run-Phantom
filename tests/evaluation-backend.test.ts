@@ -203,6 +203,27 @@ describe("evaluation workbench backend", () => {
     expect(recovered.error).toContain("restart"); gate.resolve(); await pause(20);
     expect(resumed.getExperiment(queued.id)).toEqual(recovered);
   });
+  test("R07 SQL progress fencing independently refuses wrong nonterminal tokens and matching terminal tokens", async () => {
+    const gate = deferredJudge(), s = service({ judge: gate.judge }); run();
+    const revision = dataset(s, [rubric]), queued = start(s, revision, "candidate", true);
+    await until(gate.calls, calls => calls === 1);
+    const record = store.getExperimentRecord(queued.id);
+    expect(record.experiment.status).toBe("running");
+    const row = () => getDrizzleDb().$client.query("SELECT status, job_token, completed_checks, data, summary, completed_at FROM evaluation_experiments WHERE id=?").get(queued.id);
+    const before = row();
+    const attempted = { ...record.experiment, status: "completed" as const, completedAt: Date.now(), error: "A stale callback must not publish" };
+    expect(store.updateExperiment(attempted, "wrong-job-token", 1)).toBe(false);
+    expect(row()).toEqual(before);
+    expect(store.updateExperiment(record.experiment, record.token, record.completedChecks)).toBe(true);
+    expect(row()).toEqual(before);
+    const cancelled = s.cancel(queued.id), terminalRow = row();
+    expect(cancelled.status).toBe("cancelled");
+    expect(store.updateExperiment(attempted, record.token, 1)).toBe(false);
+    expect(row()).toEqual(terminalRow);
+    expect(store.getExperiment(queued.id)).toEqual(cancelled);
+    gate.resolve(); await pause(20);
+    expect(row()).toEqual(terminalRow);
+  });
   test("global clear and shutdown abort calls and prevent deleted experiment resurrection", async () => {
     const gate = deferredJudge(); let aborted = false;
     const s = service({ judge: async (...args) => { args[3]?.signal?.addEventListener("abort", () => { aborted = true; }); return gate.judge(...args); } });
