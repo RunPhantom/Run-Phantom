@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { waitForElectronTerminal } from "./fixtures/electron/terminal";
+import { copyElectronBundle } from "./fixtures/electron/bundle";
 
 async function run(): Promise<number> {
   const executable = process.env.RUNPHANTOM_ELECTRON_EXECUTABLE;
@@ -21,7 +22,7 @@ async function run(): Promise<number> {
   mkdirSync(output, { recursive: true, mode: 0o700 });
   let cleanupConfirmed = true;
   try {
-    const bundle = path.join(temp, "CooperatingFixture.app"); cpSync(sourceBundle, bundle, { recursive: true, dereference: false });
+    const bundle = path.join(temp, "CooperatingFixture.app"); copyElectronBundle(sourceBundle, bundle);
     const resources = path.join(bundle, "Contents/Resources"), fixture = path.join(resources, "app");
     rmSync(path.join(resources, "default_app.asar")); mkdirSync(fixture, { mode: 0o700 });
     writeFileSync(path.join(fixture, "package.json"), JSON.stringify({ name: "runphantom-cooperating-fixture", version: "1.0.0", main: "main.cjs" }));
