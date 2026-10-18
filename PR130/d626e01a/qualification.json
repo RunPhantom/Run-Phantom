@@ -1,0 +1,27 @@
+{
+  "pr": 130,
+  "feature": "F38",
+  "source": "d626e01a18fd2b6fcbc411d41b913cabd6e18d82",
+  "tree": "b7335de04299a6e7ee90731db6a6a2b8ed3d8bdb",
+  "base": "6c2b3efabf084952134957995f88b62855fb8937",
+  "draft": true,
+  "scope": "Copied native ACP/MCP real application grading with controlled provider transport; pass/fail/inconclusive outcomes, not authenticated model output.",
+  "remaining_qualification": "See PR body; no merge or full-product/platform/paid acceptance claimed.",
+  "root_viewed_at": "2026-10-18T10:08:31.508078+00:00",
+  "screenshots": [
+    {
+      "file": "acp-actual-mcp-reports.png",
+      "sha256": "6b66376032b1055ad93d3977e19df1d1f753e0d94a912dd68e3425692100d33e",
+      "bytes": 98126,
+      "platform": "macOS arm64",
+      "profile": "Copied native ACP/MCP real application grading with controlled provider transport; pass/fail/inconclusive outcomes, not authenticated model output."
+    },
+    {
+      "file": "acp-actual-mcp-inconclusive.png",
+      "sha256": "b53ba5af65257c24f572aaf2234e05df9146765ef9b3d0e4b0812a709df1a95d",
+      "bytes": 91203,
+      "platform": "macOS arm64",
+      "profile": "Copied native ACP/MCP real application grading with controlled provider transport; pass/fail/inconclusive outcomes, not authenticated model output."
+    }
+  ]
+}
