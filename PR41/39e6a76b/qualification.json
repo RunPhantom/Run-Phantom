@@ -1,0 +1,87 @@
+{
+  "source": "39e6a76b312543a3a427d5610a78ab18cf96c2d2",
+  "receiving_main": "fdde3ad0fbea2e0d125c005daa32a1d7c279c77b",
+  "tested_pr_merge": "d80c27fb570c32571e6db9102500907c28e1dfd6",
+  "windows_report_artifact": 12120019873,
+  "screenshots": [
+    {
+      "file": "trajectory-click-researcher-dialog.png",
+      "sha256": "c66b83c16d20011d98cb3517a00bbc4643452e31c3abcaf197ce9d5128674a78",
+      "bytes": 81344
+    },
+    {
+      "file": "trajectory-open-sub-agent-drill-in.png",
+      "sha256": "561a209272ac79c90c76dd0c4b9b269ef6105eed55ba1b0ce8349190a27c4af3",
+      "bytes": 58487
+    },
+    {
+      "file": "trajectory-keyboard-dialog-focus.png",
+      "sha256": "b33e1d6f99a378c1d626ffe9cc412e1f249bc40574c8faf5438c6bacfd9ba93d",
+      "bytes": 81099
+    },
+    {
+      "file": "trajectory-nested-reader-only-dialog.png",
+      "sha256": "d95f610ecda51b02710b86fda9b42fd0d59b9a32d3f4db8f04e1e42111fca3e3",
+      "bytes": 77777
+    }
+  ],
+  "runs": [
+    {
+      "id": 39084715965,
+      "platform": "Linux",
+      "event": "pull_request",
+      "backend": {
+        "passed": 704,
+        "skipped": 1,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39084713573,
+      "platform": "Linux",
+      "event": "push",
+      "backend": {
+        "passed": 704,
+        "skipped": 1,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39084715940,
+      "platform": "Windows",
+      "event": "pull_request",
+      "backend": {
+        "passed": 672,
+        "skipped": 33,
+        "failed": 0
+      },
+      "browser": {
+        "passed": 123,
+        "skipped": 10,
+        "flaky": 0
+      },
+      "compiled_browser": {
+        "passed": 3
+      }
+    },
+    {
+      "id": 39084713553,
+      "platform": "Windows",
+      "event": "push",
+      "backend": {
+        "passed": 672,
+        "skipped": 33,
+        "failed": 0
+      },
+      "browser": {
+        "passed": 123,
+        "skipped": 10,
+        "flaky": 0
+      },
+      "compiled_browser": {
+        "passed": 3
+      }
+    }
+  ],
+  "scope": "Current PR41 qualification only. Conditional skips and remaining product/platform qualification are not represented as passes."
+}
