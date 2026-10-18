@@ -7,7 +7,6 @@
   "draft": true,
   "scope": "Exact-source component/native fixture only. Current source has no production registration or canonical activation.",
   "remaining_qualification": "Connected implementation review, product facade and canonical activation, Team isolation, copied/installed/platform qualification remain pending.",
-  "root_viewed_at": "2026-10-18T10:16:00Z",
   "screenshots": [
     {
       "file": "native-chromium-player-1440.png",
@@ -23,5 +22,7 @@
       "platform": "macOS arm64",
       "profile": "Inactive component fixture: real native masked producer to private disk SQLite to inert React player; not a production route."
     }
-  ]
+  ],
+  "root_reinspection_at": "2026-10-18T10:45:25.990309+00:00",
+  "review_timing_note": "Earlier root inspection was retained without an exact timestamp; the timestamp above records the fresh reinspection."
 }
