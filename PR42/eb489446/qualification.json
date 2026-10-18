@@ -1,0 +1,111 @@
+{
+  "pr": 42,
+  "source": "eb489446264fd8690a6bd4243ca71215f705b924",
+  "receiving_main": "4bb4069cbf5e25aecde659e1c6ed417b9d789a48",
+  "tested_pr_merge": "c65992e4a5d21cb5fd51fa27e9a7f74bdcab7817",
+  "runs": [
+    {
+      "id": 39085728767,
+      "platform": "Linux",
+      "event": "pull_request",
+      "backend": {
+        "passed": 704,
+        "skipped": 1,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39085725810,
+      "platform": "Linux",
+      "event": "push",
+      "backend": {
+        "passed": 704,
+        "skipped": 1,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39085728734,
+      "platform": "Windows",
+      "event": "pull_request",
+      "backend": {
+        "passed": 672,
+        "skipped": 33,
+        "failed": 0
+      },
+      "browser": {
+        "passed": 126,
+        "skipped": 10,
+        "flaky": 0
+      },
+      "compiled_browser": {
+        "passed": 3
+      }
+    },
+    {
+      "id": 39085725855,
+      "platform": "Windows",
+      "event": "push",
+      "backend": {
+        "passed": 672,
+        "skipped": 33,
+        "failed": 0
+      },
+      "browser": {
+        "passed": 126,
+        "skipped": 10,
+        "flaky": 0
+      },
+      "compiled_browser": {
+        "passed": 3
+      }
+    }
+  ],
+  "native_macos": {
+    "source": "eb489446264fd8690a6bd4243ca71215f705b924",
+    "backend": {
+      "passed": 704,
+      "skipped": 1,
+      "failed": 0
+    },
+    "changed_browser_journeys": {
+      "passed": 3,
+      "retried": 0
+    },
+    "typecheck_lint_build": "passed"
+  },
+  "scope": "Current PR42 only. Conditional skips and remaining product/platform qualification remain separate. Screenshots contain synthetic fixtures.",
+  "screenshots": [
+    {
+      "file": "span-detail-complete-identifier.png",
+      "sha256": "5bcf75888004250e7aed5c0a0b2a4c901a07e43aba4573d7f6ea462e6f3ac687",
+      "bytes": 98177,
+      "platform": "Windows x64",
+      "run_id": 39085725855,
+      "artifact_id": 12120687082
+    },
+    {
+      "file": "errors-tooltip-complete-message.png",
+      "sha256": "e6e4ca313c8a6e9b19a76591f93914466d7ee4d65cbb3543ad9e303c3d36f9b8",
+      "bytes": 116326,
+      "platform": "Windows x64",
+      "run_id": 39085725855,
+      "artifact_id": 12120687082
+    },
+    {
+      "file": "errors-tooltip-short-viewport-overflow.png",
+      "sha256": "0c182b8d653914658da12b7b8d59b76e2aa166bf2cc066591bb11bd63a9faa3c",
+      "bytes": 50478,
+      "platform": "Windows x64",
+      "run_id": 39085725855,
+      "artifact_id": 12120687082
+    },
+    {
+      "file": "settled-duration-matches-span-root.png",
+      "sha256": "92884eacd9db3af8cc2f0604279b9bbe99f0d58e92e259e811321f150e898486",
+      "bytes": 75516,
+      "platform": "macOS arm64",
+      "profile": "Native source Chromium, no retries; exact candidate built locally"
+    }
+  ]
+}
