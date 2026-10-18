@@ -1,3 +1,4 @@
+import { removeConfiguredClaudeHooks } from "./coding-hooks/commands";
 import { createInterface } from "node:readline/promises";
 import fs from "node:fs";
 import os from "node:os";
@@ -486,6 +487,11 @@ export async function runUninstall(opts: RunUninstallOptions = {}): Promise<RunU
     timeoutMs: opts.stopTimeoutMs ?? 5_000,
   });
   const daemonStopFailed = failures.length > 0;
+  let hookCleanupFailed = false;
+  if (!dryRun && !daemonStopFailed) {
+    try { const count = await removeConfiguredClaudeHooks(process.env.RUNPHANTOM_DB_PATH || path.join(homeDir, ".runphantom/runphantom.db")); if (count) removed.push(`revoked and removed ${count} owned Claude hook installations`); }
+    catch { hookCleanupFailed = true; failures.push("failed to revoke owned Claude hook installations; preserving installation state for retry"); }
+  }
 
   removeStartup({ ...opts, homeDir, dryRun, removed, failures });
 
@@ -503,13 +509,14 @@ export async function runUninstall(opts: RunUninstallOptions = {}): Promise<RunU
 
   removeShellPathBlocks(homeDir, { dryRun, removed, failures });
 
-  if (wipe && !daemonStopFailed) {
+  if (wipe && !daemonStopFailed && !hookCleanupFailed) {
     wipeState(homeDir, { dryRun, removed, failures });
   } else if (wipe) {
-    warnings.push("skipped local state wipe because the Run Phantom daemon could not be stopped");
+    warnings.push("skipped local state wipe because daemon or hook cleanup did not complete");
   }
 
-  removeBinary(opts.execPath ?? process.execPath, homeDir, { dryRun, removed, warnings, failures });
+  if (!hookCleanupFailed) removeBinary(opts.execPath ?? process.execPath, homeDir, { dryRun, removed, warnings, failures });
+  else warnings.push("kept the Run Phantom binary for hook cleanup retry");
 
   if (!dryRun) cleanupEmptyStateDirs(homeDir);
 

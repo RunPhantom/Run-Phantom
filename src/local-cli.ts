@@ -17,6 +17,7 @@ import { stopRunPhantomStartup } from "./runphantom-startup";
 import { registerReplayProject } from "./agents-config";
 import { openInBrowser } from "./open-browser";
 import { SOURCE_ENTRY } from "./source-paths";
+import { cmdCodingHooks } from "./coding-hooks/commands";
 
 const STATE_DIR = path.join(os.homedir(), ".runphantom");
 const PID_PATH = path.join(STATE_DIR, "runphantom.pid");
@@ -54,7 +55,7 @@ async function runBackend(): Promise<void> {
   const requestedPort = getConfiguredPort();
   const port = hasExplicitPort() ? requestedPort : await findFreePort(requestedPort);
   const bindHost = getConfiguredBindHost();
-  const { server } = await createServer(port);
+  const { server, close } = await createServer(port);
 
   server.listen(port, bindHost, () => {
     printPortFallback(requestedPort, port);
@@ -76,7 +77,7 @@ async function runBackend(): Promise<void> {
     exitStatus = Math.max(exitStatus, status);
     if (closing) return;
     closing = true;
-    try { server.close(error => { if (error) console.error("[runphantom] daemon shutdown failed:", error); process.exit(error ? 1 : exitStatus); }); }
+    try { void close().then(() => process.exit(exitStatus), error => { console.error("[runphantom] daemon shutdown failed:", error); process.exit(1); }); }
     catch { process.exit(1); }
   };
   process.on("uncaughtException", (err) => {
@@ -100,6 +101,8 @@ async function runMcp(): Promise<void> {
   // "Failed to reconnect"). Auto-start the daemon so the plugin is robust to
   // machine restarts. All progress goes to stderr — stdout is reserved for
   // JSON-RPC frames.
+  const acpGrant = process.env.RUNPHANTOM_ACP_MCP_GRANT;
+  if (acpGrant && !process.env.RUNPHANTOM_URL) throw new Error("Scoped verification MCP requires its owned daemon origin.");
   if (!process.env.RUNPHANTOM_URL) {
     try {
       const result = await ensureDaemonRunning();
@@ -118,7 +121,8 @@ async function runMcp(): Promise<void> {
   }
 
   const { runMcpServer } = await import("./mcp");
-  const handle = await runMcpServer();
+  const handle = await runMcpServer(acpGrant ? { acpGrant: { origin: process.env.RUNPHANTOM_URL!, token: acpGrant } } : {});
+  if (acpGrant) { await handle.closed; return; }
   const shutdown = async () => { await handle.close(); process.exit(0); };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
@@ -765,6 +769,9 @@ async function dispatchRunPhantom(verb: string | undefined, rest: string[]): Pro
     case "version":
       console.log(VERSION);
       process.exit(0);
+      break;
+    case "hooks":
+      process.exit(await cmdCodingHooks(process.argv.slice(3)));
       break;
     case "setup":
       process.exit(await cmdSetup(process.argv.slice(3)));

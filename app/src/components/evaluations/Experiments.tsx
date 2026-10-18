@@ -8,7 +8,7 @@ import { ResponseSpanSelect, SnapshotPreview, Verdict, measurement } from "./Sna
 import { textareaClass, ruleLabel } from "./RuleEditor";
 import { evaluationsApi, type DatasetRevision, type Experiment, type Snapshot, type Comparison, type ExperimentSummary } from "../../api/evaluations";
 import { useRuns } from "../../hooks/use-runs";
-import { runDisplayName } from "../../utils/helpers";
+import { plural, runDisplayName } from "../../utils/helpers";
 
 function evidenceValue(value: unknown): string { if (value === null || value === undefined) return "Unavailable"; if (typeof value === "string") return value === "" ? "(Empty text)" : value; return JSON.stringify(value); }
 export function StartExperiment({ revision, onStarted }: { revision: DatasetRevision; onStarted: (experiment: Experiment) => void }) {
@@ -54,7 +54,7 @@ export function ExperimentResults({ experimentId }: { experimentId: string }) {
   const orderedReviews = [...(reviews.data ?? [])].sort((a, b) => b.createdAt - a.createdAt);
   return <section aria-label="Experiment results" className="space-y-4">
     <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-base font-semibold">{data.name}</h2><div className="flex items-center gap-3"><span role="status" className="text-xs capitalize">{data.status}</span><Verdict status={data.verdict} /></div></div>
-    <p className="text-xs text-[color:var(--rp-ink-soft)]">{data.datasetName} · revision {data.datasetVersion} · {data.summary.pass} / {data.summary.total} cases passed ({measurement(data.summary.passRate * 100, "%")}). {data.summary.fail} failed; {data.summary.inconclusive} inconclusive. All assigned cases count toward the pass rate.</p>
+    <p className="text-xs text-[color:var(--rp-ink-soft)]">{data.datasetName} · revision {data.datasetVersion} · {data.summary.pass} / {plural(data.summary.total, "case")} passed ({measurement(data.summary.passRate * 100, "%")}). {data.summary.fail} failed; {data.summary.inconclusive} inconclusive. All assigned cases count toward the pass rate.</p>
     {(error || data.error) && <p role="alert" className="text-xs text-[color:var(--rp-danger)]">{error || data.error}</p>}
     {notice && <p role="status" className="text-xs">{notice}</p>}
     <div className="flex flex-wrap gap-2">

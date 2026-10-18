@@ -11,6 +11,7 @@ import { ChecksPage } from "./checks";
 import { AdminPage } from "./admin";
 import { EvidencePage } from "./evidence";
 import { PromptsPage } from "./prompts";
+import { TeamReviewQueuesPage, TeamReviewRevisionPage } from "./review-queues";
 import "./team.css";
 
 function TeamShell({ children }: { children: React.ReactNode }) {
@@ -21,12 +22,12 @@ function ProjectShell() {
   const project = useProject(); const navigate = useNavigate(); const location = useLocation(); const [open, setOpen] = useState(false);
   const projects = useTeamPages<Project>(["projects"], "/projects", {}, 30_000);
   const items = projects.data?.pages.flatMap(page => page.items) ?? [];
-  const links = [["", "Overview"], ["traces", "Traces"], ["checks", "Checks"], ["evidence", "External reports"], ["prompts", "Prompts"], ...(project.role === "admin" ? [["members", "Members"], ["keys", "Ingestion keys"], ["audit", "Audit log"]] : [])];
+  const links = [["", "Overview"], ["traces", "Traces"], ["checks", "Checks"], ["evidence", "External reports"], ["prompts", "Prompts"], ["review-queues", "Review queues"], ...(project.role === "admin" ? [["members", "Members"], ["keys", "Ingestion keys"], ["audit", "Audit log"]] : [])];
   return <div className="team-workspace"><aside className={`team-sidebar ${open ? "team-sidebar-open" : ""}`}>
     <div className="team-switcher"><label htmlFor="team-project-switcher">Project</label><Select id="team-project-switcher" value={project.id} onChange={event => { setOpen(false); navigate(projectPath(event.target.value)); }}>{!items.some(item => item.id === project.id) && <option value={project.id}>{project.name}</option>}{items.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</Select>{projects.hasNextPage && <Action onClick={() => void projects.fetchNextPage()}>More projects <ChevronDown size={14} /></Action>}</div>
     <nav aria-label="Project navigation">{links.map(([path, name]) => <NavLink key={path} end={!path} to={`${projectPath(project.id)}${path ? `/${path}` : ""}`} onClick={() => setOpen(false)}>{name}</NavLink>)}</nav><p className="team-sidebar-footer">Signed in as <strong>{project.role}</strong><br />Project access is checked on every request.</p>
   </aside><div className="team-content"><div className="team-mobile-bar"><Action aria-label={open ? "Close project navigation" : "Open project navigation"} aria-expanded={open} onClick={() => setOpen(!open)}>{open ? <X /> : <Menu />}{project.name}</Action></div><main id="team-main" tabIndex={-1} key={project.id}>
-    <Routes location={location}><Route index element={<OverviewPage />} /><Route path="traces/*" element={<TracesPage />} /><Route path="checks/*" element={<ChecksPage />} /><Route path="evidence" element={<EvidencePage />} /><Route path="prompts" element={<PromptsPage />} /><Route path="members" element={<AdminPage kind="members" />} /><Route path="keys" element={<AdminPage kind="keys" />} /><Route path="audit" element={<AdminPage kind="audit" />} /><Route path="*" element={<p className="team-page">This team page does not exist. <Link to={projectPath(project.id)}>Open project overview</Link></p>} /></Routes>
+    <Routes location={location}><Route index element={<OverviewPage />} /><Route path="traces/*" element={<TracesPage />} /><Route path="checks/*" element={<ChecksPage />} /><Route path="evidence" element={<EvidencePage />} /><Route path="prompts" element={<PromptsPage />} /><Route path="review-queues" element={<TeamReviewQueuesPage />} /><Route path="review-datasets/:datasetId/revisions/:version" element={<TeamReviewRevisionPage />} /><Route path="members" element={<AdminPage kind="members" />} /><Route path="keys" element={<AdminPage kind="keys" />} /><Route path="audit" element={<AdminPage kind="audit" />} /><Route path="*" element={<p className="team-page">This team page does not exist. <Link to={projectPath(project.id)}>Open project overview</Link></p>} /></Routes>
   </main></div></div>;
 }
 function SignedInRoutes() {
