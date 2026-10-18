@@ -7,6 +7,8 @@
  * what made a cold load feel like a hang.
  */
 import type { ClaudeSessionSummary } from "./claude-sessions";
+import type { AgentProviderId } from "./agent-chat";
+import type { OpenCodeAcpSessions } from "./acp-sessions";
 
 const CACHE_TTL_MS = 10_000;
 const WORKER_TIMEOUT_MS = 60_000;
@@ -89,9 +91,14 @@ function refresh(key: string, provider: "claude" | "codex", cwd: string): Promis
 }
 
 export async function listAgentSessions(
-  provider: "claude" | "codex",
+  provider: AgentProviderId,
   cwd: string,
+  acp?: OpenCodeAcpSessions,
 ): Promise<{ sessions: ClaudeSessionSummary[]; stale: boolean }> {
+  if (provider === "opencode") {
+    if (!acp) throw new Error("OpenCode session owner unavailable");
+    return { sessions: acp.list(cwd), stale: false };
+  }
   const key = `${provider} ${cwd}`;
   const entry = cache.get(key);
 

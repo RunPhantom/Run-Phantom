@@ -148,7 +148,12 @@ function normalizeCurrentGenAiMessages(attrs: Record<string, string | number | b
   const messages = allMessages.filter((message) => message.role !== "system");
   const outputText = Array.isArray(output) && output.some(genAiHasTextContent)
     ? output.map(genAiTextContent).filter(Boolean).join("\n\n")
-    : typeof output === "string" ? output : undefined;
+    : typeof output === "string" ? output
+    // Not a message list, but the shipped examples send `{ error }` here when the
+    // provider call fails; dropping it removed the only LLM output a failed call has.
+    : output && typeof output === "object" && !Array.isArray(output)
+      ? genAiHasTextContent(output) ? genAiTextContent(output) : outputRaw
+      : undefined;
   const systemPrompt = [normalizeSystemInstructions(system), ...allMessages.filter((message) => message.role === "system").map((message) => message.content)].filter(Boolean).join("\n\n");
 
   if (messages.length === 0 && outputText === undefined && !systemPrompt) return null;
