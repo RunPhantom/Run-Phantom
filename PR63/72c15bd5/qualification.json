@@ -1,0 +1,96 @@
+{
+  "pr": 63,
+  "source": "72c15bd5b23aeb95a995e0eac1058fd520c4298c",
+  "receiving_main": "ea253e7015867be2cdeb2d99cd043e65bd1f8146",
+  "source_tree": "0535ee4b490eccfc585f839be5243e4524a0aad4",
+  "actual_pr_checkout": "77346fcd34751e8cfce85b7ea37f25739ca77e45",
+  "scope": "Controlled nominal pricing populations, consent, exact actual received catalogue bytes and reported-cost/privacy separation",
+  "ci": {
+    "all_four_workflows": "success",
+    "linux_backend_each": {
+      "pass": 870,
+      "skip": 1,
+      "fail": 0
+    },
+    "windows_backend_each": {
+      "pass": 838,
+      "skip": 33,
+      "fail": 0
+    },
+    "windows_push_source": {
+      "pass": 152,
+      "skip": 10,
+      "flaky": 0
+    },
+    "windows_pr_source": {
+      "pass": 151,
+      "skip": 10,
+      "flaky": 1
+    },
+    "pricing_populations4_and_original8": "initial pass in both Windows events",
+    "copied_native_each": 3,
+    "retained_initial_negative": "Existing deletion-list counter expected2/actual3 before final row assertions; retry1passed; no initial trace",
+    "disposition": "HELD, source-proven stale expected-counter race under separate repair proposal; not all-clean"
+  },
+  "actual_native_catalogue_page_receipts": {
+    "count": 8,
+    "status": 200,
+    "bytes": 153,
+    "sha256": "083af553c88cef4b851491a90e40ecd27689ebb83a297e22dca9ed4293c5946e",
+    "exact_bytes": true,
+    "privacy_handler_cleanup_errors": 0
+  },
+  "limits": [
+    "FullPR held: existing deletion-counter initial expected2/actual3 thenretry pass",
+    "Mobile title/timeline truncation and launcher/body overlap remain assembled UI gaps",
+    "No full-theme/provider/platform acceptance"
+  ],
+  "provider_calls": 0,
+  "screenshots": [
+    {
+      "file": "empty.png",
+      "sha256": "4f42386cc6aad415253209c1e39e7057dc73bdd3968771bc5341d34f1fb1c6ed",
+      "bytes": 32805,
+      "platform": "Native Windows x64 GitHub Actions PR, Chromium source daemon",
+      "run_id": 39107679760,
+      "artifact_id": 12129591318,
+      "profile": "Actual72c15bd source/PR77346fcd, population/original pricing first-pass; root viewed actual image or identical full-image SHA to prior root-viewed frame"
+    },
+    {
+      "file": "all-unavailable.png",
+      "sha256": "50b2405f6b7241e9bffaf3a00e56dfbba4583f0dcb43e9ff66e5fa8a40cb5a65",
+      "bytes": 41547,
+      "platform": "Native Windows x64 GitHub Actions PR, Chromium source daemon",
+      "run_id": 39107679760,
+      "artifact_id": 12129591318,
+      "profile": "Actual72c15bd source/PR77346fcd, population/original pricing first-pass; root viewed actual image or identical full-image SHA to prior root-viewed frame"
+    },
+    {
+      "file": "free-zero.png",
+      "sha256": "c42733ef47525ba9a007bea9285f791cdf006c38f7345179fbc20940ddb7541e",
+      "bytes": 36146,
+      "platform": "Native Windows x64 GitHub Actions PR, Chromium source daemon",
+      "run_id": 39107679760,
+      "artifact_id": 12129591318,
+      "profile": "Actual72c15bd source/PR77346fcd, population/original pricing first-pass; root viewed actual image or identical full-image SHA to prior root-viewed frame"
+    },
+    {
+      "file": "mixed.png",
+      "sha256": "559e30a2cb3fc73b42a606b461a1fafbd092d7dcd7163e7004b12b96a55a63fe",
+      "bytes": 42283,
+      "platform": "Native Windows x64 GitHub Actions PR, Chromium source daemon",
+      "run_id": 39107679760,
+      "artifact_id": 12129591318,
+      "profile": "Actual72c15bd source/PR77346fcd, population/original pricing first-pass; root viewed actual image or identical full-image SHA to prior root-viewed frame"
+    },
+    {
+      "file": "desktop-disclosure.png",
+      "sha256": "a8f932aced074efe89ee745600ef9c6e7c19bcb5fa43bb2e5957e303d7760da8",
+      "bytes": 86286,
+      "platform": "Native Windows x64 GitHub Actions PR, Chromium source daemon",
+      "run_id": 39107679760,
+      "artifact_id": 12129591318,
+      "profile": "Actual72c15bd source/PR77346fcd, population/original pricing first-pass; root viewed actual image or identical full-image SHA to prior root-viewed frame"
+    }
+  ]
+}
