@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { APIRequestContext } from "@playwright/test";
+import type { APIRequestContext, CDPSession } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { agentDefinition, definitionTrace, definitionInput, definitionOutput, definitionKey } from "../../tests/fixtures/agent-definitions";
 import type { RunComparison } from "../../src/run-comparison-protocol";
@@ -82,51 +82,116 @@ test.describe("actual touch definition navigation", () => {
     await summary.tap(); await expect(record).toHaveAttribute("open", ""); expect((await summary.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     await expect(record.locator('[data-definition-hash="version"]')).toHaveText(original.agentDefinitions!.candidate!.records[0].sha256!);
     const before = await comparison.evaluate(element => element.scrollTop);
-    const gesture = await comparison.evaluate(element => {
-      const box = element.getBoundingClientRect(), x = (Math.max(0, box.left) + Math.min(innerWidth, box.right)) / 2;
-      const startY = Math.min(innerHeight, box.bottom) - 24, endY = Math.max(0, box.top) + 24;
-      const distance = Math.min(1000 / 3, startY - endY);
-      return { x, startY, distance, scrollHeight: element.scrollHeight, clientHeight: element.clientHeight,
-        startInside: element.contains(document.elementFromPoint(x, startY)), endInside: element.contains(document.elementFromPoint(x, startY - distance)) };
-    });
-    expect(gesture.scrollHeight - gesture.clientHeight).toBeGreaterThan(before); expect(gesture.distance).toBeGreaterThan(0);
-    expect(gesture.startInside).toBe(true); expect(gesture.endInside).toBe(true);
     const observation = await comparison.evaluateHandle(element => {
-      const events: Array<{ type: string; x: number; y: number; defaultPrevented: boolean; inside: boolean }> = [];
-      const types = ["touchstart", "touchmove", "touchend", "touchcancel"] as const;
-      const observe = (event: TouchEvent) => {
-        if (!element.contains(event.target as Node)) return;
-        const point = event.changedTouches[0] ?? event.touches[0];
-        if (point) events.push({ type: event.type, x: point.clientX, y: point.clientY, defaultPrevented: event.defaultPrevented,
-          inside: element.contains(document.elementFromPoint(point.clientX, point.clientY)) });
+      const source = element.querySelector<HTMLAnchorElement>('[aria-label="Open candidate definition source span in a new tab"]');
+      if (!source) throw new Error("Captured source link is missing");
+      const geometry = () => {
+        const box = element.getBoundingClientRect(), link = source.getBoundingClientRect();
+        const x = (Math.max(0, box.left) + Math.min(innerWidth, box.right)) / 2, startY = Math.min(innerHeight, box.bottom) - 24;
+        const distance = Math.min(1000 / 3, startY - Math.max(0, box.top) - 24), cx = link.x + link.width / 2, cy = link.y + link.height / 2;
+        return { x, startY, distance, scrollTop: element.scrollTop, maximum: element.scrollHeight - element.clientHeight,
+          startInside: element.contains(document.elementFromPoint(x, startY)), endInside: element.contains(document.elementFromPoint(x, startY - distance)),
+          linkUsable: link.height > 0 && cx >= Math.max(0, box.left) && cx < Math.min(innerWidth, box.right)
+            && cy >= Math.max(0, box.top) && cy < Math.min(innerHeight, box.bottom) && source.contains(document.elementFromPoint(cx, cy)) };
       };
-      for (const type of types) window.addEventListener(type, observe, { passive: true });
-      return { events, dispose: () => { for (const type of types) window.removeEventListener(type, observe); } };
+      type Input = { sequence: number; at: number; type: string; trusted: boolean; defaultPrevented: boolean; x: number | null; y: number | null;
+        inside: boolean; targetInsideAnchor: boolean; hitInsideAnchor: boolean; userActivation: { isActive: boolean; hasBeenActive: boolean } };
+      type Scroll = { sequence: number; at: number; type: string; trusted: boolean; scrollTop: number };
+      type Contact = { generation: number; armedAt: number; geometry: ReturnType<typeof geometry>; touch: Input[]; scroll: Scroll[]; releaseAcknowledgedAt: number | null };
+      const contacts: Contact[] = [], activation: Input[] = [], activationScroll: Scroll[] = [], unassignedScroll: Scroll[] = [];
+      let sequence = 0, activationArmedAt: number | null = null, activationGeometry: ReturnType<typeof geometry> | null = null;
+      const types = ["touchstart", "touchmove", "touchend", "touchcancel", "pointerdown", "pointerup", "pointercancel", "click"] as const;
+      const input = (event: Event) => {
+        const target = event.target as Node | null;
+        if (!target || !element.contains(target) || (activationArmedAt !== null && !source.contains(target))) return;
+        const point = event instanceof TouchEvent ? event.changedTouches[0] ?? event.touches[0] : event instanceof MouseEvent ? event : null;
+        const sample: Input = { sequence: ++sequence, at: performance.now(), type: event.type, trusted: event.isTrusted, defaultPrevented: event.defaultPrevented,
+          x: point?.clientX ?? null, y: point?.clientY ?? null, inside: !!point && element.contains(document.elementFromPoint(point.clientX, point.clientY)),
+          targetInsideAnchor: source.contains(target), hitInsideAnchor: !!point && source.contains(document.elementFromPoint(point.clientX, point.clientY)),
+          userActivation: { isActive: navigator.userActivation.isActive, hasBeenActive: navigator.userActivation.hasBeenActive } };
+        if (activationArmedAt !== null) activation.push(sample);
+        else if (event instanceof TouchEvent) contacts.at(-1)?.touch.push(sample);
+      };
+      const scroll = (event: Event) => {
+        if (event.target !== element) return;
+        const sample: Scroll = { sequence: ++sequence, at: performance.now(), type: event.type, trusted: event.isTrusted, scrollTop: element.scrollTop };
+        if (activationArmedAt !== null) activationScroll.push(sample);
+        else (contacts.at(-1)?.scroll ?? unassignedScroll).push(sample);
+      };
+      for (const type of types) window.addEventListener(type, input, { passive: true });
+      element.addEventListener("scroll", scroll, { passive: true }); element.addEventListener("scrollend", scroll, { passive: true });
+      return { geometry,
+        begin: () => { const contact: Contact = { generation: contacts.length + 1, armedAt: performance.now(), geometry: geometry(), touch: [], scroll: [], releaseAcknowledgedAt: null }; contacts.push(contact); return contact.geometry; },
+        released: () => { contacts.at(-1)!.releaseAcknowledgedAt = performance.now(); },
+        completed: () => {
+          const contact = contacts.at(-1), start = contact?.touch.find(event => event.type === "touchstart");
+          const terminal = contact?.touch.find(event => event.type === "touchend" || event.type === "touchcancel");
+          if (!contact || contact.releaseAcknowledgedAt === null || !start || !terminal || terminal.sequence <= start.sequence) return false;
+          // Native completion may precede CDP's release acknowledgment.
+          const update = contact.scroll.filter(event => event.type === "scroll" && event.trusted && event.sequence > start.sequence).at(-1);
+          return !!update && contact.scroll.some(event => event.type === "scrollend" && event.trusted && event.sequence > update.sequence && event.sequence > terminal.sequence);
+        },
+        current: () => ({ contact: contacts.at(-1)!, scrollTop: element.scrollTop }),
+        activate: () => { activationGeometry = geometry(); activationArmedAt = performance.now(); return activationGeometry; },
+        activation: () => ({ events: activation, scroll: activationScroll }),
+        finish: () => {
+          for (const type of types) window.removeEventListener(type, input);
+          element.removeEventListener("scroll", scroll); element.removeEventListener("scrollend", scroll);
+          return { contacts, unassignedScroll, activation: { armedAt: activationArmedAt, geometry: activationGeometry, events: activation, scroll: activationScroll } };
+        } };
     });
-    const touch = await page.context().newCDPSession(page);
+    let touch: CDPSession | undefined, failed = false;
+    const cleanupErrors: unknown[] = [];
     try {
+      touch = await page.context().newCDPSession(page);
+      let panCount = 0;
       for (let swipe = 0; swipe < 3; swipe++) {
+        const next = await observation.evaluate(value => value.geometry());
+        if (swipe > 0 && (next.linkUsable || next.scrollTop >= next.maximum)) break;
+        const gesture = await observation.evaluate(value => value.begin());
+        expect(gesture.linkUsable).toBe(false); expect(gesture.maximum).toBeGreaterThan(gesture.scrollTop);
+        expect(gesture.distance).toBeGreaterThan(0); expect(gesture.startInside).toBe(true); expect(gesture.endInside).toBe(true);
         await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: gesture.x, y: gesture.startY, id: 0 }] });
         for (let step = 1; step <= 12; step++) await touch.send("Input.dispatchTouchEvent", { type: "touchMove",
           touchPoints: [{ x: gesture.x, y: gesture.startY - gesture.distance * step / 12, id: 0 }] });
         await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await observation.evaluate(value => value.released());
+        await expect.poll(() => observation.evaluate(value => value.completed()), { message: "Current native comparison pan must complete" }).toBe(true);
+        const completed = await observation.evaluate(value => value.current()), delivered = completed.contact.touch;
+        expect(delivered.filter(event => event.type === "touchstart")).toHaveLength(1); expect(delivered.filter(event => event.type === "touchmove").length).toBeGreaterThan(0);
+        expect(delivered.filter(event => event.type !== "touchmove").map(event => event.type === "touchstart" ? "start" : "terminal")).toEqual(["start", "terminal"]);
+        expect(delivered.every(event => event.trusted && event.inside && !event.defaultPrevented)).toBe(true);
+        expect(completed.scrollTop).toBeGreaterThan(gesture.scrollTop); panCount++;
       }
-    } finally { await touch.detach(); await observation.evaluate(value => value.dispose()); }
-    const delivered = await observation.evaluate(value => value.events); await observation.dispose();
-    await testInfo.attach("actual-touch-gesture-receipt.json", { body: JSON.stringify({ beforeScroll: before, gesture, delivered }, null, 2), contentType: "application/json" });
-    expect(delivered.filter(event => event.type === "touchstart")).toHaveLength(3); expect(delivered.filter(event => event.type === "touchmove").length).toBeGreaterThan(0);
-    expect(delivered.filter(event => event.type !== "touchmove").map(event => event.type === "touchstart" ? "start" : "terminal"))
-      .toEqual(["start", "terminal", "start", "terminal", "start", "terminal"]);
-    expect(delivered.every(event => event.inside && !event.defaultPrevented)).toBe(true);
-    await expect.poll(() => comparison.evaluate(element => element.scrollTop)).toBeGreaterThan(before);
-    const link = record.getByRole("link", { name: "Open candidate definition source span in a new tab" }); await expect(link).toBeVisible();
-    const target = (await link.boundingBox())!; expect(target.height).toBeGreaterThanOrEqual(44);
-    expect(await link.evaluate(element => { const rect = element.getBoundingClientRect(); return element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)); })).toBe(true);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); await page.screenshot({ path: testInfo.outputPath("definition-touch-local-scroll.png"), fullPage: true });
-    const [detail] = await Promise.all([page.waitForEvent("popup"), link.tap()]);
-    try { await expect(detail).toHaveURL(new RegExp(`/runs/${candidate.id}/span/${candidate.spanId}$`)); await expect(detail.getByText(definitionInput, { exact: true }).first()).toBeVisible(); await expect(detail.getByText(definitionOutput, { exact: true }).first()).toBeVisible(); }
-    finally { await detail.close(); }
-    await testInfo.attach("actual-touch-receipt.json", { body: JSON.stringify({ pointer: "coarse", beforeScroll: before, afterScroll: await comparison.evaluate(element => element.scrollTop), sourceTargetHeight: target.height, originalOutputVerified: true }), contentType: "application/json" });
+      expect(panCount).toBeGreaterThanOrEqual(1); expect(panCount).toBeLessThanOrEqual(3);
+      await touch.detach(); touch = undefined;
+      expect((await observation.evaluate(value => value.geometry())).linkUsable).toBe(true);
+      await expect.poll(() => comparison.evaluate(element => element.scrollTop)).toBeGreaterThan(before);
+      const link = record.getByRole("link", { name: "Open candidate definition source span in a new tab" }); await expect(link).toBeVisible();
+      const target = (await link.boundingBox())!; expect(target.height).toBeGreaterThanOrEqual(44);
+      expect(await link.evaluate(element => { const rect = element.getBoundingClientRect(); return element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)); })).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); await page.screenshot({ path: testInfo.outputPath("definition-touch-local-scroll.png"), fullPage: true });
+      expect(await observation.evaluate(value => value.completed())).toBe(true);
+      expect((await observation.evaluate(value => value.activate())).linkUsable).toBe(true);
+      const [detail] = await Promise.all([page.waitForEvent("popup"), link.tap()]);
+      try { await expect(detail).toHaveURL(new RegExp(`/runs/${candidate.id}/span/${candidate.spanId}$`)); await expect(detail.getByText(definitionInput, { exact: true }).first()).toBeVisible(); await expect(detail.getByText(definitionOutput, { exact: true }).first()).toBeVisible(); }
+      finally { await detail.close(); }
+      const activation = await observation.evaluate(value => value.activation()), clicks = activation.events.filter(event => event.type === "click");
+      expect(clicks).toHaveLength(1); expect(clicks[0]).toMatchObject({ trusted: true, defaultPrevented: false, targetInsideAnchor: true, hitInsideAnchor: true });
+      expect(activation.scroll.filter(event => event.type === "scroll")).toHaveLength(0);
+      await testInfo.attach("actual-touch-receipt.json", { body: JSON.stringify({ pointer: "coarse", beforeScroll: before, afterScroll: await comparison.evaluate(element => element.scrollTop), sourceTargetHeight: target.height, originalOutputVerified: true }), contentType: "application/json" });
+    } catch (error) { failed = true; throw error; }
+    finally {
+      try { const receipt = await observation.evaluate(value => value.finish());
+        await testInfo.attach("actual-touch-gesture-receipt.json", { body: JSON.stringify({ beforeScroll: before, ...receipt }, null, 2), contentType: "application/json" });
+      } catch (error) { cleanupErrors.push(error); }
+      try { await touch?.detach(); } catch (error) { cleanupErrors.push(error); }
+      try { await observation.dispose(); } catch (error) { cleanupErrors.push(error); }
+      if (cleanupErrors.length) {
+        await testInfo.attach("actual-touch-cleanup-errors.json", { body: JSON.stringify(cleanupErrors.map(String)), contentType: "application/json" }).catch(() => undefined);
+      }
+    }
+    if (cleanupErrors.length && !failed) throw cleanupErrors[0];
   });
 });
 
