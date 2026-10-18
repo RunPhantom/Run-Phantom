@@ -22,6 +22,7 @@ export function createBrowserRouter(automation: BrowserAutomation, controlPort: 
   }));
   router.post("/sessions/:id/action", route(async (req, res) => res.json(await automation.act(req.params.id, req.body))));
   router.post("/sessions/:id/check", route(async (req, res) => res.json(await automation.check(req.params.id, req.body))));
+  router.post("/sessions/:id/audit", route(async (req, res) => res.json(await automation.audit(req.params.id, req.body))));
   router.post("/sessions/:id/capture", route(async (req, res) => res.status(201).json(await automation.capture(req.params.id, req.body))));
   for (const operation of ["close", "cancel"]) router.post(`/sessions/:id/${operation}`, route(async (req, res) => {
     const body = browserObject(req.body, ["generation"]); res.json(await automation.closeSession(req.params.id, body.generation));

@@ -1,3 +1,6 @@
+import type { CursorHookCaptureView } from "../../../src/spans/adapters/cursor-hook";
+import type { ClaudeHookCaptureView } from "../../../src/spans/adapters/claude-hook";
+
 export interface Run {
   id: string;
   name: string | null;
@@ -65,6 +68,7 @@ export interface NormalizedMessage {
 }
 
 export interface NormalizedLLMSpan {
+  capture?: ClaudeHookCaptureView | CursorHookCaptureView;
   kind: "llm";
   messages: NormalizedMessage[];
   userMessage: string;
@@ -74,6 +78,7 @@ export interface NormalizedLLMSpan {
 }
 
 export interface NormalizedToolSpan {
+  capture?: ClaudeHookCaptureView | CursorHookCaptureView;
   kind: "tool";
   name: string;
   args: unknown;
@@ -82,10 +87,12 @@ export interface NormalizedToolSpan {
 }
 
 export interface NormalizedOtherSpan {
+  capture?: ClaudeHookCaptureView | CursorHookCaptureView;
   kind: "other";
 }
 
-export type NormalizedSpan = NormalizedLLMSpan | NormalizedToolSpan | NormalizedOtherSpan;
+import type { CaptureVisibilityV1, RetrievalCapture, EmbeddingCapture } from "../../../src/spans/adapters/capture-visibility-types";
+export type NormalizedSpan = RetrievalCapture | EmbeddingCapture | NormalizedLLMSpan | NormalizedToolSpan | NormalizedOtherSpan;
 
 export interface Span {
   id: string;
@@ -111,6 +118,7 @@ export interface Span {
    * consumers should treat absence the same as `{ kind: "other" }`.
    */
   normalized?: NormalizedSpan;
+  captureVisibility?: CaptureVisibilityV1;
 }
 
 export function getNormalizedTool(span: Span): NormalizedToolSpan | null {

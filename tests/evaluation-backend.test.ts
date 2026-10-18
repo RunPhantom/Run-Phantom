@@ -12,6 +12,8 @@ import { loadSnapshot } from "../src/evaluations/loader";
 import * as store from "../src/evaluations/store";
 import { EVALUATION_LIMITS as L, type Experiment, type Rule, type RuleResult } from "../src/evaluations/protocol";
 import { evaluationsApi } from "../app/src/api/evaluations";
+import { captureOtlpEvidence } from "../src/spans/otlp-evidence";
+import { agentDefinition, definitionKey } from "./fixtures/agent-definitions";
 
 let directory: string, oldDb: string | undefined;
 const services: EvaluationService[] = [];
@@ -58,6 +60,16 @@ function deferredJudge() {
 }
 
 describe("evaluation workbench backend", () => {
+  test("frozen definition metadata is validated on durable reads and selected report acquisition without touching legacy verdicts", async () => {
+    const s = service(); run(); const raw = JSON.stringify(agentDefinition()), attributes = [{ key: definitionKey, value: { stringValue: raw } }];
+    getDrizzleDb().$client.query("UPDATE spans SET attributes=?,otlp_evidence=? WHERE run_id='candidate'").run(JSON.stringify({ [definitionKey]: raw }), JSON.stringify(captureOtlpEvidence({ attributes }, {}, {})));
+    const revision = dataset(s), done = await terminal(s, start(s, revision).id), other = await terminal(s, start(s, revision).id); expect(done.verdict).toBe("pass");
+    expect(store.getExperiment(done.id).results[0].snapshot.agentDefinitions?.records[0].complete).toBe(true);
+    const counterfeit = structuredClone(done) as any; counterfeit.results[0].snapshot.agentDefinitions.records[0].rawPrompt = "private unvalidated extension";
+    getDrizzleDb().$client.query("UPDATE evaluation_experiments SET data=? WHERE id=?").run(JSON.stringify(counterfeit), done.id);
+    expect(() => store.getExperimentRecord(done.id)).toThrow("Frozen definition provenance is invalid");
+    let consumed = false; expect(() => store.readExperimentSelection([done.id, other.id], () => { consumed = true; })).toThrow("Frozen definition provenance is invalid"); expect(consumed).toBe(false);
+  });
   test("dataset OCC freezes source evidence and retains revision hashes after edits and source deletion", () => {
     const s = service(); run("source");
     const first = s.createDataset({ name: "Dataset" });
@@ -270,6 +282,11 @@ describe("evaluation workbench backend", () => {
       for (let i = 0; i < 530; i++) query.run(`bytes-${i}`);
     })();
     expect(() => loadSnapshot("bytes")).toThrow("acquisition limit");
+    run("receipt-bytes"); db.transaction(() => {
+      const query = db.query("INSERT INTO spans(run_id,id,name,otlp_evidence) VALUES('receipt-bytes',?,'span',CAST(zeroblob(64000) AS TEXT))");
+      for (let i = 0; i < 530; i++) query.run(`receipt-${i}`);
+    })();
+    expect(() => loadSnapshot("receipt-bytes")).toThrow("acquisition limit");
     expect(() => loadSnapshot("absent")).toThrow("Run not found");
     expect(() => loadSnapshot("large", "other-run-span")).toThrow("exact run");
   });

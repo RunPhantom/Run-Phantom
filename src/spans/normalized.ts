@@ -1,3 +1,6 @@
+import type { CursorHookCaptureView } from "./adapters/cursor-hook";
+import type { ClaudeHookCaptureView } from "./adapters/claude-hook";
+
 /**
  * Canonical, SDK-agnostic view of a parsed span.
  *
@@ -38,6 +41,7 @@ export interface NormalizedMessage {
  * still has these defaults — the consumer just sees an empty conversation.
  */
 export interface NormalizedLLMSpan {
+  capture?: ClaudeHookCaptureView | CursorHookCaptureView;
   kind: "llm";
   /** Always an array. Empty if extraction failed or no messages were present. */
   messages: NormalizedMessage[];
@@ -58,6 +62,7 @@ export interface NormalizedLLMSpan {
 
 /** Normalized view of a tool-call span. Args/result are pre-parsed (or raw if not JSON). */
 export interface NormalizedToolSpan {
+  capture?: ClaudeHookCaptureView | CursorHookCaptureView;
   kind: "tool";
   name: string;
   args: unknown;
@@ -67,10 +72,13 @@ export interface NormalizedToolSpan {
 
 /** Span we couldn't normalize (e.g. internal/instrumentation spans). */
 export interface NormalizedOtherSpan {
+  capture?: ClaudeHookCaptureView | CursorHookCaptureView;
   kind: "other";
 }
 
-export type NormalizedSpan = NormalizedLLMSpan | NormalizedToolSpan | NormalizedOtherSpan;
+import type { RetrievalCapture, EmbeddingCapture } from "./adapters/capture-visibility-types";
+
+export type NormalizedSpan = RetrievalCapture | EmbeddingCapture | NormalizedLLMSpan | NormalizedToolSpan | NormalizedOtherSpan;
 
 export function emptyNormalized(): NormalizedOtherSpan {
   return { kind: "other" };

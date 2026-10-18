@@ -8,6 +8,7 @@ import { relativeTargetKey, VERIFICATION_LIMITS as L, type Coverage, type Predic
 import { selectPath } from "./state-select";
 import { isSensitiveKey } from "./redaction";
 import { sanitizeWithReport } from "./serialization";
+import { evaluatePerformancePredicate, type PerformanceSnapshot } from "./performance";
 import {
   baselineCursor, captureBaselineReading, captureBaselineScope, isCapturedAttribution, sameBaselineScope,
   type BaselineReading, type BaselineScope, type CausalAttribution, type OperationReading,
@@ -66,6 +67,7 @@ export function boundEvidence(events: RuntimeEvent[]): RuntimeEvent[] {
 }
 
 export interface EvaluationContext extends PredicateContext {
+  performance?: { snapshot: PerformanceSnapshot; fresh: boolean };
   relative?: ReadonlyMap<string, { scope: BaselineScope; input: CausalPredicateContext }>;
 }
 
@@ -73,6 +75,7 @@ export function evaluatePredicate(predicate: Predicate, context: EvaluationConte
   const verdict = (status: Verdict["status"], reason: string, evidence: RuntimeEvent[] = []): Verdict =>
     ({ status, reason: reason.slice(0, L.MAX_REASON_LENGTH), evidence: boundEvidence(evidence) });
   const unknown = (reason: string, evidence: RuntimeEvent[] = []) => verdict("inconclusive", reason, evidence);
+  if (predicate.kind === "performance") return evaluatePerformancePredicate(predicate, context.performance?.snapshot, context.performance?.fresh === true);
 
   if (predicate.kind === "relative") {
     const captured = context.relative?.get(relativeTargetKey(predicate.target));
