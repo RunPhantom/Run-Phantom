@@ -87,7 +87,7 @@ for (const family of ["OpenInference JSON", "GenAI gzipped protobuf"]) {
   });
 }
 
-test("failed LLM calls show their provider reason in the LLM Error banner and the errors tooltip", async ({ page, request, runPhantom }) => {
+test("failed LLM calls show their provider reason in the LLM Error banner and the errors tooltip", async ({ page, request, runPhantom }, testInfo) => {
   const traceId = "f01234567890abcdef1234567890abc033";
   const reason = "401 Incorrect API key provided: sk-bad.";
   const retryReason = "429 Rate limit reached for gpt-4o-mini.";
@@ -113,10 +113,13 @@ test("failed LLM calls show their provider reason in the LLM Error banner and th
   const banner = page.getByLabel("LLM error. Focus or hover for details.").first();
   await expect(banner).toContainText("LLM Error");
   await expect(banner).toContainText("401 Incorrect API key");
+  await banner.focus();
+  await page.screenshot({ path: testInfo.outputPath("llm-error-provider-reason.png") });
 
   const errors = page.getByLabel(/run errors?\. Focus for details\./);
   await errors.focus();
   await expect(errors.getByText("openai.chat.completions")).toBeVisible();
   await expect(errors.getByText("openai.chat.retry")).toBeVisible();
   await expect(errors.getByText(retryReason)).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("llm-error-status-message-tooltip.png") });
 });
