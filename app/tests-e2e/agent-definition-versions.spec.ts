@@ -100,9 +100,41 @@ test.describe("actual touch definition navigation", () => {
       type Scroll = { sequence: number; at: number; type: string; trusted: boolean; scrollTop: number };
       type Frame = { generation: number; at: number; phase: "hold" | "quiet"; scrollTop: number; scrollSequence: number; moveSequence: number };
       type Contact = { generation: number; armedAt: number; geometry: ReturnType<typeof geometry>; touch: Input[]; scroll: Scroll[];
-        movesAcknowledgedAt: number | null; holdOrigin: number | null; hold: { startedAt: number; completedAt: number; moveSequence: number } | null;
+        endpoint: { x: number; y: number; tolerance: number }; movesAcknowledgedAt: number | null; movesGeneration: number | null;
+        holdOrigin: number | null; hold: { startedAt: number; completedAt: number; moveSequence: number } | null;
         releasePreparedAt: number | null; releaseAcknowledgedAt: number | null; releaseGeneration: number | null;
         frames: Frame[]; quiet: Frame[]; failure: string | null };
+      function contactOpen(contact: Contact | undefined): boolean {
+        return !!contact && !contact.touch.some(event => ["touchend", "touchcancel"].includes(event.type));
+      }
+      function endpointOrigin(contact: Contact | undefined, generation: number): number | null {
+        if (!contact || !Number.isFinite(contact.armedAt) || !Number.isInteger(generation) || generation < 1 || contact.generation !== generation
+          || contact.movesGeneration !== generation || contact.movesAcknowledgedAt === null || !Number.isFinite(contact.movesAcknowledgedAt)
+          || contact.movesAcknowledgedAt < contact.armedAt) return null;
+        const geometry = contact.geometry, endpoint = contact.endpoint, start = contact.touch[0];
+        const move = contact.touch.filter(event => event.type === "touchmove").at(-1);
+        if (!endpoint || !Number.isFinite(geometry.x) || !Number.isFinite(geometry.startY) || !Number.isFinite(geometry.distance) || geometry.distance <= 0
+          || endpoint.x !== geometry.x || endpoint.y !== geometry.startY - geometry.distance || !Number.isFinite(endpoint.y)
+          || !Number.isFinite(endpoint.tolerance) || endpoint.tolerance <= 0 || endpoint.tolerance > Math.min(0.25, geometry.distance / 48)
+          || endpoint.tolerance >= geometry.distance / 12 || !start || start.type !== "touchstart" || start.at < contact.armedAt || !move
+          || contact.touch.some((event, index) => !event.trusted || event.defaultPrevented || !event.inside || !Number.isFinite(event.at)
+            || !Number.isFinite(event.sequence) || (index > 0 && (event.sequence <= contact.touch[index - 1].sequence || event.at < contact.touch[index - 1].at
+              || (event.type !== "touchmove" && !(index === contact.touch.length - 1 && ["touchend", "touchcancel"].includes(event.type))))))
+          || move.x === null || move.y === null || !Number.isFinite(move.x) || !Number.isFinite(move.y)
+          || Math.abs(move.x - endpoint.x) > endpoint.tolerance || Math.abs(move.y - endpoint.y) > endpoint.tolerance) return null;
+        return Math.max(contact.movesAcknowledgedAt, move.at);
+      }
+      function stationaryHoldReady(contact: Contact | undefined, generation: number): boolean {
+        const origin = endpointOrigin(contact, generation), hold = contact?.hold;
+        if (!contact || origin === null || !hold) return false;
+        const move = contact.touch.filter(event => event.type === "touchmove").at(-1)!, terminal = contact.touch.at(-1)!;
+        return Number.isFinite(hold.startedAt) && Number.isFinite(hold.completedAt) && hold.startedAt === origin && hold.startedAt === contact.holdOrigin
+          && hold.completedAt - hold.startedAt >= 100 && hold.moveSequence === move.sequence
+          && (contactOpen(contact) || (contact.releasePreparedAt !== null && Number.isFinite(contact.releasePreparedAt)
+            && terminal.at >= hold.completedAt && terminal.at >= contact.releasePreparedAt))
+          && contact.frames.some(frame => frame.phase === "hold" && frame.generation === generation && frame.at === hold.completedAt
+            && frame.moveSequence === hold.moveSequence);
+      }
       function panReadiness(contact: Contact | undefined, generation: number, liveScrollTop: number | null): string[] {
         if (!contact) return ["contact"];
         const missing: string[] = [], start = contact.touch[0], terminal = contact.touch.at(-1), moves = contact.touch.slice(1, -1);
@@ -118,13 +150,9 @@ test.describe("actual touch definition navigation", () => {
         if (!contact.touch.every(event => event.inside)) missing.push("inside-contact");
         if (!start || !contact.scroll.some(event => event.type === "scroll" && event.trusted && event.sequence > start.sequence)) missing.push("trusted-scroll");
         if (liveScrollTop === null || !Number.isFinite(liveScrollTop) || !Number.isFinite(contact.geometry.scrollTop) || !(liveScrollTop > contact.geometry.scrollTop)) missing.push("offset-progress");
-        const hold = contact.hold;
-        if (!hold || contact.movesAcknowledgedAt === null || !Number.isFinite(contact.movesAcknowledgedAt) || !lastMove
-          || !Number.isFinite(hold.startedAt) || !Number.isFinite(hold.completedAt) || hold.startedAt !== contact.holdOrigin || hold.startedAt < contact.movesAcknowledgedAt
-          || hold.startedAt < lastMove.at || hold.completedAt - hold.startedAt < 100 || hold.moveSequence !== lastMove.sequence
-          || contact.releasePreparedAt === null || contact.releasePreparedAt < hold.completedAt
-          || !contact.frames.some(frame => frame.phase === "hold" && frame.generation === generation && frame.at === hold.completedAt
-            && frame.moveSequence === hold.moveSequence)) missing.push("stationary-hold");
+        if (endpointOrigin(contact, generation) === null) missing.push("final-endpoint");
+        if (!stationaryHoldReady(contact, generation) || contact.releasePreparedAt === null
+          || contact.releasePreparedAt < contact.hold!.completedAt) missing.push("stationary-hold");
         if (contact.releaseAcknowledgedAt === null || !Number.isFinite(contact.releaseAcknowledgedAt) || contact.releaseGeneration !== generation
           || contact.releasePreparedAt === null || !Number.isFinite(contact.releasePreparedAt)
           || contact.releaseAcknowledgedAt < contact.releasePreparedAt) missing.push("release-acknowledgment");
@@ -164,11 +192,13 @@ test.describe("actual touch definition navigation", () => {
         const contact = contacts.at(-1);
         if (!contact || contact.generation !== pending.generation) { fail("Stale native contact frame"); return; }
         if (performance.now() - contact.armedAt >= 5000) { fail("Current native comparison pan exceeded its completion budget"); return; }
+        if (pending.phase === "hold" && !contactOpen(contact)) { fail("Native touch terminal arrived before stationary release preparation"); return; }
         const frame: Frame = { generation: contact.generation, at: performance.now(), phase: pending.phase, scrollTop: element.scrollTop,
           scrollSequence: contact.scroll.filter(event => event.type === "scroll").at(-1)?.sequence ?? 0,
           moveSequence: contact.touch.filter(event => event.type === "touchmove").at(-1)?.sequence ?? 0 };
         contact.frames.push(frame);
         if (pending.phase === "hold") {
+          contact.holdOrigin = endpointOrigin(contact, pending.generation);
           if (contact.holdOrigin !== null && frame.at - contact.holdOrigin >= 100) {
             contact.hold = { startedAt: contact.holdOrigin, completedAt: frame.at, moveSequence: frame.moveSequence }; settle(); return;
           }
@@ -208,8 +238,8 @@ test.describe("actual touch definition navigation", () => {
           if (contact && event.type === "touchmove") {
             contact.hold = null; contact.quiet = [];
             if (contact.releasePreparedAt !== null) fail("Native touchmove invalidated the prepared stationary release");
-            else if (contact.movesAcknowledgedAt !== null) contact.holdOrigin = sample.at;
-          }
+            else contact.holdOrigin = endpointOrigin(contact, contact.generation);
+          } else if (contact && !contactOpen(contact) && contact.releasePreparedAt === null) fail("Native touch terminal arrived before stationary release preparation");
         }
       };
       const scroll = (event: Event) => {
@@ -226,8 +256,10 @@ test.describe("actual touch definition navigation", () => {
       return { geometry,
         begin: () => {
           if (disposed || waiter || (contacts.length > 0 && panReadiness(contacts.at(-1), contacts.length, element.scrollTop).length > 0)) throw new Error("Previous native pan is not ready");
-          const contact: Contact = { generation: contacts.length + 1, armedAt: performance.now(), geometry: geometry(), touch: [], scroll: [],
-            movesAcknowledgedAt: null, holdOrigin: null, hold: null, releasePreparedAt: null, releaseAcknowledgedAt: null, releaseGeneration: null,
+          const initial = geometry();
+          const contact: Contact = { generation: contacts.length + 1, armedAt: performance.now(), geometry: initial, touch: [], scroll: [],
+            endpoint: { x: initial.x, y: initial.startY - initial.distance, tolerance: Math.min(0.25, initial.distance / 48) },
+            movesAcknowledgedAt: null, movesGeneration: null, holdOrigin: null, hold: null, releasePreparedAt: null, releaseAcknowledgedAt: null, releaseGeneration: null,
             frames: [], quiet: [], failure: null };
           contacts.push(contact);
           // One existing 5s completion budget covers motion, stationary contact and observed quietness.
@@ -239,12 +271,13 @@ test.describe("actual touch definition navigation", () => {
         moved: (generation: number) => {
           const contact = current(generation);
           if (contact.movesAcknowledgedAt !== null) throw new Error("Duplicate native movement acknowledgment");
-          contact.movesAcknowledgedAt = performance.now(); contact.holdOrigin = contact.movesAcknowledgedAt;
+          contact.movesAcknowledgedAt = performance.now(); contact.movesGeneration = generation;
+          contact.holdOrigin = endpointOrigin(contact, generation);
         },
         stationary: (generation: number) => waitFor(generation, "hold"),
         prepareRelease: (generation: number) => {
-          const contact = current(generation), move = contact.touch.filter(event => event.type === "touchmove").at(-1);
-          if (!contact.hold || !move || contact.hold.moveSequence !== move.sequence || contact.releasePreparedAt !== null) throw new Error("Native stationary hold lacks actual movement or was invalidated");
+          const contact = current(generation);
+          if (!contactOpen(contact) || !stationaryHoldReady(contact, generation) || contact.releasePreparedAt !== null) throw new Error("Native stationary hold lacks actual movement or was invalidated");
           contact.releasePreparedAt = performance.now();
         },
         released: (generation: number) => {
