@@ -3,54 +3,66 @@
   "source": "a68801252b5834c17f464f88f000516346ec081d",
   "receiving_main": "ea253e7015867be2cdeb2d99cd043e65bd1f8146",
   "source_tree": "99cdf6b7066f9959f99fcb66a9623802ba58a270",
-  "scope": "Live detail request ownership, persisted native event IDs, historical-cache separation and monotonic failed-delete display",
-  "native_macos": {
-    "backend": {
+  "actual_pr_checkout": "54f3230d3e3d9fb9545ec56d904b6661e221a294",
+  "scope": "Live detail ownership/native IDs/cache-domain separation; screenshots are generic rendered current-source Windows detail/output",
+  "ci": {
+    "all_four_workflows": "success",
+    "linux_backend_each": {
       "pass": 743,
       "skip": 1,
-      "fail": 0,
-      "assertions": 4043
+      "fail": 0
     },
-    "types": "root/app/browser pass",
-    "lint": "full pass",
-    "build": "full pass",
-    "source_browser": {
-      "collected": 170,
+    "windows_backend_each": {
+      "pass": 711,
+      "skip": 33,
+      "fail": 0
+    },
+    "windows_push_source": {
       "pass": 160,
       "skip": 10,
-      "fail": 0,
-      "flaky": 0,
-      "retry": 0,
-      "not_run": 0
+      "flaky": 0
     },
-    "skips": "3 compiled-daemon and7 live-provider; no provider calls",
-    "strict_audit_pass": 18,
-    "focused_pass": 20,
-    "all_owned_groups_absent_before_lease_release": true
+    "windows_pr_source": {
+      "pass": 159,
+      "skip": 10,
+      "flaky": 1
+    },
+    "copied_native_each": 3,
+    "new20_initial": "push20/20; PR19/20 then1retry-pass",
+    "retained_failure": "route.fetch ECONNREFUSED ::1 plus browserContext disposal; exact causal timeline unknown; no initial trace/screenshot retained",
+    "disposition": "HELD; fixture bind127/returnedlocalhost mismatch under repair, no merge waiver"
   },
-  "ci": "Fresh exact-head Linux/Windows/compile/copied checks pending at initial screenshot publication",
-  "local_report_sha256": "bef0317b72f736c9d12dc216aa5f4ad9ff4c6b841e6b7b7ed74617007a998d3d",
-  "final_independent_review_seal": "98a31e04ea07d627269d7fcb57a1296dd128477ff473ec7e2d0c048c82b1b29a",
-  "provider_calls": 0,
+  "artifact": {
+    "id": 12128979126,
+    "bytes": 4656515,
+    "sha256": "65630c1d5b04e2291e61f8513bd8e8fa476db87b69185dfcac6db2c6a1304110",
+    "all76_outer_CRC": true,
+    "both_nested_and_both_embedded_CRC": true
+  },
   "limits": [
-    "Generic connected run detail and synthetic output frames; no static image claims held-read/cache-domain/temporal proof",
-    "Legacy/partial peers best effort; legitimate retired requests may abort; zero-span normalization unchanged",
-    "Pre-theme current-main shell; no full reference-theme/provider/platform acceptance"
+    "Generic rendered detail/output only. All20-new-case first-pass is false; Windows PR initial stale-conversation refusal/context disposal retained. No temporal/cache proof from images.",
+    "Native Mac earlier qualification and images remain separate immutable evidence",
+    "No full theme/provider/installed/platform acceptance"
   ],
+  "provider_calls": 0,
   "screenshots": [
     {
-      "file": "settled-duration-matches-span-root.png",
-      "sha256": "882b37025a0f99ad32014832e3d55ba5ed6b52419e29aaa0ad110cec7b347a5c",
-      "bytes": 75334,
-      "platform": "native macOS arm64, source daemon, Chromium",
-      "profile": "Actuala6880125/tree99cdf6b7 full source Chromium initial pass retry0; root individually viewed; synthetic data, no visible private paths"
+      "file": "windows-settled-duration-matches-span-root.png",
+      "sha256": "5f2c1d50f011845319291d5e0583baf4ed5e9ce214bf0e11dbe7d8e6d9b5da84",
+      "bytes": 68484,
+      "platform": "Native Windows GitHub Actions PR Chromium; separate from actual Mac root images",
+      "run_id": 39107961115,
+      "artifact_id": 12128979126,
+      "profile": "Actuala6880125/PR54f3230, individual generic M1 case initially passed; root individually viewed actual image; synthetic fixture data, no visible private paths"
     },
     {
-      "file": "distinct-run-identifiers-and-complete-header.png",
-      "sha256": "92a2dd72359c7d76518c1d550d3b9c4269957fd2f4b40c36b7d74b27a1ab415b",
-      "bytes": 89192,
-      "platform": "native macOS arm64, source daemon, Chromium",
-      "profile": "Actuala6880125/tree99cdf6b7 full source Chromium initial pass retry0; root individually viewed; synthetic data, no visible private paths"
+      "file": "windows-distinct-run-identifiers-and-complete-header.png",
+      "sha256": "1fe1527aba74acf6ecf4253f82782c05aad4e48a5bb449f3c3de48ed1909c127",
+      "bytes": 90692,
+      "platform": "Native Windows GitHub Actions PR Chromium; separate from actual Mac root images",
+      "run_id": 39107961115,
+      "artifact_id": 12128979126,
+      "profile": "Actuala6880125/PR54f3230, individual generic M1 case initially passed; root individually viewed actual image; synthetic fixture data, no visible private paths"
     }
   ]
 }
