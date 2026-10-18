@@ -25,14 +25,14 @@ async function launch(dbPath = file) {
   return { child, receipt: JSON.parse(raw) as { status: string; reason?: string; generation?: string; source_epoch?: string; birth?: string } };
 }
 test("a competing actual process refuses before changing the current owner generation", async () => {
-  const first = await launch(); expect(first.receipt.status).toBe("owned");
+  const first = await launch(); expect(first.receipt).toMatchObject({ status: "owned" });
   const second = await launch(); expect(second.receipt.status).toBe("refused"); expect(second.receipt.reason).toBe("occupied");
   const db = new Database(file); try { expect(db.query("SELECT generation FROM coding_hook_owner").get()).toEqual({ generation: first.receipt.generation }); } finally { db.close(); }
 });
 test("actual SIGKILL recovery releases the lease and creates a new birth/generation with stable source epoch", async () => {
-  const first = await launch(); expect(first.receipt.status).toBe("owned");
+  const first = await launch(); expect(first.receipt).toMatchObject({ status: "owned" });
   first.child.kill("SIGKILL"); await first.child.exited;
-  const next = await launch(); expect(next.receipt.status).toBe("owned"); expect(next.receipt.birth).toMatch(/^[a-f0-9]{32}$/);
+  const next = await launch(); expect(next.receipt).toMatchObject({ status: "owned" }); expect(next.receipt.birth).toMatch(/^[a-f0-9]{32}$/);
   expect(next.receipt.birth).not.toBe(first.receipt.birth); expect(next.receipt.generation).not.toBe(first.receipt.generation); expect(next.receipt.source_epoch).toBe(first.receipt.source_epoch);
 });
 test("two unrelated actual database files can be owned concurrently", async () => {
@@ -41,7 +41,7 @@ test("two unrelated actual database files can be owned concurrently", async () =
   const fixture = new Database(other); expect(fixture.query("SELECT count(*) count FROM coding_hook_owner").get()).toEqual({ count: 0 }); fixture.close();
   // Distinct deterministic lease ports qualify this positive fixture; collisions have a separate refusal control.
   expect(codingHookOwnerPort(other)).not.toBe(codingHookOwnerPort(file));
-  const first = await launch(), second = await launch(other); expect(first.receipt.status).toBe("owned"); expect(second.receipt.status).toBe("owned"); expect(second.receipt.birth).not.toBe(first.receipt.birth);
+  const first = await launch(), second = await launch(other); expect(first.receipt).toMatchObject({ status: "owned" }); expect(second.receipt).toMatchObject({ status: "owned" }); expect(second.receipt.birth).not.toBe(first.receipt.birth);
 });
 test("an occupied fixed lease port refuses without creating an owner row or choosing another port", async () => {
   const blocker = createServer(socket => socket.destroy());
