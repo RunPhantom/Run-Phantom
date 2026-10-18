@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -14,7 +14,35 @@ import { runMcpServer } from "../src/mcp/index";
 // that tool is not served by a connected MCP server.
 const PROMPT_TOOL = "mcp__runphantom__permission_prompt";
 const UNREACHABLE_DAEMON = "http://127.0.0.1:1";
-const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+
+let nativeStubDirectory = "";
+let nativeStubBin = "";
+
+beforeAll(async () => {
+  nativeStubDirectory = realpathSync(mkdtempSync(path.join(tmpdir(), "runphantom-native-claude-stub-")));
+  nativeStubBin = path.join(nativeStubDirectory, process.platform === "win32" ? "claude-stub.exe" : "claude-stub");
+  const entry = path.join(nativeStubDirectory, "entry.ts");
+  // One native launcher loads each case's existing synthetic script without a shell.
+  writeFileSync(entry, [
+    'import path from "node:path";',
+    'import { pathToFileURL } from "node:url";',
+    'await import(pathToFileURL(path.join(process.cwd(), "claude-stub.ts")).href);',
+  ].join("\n"));
+  const build = Bun.spawn([process.execPath, "--no-env-file", "build", "--compile",
+    "--no-compile-autoload-dotenv", "--no-compile-autoload-bunfig", entry, "--outfile", nativeStubBin], {
+    cwd: nativeStubDirectory,
+    env: { ...process.env, BUN_BE_BUN: "", BUN_OPTIONS: "" },
+    stdout: "pipe", stderr: "pipe", timeout: 20_000, killSignal: "SIGKILL",
+  });
+  const [code, stdout, stderr] = await Promise.all([
+    build.exited, new Response(build.stdout).text(), new Response(build.stderr).text(),
+  ]);
+  expect(code, `${stdout}\n${stderr}`).toBe(0);
+}, 30_000);
+
+afterAll(() => {
+  if (nativeStubDirectory) rmSync(nativeStubDirectory, { recursive: true, force: true });
+});
 
 interface McpServerConfig { command: string; args: string[]; env: Record<string, string> }
 
@@ -105,22 +133,28 @@ test("the permission prompt tool is served only to the side pane and never grant
 function stubClaude(script: (directory: string) => string[]) {
   const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "runphantom-claude-stub-")));
   const stub = path.join(directory, "claude-stub.ts");
-  const bin = path.join(directory, "claude");
   writeFileSync(stub, script(directory).join("\n"));
-  writeFileSync(bin, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(stub)} "$@"\n`, { mode: 0o700 });
-  const previousBin = process.env.RUNPHANTOM_CLAUDE_BIN;
-  process.env.RUNPHANTOM_CLAUDE_BIN = bin;
+  const previous = {
+    RUNPHANTOM_CLAUDE_BIN: process.env.RUNPHANTOM_CLAUDE_BIN,
+    BUN_BE_BUN: process.env.BUN_BE_BUN,
+    BUN_OPTIONS: process.env.BUN_OPTIONS,
+  };
+  process.env.RUNPHANTOM_CLAUDE_BIN = nativeStubBin;
+  delete process.env.BUN_BE_BUN;
+  delete process.env.BUN_OPTIONS;
   return {
     directory,
     restore() {
-      if (previousBin === undefined) delete process.env.RUNPHANTOM_CLAUDE_BIN;
-      else process.env.RUNPHANTOM_CLAUDE_BIN = previousBin;
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
       rmSync(directory, { recursive: true, force: true });
     },
   };
 }
 
-test.skipIf(process.platform === "win32")("a stub Claude CLI receives a permission prompt tool that its MCP server serves", async () => {
+test("a stub Claude CLI receives a permission prompt tool that its MCP server serves", async () => {
   const claude = stubClaude((directory) => [
     `import fs from "node:fs";`,
     `fs.writeFileSync(${JSON.stringify(path.join(directory, "argv.json"))}, JSON.stringify(process.argv.slice(2)));`,
@@ -164,7 +198,7 @@ test.skipIf(process.platform === "win32")("a stub Claude CLI receives a permissi
 // Claude Code 2.1.283 printed this and exited at the first tool call when the
 // project had `/mcp disable runphantom`; before the prompt tool, the pane ran
 // without Run Phantom's tools instead.
-test.skipIf(process.platform === "win32")("a side pane without its runphantom MCP server says how to fix it", async () => {
+test("a side pane without its runphantom MCP server says how to fix it", async () => {
   const claude = stubClaude(() => [
     `console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "stub-session", tools: [] }));`,
     `console.error(${JSON.stringify(`Error: MCP tool ${PROMPT_TOOL} (passed via --permission-prompt-tool) not found. Available MCP tools: none`)});`,
