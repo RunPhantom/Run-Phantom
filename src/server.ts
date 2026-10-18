@@ -370,6 +370,8 @@ function demoChatHtml(): string {
       --border: #9C8870;
       --accent: #B83C24;
       --mark-accent: #C7462D;
+      --mark-shield: #EEE7DE;
+      --mark-shield-edge: #D8D0C7;
       --accent-strong: #9F301D;
       --focus: #9F301D;
       --info: #275EA8;
@@ -404,19 +406,10 @@ function demoChatHtml(): string {
     header { padding: 24px 24px 18px; border-bottom: 1px solid var(--border); }
     .brand { display: flex; gap: 16px; align-items: flex-start; }
     .mark {
-      position: relative;
       flex: 0 0 auto;
       width: 52px;
       height: 52px;
-      border-radius: 16px;
-      border: 1px solid var(--border);
-      background: var(--canvas);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.86);
-      padding: 8px;
-      color: var(--ink);
     }
-    .mark path { stroke: currentColor; }
-    .mark circle { fill: var(--mark-accent); }
     .eyebrow {
       margin: 1px 0 7px;
       color: var(--muted);
@@ -555,7 +548,7 @@ function demoChatHtml(): string {
       .shell { height: min(760px, calc(100svh - 24px)); border-radius: 22px; }
       header { padding: 20px 18px 16px; }
       .brand { gap: 12px; }
-      .mark { width: 46px; height: 46px; border-radius: 14px; }
+      .mark { width: 46px; height: 46px; }
       main { padding: 14px; }
       form { padding: 12px; }
       .actions { flex-direction: column; align-items: stretch; }
@@ -571,10 +564,14 @@ function demoChatHtml(): string {
   <div class="shell">
     <header>
       <div class="brand">
-        <svg class="mark" viewBox="0 0 64 64" fill="none" role="img" aria-label="Run Phantom">
-          <path d="M12 26V12H26M38 52H52V38" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"></path>
-          <path d="M12 42C20 42 20 22 30 22C40 22 39 42 52 42" stroke-width="4.5" stroke-linecap="round"></path>
-          <circle cx="30" cy="22" r="5"></circle>
+        <svg class="mark" viewBox="0 0 32 32" fill="none" role="img" aria-label="Run Phantom">
+          <path d="M15.05 1.95Q16 1.6 16.95 1.95L26.75 6.2Q27.85 6.65 27.85 7.85V19.2Q27.85 22.6 17.1 29.9Q16 30.6 14.9 29.9Q4.15 22.6 4.15 19.2V7.85Q4.15 6.65 5.25 6.2Z" fill="var(--mark-shield)" stroke="var(--mark-shield-edge)" stroke-width="0.5" stroke-linejoin="round"></path>
+          <path d="M10.42 19.66A6.9 6.9 0 0 1 20.96 10.81" stroke="var(--mark-accent)" stroke-width="2.6" stroke-linecap="round"></path>
+          <path d="M22.87 8.97L22.8 14.4L19.06 12.65Z" fill="var(--mark-accent)" stroke="var(--mark-accent)" stroke-width="0.6" stroke-linejoin="round"></path>
+          <rect x="12.1" y="20.75" width="2.4" height="2.4" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.8"></rect>
+          <rect x="15.62" y="21.36" width="2.2" height="2.2" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.62"></rect>
+          <rect x="18.96" y="20.25" width="2" height="2" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.46"></rect>
+          <rect x="21.3" y="17.72" width="1.8" height="1.8" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.34"></rect>
         </svg>
         <div>
           <p class="eyebrow">Run Phantom demo</p>

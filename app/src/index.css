@@ -239,6 +239,8 @@
   --rp-accent-soft-hover: #FBD5C6;
   --rp-accent-border: #E9A585;
   --rp-mark-accent: #A94304;
+  --rp-mark-shield: var(--rp-n6);
+  --rp-mark-shield-edge: var(--rp-n9);
 
   /* Deliberately the darkest, most saturated rust rather than a second hue.
      8.27:1 on canvas and >= 7.2:1 on every tinted bed, so the ring is legible

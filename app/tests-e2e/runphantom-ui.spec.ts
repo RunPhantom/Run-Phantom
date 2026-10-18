@@ -212,6 +212,55 @@ test("Run Phantom UI: run header actions never cover the run title or status", a
   }
 });
 
+test("Run Phantom UI: Debug opens the chat with its header in a fresh profile", async ({ page, runPhantom }) => {
+  await seedRunPhantomFixtures(runPhantom.url);
+  await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
+  // A fresh profile has never dismissed the coding-agent intro. Debug opened the
+  // chat view anyway, and that view took the intro's layout: no header, and the
+  // intro's floating "Hide" button drawn over the first message.
+  expect(await page.evaluate(() => localStorage.getItem("runphantom:messagePane:providerIntroSeen"))).toBeNull();
+
+  await page.getByRole("button", { name: "Debug", exact: true }).click();
+  const pane = page.getByRole("complementary", { name: "Coding-agent debug chat" });
+  const prompt = "What went wrong here?";
+  await pane.getByRole("button", { name: prompt, exact: true }).click();
+  const firstMessage = pane.getByRole("log", { name: "Debug chat messages" }).locator(":scope > *").first().locator(":scope > *");
+  await expect(firstMessage).toHaveText(prompt);
+
+  const covering = await firstMessage.evaluate((message) => {
+    const box = message.getBoundingClientRect();
+    return Array.from(message.closest("aside")!.querySelectorAll("button"))
+      .filter((button) => !message.contains(button))
+      .filter((button) => {
+        const rect = button.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0
+          && rect.left < box.right && box.left < rect.right && rect.top < box.bottom && box.top < rect.bottom;
+      })
+      .map((button) => button.getAttribute("aria-label") || button.textContent?.trim() || "");
+  });
+  expect(covering, "buttons drawn over the first message").toEqual([]);
+
+  const header = pane.locator("header");
+  await expect(header).toBeVisible();
+  for (const name of ["All Chats", "New chat", "Hide chat"]) {
+    await expect(header.getByRole("button", { name, exact: true })).toBeVisible();
+  }
+  // The header is stacked above the intro's Hide button, so a Hide left in the
+  // chat view is out of sight but still reachable by keyboard and screen reader.
+  await expect(pane.getByRole("button", { name: "Hide", exact: true }), "intro Hide button left in the chat view").toHaveCount(0);
+  const headerBox = (await header.boundingBox())!;
+  const messageBox = (await firstMessage.boundingBox())!;
+  expect(headerBox.y + headerBox.height, "header ends above the first message").toBeLessThanOrEqual(messageBox.y);
+
+  // The intro still belongs to the floating button's first open, which has no
+  // header, so that screen keeps its own Hide control.
+  await header.getByRole("button", { name: "Hide chat", exact: true }).click();
+  await page.getByRole("button", { name: "Ask Claude Code", exact: true }).click();
+  await expect(pane.getByText("Connect your coding agent", { exact: true })).toBeVisible();
+  await pane.getByRole("button", { name: "Hide", exact: true }).click();
+  await expect(pane).toBeHidden();
+});
+
 test("Run Phantom UI: trajectory renders when the first spans arrive after live activity", async ({ page, request, runPhantom }) => {
   await seedRunPhantomFixtures(runPhantom.url);
   const detailUrl = `${runPhantom.url}/api/runs/detail/${FIXTURE_PRIMARY_RUN_ID}`;
@@ -362,7 +411,111 @@ test("Run Phantom UI: deleting a trace via the API removes only that sidebar row
   await expect.poll(async () => page.locator("[data-run-id]").count(), { timeout: 5_000 }).toBe(2);
 });
 
-test("Run Phantom UI: run ids stay distinguishable in the sidebar and whole in the header", async ({ page, runPhantom }) => {
+async function replayFinishedDemoReview(url: string): Promise<void> {
+  const replay = await fetch(`${url}/api/demo-traces/replay`, { method: "POST" });
+  expect(replay.ok).toBe(true);
+  await expect.poll(async () => {
+    const response = await fetch(`${url}/api/runs/detail/demo_review`);
+    if (response.status === 404) return 0;
+    expect(response.ok).toBe(true);
+    const detail = await response.json() as { run: { finished?: number | null } };
+    return detail.run.finished;
+  }, { timeout: 20_000 }).toBe(1);
+}
+
+test("Run Phantom UI: the errors tooltip shows its last line whole and signals overflow", async ({ page, runPhantom }, testInfo) => {
+  await replayFinishedDemoReview(runPhantom.url);
+
+  // The error message was capped at 80px with overflow hidden, which cut
+  // "2 passed, 1 failed." through the middle of its glyphs with no sign that
+  // anything was missing.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(`${runPhantom.url}/runs/demo_review`);
+  const trigger = page.getByLabel(/^1 run error\. Focus for details\.$/);
+  await trigger.focus();
+  const lastLine = page.getByText(/2 passed, 1 failed\./);
+  await expect(lastLine).toBeVisible();
+  const clipped = await lastLine.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const rects = [...range.getClientRects()];
+    const bottom = Math.max(...rects.map(rect => rect.bottom));
+    const problems: string[] = [];
+    if (bottom > window.innerHeight) problems.push(`below viewport (${bottom} > ${window.innerHeight})`);
+    for (let node: Element | null = element; node && node !== document.body; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.overflowY === "visible") continue;
+      const box = node.getBoundingClientRect();
+      const clipBottom = box.top + node.clientTop + node.clientHeight;
+      if (bottom > clipBottom + 0.5) problems.push(`clipped by ${node.className || node.tagName} (${bottom} > ${clipBottom})`);
+    }
+    return problems;
+  });
+  expect(clipped).toEqual([]);
+  await expect(page.locator("[data-errors-overflow-hint]")).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("errors-tooltip-complete-message.png") });
+
+  // When the viewport is too short for the whole list, the region must say so
+  // and stay reachable from the keyboard without closing the tooltip.
+  await page.setViewportSize({ width: 1280, height: 200 });
+  await trigger.blur();
+  await trigger.focus();
+  const region = page.getByRole("region", { name: /error details/i });
+  await expect(region).toBeVisible();
+  expect(await region.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  await expect(page.locator("[data-errors-overflow-hint]")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("errors-tooltip-short-viewport-overflow.png") });
+  await trigger.hover();
+  await page.keyboard.press("Tab");
+  await expect(region).toBeFocused();
+  await page.mouse.move(1270, 190);
+  await expect(region).toBeVisible();
+  await expect(region).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(page.locator("[data-errors-overflow-hint]")).toHaveCount(0);
+  await expect(lastLine).toBeInViewport();
+  await page.keyboard.press("Escape");
+  await expect(region).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+});
+
+test("Run Phantom UI: the span detail pane shows the whole span id", async ({ page, runPhantom }, testInfo) => {
+  await replayFinishedDemoReview(runPhantom.url);
+
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(`${runPhantom.url}/runs/demo_review/spans`);
+  await page.locator('[data-span-row="demo_review_tool-1"]').click();
+  // `span.id.slice(-12)` rendered "eview_tool-1", which reads as a mangled
+  // word rather than an id.
+  const idCell = page.getByText("span id", { exact: true }).locator("xpath=following-sibling::*[1]");
+  await expect(idCell).toHaveText("demo_review_tool-1");
+  await expect(idCell).toHaveRole("button");
+  await expect(idCell).toHaveAccessibleName("Copy span id demo_review_tool-1");
+  await expect(idCell).toHaveAttribute("title", "demo_review_tool-1");
+  const overflow = await idCell.evaluate((element) => ({
+    truncates: element.scrollWidth > element.clientWidth,
+    textOverflow: getComputedStyle(element).textOverflow,
+  }));
+  expect(overflow.textOverflow).toBe("ellipsis");
+  expect(overflow.truncates).toBe(false);
+  await page.screenshot({ path: testInfo.outputPath("span-detail-complete-identifier.png") });
+});
+
+test("Run Phantom UI: the header duration agrees with the span tree root", async ({ page, runPhantom }, testInfo) => {
+  await replayFinishedDemoReview(runPhantom.url);
+
+  // The header rounded the finished 6200ms run to whole seconds ("6s") while
+  // the tree root read "6.2s" for the same trace.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(`${runPhantom.url}/runs/demo_review/spans`);
+  const rootDuration = page.locator('[data-span-row="demo_review_root"] .font-mono').last();
+  await expect(rootDuration).toHaveText("6.2s");
+  const headerDuration = page.locator(".rp-meta-metrics").getByText("duration", { exact: true }).locator("xpath=following-sibling::span[1]");
+  await expect(headerDuration).toHaveText("6.2s", { timeout: 10_000 });
+  await page.screenshot({ path: testInfo.outputPath("settled-duration-matches-span-root.png") });
+});
+
+test("Run Phantom UI: run ids stay distinguishable in the sidebar and whole in the header", async ({ page, runPhantom }, testInfo) => {
   const replay = await fetch(`${runPhantom.url}/api/demo-traces/replay`, { method: "POST" });
   expect(replay.ok).toBe(true);
 
@@ -393,4 +546,5 @@ test("Run Phantom UI: run ids stay distinguishable in the sidebar and whole in t
   await expect(traceId).toHaveText("demo_review");
   const clipped = await traceId.evaluate((element) => element.scrollWidth > element.clientWidth);
   expect(clipped, "the full run id fits the header at 1280px").toBe(false);
+  await page.screenshot({ path: testInfo.outputPath("distinct-run-identifiers-and-complete-header.png") });
 });

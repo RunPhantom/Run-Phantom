@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Star, RotateCcw } from "lucide-react";
 import { C } from "../utils/colors";
-import { ago, isActive, runDisplayName, uniqueRunIdPrefixes } from "../utils/helpers";
+import { ago, runDisplayName, runStatus, uniqueRunIdPrefixes } from "../utils/helpers";
 import { useSavedEvent } from "../api/saved-runs";
 import { parseReplayMetadata } from "../utils/types";
 import type { Run } from "../utils/types";
@@ -31,11 +31,12 @@ export function RunListItem({ run, shortRunIds, selected, highlighted, faded, on
   faded?: boolean;
   onClick: () => void;
 }) {
-  const active = isActive(run);
+  const status = runStatus(run, run.error_count ?? 0);
+  const active = status === "live";
   const saved = !!useSavedEvent(run.id);
   const replayMeta = parseReplayMetadata(run);
   const isReplay = !!replayMeta;
-  const statusLabel = active ? "Run live" : (run.error_count ?? 0) > 0 ? "Run failed" : "Run finished";
+  const statusLabel = { live: "Run live", failed: "Run failed", cancelled: "Run cancelled", complete: "Run finished" }[status];
 
   const baseName = runDisplayName(run);
   const traceIdShort = shortRunIds.get(run.id) ?? run.id;
