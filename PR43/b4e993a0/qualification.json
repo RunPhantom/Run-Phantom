@@ -2,7 +2,7 @@
   "pr": 43,
   "source": "b4e993a0a414a747e59a1b76bd7d3ca9e524d0b9",
   "receiving_main": "31977cf0615c976c5666b0d401232c6031274f1f",
-  "tested_pr_merge": "767d9c2",
+  "tested_pr_merge": "767d9c2d2308b1d12f0919072a83d60b58ff47cb",
   "runs": [
     {
       "id": 39086671362,
@@ -86,10 +86,11 @@
     },
     {
       "file": "llm-error-status-message-tooltip.png",
-      "sha256": "de4689dc4f006d73a9163da56204a8fff5984b2ccfb5f69b38d3a72de01c5be3",
-      "bytes": 80487,
-      "platform": "macOS arm64",
-      "profile": "Native source Chromium, exact committed candidate, no retries"
+      "sha256": "15e3cf555ad9e2a0f7d9f32fb0f9934cd2e20b36e5bbdb9147b9c230613728e8",
+      "bytes": 72539,
+      "platform": "Windows x64",
+      "run_id": 39086671355,
+      "artifact_id": 12120854129
     }
   ]
 }
