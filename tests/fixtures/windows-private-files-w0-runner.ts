@@ -116,6 +116,10 @@ async function nativeProbe(syntheticRoot: string) {
     const out = Buffer.alloc(4096), size = k.GetModuleFileNameW(module, out, out.length / 2);
     requireObserved(size > 0 && size < out.length / 2, "module_path_unavailable"); return out.subarray(0, size * 2).toString("utf16le");
   };
+  const nativeThreadExitedBy = async (handle: bigint, deadline: number) => {
+    while (k.WaitForSingleObject(handle, 0) === WAIT_TIMEOUT && performance.now() < deadline) await pause(1);
+    return k.WaitForSingleObject(handle, 0) === 0 && performance.now() <= deadline;
+  };
   let closeAdvapi: (() => void) | undefined;
   try {
     const sys = Buffer.alloc(4096), chars = k.GetSystemDirectoryW(sys, sys.length / 2);
@@ -260,7 +264,8 @@ async function nativeProbe(syntheticRoot: string) {
     observations.mainDeadlineElapsedMs = Math.round(elapsed);
     const terminationStarted = performance.now();
     await Promise.race([worker.terminate().then(() => workerExit!), pause(W0_LIMITS.workerMs).then(() => { throw new DiagnosticFailure("worker_termination_deadline"); })]);
-    requireObserved(workerExited && !workerError && k.WaitForSingleObject(workerThread, 0) === 0, "actual_native_thread_exit");
+    observations.workerExitEventNativeThreadAlreadySignaled = k.WaitForSingleObject(workerThread, 0) === 0;
+    requireObserved(workerExited && !workerError && await nativeThreadExitedBy(workerThread, terminationStarted + W0_LIMITS.workerMs), "actual_native_thread_exit");
     cleanup.nativeThreadSignaled = true;
     observations.terminationElapsedMs = Math.round(performance.now() - terminationStarted);
     observations.terminationScope = "finite-600ms-native-wait;not-general-cancellation";
@@ -277,7 +282,7 @@ async function nativeProbe(syntheticRoot: string) {
       try { await Promise.race([worker.terminate().then(() => workerExit!), pause(W0_LIMITS.workerMs).then(() => { throw new DiagnosticFailure("cleanup_worker_deadline"); })]); }
       catch { report.failure ??= { stage: "cleanup_worker_deadline" }; }
     }
-    if (workerThread !== 0n && workerExited) cleanup.nativeThreadSignaled = k.WaitForSingleObject(workerThread, 0) === 0;
+    if (workerThread !== 0n && workerExited) cleanup.nativeThreadSignaled = await nativeThreadExitedBy(workerThread, performance.now() + W0_LIMITS.workerMs);
     const canClose = !worker || workerExited && workerThread !== 0n && cleanup.nativeThreadSignaled;
     if (canClose) {
       for (const handle of [...handles]) { try { close(handle); } catch { report.failure ??= { stage: "handle_cleanup" }; } }
