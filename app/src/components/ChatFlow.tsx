@@ -702,7 +702,7 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
   return (
     <div ref={scrollRef} className="space-y-1.5 py-2 pb-24">
       {spans.some(span => span.normalized?.capture) && <div role="status" className="px-4 text-xs" style={{ color: C.fg1 }}>Producer-reported observations · Partial capture · Runtime unverified</div>}
-      <div className="px-3"><FlameTimeline spans={spans} subAgents={subAgents} /></div>
+      <div className="px-3 min-w-0"><FlameTimeline spans={spans} subAgents={subAgents} onDiveIn={onDiveIn} /></div>
       {(() => { let seenLLM = false; return items.map((item, i) => {
         const isFirstLLM = hasLLMOutput && item.type === "llm_out" && !seenLLM;
         if (item.type === "llm_out") seenLLM = true;

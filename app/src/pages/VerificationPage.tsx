@@ -5,12 +5,16 @@ import { CheckCircle2, CircleHelp, Copy, Play, Unplug, XCircle } from "lucide-re
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Inspection } from "../components/verification/Inspection";
+import { SemanticInspector } from "../components/verification/SemanticInspector";
+import { TrustedBrowser } from "../components/verification/TrustedBrowser";
+import { SnapshotDiff } from "../components/verification/SnapshotDiff";
 import { ReportContext } from "../components/verification/ReportContext";
 import { buildPredicate, describePredicate, emptyCheck, Field, PredicateEditor, Select, type CheckDraft } from "../components/verification/PredicateEditor";
 import { verificationApi, type AppCommand, type CommandResult, type CreatedSession, type FlowStep, type Predicate, type RuntimeEvent, type VerificationReport, type VerificationStatus } from "../api/verification";
 import { useRuns } from "../hooks/use-runs";
 import { runDisplayName } from "../utils/helpers";
 import { C } from "../utils/colors";
+import { relativeTargets } from "../../../src/verification/protocol";
 
 function stateSummary(value: unknown, depth = 0): string {
   if (value === null) return "null";
@@ -34,6 +38,8 @@ function eventSummary(event: RuntimeEvent): string {
     case "dom": return `${String(data.selector ?? "Document")}: ${String(data.count ?? "unknown")} matching elements`;
     case "route": return `Route: ${String(data.url ?? "changed")}`;
     case "action.boundary": return "Application action started";
+    case "action.reading": case "verification.baseline": return `${String(data.phase ?? "Captured")} action reading: ${stateSummary(data.value)}`;
+    case "action.result": return "SDK-reported action result acknowledged";
     default: return String(data.message ?? data.reason ?? event.type);
   }
 }
@@ -85,7 +91,7 @@ export function VerificationPage() {
   const [setup, setSetup] = useState<CreatedSession | null>(null);
   const session = sessions.data?.find(item => item.id === selectedId) ?? sessions.data?.[0];
   const observation = useQuery({ queryKey: ["verification", "events", session?.id], queryFn: () => verificationApi.observe(session!.id), enabled: !!session, refetchInterval: 1000 });
-  const [action, setAction] = useState<AppCommand["type"]>("snapshot");
+  const [action, setAction] = useState<"snapshot" | "click" | "fill" | "state">("snapshot");
   const [selector, setSelector] = useState("");
   const [fillValue, setFillValue] = useState("");
   const [store, setStore] = useState("");
@@ -123,6 +129,8 @@ export function VerificationPage() {
   }
 
   function currentCommand(): AppCommand {
+    const targets = checks.some(check => check.kind === "relative") ? relativeTargets(currentPredicate()) : [];
+    if (targets.length && action !== "click") throw new Error("Action transitions require a Click action. Configure the outcome before running it.");
     if (action === "state") {
       if (!store.trim()) throw new Error("Registered store is required.");
       return { type: "state", store: store.trim() };
@@ -130,7 +138,7 @@ export function VerificationPage() {
     if (action === "snapshot") return { type: "snapshot", ...(selector.trim() ? { selector: selector.trim() } : {}) };
     if (!selector.trim()) throw new Error("Action selector is required.");
     if (action === "fill") return { type: "fill", selector: selector.trim(), value: fillValue };
-    return { type: "click", selector: selector.trim() };
+    return targets.length ? { type: "causal-click", selector: selector.trim(), targets } : { type: "click", selector: selector.trim() };
   }
 
   function currentPredicate(): Predicate {
@@ -185,6 +193,7 @@ export function VerificationPage() {
     try {
       if (steps.length >= 20) throw new Error("A saved flow supports at most 20 steps.");
       if (includeAction && action === "fill") throw new Error("Saved flows cannot contain fill actions. Fill the app live, then save checks or other actions.");
+      if (!includeAction && checks.some(check => check.kind === "relative")) throw new Error("Include the Click action when saving an action transition.");
       const command = includeAction ? currentCommand() : undefined;
       setSteps(previous => [...previous, { ...(command ? { command } : {}), predicate: currentPredicate() }]);
       setNotice("Step added to the flow draft.");
@@ -230,10 +239,11 @@ export function VerificationPage() {
 
     {session && <div className="flex flex-wrap items-start gap-8">
       <div className="min-w-0 flex-[2_1_360px] space-y-7">
+        <SemanticInspector sessionId={session.id} connected={connected} capable={(observation.data?.session.capabilities ?? session.capabilities)?.includes("semantic-refs") ?? false} disabled={!!busy} onAction={cursor => { setSince(cursor); setInspection(null); }} />
         <section aria-labelledby="action-heading" className="space-y-4">
           <h2 id="action-heading" className="text-sm font-semibold" style={{ color: C.fg3 }}>1. Exercise the app</h2>
           <fieldset disabled={!!busy || !connected} className="space-y-3">
-            <Field label="Action"><Select value={action} onChange={event => { setAction(event.target.value as AppCommand["type"]); setFillValue(""); setInspection(null); }}><option value="snapshot">Snapshot</option><option value="click">Click</option><option value="fill">Fill</option><option value="state">Read state</option></Select></Field>
+            <Field label="Action"><Select value={action} onChange={event => { setAction(event.target.value as typeof action); setFillValue(""); setInspection(null); }}><option value="snapshot">Snapshot</option><option value="click">Click</option><option value="fill">Fill</option><option value="state">Read state</option></Select></Field>
             {action === "state" ? <Field label="Registered store"><Input value={store} onChange={event => setStore(event.target.value)} placeholder="cart" /></Field> : <Field label="Action selector" hint={action === "snapshot" ? "Optional: narrow the snapshot to matching elements." : "Use a stable CSS selector for exactly one interactive element."}><Input value={selector} onChange={event => setSelector(event.target.value)} placeholder='[data-testid="checkout"]' /></Field>}
             {action === "fill" && <Field label="Fill value" hint="Used only for this live action. Cleared after sending and excluded from saved flows."><Input type="password" autoComplete="new-password" value={fillValue} onChange={event => setFillValue(event.target.value)} /></Field>}
             <Button onClick={runAction}><Play aria-hidden="true" />Run action</Button>
@@ -270,6 +280,8 @@ export function VerificationPage() {
       </section>
     </div>}
 
+    <TrustedBrowser runId={linkedRunId || undefined} onReport={() => void reports.refetch()} />
+    <SnapshotDiff sessionId={session?.id} connected={connected} capable={(observation.data?.session.capabilities ?? session?.capabilities)?.includes("semantic-tree") ?? false} disabled={!!busy} runId={linkedRunId || undefined} />
     <section aria-labelledby="flows-heading" className="space-y-3 border-t pt-5" style={{ borderColor: C.border }}>
       <h2 id="flows-heading" className="text-sm font-semibold" style={{ color: C.fg3 }}>Saved flows</h2>
       {operationAlert("flows")}

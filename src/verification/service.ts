@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { VerificationBridge, VerificationHttpError, type VerificationBridgeOptions, type VerificationSession } from "./bridge";
-import { evaluatePredicate } from "./predicates";
+import { evaluatePredicate, type EvaluationContext } from "./predicates";
 import { parseCommand, parsePredicate } from "./validation";
 import { saveReport, getFlow, boundedEvidence } from "./store";
 import { boundReportContext } from "./report-context";
-import { VERIFICATION_LIMITS as L, type Predicate, type Verdict, type VerificationReport, type VerificationCheckContext } from "./protocol";
+import { relativeTargets, relativeTargetKey, VERIFICATION_LIMITS as L, type Predicate,
+  type Verdict, type VerificationReport, type VerificationCheckContext, type RetainedControlSource } from "./protocol";
+import { baselineScopeForTarget, type BaselineReading } from "./baseline";
+import { saveCapturedSnapshot } from "./snapshot-store";
 
 export interface VerificationServiceOptions extends VerificationBridgeOptions { checkTimeoutMs?: number }
 
@@ -32,6 +35,17 @@ export class VerificationService {
     });
   }
 
+  captureSnapshot(id: string, name: unknown) {
+    const session = this.bridge.get(id);
+    return this.lock(session, async () => {
+      const socket = session.ws; const generation = session.generation;
+      if (!socket) throw new VerificationHttpError(409, "Connect the application before capturing a snapshot");
+      const result = await this.bridge.command(session, { type: "semantic-tree" });
+      if (!result.ok || this.bridge.sessions.get(id) !== session || !session.ws || session.ws !== socket || session.generation !== generation) throw new VerificationHttpError(409, result.error ?? "Application connection changed during snapshot capture");
+      return saveCapturedSnapshot({ sessionId: session.id, runId: session.runId, origin: session.origin, name: this.bridge.sanitize(session, name).value, tree: result.result, connectionGeneration: generation, capturedAt: Date.now() });
+    });
+  }
+
   assert(id: string, value: unknown, since: number | undefined, name = "Application check") {
     const predicate = parsePredicate(value);
     const session = this.bridge.get(id);
@@ -52,6 +66,7 @@ export class VerificationService {
       for (let index = 0; index < flow.steps.length; index++) {
         const step = flow.steps[index];
         let since = this.bridge.tick(session);
+        let controlSource: RetainedControlSource | undefined;
         const started = Date.now();
         if (generation !== session.generation || !session.ws) {
           const verdict: Verdict = { status: "inconclusive", reason: "Application disconnected or changed document during the flow", evidence };
@@ -59,15 +74,19 @@ export class VerificationService {
           return this.report(session, flow.name, flow.id, verdict, checks);
         }
         if (step.command) {
-          const result = await this.bridge.command(session, step.command);
+          const targets = relativeTargets(step.predicate);
+          const command = targets.length && ["click", "causal-click"].includes(step.command.type)
+            ? parseCommand({ type: "causal-click", selector: (step.command as { selector: string }).selector, targets }) : step.command;
+          const result = await this.bridge.command(session, command);
           since = result.cursor;
+          controlSource = result.controlSource;
           if (!result.ok) {
             const verdict: Verdict = { status: "inconclusive", reason: `Step ${index + 1}: ${result.error ?? "Action was not acknowledged"}`, evidence };
-            checks.push(this.checkContext(session, step.predicate, verdict, since, generation, started, index + 1, false));
+            checks.push(this.checkContext(session, step.predicate, verdict, since, generation, started, index + 1, false, controlSource));
             return this.report(session, flow.name, flow.id, verdict, checks);
           }
         }
-        const result = await this.check(session, step.predicate, since, generation, index + 1);
+        const result = await this.check(session, step.predicate, since, generation, index + 1, controlSource);
         const { verdict } = result;
         checks.push(result.context);
         evidence.push(...verdict.evidence);
@@ -78,11 +97,13 @@ export class VerificationService {
     });
   }
 
-  private async check(session: VerificationSession, predicate: Predicate, since: number, generation: number, step = 1): Promise<{ verdict: Verdict; context: VerificationCheckContext }> {
+  private async check(session: VerificationSession, predicate: Predicate, since: number, generation: number, step = 1, controlSource?: RetainedControlSource): Promise<{ verdict: Verdict; context: VerificationCheckContext }> {
     const deadline = Date.now() + (this.options.checkTimeoutMs ?? L.CHECK_TIMEOUT_MS);
     const started = Date.now();
     let fresh = false;
-    const finish = (verdict: Verdict) => ({ verdict, context: this.checkContext(session, predicate, verdict, since, generation, started, step, fresh) });
+    const source = controlSource ?? (session.lastControlSource?.commandCursor === since && session.lastControlSource.generation === generation
+      && generation === session.generation && session.lastControlSource.actionId === session.currentActionId ? session.lastControlSource : undefined);
+    const finish = (verdict: Verdict) => ({ verdict, context: this.checkContext(session, predicate, verdict, since, generation, started, step, fresh, source) });
     const actionId = session.currentActionId;
     let latest: Verdict = { status: "inconclusive", reason: "No fresh observations available", evidence: [] };
     const reads = this.reads(predicate);
@@ -103,8 +124,12 @@ export class VerificationService {
       if (!session.ws || session.generation !== generation) return finish({ status: "inconclusive", reason: "Application connection changed while collecting evidence", evidence: [] });
       const observed = this.bridge.observe(session, since);
       const settled = session.coverage.network && !session.pending && session.requests.size === 0 && Date.now() - Math.max(started, session.lastActivity) >= L.QUIET_MS;
-      latest = evaluatePredicate(predicate, { events: observed.events, coverage: session.coverage, complete: observed.complete, settled, actionId });
+      latest = evaluatePredicate(predicate, { events: observed.events, coverage: session.coverage, complete: observed.complete, settled, actionId,
+        relative: this.relativeContext(session, predicate, since, generation, observed.cursor, observed.complete, settled) });
       if (latest.status === "pass" && settled) return finish({ ...latest, reason: `${latest.reason} Verified during an observed interval with ${L.QUIET_MS}ms quiet and no tracked requests pending.` });
+      // An atomic relative result is an immutable owned turn. Waiting cannot convert an
+      // unchanged synchronous result into a later background or business completion.
+      if (predicate.kind === "relative" && settled) return finish(latest);
       const remaining = deadline - Date.now();
       if (remaining > 0) await new Promise<void>((resolve) => setTimeout(resolve, Math.min(remaining, L.POLL_MS)));
     }
@@ -116,14 +141,50 @@ export class VerificationService {
   }
 
   private checkContext(session: VerificationSession, predicate: Predicate, verdict: Verdict, since: number,
-    generation: number, started: number, step: number, fresh: boolean): VerificationCheckContext {
+    generation: number, started: number, step: number, fresh: boolean, controlSource?: RetainedControlSource): VerificationCheckContext {
     const observed = this.bridge.observe(session, since);
     const current = !!session.ws && generation === session.generation;
     return { step, predicate, status: verdict.status, reason: verdict.reason, since, through: observed.cursor,
       generation, coverage: { ...session.coverage }, complete: fresh && current && observed.complete,
       dropped: observed.session.dropped,
+      ...(controlSource?.commandCursor === since && controlSource.generation === generation ? { controlSource } : {}),
       settled: fresh && current && session.coverage.network && !session.pending && session.requests.size === 0
-        && Date.now() - Math.max(started, session.lastActivity) >= L.QUIET_MS };
+        && Date.now() - Math.max(started, session.lastActivity) >= L.QUIET_MS,
+      ...(relativeTargets(predicate).length ? { causal: this.retainedCausalContext(session, predicate, since, generation) } : {}) };
+  }
+
+  private matchingDispatch(session: VerificationSession, since: number, generation: number) {
+    const captured = session.lastCausalResult;
+    return captured && captured.startCursor === since && captured.generation === generation
+      && generation === session.generation && captured.actionId === session.currentActionId ? captured : undefined;
+  }
+
+  private relativeContext(session: VerificationSession, predicate: Predicate, since: number, generation: number,
+    through: number, complete: boolean, settled: boolean): EvaluationContext["relative"] {
+    const dispatch = this.matchingDispatch(session, since, generation);
+    return new Map(relativeTargets(predicate).map(target => {
+      const key = relativeTargetKey(target);
+      const pair = dispatch?.pairs.get(key);
+      return [key, { scope: baselineScopeForTarget(session.id, generation, target), input: {
+        before: pair?.before, after: pair?.after, attribution: pair?.attribution,
+        action: { id: dispatch?.actionId ?? "", sessionId: session.id, generation,
+          cursor: dispatch?.actionCursor ?? since, acknowledged: !!dispatch },
+        through, complete, settled, coverage: { ...session.coverage },
+      } }];
+    }));
+  }
+
+  private retainedCausalContext(session: VerificationSession, predicate: Predicate, since: number, generation: number): NonNullable<VerificationCheckContext["causal"]> {
+    const dispatch = this.matchingDispatch(session, since, generation);
+    const readings = relativeTargets(predicate).map(target => {
+      const pair = dispatch?.pairs.get(relativeTargetKey(target));
+      const retain = (reading: BaselineReading | undefined) => reading
+        ? { cursor: reading.cursor, availability: reading.availability, value: reading.value } : null;
+      return { target, before: retain(pair?.before), after: retain(pair?.after) };
+    });
+    const captured = !!dispatch && relativeTargets(predicate).every(target => !!dispatch.pairs.get(relativeTargetKey(target))?.attribution);
+    return { source: "sdk-reported", attribution: captured ? "captured" : "unavailable",
+      ...(dispatch ? { actionId: dispatch.actionId } : {}), readings };
   }
 
   private reads(predicate: Predicate): Array<{ type: "snapshot"; selector: string } | { type: "state"; store: string }> {

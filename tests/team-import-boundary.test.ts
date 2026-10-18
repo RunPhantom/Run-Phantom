@@ -5,7 +5,7 @@ import ts from "typescript";
 
 const root = path.resolve(import.meta.dir, "..");
 
-function runtimeImports(file: string): string[] {
+function runtimeImports(file: string, node?: ts.Node): string[] {
   const tree = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
   const imports: string[] = [];
   function visit(node: ts.Node) {
@@ -29,7 +29,7 @@ function runtimeImports(file: string): string[] {
     }
     ts.forEachChild(node, visit);
   }
-  visit(tree);
+  visit(node ?? tree);
   return imports;
 }
 
@@ -49,7 +49,18 @@ describe("team runtime authority boundary", () => {
     const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
     expect(tree.statements.filter(ts.isImportDeclaration)).toHaveLength(0);
     expect(source).toContain('process.argv[2] === "team"');
-    expect(runtimeImports(file).sort()).toEqual(["./coding-hooks/callback", "./evaluations/evidence-worker", "./evaluations/evidence-worker-environment", "./local-cli", "./team/cli"]);
+    expect(runtimeImports(file).sort()).toEqual(["./coding-hooks/callback", "./evaluations/evidence-worker", "./evaluations/evidence-worker-environment", "./local-cli", "./team/cli", "./verification/browser-worker"]);
+    const dispatch = tree.statements.find(ts.isIfStatement)!;
+    expect(dispatch.expression.getText(tree)).toBe('process.argv[2] === "--internal-browser-worker"');
+    expect(runtimeImports(file, dispatch.thenStatement)).toEqual(["./verification/browser-worker"]);
+    let team: ts.Statement | undefined = dispatch.elseStatement;
+    while (team && ts.isIfStatement(team) && team.expression.getText(tree) !== 'process.argv[2] === "team"') team = team.elseStatement;
+    expect(team && ts.isIfStatement(team)).toBe(true);
+    if (!team || !ts.isIfStatement(team)) throw new Error("Expected separate team authority branch");
+    expect(team.expression.getText(tree)).toBe('process.argv[2] === "team"');
+    expect(runtimeImports(file, team.thenStatement)).toEqual(["./team/cli"]);
+    expect(team.elseStatement && ts.isBlock(team.elseStatement)).toBe(true);
+    expect(runtimeImports(file, team.elseStatement!)).toEqual(["./local-cli"]);
   });
 
   test("silent callback imports exclude daemon, installation and provider authority", () => {

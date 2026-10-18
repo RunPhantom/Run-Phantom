@@ -1,7 +1,10 @@
-import type { AppCommand } from "../../protocol.js";
+import type { AppCommand, SemanticCommand } from "../../protocol.js";
 import { sanitizeWithReport } from "../../serialization.js";
 import { isHtmlElement, isInput, isTextArea } from "../dom/realm.js";
 import { assertEditable, assertNotRichText, setNativeValue } from "./value-input.js";
+import { composedAncestors, isSemanticVisible, semanticRole } from "../dom/query.js";
+import { LiveElementRefs } from "../dom/refs.js";
+import { findSemantic, snapshotSemantic } from "../dom/snapshot.js";
 
 function matches(selector: string): NodeListOf<Element> {
   try { return document.querySelectorAll(selector); } catch {
@@ -26,11 +29,12 @@ function actionTarget(selector: string): HTMLElement {
 }
 
 export function runDomCommand(
-  command: Exclude<AppCommand, { type: "state" }>,
+  command: Extract<AppCommand, { type: "snapshot" | "click" | "fill" }>,
   sanitize: (value: unknown) => { value: unknown; truncated: boolean } = (value) => {
     const safe = sanitizeWithReport(value);
     return { value: safe.value, truncated: Boolean(safe.truncation || safe.redacted) };
   },
+  beforeMutation?: (element: Element) => void,
 ): { result: unknown; truncated?: boolean } {
   if (command.type === "snapshot") {
     const selector = command.selector ?? "button,input,textarea,select,a,[role]";
@@ -58,6 +62,7 @@ export function runDomCommand(
   }
   const element = actionTarget(command.selector);
   if (command.type === "click") {
+    beforeMutation?.(element);
     element.click();
     return { result: { dispatched: true } };
   }
@@ -67,7 +72,47 @@ export function runDomCommand(
     throw new Error("This input type does not support text filling");
   }
   assertEditable(element, "fill");
+  beforeMutation?.(element);
   element.focus();
   const prevented = setNativeValue(element, command.value);
   return { result: { dispatched: true, defaultPrevented: prevented } };
+}
+
+function semanticTarget(ref: string, refs: LiveElementRefs, fill: boolean): HTMLElement {
+  const element = refs.resolve(ref);
+  if (!isHtmlElement(element)) throw new Error("Actions require an HTML element");
+  if (!isSemanticVisible(element)) throw new Error("Cannot act on a hidden element");
+  if (composedAncestors(element).some(ancestor => ancestor.hasAttribute("inert") || ancestor.getAttribute("aria-disabled") === "true")
+    || element.matches(":disabled")) throw new Error("Cannot act on a disabled or inert element");
+  if ((isInput(element) || isTextArea(element)) && element.readOnly) throw new Error("Cannot act on a readonly element");
+  if (fill) {
+    assertNotRichText(element, "fill");
+    if (!isInput(element) && !isTextArea(element)) throw new Error("Fill requires an input or textarea");
+    if (isInput(element) && !["text", "search", "tel", "url", "email", "password", "number"].includes(element.type)) throw new Error("This input type does not support text filling");
+    assertEditable(element, "fill");
+  } else if (!["button", "link", "checkbox", "radio", "switch", "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "option", "treeitem", "textbox", "searchbox", "spinbutton", "combobox", "listbox", "slider"].includes(semanticRole(element))) {
+    throw new Error("Reference is not an interactive click target");
+  }
+  return element;
+}
+
+export function runSemanticDomCommand(
+  command: SemanticCommand,
+  refs: LiveElementRefs,
+  sanitize: (value: unknown) => { value: unknown; truncated: boolean },
+  beforeMutation: (element: Element) => void,
+): { result: unknown; truncated?: boolean } {
+  if (command.type === "find") return findSemantic(command.query, refs, sanitize);
+  if (command.type === "semantic-snapshot") return snapshotSemantic(refs, sanitize);
+  const element = semanticTarget(command.ref, refs, command.type === "ref-fill");
+  // Resolve and validate before recording an action or invoking any page focus handler.
+  beforeMutation(element);
+  if (command.type === "ref-click") {
+    element.click();
+    return { result: { dispatched: true, source: "sdk-reported" } };
+  }
+  element.focus();
+  if (semanticTarget(command.ref, refs, true) !== element) throw new Error("Reference changed during focus");
+  const prevented = setNativeValue(element as HTMLInputElement | HTMLTextAreaElement, command.value);
+  return { result: { dispatched: true, defaultPrevented: prevented, source: "sdk-reported" } };
 }

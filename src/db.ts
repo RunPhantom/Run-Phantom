@@ -1042,6 +1042,7 @@ export function clearAll() {
     tx.delete(schema.evaluation_experiments).run();
     tx.delete(schema.evaluation_revisions).run();
     tx.delete(schema.evaluation_datasets).run();
+    tx.delete(schema.verification_snapshots).run();
     tx.delete(schema.verification_reports).run();
     tx.delete(schema.verification_flows).run();
     tx.delete(schema.live_events).run();

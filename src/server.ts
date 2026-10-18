@@ -117,6 +117,9 @@ import { createVerificationRouter } from "./verification/router";
 import { parseAppOrigin } from "./verification/bridge";
 import verificationSdk from "./verification/browser-sdk.js" with { type: "text" };
 import { VERIFICATION_LIMITS } from "./verification/protocol";
+import { BrowserAutomation } from "./verification/automation";
+import { browserHostConfig } from "./verification/browser-provider";
+import { createBrowserRouter } from "./verification/browser-router";
 import { createEvaluationService } from "./evaluations/service";
 import { createEvaluationRouter } from "./evaluations/router";
 import { createReviewQueueRouter } from "./review-queues/router";
@@ -777,6 +780,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
   hookController = new CodingHookController(hookOwner.store, runId => broadcast("spans", { runIds: [runId] }));
 
   const verification = createVerificationService({ broadcast, allowedSourceIps, allowedHosts });
+  const browserAutomation = new BrowserAutomation(browserHostConfig(), broadcast);
   const evaluations = createEvaluationService();
   const evidenceDatabase = getDrizzleDb().$client;
   evidenceDatabase.transaction(() => {
@@ -824,7 +828,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
     const httpClosed = new Promise<Error | undefined>((resolve) => closeHttp((error) => resolve(error)));
     shutdownTask = (async () => {
       try {
-        await Promise.all([nativeClosed, hookController.close(), evidenceImports.shutdown(), comparisons?.close(), ...hookManagementWork]);
+        await Promise.all([nativeClosed, browserAutomation.close(), hookController.close(), evidenceImports.shutdown(), comparisons?.close(), ...hookManagementWork]);
         await acpGrants.close();
         askUserQuestions.closeAll();
         verification.close();
@@ -1164,6 +1168,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
 
   // The owned close promise above joins ACP before disposing these shared services.
 
+  app.use("/api/verification/browser", localOriginGuard, createBrowserRouter(browserAutomation, () => currentServerPort() ?? port));
   app.use("/api/verification", createVerificationRouter(verification));
   app.use("/api/evaluations", createEvaluationRouter(evaluations, { service: evidenceImports, owner: evidenceOwner }));
 
@@ -1772,7 +1777,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
     hookOwner.store.rotateOwner();
     clearingHooks = true;
     const draining = hookController.close();
-    void Promise.all([draining, evidenceImports.clear(evidenceOwner), ...hookManagementWork]).then(() => {
+    void Promise.all([draining, browserAutomation.reset(), evidenceImports.clear(evidenceOwner), ...hookManagementWork]).then(() => {
       evaluations.reset();
       for (const id of verification.bridge.sessions.keys()) verification.bridge.remove(id);
       clearAll(); hookController = new CodingHookController(hookOwner.store, runId => broadcast("spans", { runIds: [runId] })); clearingHooks = false; broadcast("clear", {}); res.json({ ok: true });
@@ -3002,6 +3007,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
   return {
     app,
     server,
+    closeBrowserWorkers: () => browserAutomation.close(),
     close: closeServer,
     codingHooks: { store: hookOwner.store, get controller() { return hookController; }, management: () => new ClaudeHookManagement(hookOwner.store, server.listening && currentServerPort() ? `http://127.0.0.1:${currentServerPort()}` : null, server.listening) },
     get port() {
