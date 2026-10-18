@@ -1,0 +1,27 @@
+{
+  "pr": 131,
+  "feature": "F46",
+  "source": "a61f820583491e07f88bdb3d3c41a2453643131a",
+  "tree": "09bd6e67c7342a7749ef9a28bc2a1370c8d41ffb",
+  "base": "251c7dacf55698dd30754865ae8bedec78b8e733",
+  "draft": true,
+  "scope": "Exact reviewed inactive dataset component with synthetic transport; production execution and installed runtime integration remain pending.",
+  "remaining_qualification": "See PR body; no merge or full-product/platform/paid acceptance claimed.",
+  "root_viewed_at": "2026-10-18T10:08:31.508744+00:00",
+  "screenshots": [
+    {
+      "file": "component-1440.png",
+      "sha256": "16a1c3f159fe4b8e0dc243898ed1b705f322d96c682a68400eadcc14f12b426b",
+      "bytes": 117111,
+      "platform": "macOS arm64",
+      "profile": "Exact reviewed inactive dataset component with synthetic transport; production execution and installed runtime integration remain pending."
+    },
+    {
+      "file": "component-390.png",
+      "sha256": "0966379bfebada13628409dc95b2bf78b01df1a8bdc35e02b473becb5708e176",
+      "bytes": 76836,
+      "platform": "macOS arm64",
+      "profile": "Exact reviewed inactive dataset component with synthetic transport; production execution and installed runtime integration remain pending."
+    }
+  ]
+}
