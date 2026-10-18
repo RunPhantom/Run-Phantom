@@ -1,0 +1,41 @@
+{
+  "pr": 134,
+  "feature": "F42",
+  "source": "4581a924c378f4b2ef35e338d8c3bcb1dba3d78d",
+  "tree": "7ec03a09db989c5875c052963b5f815801e20b56",
+  "base": "50d9e5cea9ebf3fbe01a1f9f0c085fff4cf8ddcd",
+  "draft": true,
+  "scope": "Real local daemon/SQLite synthetic evaluation and queue UI. One before-baseline image is explicitly identified; three exact final-head images.",
+  "remaining_qualification": "See PR body; source-specific local proofs do not establish full assembled or all-platform/provider acceptance. Merges stopped.",
+  "root_review_recorded_at": "2026-10-18T10:50:32.424691+00:00",
+  "screenshots": [
+    {
+      "file": "before-evaluations-desktop.png",
+      "sha256": "124d3b478ed60b4918bd7e240c01273947e0afc3226f75435fccb9cd24d38764",
+      "bytes": 119140,
+      "platform": "macOS arm64",
+      "profile": "Before: regression dataset workspace, desktop; baseline source50d9e5cea9ebf3fbe01a1f9f0c085fff4cf8ddcd"
+    },
+    {
+      "file": "evaluation-workspace-desktop.png",
+      "sha256": "7defd4fd0dff0d7bc3704a14fa84b1f2c329c8ee7aed263bb6750a8db45ed9b1",
+      "bytes": 114594,
+      "platform": "macOS arm64",
+      "profile": "After: frozen dataset revision and candidate workspace, desktop; final source4581a924c378f4b2ef35e338d8c3bcb1dba3d78d"
+    },
+    {
+      "file": "evaluation-workspace-mobile.png",
+      "sha256": "c27cbd083095297f6430e0c16f5e266c1037046565839010dfbe1a87ebd24482",
+      "bytes": 53962,
+      "platform": "macOS arm64",
+      "profile": "After: frozen dataset revision workspace, mobile; final source4581a924c378f4b2ef35e338d8c3bcb1dba3d78d"
+    },
+    {
+      "file": "review-mobile.png",
+      "sha256": "d49b1a2b35e10abf4f16cc511bcb5158308685f6388632da672454578c42b2e3",
+      "bytes": 50314,
+      "platform": "macOS arm64",
+      "profile": "After: real review queue with connected workspace navigation, mobile; final source4581a924c378f4b2ef35e338d8c3bcb1dba3d78d"
+    }
+  ]
+}
