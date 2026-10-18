@@ -45,7 +45,7 @@ export interface SemanticCoverage {
   unread: Array<{ tag: string; reason: string }>;
   unreadOverflow?: true;
 }
-export interface SemanticSummary { ref?: string; tag: string; role: string; name: string; label: string; testId: string; depth: number; disabled: boolean; readonly: boolean; truncated?: true }
+export interface SemanticSummary { ref?: string; tag: string; role: string; name: string; label: string; testId: string; depth: number; disabled: boolean; readonly: boolean; truncated?: true; controlSource?: ControlSourceObservation }
 export interface SemanticResult {
   source: "sdk-reported";
   nameModel: "partial-aria";
@@ -142,13 +142,31 @@ export type Predicate =
   | { kind: "element"; selector: string; state: "present" | "absent" }
   | { kind: "allOf" | "anyOf"; predicates: Predicate[] }
   | RelativePredicate;
-export interface FlowStep { command?: AppCommand; predicate: Predicate }
+export type FlowAnchor = { kind: "css"; selector: string } | {
+  kind: "semantic"; query: SemanticQuery;
+  instance: Pick<SemanticSummary, "tag" | "role" | "name" | "label" | "testId">;
+  source?: ControlSourceObservation;
+};
+export interface FlowStep { command?: AppCommand; predicate: Predicate; anchor?: FlowAnchor }
+export interface FlowDocument { version: 2; steps: FlowStep[] }
 export interface VerificationFlow {
+  version: 2;
+  revision: string;
   id: string;
   name: string;
   origin: string;
   steps: FlowStep[];
   createdAt: number;
+}
+export interface FlowRepairCandidate {
+  id: string; anchor: Extract<FlowAnchor, { kind: "semantic" }>; selectable: boolean;
+  sourceMatch: "same" | "changed" | "unavailable" | "unrecorded"; reason: string;
+}
+export interface FlowRepairProposal {
+  id: string; flowId: string; revision: string; step: number; oldAnchor: FlowAnchor;
+  oldMatch: { matches: number | null; reason: string };
+  candidates: FlowRepairCandidate[]; coverage: SemanticCoverage;
+  ambiguous: boolean; sourceIncomplete: boolean; expiresAt: number;
 }
 export interface Verdict { status: VerificationStatus; reason: string; evidence: RuntimeEvent[] }
 export interface VerificationCheckContext {

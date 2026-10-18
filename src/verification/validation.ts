@@ -2,6 +2,7 @@ import {
   PROTOCOL_VERSION, CAUSAL_PROTOCOL_VERSION, CAUSAL_CAPABILITY, SEMANTIC_PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_PROTOCOL_VERSION, SOURCE_CAPABILITY, TREE_PROTOCOL_VERSION, TREE_CAPABILITY, SEMANTIC_REF_PATTERN, normalizeSemanticText, relativeTargetKey, relativeTargets, VERIFICATION_LIMITS as L,
   type AppCommand, type BrowserMessage, type Coverage, type FlowStep, type Predicate, type RelativeTarget, type SemanticQuery, type VerificationCapability,
 } from "./protocol";
+import { parseFlowAnchor } from "./flow-anchors";
 import { isSensitiveKey } from "./redaction";
 import { sanitizeWithReport } from "./serialization";
 import { parseControlSourceObservation } from "./build/source";
@@ -262,7 +263,7 @@ export function parseFlowSteps(value: unknown): FlowStep[] {
   size(value, L.MAX_FRAME_BYTES, "flow steps");
   return value.map((raw) => {
     const obj = record(raw, "flow step");
-    keys(obj, ["command", "predicate"], "flow step");
+    keys(obj, ["command", "predicate", "anchor"], "flow step");
     const predicate = parsePredicate(obj.predicate);
     assertSafePredicate(predicate);
     const command = Object.hasOwn(obj, "command") ? parseCommand(obj.command) : undefined;
@@ -276,7 +277,11 @@ export function parseFlowSteps(value: unknown): FlowStep[] {
     if (command?.type === "fill") invalid("saved flows cannot contain fill commands; use live fill so entered values are never persisted");
     if (command?.type === "state" && isSensitiveKey(command.store)) invalid("saved flows cannot read credential-bearing stores");
     if (command && "selector" in command && command.selector !== undefined) assertSafeSelector(command.selector);
-    const step = { ...(command === undefined ? {} : { command }), predicate };
+    const anchor = Object.hasOwn(obj, "anchor") ? parseFlowAnchor(obj.anchor) : undefined;
+    if (anchor && command?.type !== "click" && command?.type !== "causal-click") invalid("durable anchors require a saved click action");
+    if (anchor?.kind === "css" && command && "selector" in command && anchor.selector !== command.selector) invalid("CSS anchor must preserve the exact action selector");
+    if (anchor?.kind === "semantic" && targets.length) invalid("semantic anchors do not support CSS-addressed relative baselines; keep the CSS action");
+    const step = { ...(command === undefined ? {} : { command }), predicate, ...(anchor ? { anchor } : {}) };
     const sanitized = sanitizeWithReport(step);
     if (sanitized.redacted || sanitized.truncation) invalid("saved flow contains a secret or exceeds the safe persistence limits");
     return step;
