@@ -1,4 +1,5 @@
 import { normalizeOtelId } from "./ids";
+import { inferSpanType, type CaptureVisibilityV1 } from "./spans/adapters/capture-visibility";
 import { normalizeSpan } from "./spans/normalize";
 import type { NormalizedSpan } from "./spans/normalized";
 import { captureOtlpEvidence, type OtlpEvidence } from "./spans/otlp-evidence";
@@ -17,6 +18,7 @@ export interface ParsedSpan {
    * fields without re-parsing `input_payload` strings. See `src/spans/`.
    */
   normalized: NormalizedSpan;
+  captureVisibility?: CaptureVisibilityV1;
 }
 
 /**
@@ -86,70 +88,6 @@ function collectAttrs(
 function first(attrs: any[], ...keys: string[]): string | number | boolean | undefined {
   for (const k of keys) { const v = getAttr(attrs, k); if (v !== undefined) return v; }
   return undefined;
-}
-
-function inferSpanType(
-  operationId?: string,
-  traceloopKind?: string,
-  hasToolName = false,
-  runPhantomSpanKind?: string,
-  attrs: Record<string, string | number | boolean> = {},
-): "LLM_GENERATION" | "TOOL_CALL" | "AGENT_ROOT" | "TRACE" | "INTERNAL" {
-  // Prefer an explicit Run Phantom role over operation-name heuristics.
-  if (runPhantomSpanKind === "agent_root") return "AGENT_ROOT";
-  if (runPhantomSpanKind === "trace") return "TRACE";
-  if (runPhantomSpanKind === "llm_call") return "LLM_GENERATION";
-  if (runPhantomSpanKind === "tool_call") return "TOOL_CALL";
-
-  // Fall back to provider-neutral and factual third-party conventions.
-  if (hasToolName) return "TOOL_CALL";
-  if (traceloopKind === "tool") return "TOOL_CALL";
-  if (traceloopKind === "llm") return "LLM_GENERATION";
-  switch (attrs["openinference.span.kind"]) {
-    case "LLM": return "LLM_GENERATION";
-    case "TOOL": return "TOOL_CALL";
-    case "AGENT": return "AGENT_ROOT";
-    case "CHAIN": return "TRACE";
-    case "EMBEDDING": case "RETRIEVER": case "RERANKER":
-    case "GUARDRAIL": case "EVALUATOR": case "PROMPT": return "INTERNAL";
-  }
-  if (attrs["gen_ai.operation.name"] === "execute_tool") return "TOOL_CALL";
-  if (attrs["gen_ai.operation.name"] === "invoke_agent") return "AGENT_ROOT";
-  if (attrs["gen_ai.operation.name"] === "invoke_workflow") return "TRACE";
-  if (isGenAiInferenceSpan(attrs)) return "LLM_GENERATION";
-  if (typeof attrs["lk.chat_ctx"] === "string") return "LLM_GENERATION";
-  if (typeof operationId === "string") {
-    if (operationId === "ai.toolCall") return "TOOL_CALL";
-    if (operationId === "chat" || operationId === "llm" || operationId === "generation" || operationId === "response") return "LLM_GENERATION";
-    if (operationId === "ConverseCommand" || operationId === "InvokeModelCommand") return "LLM_GENERATION";
-    if (operationId.includes("Stream") || operationId.includes("Generate") ||
-        operationId.includes("stream") || operationId.includes("generate")) return "LLM_GENERATION";
-  }
-  return "INTERNAL";
-}
-
-function isGenAiInferenceSpan(attrs: Record<string, string | number | boolean>): boolean {
-  const operationName = attrs["gen_ai.operation.name"];
-  if (
-    operationName === "chat" ||
-    operationName === "text_completion" ||
-    operationName === "generate_content"
-  ) {
-    return true;
-  }
-
-  // Legacy OpenLLMetry provider spans emitted this shape before the current
-  // OTel GenAI message attributes existed. Treat chat/completion calls as LLMs,
-  // but avoid broad `gen_ai.*` matching so embeddings/retrievals remain INTERNAL
-  // until Run Phantom supports them explicitly.
-  const requestType = attrs["llm.request.type"];
-  if (requestType === "chat" || requestType === "completion") return true;
-
-  return hasIndexedAttr(attrs, "gen_ai.prompt.") || hasIndexedAttr(attrs, "gen_ai.completion.");
-}
-
-function hasIndexedAttr(attrs: Record<string, string | number | boolean>, prefix: string): boolean {
-  return Object.keys(attrs).some((key) => key.startsWith(prefix));
 }
 
 function status(code: number | string | undefined): string {
@@ -283,7 +221,9 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
         // Adapters know which attributes hold the canonical input/output payload
         // for their SDK and produce a typed `normalized` view in a single pass,
         // so downstream consumers don't need to coalesce or try/catch-and-guess.
+        const otlpEvidence = captureOtlpEvidence(s, rs, ss);
         const match = normalizeSpan({
+          traceId: normalizeOtelId(s.traceId, 16) ?? s.traceId, spanId: normalizeOtelId(s.spanId, 8) ?? s.spanId, otlpEvidence,
           spanName: name,
           attrs: allAttrs,
           spanType,
@@ -345,7 +285,12 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
             s.parentSpanId ??
             undefined,
           name, spanType,
-          status: match.normalized.capture?.contract === "runphantom.codex-hook.observation/v1" ? "UNSET" : status(s.status?.code),
+          // Imported observations do not acquire an ended-runtime guarantee from OTLP's UNSET default.
+          status: match.normalized.capture?.contract === "runphantom.codex-hook.observation/v1"
+            ? "UNSET"
+            : typeof allAttrs.captureContract === "string" && allAttrs.captureContract.startsWith("runphantom.cursor-hook.observation/")
+              ? status(s.status?.code) === "ERROR" ? "ERROR" : "UNSET"
+              : status(s.status?.code),
           inputPayload: stripNul(inputPayload), outputPayload: stripNul(outputPayload),
           startTimeMs: startMs, endTimeMs: endMs,
           durationMs: match.normalized.capture?.contract === "runphantom.codex-hook.observation/v1" ? 0 : numericAttr(getAttr(attrs, "traceloop.entity.duration_ms")) ?? (endMs - startMs),
@@ -354,7 +299,8 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
           outputTokens: typeof outputTokens === "number" ? outputTokens : undefined,
           attributes: allAttrs,
           eventId, eventName, userId, convoId, replayRunId,
-          otlpEvidence: captureOtlpEvidence(s, rs, ss),
+          otlpEvidence,
+          ...(match.captureVisibility ? { captureVisibility: match.captureVisibility } : {}),
           normalized: match.normalized,
         });
       }

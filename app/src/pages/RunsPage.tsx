@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavigationType, useNavigate, useNavigationType, useParams } from "react-router-dom";
 import { runPath } from "../utils/navigation";
-import { RunListItem } from "../components/RunList";
+import { RunListItem, useShortRunIds } from "../components/RunList";
 import { RunDetail } from "../components/RunDetail";
 import { EmptyState } from "../components/EmptyState";
 import { ReplayView } from "../components/ReplayView";
@@ -208,6 +208,10 @@ export function RunsPage() {
     return [...names].sort();
   }, [runs]);
 
+  // Computed over every loaded run, not just the filtered rows, so a row's
+  // suffix does not change while the user types a search.
+  const shortRunIds = useShortRunIds(runs);
+
   const filtered = useMemo(() => {
     let list = runs;
     if (agentFilter !== "all") {
@@ -384,7 +388,7 @@ export function RunsPage() {
                   {search ? "No matching runs" : "No runs"}
                 </div>
               : filtered.map(run => (
-                  <RunListItem key={run.id} run={run}
+                  <RunListItem key={run.id} run={run} shortRunIds={shortRunIds}
                     selected={run.id === selectedId}
                     highlighted={run.id === hoveredSourceId}
                     faded={!!hoveredSourceId && run.id !== hoveredSourceId}
@@ -454,7 +458,7 @@ export function RunsPage() {
                                   onMouseLeave={() => setHoveredSourceId(null)}>
                                   {srcName}
                                 </button>
-                                <span className="font-mono text-[10px] ml-1.5" style={{ color: C.fg0 }}>({meta.replay.sourceRunId.slice(0, 5)})</span>
+                                <span className="font-mono text-[10px] ml-1.5" style={{ color: C.fg0 }}>({shortRunIds.get(meta.replay.sourceRunId) ?? meta.replay.sourceRunId})</span>
                               </span>
                               {!replayCompare && !isMobile && (
                                 <button

@@ -135,3 +135,8 @@ export function parseClaudeHookInput(input: unknown): HookAdmission {
     toolInput: source.tool_input ?? null, toolResponse: source.tool_response ?? null, error: text("error"), errorType: text("error_type"), interrupted: typeof source.is_interrupt === "boolean" ? source.is_interrupt : null, durationMs: typeof source.duration_ms === "number" ? source.duration_ms : null, lastAssistantMessage: text("last_assistant_message"),
   } };
 }
+
+/** Only management-registered settings choose the observation producer label. */
+export function hookVendorForSettings(file: string): "claude" | "cursor" {
+  return /[\\/]\.cursor[\\/]hooks\.json$/.test(file) ? "cursor" : "claude";
+}

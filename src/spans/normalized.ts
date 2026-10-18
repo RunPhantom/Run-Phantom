@@ -1,6 +1,7 @@
+import type { CursorHookCaptureView } from "./adapters/cursor-hook";
 import type { ClaudeHookCaptureView } from "./adapters/claude-hook";
 import type { CodexHookCaptureView } from "./adapters/codex-hook";
-export type HookCaptureView = ClaudeHookCaptureView | CodexHookCaptureView;
+export type HookCaptureView = ClaudeHookCaptureView | CursorHookCaptureView | CodexHookCaptureView;
 
 /** Producer observations can withhold completion authority, never establish it. */
 export function captureCompletion(capture: HookCaptureView | undefined): "unavailable" | null {
@@ -87,7 +88,9 @@ export interface NormalizedOtherSpan {
   kind: "other";
 }
 
-export type NormalizedSpan = NormalizedLLMSpan | NormalizedToolSpan | NormalizedOtherSpan;
+import type { RetrievalCapture, EmbeddingCapture } from "./adapters/capture-visibility-types";
+
+export type NormalizedSpan = RetrievalCapture | EmbeddingCapture | NormalizedLLMSpan | NormalizedToolSpan | NormalizedOtherSpan;
 
 export function emptyNormalized(): NormalizedOtherSpan {
   return { kind: "other" };

@@ -8,10 +8,11 @@ import { executeHookManagement, parseHookManagementCommand, type HookManagementC
 import { ClaudeHookManagement } from "./management";
 import { CodingHookStore } from "./store";
 import { parseTransitionV2 } from "./context-v2";
+import { hookVendorForSettings } from "./shared";
 import { hookDigest, isHex } from "./protocol";
 
 function command(argv: string[]): HookManagementCommand {
-  const action = argv[0]; if (!["install", "uninstall", "doctor", "unregister"].includes(action) || argv[1] !== "claude") throw new Error("usage: runphantom hooks install|uninstall|doctor|unregister claude [--global|--local] [--cwd PATH] [--full --consent-full]");
+  const action = argv[0]; if (!["install", "uninstall", "doctor", "unregister"].includes(action) || !["claude", "cursor"].includes(argv[1])) throw new Error("usage: runphantom hooks install|uninstall|doctor|unregister claude|cursor [--global|--local] [--cwd PATH] [--full --consent-full]");
   let scope = "global", workspace = process.cwd(), captureMode = "metadata", fullConsent = false;
   for (let i = 2; i < argv.length; i++) {
     if (argv[i] === "--global") scope = "global";
@@ -21,7 +22,7 @@ function command(argv: string[]): HookManagementCommand {
     else if (argv[i] === "--consent-full") fullConsent = true;
     else throw new Error("unknown hooks management argument");
   }
-  return parseHookManagementCommand({ action, scope, workspace, captureMode, fullConsent });
+  return parseHookManagementCommand({ action, scope, workspace, captureMode, fullConsent, ...(argv[1] === "cursor" ? { vendor: "cursor" } : {}) });
 }
 function managementPort(): number {
   let raw = process.env.RUNPHANTOM_PORT;
@@ -87,6 +88,11 @@ export async function removeConfiguredClaudeHooks(databasePath = getDbPath()): P
     if (!db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='coding_hook_installations'").get()) return 0;
     const manager = new ClaudeHookManagement(new CodingHookStore(db));
     const rows = db.query("SELECT id FROM coding_hook_installations ORDER BY id LIMIT 65").all() as { id: string }[]; if (rows.length > 64) throw new Error("Hook installation quota");
-    for (const row of rows) if ((await manager.uninstall(row.id)).status !== "removed") throw new Error("Uncertain hook configuration ownership"); return rows.length;
+    for (const row of rows) {
+      const installed = manager.store.readInstallation(row.id);
+      const selected = installed && hookVendorForSettings(installed.binding.settingsPath) === "cursor" ? manager.forPlatform((await import("./cursor-install")).CURSOR_PLATFORM) : manager;
+      if ((await selected.uninstall(row.id)).status !== "removed") throw new Error("Uncertain hook configuration ownership");
+    }
+    return rows.length;
   } finally { db.close(true); }
 }
