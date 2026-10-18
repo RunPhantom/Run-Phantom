@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { accepted, ENGINES, matrix, reportOutcome, summarize, privateEnvironment, type EngineIdentity } from "../scripts/qualification/browser-engines";
 const identities: EngineIdentity[] = ENGINES.map(engine => ({ engine, executable: `/installed/${engine}`, executableSha256: "a".repeat(64), nativeBinary: `/installed/${engine}`, nativeSha256: "a".repeat(64), available: true, reason: null }));
@@ -41,3 +42,45 @@ test("direct config invocation refuses missing runtime before any browser journe
   const child = spawnSync(process.execPath, ["--no-env-file", "-e", `await import(${JSON.stringify(config)})`], { env: { PATH: process.env.PATH!, HOME: process.env.HOME!, TMPDIR: process.env.TMPDIR! }, encoding: "utf8", timeout: 10_000 });
   expect(child.status).not.toBe(0); expect(child.stderr).toContain("BLOCKED: dedicated owned browser runner");
 });
+
+test("partial acquisition cleanup attempts a registered resource after connection failure and rejected close", async () => {
+  const { createServer } = await import("node:net");
+  const { cleanupStages, preserveFixtureFailure } = await import("../app/tests-e2e/browser-engine-qualification/lifecycle");
+  const server = createServer(); server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const primary = new Error("failed after server acquisition before connection registration");
+  const secondary = new Error("connection close rejected");
+  const stages = await cleanupStages([
+    { stage: "connection-close", close: () => Promise.reject(secondary) },
+    { stage: "registered-server-close", close: () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) },
+  ], 1000);
+  expect(stages.map(item => item.completed)).toEqual([false, true]); expect(server.listening).toBe(false);
+  let failure: unknown; try { preserveFixtureFailure(primary, stages); } catch (error) { failure = error; }
+  expect(failure).toBeInstanceOf(AggregateError); expect((failure as AggregateError).errors[0]).toBe(primary);
+  expect((failure as AggregateError).errors[1].message).toContain("connection close rejected");
+});
+test("primary body failure is preserved after successful independently bounded cleanup", async () => {
+  const { cleanupStages, preserveFixtureFailure } = await import("../app/tests-e2e/browser-engine-qualification/lifecycle");
+  const primary = new Error("body failed"); const visited: number[] = [];
+  const stages = await cleanupStages([{ stage: "hung-close", close: () => new Promise(() => {}) }, { stage: "later-close", close: () => { visited.push(2); } }], 25);
+  expect(stages.map(item => item.completed)).toEqual([false, true]); expect(visited).toEqual([2]);
+  let failure: unknown; try { preserveFixtureFailure(primary, [{ stage: "successful-close", completed: true }]); } catch (error) { failure = error; }
+  expect(failure).toBe(primary);
+});
+test("TERM-resistant daemon and inherited-pipe descendant are escalated and close is boundedly observed", async () => {
+  const { spawn } = await import("node:child_process");
+  const { reapOwnedProcess, processGone, waitForOwned, cleanupStages, preserveFixtureFailure } = await import("../app/tests-e2e/browser-engine-qualification/lifecycle");
+  const script = `const {spawn}=require('node:child_process');process.on('SIGTERM',()=>{});const child=spawn(process.execPath,['--no-env-file','-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"],{stdio:['ignore','inherit','inherit']});console.log(child.pid);setInterval(()=>{},1000);`;
+  const daemon = spawn(process.execPath, ["--no-env-file", "-e", script], { stdio: ["ignore", "pipe", "pipe"], detached: true }); let closed = false; daemon.once("close", () => { closed = true; });
+  let descendant = 0, primary: Error | undefined;
+  try {
+    descendant = await new Promise<number>((resolve, reject) => { const timer = setTimeout(() => reject(new Error("control child did not identify descendant")), 2000); daemon.stdout!.once("data", bytes => { clearTimeout(timer); resolve(Number(String(bytes).trim())); }); });
+    expect(descendant).toBeGreaterThan(0);
+    const result = await reapOwnedProcess(daemon, [descendant], () => closed, 500);
+    expect(result).toEqual({ forced: true, closeObserved: true }); expect(processGone(daemon.pid!)).toBe(true); expect(processGone(descendant)).toBe(true);
+  } catch (error) { primary = error instanceof Error ? error : new AggregateError([error], "Control primary failure"); }
+  const cleanup = await cleanupStages([
+    { stage: "control-group-kill", close: () => { if (daemon.pid) { try { process.kill(-daemon.pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } } } },
+    { stage: "control-reap", close: () => waitForOwned(() => closed && (!daemon.pid || processGone(daemon.pid)) && (!descendant || processGone(descendant)), 1000) },
+  ], 1500);
+  preserveFixtureFailure(primary, cleanup);
+}, 5000);
