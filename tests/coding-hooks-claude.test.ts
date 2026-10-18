@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { parseClaudeHookInput, HOOK_LIMITS } from "../src/coding-hooks/shared";
+import { Buffer } from "node:buffer";
+import { parseBoundedHookJson, parseClaudeHookInput, HOOK_LIMITS } from "../src/coding-hooks/shared";
 import { normalizeClaudeHook, NORMALIZATION_LIMITS } from "../src/coding-hooks/claude";
 import { buildRedactionPolicy, resetActiveRedactionPolicy, setActiveRedactionPolicy } from "../src/verification/redaction";
 import { hookFixture, hookSourceKey, transcriptRecord, transcriptSnapshot } from "./fixtures/coding-hooks-claude";
@@ -44,6 +45,40 @@ describe("Claude hook lexical and typed admission", () => {
   test("actual UTF8 bytes are bounded before parsing, independent of UTF16 length", () => {
     expect(parseClaudeHookInput('"' + "🧪".repeat(HOOK_LIMITS.stdinBytes / 4) + '"').reason).toBe("byte_limit");
     expect(parseClaudeHookInput(" ".repeat(HOOK_LIMITS.stdinBytes + 1)).reason).toBe("byte_limit");
+  });
+
+  test.each([
+    ["ASCII", "safe ascii"], ["CJK", "漢字"], ["astral", "🧪"],
+    ["unpaired high scalar", "\ud800"], ["unpaired low scalar", "\udfff"],
+  ])("%s generic JSON byte boundary preserves native Buffer UTF8 semantics", (_name, value) => {
+    const raw = '"' + value + '"', bytes = Buffer.byteLength(raw, "utf8");
+    expect(parseBoundedHookJson(raw, bytes)).toEqual({ status: "accepted", value });
+    expect(parseBoundedHookJson(raw, bytes - 1)).toEqual({ status: "unavailable", reason: "byte_limit" });
+    expect(parseBoundedHookJson(raw, bytes + 1)).toEqual({ status: "accepted", value });
+  });
+
+  test.each(["a", "漢", "🧪", "\ud800", "\udfff"])("default maximum UTF8 boundary remains exact for %j", unit => {
+    const unitBytes = Buffer.byteLength(unit, "utf8"), repeats = Math.floor((HOOK_LIMITS.stdinBytes - 2) / unitBytes);
+    const payload = unit.repeat(repeats) + "a".repeat(HOOK_LIMITS.stdinBytes - 2 - repeats * unitBytes);
+    const raw = '"' + payload + '"';
+    expect(Buffer.byteLength(raw, "utf8")).toBe(HOOK_LIMITS.stdinBytes);
+    expect(parseBoundedHookJson(raw)).toEqual({ status: "accepted", value: payload });
+    expect(parseBoundedHookJson(raw + " ")).toEqual({ status: "unavailable", reason: "byte_limit" });
+  });
+
+  test("unpaired generic scalar byte counting does not admit an invalid selected hook string", () => {
+    for (const scalar of ["\ud800", "\udfff"]) {
+      expect(parseBoundedHookJson('"' + scalar + '"', Buffer.byteLength('"' + scalar + '"'))).toEqual({ status: "accepted", value: scalar });
+      expect(parse({ ...base, prompt: scalar })).toEqual({ status: "unavailable", reason: "invalid_fields" });
+    }
+  });
+
+  test("byte lower bound takes precedence over lexical and JSON work", () => {
+    expect(parseBoundedHookJson("[".repeat(HOOK_LIMITS.stdinBytes + 1))).toEqual({ status: "unavailable", reason: "byte_limit" });
+    expect(parseBoundedHookJson('{"x":0,"x":1}', 1)).toEqual({ status: "unavailable", reason: "byte_limit" });
+    for (const limit of [0, -1, NaN, Infinity, 1.5, HOOK_LIMITS.stdinBytes + 1]) {
+      expect(parseBoundedHookJson("0", limit)).toEqual({ status: "unavailable", reason: "byte_limit" });
+    }
   });
 
   test("depth guards ignore quoted brackets and escaped quotes", () => {

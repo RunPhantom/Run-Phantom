@@ -46,7 +46,7 @@ test("two genuine Team daemon processes race receipts and survive killed ACK res
     const request = { datasetId: dataset.data.datasetId, expectedDatasetVersion: 1, idempotencyKey: randomUUID(), items: [{ itemId: item.id, expectedRevision: approved.data.revision }] };
     const filename = path.join(dataDir, "team.sqlite"), before = statSync(filename);
     const promoted = await Promise.all([first, second].map(daemon => call(daemon.url, "POST", at + "/promotions", request))); expect(promoted.map(row => row.response.status)).toEqual([201, 201]); expect(promoted[0].data).toEqual(promoted[1].data); const receipt: TeamReviewReceipt = promoted[0].data;
-    expect(counts()).toEqual({ version: { user_version: 4 }, revisions: { n: 2 }, receipts: { n: 1 }, states: [{ state: "promoted", n: 1 }] });
+    expect(counts()).toEqual({ version: { user_version: 5 }, revisions: { n: 2 }, receipts: { n: 1 }, states: [{ state: "promoted", n: 1 }] });
     // Cancel the first response for a distinct new promotion without parsing its receipt, then hard-kill that native process.
     const crashRun = "3".repeat(32); await capture("Frozen δ", crashRun);
     const crashItem = await call(first.url, "POST", at + "/items", { runId: crashRun }); expect(crashItem.response.status).toBe(201);
@@ -56,7 +56,7 @@ test("two genuine Team daemon processes race receipts and survive killed ACK res
     const crashReceipt = await call(first.url, "GET", at + `/promotions/${crashRequest.idempotencyKey}`); expect(crashReceipt.response.status).toBe(200);
     await capture("Live γ"); const restarted = await boot(); expect(restarted.child.pid).not.toBe(second.child.pid); expect(statSync(filename).ino).toBe(before.ino); expect(statSync(filename).dev).toBe(before.dev);
     const retry = await call(restarted.url, "POST", at + "/promotions", request); expect(retry.response.status).toBe(201); expect(retry.data).toEqual(receipt);
-    const crashRetry = await call(restarted.url, "POST", at + "/promotions", crashRequest); expect(crashRetry.response.status).toBe(201); expect(crashRetry.data).toEqual(crashReceipt.data); expect(counts()).toEqual({ version: { user_version: 4 }, revisions: { n: 3 }, receipts: { n: 2 }, states: [{ state: "promoted", n: 2 }] });
+    const crashRetry = await call(restarted.url, "POST", at + "/promotions", crashRequest); expect(crashRetry.response.status).toBe(201); expect(crashRetry.data).toEqual(crashReceipt.data); expect(counts()).toEqual({ version: { user_version: 5 }, revisions: { n: 3 }, receipts: { n: 2 }, states: [{ state: "promoted", n: 2 }] });
     const source = await call(restarted.url, "GET", at + `/window?centerId=${item.id}`); expect(source.data[0].source.output).toBe("Frozen β");
     const revision = await call(restarted.url, "GET", prefix + `/review-datasets/${receipt.datasetId}/revisions/2`); expect(revision.data.cases[0].sourceOutput).toBe("Frozen β");
     const portable = await call(restarted.url, "GET", prefix + `/review-datasets/${receipt.datasetId}/revisions/2/export`), portableHash = createHash("sha256").update(JSON.stringify(portable.data)).digest("hex"); expect(JSON.stringify(portable.data)).not.toContain(setup.data.user.id); expect(JSON.stringify(portable.data)).not.toContain(runId);

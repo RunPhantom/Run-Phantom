@@ -2,10 +2,11 @@ import type { Database } from "bun:sqlite";
 import { EVIDENCE_STORAGE_SQL } from "../evaluations/evidence-store";
 import { PROMPT_STORAGE_SQL } from "../prompts/storage";
 import { TEAM_REVIEW_STORAGE_SQL } from "./review-queue-schema";
+import { COMPARISON_STORAGE_SQL } from "../prompts/comparison-storage";
 import { TeamError } from "./errors";
 import { TEAM_LIMITS } from "./protocol";
 
-export const TEAM_SCHEMA_VERSION = 4;
+export const TEAM_SCHEMA_VERSION = 5;
 
 const TEAM_V1_SQL = `
       CREATE TABLE team_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -133,8 +134,9 @@ const v1Schema = expectedSchema(TEAM_V1_SQL);
 const v2Schema = expectedSchema(`${TEAM_V1_SQL}\n${TEAM_EVIDENCE_SQL}`);
 const v3Schema = expectedSchema(`${TEAM_V1_SQL}\n${TEAM_EVIDENCE_SQL}\n${PROMPT_STORAGE_SQL}`);
 const v4Schema = expectedSchema(`${TEAM_V1_SQL}\n${TEAM_EVIDENCE_SQL}\n${PROMPT_STORAGE_SQL}\n${TEAM_REVIEW_STORAGE_SQL}`);
+const v5Schema = expectedSchema(`${TEAM_V1_SQL}\n${TEAM_EVIDENCE_SQL}\n${PROMPT_STORAGE_SQL}\n${TEAM_REVIEW_STORAGE_SQL}\n${COMPARISON_STORAGE_SQL}`);
 function knownTeamSchema(db: Database, version: number): void {
-  const expected = version === 1 ? v1Schema : version === 2 ? v2Schema : version === 3 ? v3Schema : v4Schema;
+  const expected = version === 1 ? v1Schema : version === 2 ? v2Schema : version === 3 ? v3Schema : version === 4 ? v4Schema : v5Schema;
   const actual = db.query("SELECT name,type,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'").all() as SchemaObject[];
   if (actual.length !== expected.size || actual.some(row => {
     const object = expected.get(row.name);
@@ -148,7 +150,7 @@ function knownTeamSchema(db: Database, version: number): void {
 export function initializeTeamSchema(db: Database): void {
   db.transaction(() => {
     const version = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
-    if (![0, 1, 2, 3, TEAM_SCHEMA_VERSION].includes(version)) throw new TeamError("conflict", "Unsupported team database version");
+    if (![0, 1, 2, 3, 4, TEAM_SCHEMA_VERSION].includes(version)) throw new TeamError("conflict", "Unsupported team database version");
     if (version === 0) {
       const objects = db.query("SELECT name FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'").all();
       if (objects.length) throw new TeamError("conflict", "The selected database is not an initialized team database");
@@ -171,7 +173,13 @@ export function initializeTeamSchema(db: Database): void {
       db.exec("INSERT INTO prompt_scope_controls(scope_key,generation) SELECT t.scope_key,1 FROM team_evidence_scopes t JOIN evaluation_evidence_scopes e ON e.scope_key=t.scope_key");
       db.exec("PRAGMA user_version=3");
     }
-    db.exec(TEAM_REVIEW_STORAGE_SQL);
-    db.exec("PRAGMA user_version=4");
+    if (version < 4) { db.exec(TEAM_REVIEW_STORAGE_SQL); db.exec("PRAGMA user_version=4"); }
+    const projects = (db.query("SELECT count(*) n FROM projects").get() as { n: number }).n;
+    const parents = (db.query("SELECT count(*) n FROM team_evidence_scopes t JOIN evaluation_evidence_scopes e USING(scope_key) JOIN prompt_scope_controls p USING(scope_key) WHERE e.active=1").get() as { n: number }).n;
+    if (projects > TEAM_LIMITS.PROJECTS || parents !== projects) throw new TeamError("conflict", "Team comparison scopes are unavailable");
+    db.exec(COMPARISON_STORAGE_SQL);
+    db.exec("INSERT INTO comparison_scope_controls(scope_key,generation) SELECT t.scope_key,1 FROM team_evidence_scopes t JOIN evaluation_evidence_scopes e USING(scope_key) JOIN prompt_scope_controls p USING(scope_key) WHERE e.active=1");
+    if (db.query("PRAGMA foreign_key_check").all().length) throw new TeamError("conflict", "Team comparison migration failed its integrity check");
+    db.exec("PRAGMA user_version=5");
   }).immediate();
 }

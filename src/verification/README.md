@@ -33,6 +33,16 @@ verification.disconnect();
 
 Keep the session credential out of source control and production bundles. It expires with the local session; restarting the daemon requires pairing again.
 
+## Optional React source context
+
+Source capture is disabled by default. An application can explicitly add `sourceProvenance: { enabled: true, repoRoot: '/your/repository' }` to its development-only `connect` options. The optional root stays in the browser; it permits a captured development filename to become a bounded repository-relative path. Absolute and outside-root filenames are withheld. Omitting the option or setting `enabled: false` performs no source probe and negotiates no source capability.
+
+Run Phantom captures at most one SDK-reported observation for the validated control before a click or fill is dispatched, including live semantic references. Real React 18 development metadata can supply a location. React 19 can omit that private metadata, so the [optional Vite source adapter](./build/README.md) can stamp eligible React DOM JSX in development. Missing, unsafe, cyclic, oversized or inaccessible metadata produces explicit unavailability. Private fiber inspection is bounded; it reads own data descriptors, never component hooks, props or state. Reflection can trigger a Proxy trap, which is caught; it does not provide a sandbox against a malicious page.
+
+The saved check retains only a minimized source observation, its action identity, boundary cursors and connection generation. A synchronous unmount does not erase that context. A full document navigation can retain the old-generation observation in its report while the result stays **Inconclusive**; reconnecting cannot make the old source current. Source locations are SDK-reported context for finding code. They do not establish source authenticity or cause, and cannot change a verification verdict.
+
+The optional adapter does not inject the SDK or a connection token. Keep the SDK and its session values behind an application's development gate. For explicitly installed consumers it strips reserved static stamps from eligible production JSX and preserves requested production maps with source contents omitted and bounded relative or anonymous names. Read the adapter guide for excluded files, dynamic-spread limitations and the production debugging tradeoff.
+
 ## Inspect, act and check
 
 The SDK observes fetch/XHR metadata, console messages and route changes. It can read DOM snapshots, click a uniquely matching CSS selector, fill an editable input, read explicitly registered stores, and receive application signals. It does not capture request/response bodies or authorization headers. A fetch response records headers becoming available; use an application signal to verify completion of a streamed body.
@@ -71,6 +81,10 @@ These complement the existing agent trace tools. `replay_run` still reruns an in
 
 ## Scope and development
 
-The supported environment is an instrumented local development page. CSS selector actions use synthetic browser events. Verification does not provide trusted native input, cross-origin iframe/shadow-tree traversal, automatic React fiber inspection, desktop shell capture, process snapshots, or a guarantee that all future application behavior is correct. Explicit registered stores and application signals provide additional evidence when DOM/network checks are insufficient.
+The supported environment is an instrumented local development page. CSS selector actions use synthetic browser events. Verification does not provide trusted native input, cross-origin iframe traversal, desktop shell capture, process snapshots, or a guarantee that all future application behavior is correct. Opt-in React source context remains best effort. Explicit registered stores and application signals provide additional evidence when DOM/network checks are insufficient.
 
 The browser SDK is generated from the source in `browser/`; run `bun scripts/build-verification-sdk.ts` after changing it. `bun scripts/build-verification-sdk.ts --check` checks freshness without writing files and runs as part of the root build. The bundle is embedded so serving it does not require the source checkout at runtime.
+
+Retained control source shares the complete saved context’s 64 KiB UTF-8 budget. Optional locations are omitted before existing expectations or action readings need reduction. The daemon records `controlSourceOmitted: "context-limit"` and marks context truncated; this saved-context reason is not a new browser source event or a probe failure. Executed check verdicts, observation windows, connection generations and coverage remain retained.
+
+If location, expectation and reading reductions still do not fit, the largest serialized UTF-8 human reason in saved check context becomes `[TRUNCATED]`; the truncation marker is included in the same byte measurement. The full report’s evaluated reason and verdict remain unchanged. An impossible mandatory context floor refuses persistence instead of dropping executed checks or returning oversized context.
