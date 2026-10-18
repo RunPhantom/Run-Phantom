@@ -224,24 +224,35 @@ function AgentEndpointsSection() {
     if (data?.agents) setAgents(data.agents);
   });
 
-  const persistAgents = useCallback(async (nextAgents: AgentsRegistry, message: string) => {
+  const persistAgents = useCallback(async (nextAgents: AgentsRegistry, message: string, confirmed: (actual: AgentsRegistry) => boolean) => {
     if (pending.current || loading || !loaded) return false;
     pending.current = true;
     const owner = ++generation.current;
     setBusy(true);
     setError(null);
     setNotice("");
+    let sent = false;
     try {
       await saveAgents(nextAgents);
+      sent = true;
       if (!active.current || owner !== generation.current) return false;
-      setAgents(nextAgents);
+      const actual = await getAgents();
+      if (!active.current || owner !== generation.current) return false;
+      setAgents(actual);
+      if (!confirmed(actual)) {
+        setError("The daemon did not retain this endpoint change. Review the endpoint and try again.");
+        return false;
+      }
       setNotice(message);
       void getAgentsHealth().then(next => {
         if (active.current && owner === generation.current) setHealth(next);
       }).catch(() => {});
       return true;
     } catch (cause) {
-      if (active.current && owner === generation.current) setError(cause instanceof Error ? cause.message : String(cause));
+      if (active.current && owner === generation.current) {
+        if (sent) setLoaded(false);
+        setError(sent ? "Change sent, but the saved registry could not be checked. Load it again before making more changes." : cause instanceof Error ? cause.message : String(cause));
+      }
       return false;
     } finally {
       pending.current = false;
@@ -254,18 +265,21 @@ function AgentEndpointsSection() {
     const url = newUrl.trim();
     if (!name || !url) return;
     if (Object.prototype.hasOwnProperty.call(agents, name)) { setError("An endpoint with this name already exists. Choose another name."); return; }
+    let normalized: string;
     try {
       const parsed = new URL(url);
-      if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error();
-    } catch { setError("Enter an HTTP or HTTPS replay URL without embedded credentials."); return; }
-    const saved = await persistAgents({ ...agents, [name]: { url, prefillFromTrace: {} satisfies NonNullable<AgentEntry["prefillFromTrace"]> } }, `Endpoint ${name} registered.`);
+      if (url.length > 4096 || url.includes("#") || !["http:", "https:"].includes(parsed.protocol)
+        || !["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname.toLowerCase()) || parsed.username || parsed.password) throw new Error();
+      normalized = parsed.toString();
+    } catch { setError("Use a local HTTP or HTTPS replay URL without credentials or fragments (up to 4096 characters)."); return; }
+    const saved = await persistAgents({ ...agents, [name]: { url: normalized, prefillFromTrace: {} satisfies NonNullable<AgentEntry["prefillFromTrace"]> } }, `Endpoint ${name} registered.`, actual => actual[name]?.url === normalized);
     if (saved && active.current) { setNewName(""); setNewUrl(""); }
   }, [agents, newName, newUrl, persistAgents]);
 
   const removeAgent = useCallback(async (name: string) => {
     const nextAgents = { ...agents };
     delete nextAgents[name];
-    await persistAgents(nextAgents, `Endpoint ${name} removed.`);
+    await persistAgents(nextAgents, `Endpoint ${name} removed.`, actual => !Object.prototype.hasOwnProperty.call(actual, name));
   }, [agents, persistAgents]);
 
   return (

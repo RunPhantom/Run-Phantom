@@ -8,7 +8,7 @@ import { once } from "node:events";
 
 const root = path.resolve(import.meta.dirname, "../..");
 const test = base.extend<{ local: { url: string } }>({
-  local: async ({}, use) => {
+  local: async ({}, use, testInfo) => {
     const profile = mkdtempSync(path.join(tmpdir(), "runphantom-settings-ui-"));
     const socket = createServer();
     await new Promise<void>(resolve => socket.listen(0, "127.0.0.1", resolve));
@@ -16,7 +16,7 @@ const test = base.extend<{ local: { url: string } }>({
     await new Promise<void>(resolve => socket.close(() => resolve()));
     const url = `http://127.0.0.1:${port}`;
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("RUNPHANTOM_") && !/API_KEY|TOKEN|SECRET|PASSWORD|NODE_OPTIONS/.test(key)));
-    const child: ChildProcess = spawn("bun", ["src/index.ts", "serve"], { cwd: root, env: { ...env, HOME: profile, USERPROFILE: profile, RUNPHANTOM_PORT: String(port), RUNPHANTOM_BIND_HOST: "127.0.0.1", RUNPHANTOM_CLAUDE_CLI_CHAT: "0" }, stdio: ["ignore", "pipe", "pipe"] });
+    const child: ChildProcess = spawn("bun", ["--no-env-file", path.join(root, "src/index.ts"), "serve"], { cwd: profile, env: { ...env, HOME: profile, USERPROFILE: profile, RUNPHANTOM_PORT: String(port), RUNPHANTOM_BIND_HOST: "127.0.0.1", RUNPHANTOM_CLAUDE_CLI_CHAT: "0" }, stdio: ["ignore", "pipe", "pipe"] });
     let logs = "";
     child.stdout?.on("data", data => { logs = (logs + data).slice(-16000); });
     child.stderr?.on("data", data => { logs = (logs + data).slice(-16000); });
@@ -32,9 +32,14 @@ const test = base.extend<{ local: { url: string } }>({
       if (!launchError && child.exitCode === null && child.signalCode === null) {
         const exited = once(child, "exit");
         child.kill("SIGTERM");
-        const timer = setTimeout(() => child.kill("SIGKILL"), 2500);
-        try { await exited; } finally { clearTimeout(timer); }
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const wait = async () => {
+          try { return await Promise.race([exited.then(() => true), new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), 2500); })]); }
+          finally { clearTimeout(timer); }
+        };
+        if (!await wait()) { child.kill("SIGKILL"); if (!await wait()) throw new Error("Isolated daemon did not exit; its private profile was retained."); }
       }
+      if (testInfo.status !== testInfo.expectedStatus) await testInfo.attach("isolated-daemon-log", { body: logs, contentType: "text/plain" });
       rmSync(profile, { recursive: true, force: true });
     }
   },
@@ -53,6 +58,16 @@ test("settings saves real endpoints, refuses duplicates and preserves drafts aft
   const endpoint = panel.getByLabel("Replay endpoint URL", { exact: true });
   const add = panel.getByRole("button", { name: "Add agent endpoint" });
   await expect(name).toBeEnabled();
+  let writes = 0;
+  page.on("request", request => { if (new URL(request.url()).pathname === "/api/agents" && request.method() === "PUT") writes++; });
+  for (const invalid of ["https://example.test/replay", "http://127.0.0.1:65530/replay#fragment", `http://127.0.0.1/${"x".repeat(4096)}`]) {
+    await name.fill("Refused endpoint"); await endpoint.fill(invalid); await add.click();
+    await expect(panel.getByRole("alert")).toContainText("Use a local HTTP or HTTPS replay URL");
+    await expect(name).toHaveValue("Refused endpoint"); await expect(endpoint).toHaveValue(invalid);
+    await expect(panel.getByText("Endpoint Refused endpoint registered.", { exact: true })).toHaveCount(0);
+  }
+  expect(writes).toBe(0);
+  expect((await (await page.request.get(`${local.url}/api/agents`)).json())["Refused endpoint"]).toBeUndefined();
   await name.fill("Reference replay"); await endpoint.fill("http://127.0.0.1:65530/replay"); await add.click();
   await expect(panel.getByRole("status")).toHaveText("Endpoint Reference replay registered.");
   expect((await (await page.request.get(`${local.url}/api/agents`)).json())["Reference replay"].url).toBe("http://127.0.0.1:65530/replay");
@@ -68,6 +83,16 @@ test("settings saves real endpoints, refuses duplicates and preserves drafts aft
   await panel.getByRole("button", { name: "Remove Second replay", exact: true }).click();
   await expect(panel.getByText("Second replay", { exact: true })).toHaveCount(0);
   expect((await (await page.request.get(`${local.url}/api/agents`)).json())["Second replay"]).toBeUndefined();
+  await page.route("**/api/agents", async route => { if (route.request().method() === "GET") await route.fulfill({ json: {} }); else await route.continue(); });
+  await name.fill("Readback mismatch"); await endpoint.fill("http://localhost:65528/replay"); await add.click();
+  await expect(panel.getByRole("alert")).toContainText("did not retain this endpoint change");
+  await expect(name).toHaveValue("Readback mismatch");
+  await expect(panel.getByText("Endpoint Readback mismatch registered.", { exact: true })).toHaveCount(0);
+  expect((await (await page.request.get(`${local.url}/api/agents`)).json())["Readback mismatch"].url).toBe("http://localhost:65528/replay");
+  await page.unroute("**/api/agents");
+  await page.reload(); await page.getByRole("tab", { name: "Agent Endpoints" }).click();
+  await expect(page.getByText("Reference replay", { exact: true })).toBeVisible();
+  await expect(page.getByText("Readback mismatch", { exact: true })).toBeVisible();
   await screenshot(page, "settings-endpoints-desktop");
 });
 
