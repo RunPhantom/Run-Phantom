@@ -1,0 +1,30 @@
+{
+  "pr": 137,
+  "feature": "F13",
+  "source": "3501b95c46fa7a0e9afe10866b9132ae180ed325",
+  "tree": "6d7d627c4e072143fc97990acccf854ce8219619",
+  "base": "4d423449d137f0997dd8de2e56045e11c4882da0",
+  "capture_head": "1fa5e847564bd62af4191f72ceb8d66f4ec5cded",
+  "actual_capture_start_time": "2026-10-18T11:05:48.218Z",
+  "source_bridge": "Only native catalog test changed; all product source and320assets identical.",
+  "draft": true,
+  "scope": "One real daemon/synthetic installed-hook Chromium journey,1543native pass/3skip; captured observations remain partial/runtime-unverified.",
+  "remaining_qualification": "Authentic Cursor, Windows private-file authority, copied/installed and assembled/provider qualification pending.",
+  "root_review_recorded_at": "2026-10-18T11:22:00.655042+00:00",
+  "screenshots": [
+    {
+      "file": "cursor-synthetic-capture-1440.png",
+      "sha256": "7a946dbe4d9f0c8917f5110a03e95b1a78b69b4cea1c73ee6e8c2b8928b46500",
+      "bytes": 79279,
+      "platform": "macOS arm64",
+      "profile": "Real local synthetic-hook capture at1fa5e847; all app/product bytes identical at3501b95 after catalog-test-only merge. Authentic Cursor session and Windows support unqualified."
+    },
+    {
+      "file": "cursor-synthetic-capture-320.png",
+      "sha256": "a4346b20da47a613f6845faf6ffd1fe83b82555c6336a4892546133b3e9065b5",
+      "bytes": 48598,
+      "platform": "macOS arm64",
+      "profile": "Real local synthetic-hook capture at1fa5e847; all app/product bytes identical at3501b95 after catalog-test-only merge. Authentic Cursor session and Windows support unqualified."
+    }
+  ]
+}
