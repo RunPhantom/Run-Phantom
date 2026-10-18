@@ -1,0 +1,27 @@
+{
+  "pr": 129,
+  "feature": "F34",
+  "source": "50d9e5cea9ebf3fbe01a1f9f0c085fff4cf8ddcd",
+  "tree": "90f18b4855cf88046a06aa16916e1f5efa8d1e53",
+  "base": "cd5c057e7f7ae9f6eb6d0d33d1a14946a9dd254c",
+  "draft": true,
+  "scope": "Exact-head copied default zero-budget comparison UI; targets unavailable, not successful paid provider output.",
+  "remaining_qualification": "See PR body; no merge or full-product/platform/paid acceptance claimed.",
+  "root_viewed_at": "2026-10-18T10:08:31.507200+00:00",
+  "screenshots": [
+    {
+      "file": "copied-default-local-settings-1440.png",
+      "sha256": "f4f70cf8edeacb0ba80fad05d281f3b8c300727c38cf5dbb2fcafb41eba16f89",
+      "bytes": 127862,
+      "platform": "macOS arm64",
+      "profile": "Exact-head copied default zero-budget comparison UI; targets unavailable, not successful paid provider output."
+    },
+    {
+      "file": "copied-default-local-results-390.png",
+      "sha256": "53fe0d65d19bf67bd635a9bc728546a82e0510a09077d9635bfd33f7d1831c56",
+      "bytes": 57820,
+      "platform": "macOS arm64",
+      "profile": "Exact-head copied default zero-budget comparison UI; targets unavailable, not successful paid provider output."
+    }
+  ]
+}
