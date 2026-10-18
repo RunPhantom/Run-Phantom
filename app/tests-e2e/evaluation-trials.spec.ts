@@ -39,7 +39,7 @@ for (const caseCount of [1, 2]) test(`explicit repeated trials preserve mixed ou
   await result.getByRole("button", { name: "Trial 1: pass", exact: true }).first().click();
   await expect(page.getByRole("combobox", { name: "View experiment", exact: true })).toHaveValue(trials[0].id);
   await expect(page.getByRole("region", { name: "Experiment results", exact: true })).toContainText(caseCount === 1 ? "1 / 1 case passed" : "2 / 2 cases passed");
-  await page.getByRole("region", { name: "Experiment results", exact: true }).screenshot({ path: testInfo.outputPath(`experiment-summary-${caseCount}-cases.png`) });
+  await page.getByRole("region", { name: "Experiment results", exact: true }).getByText(caseCount === 1 ? "1 / 1 case passed" : "2 / 2 cases passed").screenshot({ path: testInfo.outputPath(`experiment-summary-${caseCount}-cases.png`) });
   await panel.getByRole("checkbox", { name: /^Trial 4 ·/ }).check();
   await expect(panel.getByLabel("Repeated trial results")).toHaveCount(0);
   await panel.getByRole("button", { name: "Analyze selected trials" }).click();
