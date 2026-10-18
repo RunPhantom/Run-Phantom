@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createSourceFixtureOwner, observeSourceRequest, SourceFixtureError, spawnSourceFixture } from "./source-fixture-owner";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..");
@@ -23,54 +24,25 @@ const DAEMON_ENV = Object.fromEntries(
   ),
 );
 
-async function waitForHealth(url: string, proc: ChildProcess, timeoutMs: number): Promise<void> {
+async function waitForHealth(url: string, proc: ChildProcess, timeoutMs: number,
+  diagnostics: Pick<ReturnType<typeof createSourceFixtureOwner>, "healthAttempt" | "healthResponse" | "healthRejection">): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  let lastErr: unknown;
   while (Date.now() < deadline) {
     if (proc.exitCode != null || proc.signalCode != null) {
-      throw new Error(`Run Phantom exited before becoming healthy: ${proc.exitCode ?? proc.signalCode}`);
+      throw new SourceFixtureError("HEALTH_EXITED");
     }
+    diagnostics.healthAttempt();
     try {
       const res = await fetch(`${url}/health`);
-      if (res.ok) return;
-    } catch (e) {
-      lastErr = e;
+      const ok = res.ok;
+      diagnostics.healthResponse(ok);
+      if (ok) return;
+    } catch (error) {
+      diagnostics.healthRejection(error);
     }
     await new Promise((r) => setTimeout(r, 250));
   }
-  throw new Error(`Run Phantom /health never came up at ${url}: ${String(lastErr)}`);
-}
-
-async function stopProc(p: ChildProcess): Promise<void> {
-  if (p.exitCode != null || p.signalCode != null) return;
-  await new Promise<void>((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(forceKillTimer);
-      p.off("exit", finish);
-      resolve();
-    };
-    p.once("exit", finish);
-    const forceKillTimer = setTimeout(() => {
-      if (p.exitCode != null || p.signalCode != null) {
-        finish();
-        return;
-      }
-      try {
-        p.kill("SIGKILL");
-      } finally {
-        finish();
-      }
-    }, 2500);
-    try {
-      p.kill("SIGTERM");
-    } catch {
-      finish();
-      return;
-    }
-  });
+  throw new SourceFixtureError("HEALTH_TIMEOUT");
 }
 
 async function reservePort(): Promise<number> {
@@ -93,6 +65,10 @@ async function reservePort(): Promise<number> {
 }
 
 export const test = base.extend<{ runPhantom: RunPhantomHandle; localNetworkOnly: void }>({
+  // Keep daemon setup before the inherited context so its built-in close runs first.
+  context: async ({ runPhantom: _runPhantom, context }, use) => {
+    await use(context);
+  },
   localNetworkOnly: [async ({ page }, use) => {
     await page.route("**/*", async (route) => {
       const url = new URL(route.request().url());
@@ -109,7 +85,7 @@ export const test = base.extend<{ runPhantom: RunPhantomHandle; localNetworkOnly
     const dbPath = path.join(tmp, "runphantom.db");
     mkdirSync(path.dirname(dbPath), { recursive: true });
 
-    const proc = spawn("bun", ["src/index.ts", "serve"], {
+    const proc = spawnSourceFixture(() => spawn("bun", ["src/index.ts", "serve"], {
       cwd: REPO_ROOT,
       env: {
         ...DAEMON_ENV,
@@ -128,30 +104,16 @@ export const test = base.extend<{ runPhantom: RunPhantomHandle; localNetworkOnly
         RUNPHANTOM_CLAUDE_CLI_CHAT: "0",
       },
       stdio: ["ignore", "pipe", "pipe"],
+    }));
+    const owner = createSourceFixtureOwner(proc, () => rmSync(tmp, { recursive: true, force: true }));
+    await owner.run({
+      handle: { url: `http://127.0.0.1:${port}`, dbPath, port },
+      ready: () => waitForHealth(`http://127.0.0.1:${port}`, proc, 45_000, owner),
+      use,
+      afterUseStatus: () => ({ actual: testInfo.status, expected: testInfo.expectedStatus }),
     });
-    const logs: string[] = [];
-    let stopping = false;
-    proc.stdout?.on("data", (d) => logs.push(`[runphantom ${port}] ${d}`));
-    proc.stderr?.on("data", (d) => logs.push(`[runphantom ${port}!] ${d}`));
-    proc.on("exit", (code, signal) => {
-      if (!stopping) {
-        console.error(`[runphantom ${port}] exited unexpectedly (${code ?? signal})\n${logs.slice(-50).join("")}`);
-      }
-    });
-
-    try {
-      await waitForHealth(`http://localhost:${port}`, proc, 45_000);
-      await use({ url: `http://localhost:${port}`, dbPath, port });
-    } catch (err) {
-      console.error(logs.slice(-50).join(""));
-      throw err;
-    } finally {
-      stopping = true;
-      await stopProc(proc);
-      rmSync(tmp, { recursive: true, force: true });
-    }
   },
 });
 
-export { expect };
+export { expect, observeSourceRequest };
 export const REPO_ROOT_PATH = REPO_ROOT;

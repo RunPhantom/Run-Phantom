@@ -949,15 +949,17 @@ export function getMostRecentlyTouchedRun() {
     .get() ?? null;
 }
 
-export function upsertLiveEvent(event: { traceId: string; spanId?: string; type: string; content?: string; timestamp: number; metadata?: Record<string, any> }) {
-  getDrizzleDb().insert(schema.live_events).values({
+export function upsertLiveEvent(event: { traceId: string; spanId?: string; type: string; content?: string; timestamp: number; metadata?: Record<string, any> }): number {
+  const inserted = getDrizzleDb().insert(schema.live_events).values({
     trace_id: event.traceId,
     span_id: event.spanId ?? null,
     type: event.type,
     content: event.content ?? null,
     timestamp: event.timestamp,
     metadata: event.metadata ? JSON.stringify(event.metadata) : null,
-  }).run();
+  }).returning({ id: schema.live_events.id }).get();
+  if (!inserted) throw new Error("Live event insert did not return its identity");
+  return inserted.id;
 }
 
 export function getLiveEvents(traceId: string) {

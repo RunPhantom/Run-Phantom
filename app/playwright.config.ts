@@ -20,7 +20,7 @@ export default defineConfig({
     : [["list"]],
   use: {
     headless: true,
-    trace: "on-first-retry",
+    trace: "retain-on-failure",
     screenshot: "only-on-failure",
     actionTimeout: 15000,
     navigationTimeout: 20000,

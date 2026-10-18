@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { expect, test } from "./fixtures";
+import { expect, observeSourceRequest, test } from "./fixtures";
 import {
   clearRunPhantom,
   expectRunPhantomBranding,
@@ -477,11 +477,13 @@ test("Run Phantom UI: deleting a trace via the API removes only that sidebar row
   await expect.poll(async () => page.locator("[data-run-id]").count(), { timeout: 5_000 }).toBe(2);
 });
 
-async function replayFinishedDemoReview(url: string): Promise<void> {
+async function replayFinishedDemoReview(url: string,
+  observeDetail?: (operation: () => Promise<Response>) => Promise<Response>): Promise<void> {
   const replay = await fetch(`${url}/api/demo-traces/replay`, { method: "POST" });
   expect(replay.ok).toBe(true);
   await expect.poll(async () => {
-    const response = await fetch(`${url}/api/runs/detail/demo_review`);
+    const detailFetch = () => fetch(`${url}/api/runs/detail/demo_review`);
+    const response = await (observeDetail ? observeDetail(detailFetch) : detailFetch());
     if (response.status === 404) return 0;
     expect(response.ok).toBe(true);
     const detail = await response.json() as { run: { finished?: number | null } };
@@ -546,7 +548,8 @@ test("Run Phantom UI: the errors tooltip shows its last line whole and signals o
 });
 
 test("Run Phantom UI: the span detail pane shows the whole span id", async ({ page, runPhantom }, testInfo) => {
-  await replayFinishedDemoReview(runPhantom.url);
+  await replayFinishedDemoReview(runPhantom.url,
+    operation => observeSourceRequest(runPhantom, "DETAIL_COMPLETION", operation));
 
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto(`${runPhantom.url}/runs/demo_review/spans`);
@@ -589,7 +592,8 @@ test("Run Phantom UI: run ids stay distinguishable in the sidebar and whole in t
   // three rows the suffix "(demo_)" while the header read "demo_rev". The id
   // now lives on the meta line so the agent name keeps the title to itself.
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.goto(`${runPhantom.url}/runs/demo_review`);
+  await observeSourceRequest(runPhantom, "DOCUMENT_LOAD",
+    () => page.goto(`${runPhantom.url}/runs/demo_review`));
   const expected: Record<string, { name: string; shortId: string }> = {
     demo_triage: { name: "triage_agent", shortId: "demo_t…" },
     demo_review: { name: "code_review_agent", shortId: "demo_rev…" },
