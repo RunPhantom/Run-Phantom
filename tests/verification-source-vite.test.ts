@@ -25,6 +25,7 @@ if (import.meta.env.DEV) { globalThis.fixtureToken = "${fixtureToken}"; globalTh
 // Vite's Node API is exercised in Node, isolated from Bun's test-worker esbuild lifecycle.
 async function runVite(mode: "dev" | "multi" | "single-disabled" | "single-enabled", source = code): Promise<any> {
   const root = mkdtempSync(path.join(realpathSync(tmpdir()), "rp-source-vite-"));
+  mkdirSync(path.join(repo, ".omx"), { recursive: true });
   const helperDir = mkdtempSync(path.join(repo, ".omx/source-vite-"));
   mkdirSync(path.join(root, "src"));
   writeFileSync(path.join(root, "index.html"), '<!doctype html><div id="root"></div><script type="module" src="/src/main.tsx"></script>');
