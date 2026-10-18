@@ -1,6 +1,6 @@
 import { test as base, expect } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -42,8 +42,13 @@ const test = base.extend<{ local: { url: string } }>({
         expect.soft(reaped, "Isolated daemon did not exit; its private profile was retained.").toBe(true);
       }
       if (testInfo.status !== testInfo.expectedStatus) await testInfo.attach("isolated-daemon-log", { body: logs, contentType: "text/plain" });
-      await testInfo.attach("isolated-daemon-cleanup", { body: JSON.stringify({ pid: child.pid, reaped, profileRemoved: reaped }), contentType: "application/json" });
-      if (reaped) rmSync(profile, { recursive: true, force: true });
+      if (reaped) {
+        try { rmSync(profile, { recursive: true, force: true }); }
+        catch { expect.soft(false, "Isolated daemon profile could not be removed.").toBe(true); }
+      }
+      const profileRemoved = !existsSync(profile);
+      try { await testInfo.attach("isolated-daemon-cleanup", { body: JSON.stringify({ pid: child.pid, reaped, profileRemoved }), contentType: "application/json" }); }
+      catch { expect.soft(false, "Isolated daemon cleanup receipt could not be attached.").toBe(true); }
     }
   },
   // Daemon and default profile outlive the browser context and artifact finalizers.
