@@ -117,4 +117,37 @@ describe("cooperating Electron authority and existing evidence contracts", () =>
       expect(f.session.artifacts.list()).toEqual([]);
     } finally { await f.cleanup(); }
   });
+  test("native capture ownership survives caller retirement and concurrent close shares unconfirmed cleanup", async () => {
+    const f = fixture(), unrelated = () => {};
+    f.ipcMain.on(ELECTRON_CHANNEL + ":reply", unrelated);
+    let serialized = false;
+    try {
+      const capture = f.session.capture(1, true), first = f.session.close(15), second = f.session.close(5000);
+      expect(first).toBe(second);
+      await expectFailure(capture, "CLOSED");
+      const cleanup = await first;
+      expect(cleanup).toEqual({ authority: "retired", nativeCapture: "unconfirmed", pendingNativeCaptures: 1, nativeCancellation: "unsupported" });
+      expect(await second).toBe(cleanup);
+      expect(f.window.isDestroyed()).toBe(false);
+      expect(f.ipcMain.listeners(ELECTRON_CHANNEL + ":reply")).toEqual([unrelated]);
+      f.finishCapture({ isEmpty: () => false, getSize: () => ({ width: 320, height: 240 }), toPNG: () => { serialized = true; return Buffer.alloc(0); } });
+      await Promise.resolve(); await Promise.resolve();
+      expect(serialized).toBe(false); expect(f.session.artifacts.list()).toEqual([]);
+      expect(() => f.session.request(1, { type: "read", selector: "#done" })).toThrow("CLOSED");
+    } finally { await f.cleanup(); }
+  });
+  test("a caller timeout cannot confirm cleanup until the actual native capture settles", async () => {
+    const f = fixture();
+    let finished = false;
+    try {
+      await expectFailure(f.session.capture(1, true), "TIMEOUT");
+      const closing = f.session.close();
+      void closing.then(() => { finished = true; });
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect(finished).toBe(false);
+      f.finishCapture({ isEmpty: () => false, getSize: () => ({ width: 320, height: 240 }), toPNG: () => { throw new Error("Timed-out pixels must not serialize"); } });
+      expect(await closing).toEqual({ authority: "retired", nativeCapture: "settled", pendingNativeCaptures: 0, nativeCancellation: "unsupported" });
+      expect(f.session.artifacts.list()).toEqual([]);
+    } finally { await f.cleanup(); }
+  }, 10000);
 });

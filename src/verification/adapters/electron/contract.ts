@@ -1,5 +1,5 @@
 export const ELECTRON_CHANNEL = "runphantom:cooperating-electron:v1";
-export const ELECTRON_LIMITS = { requestMs: 5000, selector: 1024, text: 4096, calls: 1000, frameBytes: 16384 } as const;
+export const ELECTRON_LIMITS = { requestMs: 5000, closeMs: 5000, selector: 1024, text: 4096, calls: 1000, frameBytes: 16384 } as const;
 export type ElectronFailure = "INVALID_REQUEST" | "STALE_DOCUMENT" | "CLOSED" | "BUSY" | "TIMEOUT" | "UNAVAILABLE"
   | "TARGET_MISSING" | "TARGET_AMBIGUOUS" | "PRIVATE_TARGET" | "UNSUPPORTED_TARGET" | "CAPTURE_FAILED";
 export type ElectronOperation = { type: "read" | "click"; selector: string };

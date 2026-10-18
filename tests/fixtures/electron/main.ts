@@ -28,13 +28,14 @@ async function run() {
     const absent = await owner.check(1, { kind: "element", selector: "#missing", state: "absent" });
     if (absent.verdict.status !== "inconclusive") throw new Error("Missing network coverage was hidden");
     const capture = await owner.capture(1, true);
-    await owner.close();
+    const captureCleanup = await owner.close();
+    if (captureCleanup.nativeCapture !== "settled") throw new Error("Native capture completion is unconfirmed");
     let retired = false;
     try { void owner.request(1, { type: "click", selector: "#confirm" }); } catch { retired = true; }
     const closed = once(window, "closed"); window.destroy(); await closed;
     writeFileSync(process.env.RUNPHANTOM_ELECTRON_RECEIPT!, JSON.stringify({ backend: "cooperating-electron", packaged: app.isPackaged,
       electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node, pid: process.pid,
-      before, action, checked, absent, capture, retired, windowDestroyed: window.isDestroyed(), inputMode: "cooperating-dom",
+      before, action, checked, absent, capture, captureCleanup, retired, windowDestroyed: window.isDestroyed(), inputMode: "cooperating-dom",
       authoritySource: "explicit BrowserWindow/main frame", arbitraryNativeAutomation: false }, null, 2), { mode: 0o600 });
   } finally {
     await owner?.close();

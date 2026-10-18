@@ -22,6 +22,12 @@ export interface CooperatingWindow {
 export interface ElectronMainHost {
   ipcMain: { on(channel: string, listener: Listener): unknown; removeListener(channel: string, listener: Listener): unknown };
 }
+export interface ElectronCloseResult {
+  authority: "retired";
+  nativeCapture: "settled" | "unconfirmed";
+  pendingNativeCaptures: number;
+  nativeCancellation: "unsupported";
+}
 export const createElectronAuthority = (): string => randomBytes(32).toString("hex");
 const failureCodes: ElectronFailure[] = ["INVALID_REQUEST", "STALE_DOCUMENT", "CLOSED", "BUSY", "TIMEOUT", "UNAVAILABLE",
   "TARGET_MISSING", "TARGET_AMBIGUOUS", "PRIVATE_TARGET", "UNSUPPORTED_TARGET", "CAPTURE_FAILED"];
@@ -35,6 +41,8 @@ export class CooperatingElectronSession {
   #sequence = 0;
   #pending?: Pending;
   #captures = new Set<Promise<unknown>>();
+  #retireCapture?: () => void;
+  #closing?: Promise<ElectronCloseResult>;
   #reply: Listener;
   #retire: Listener;
   constructor(readonly host: ElectronMainHost, readonly window: CooperatingWindow, readonly token: string,
@@ -115,12 +123,19 @@ export class CooperatingElectronSession {
     const bounds = this.window.getContentBounds();
     if (bounds.width < 1 || bounds.height < 1 || bounds.width > BROWSER_LIMITS.WIDTH || bounds.height > BROWSER_LIMITS.HEIGHT) throw new ElectronVerificationError("CAPTURE_FAILED");
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const capture = Promise.race([this.window.webContents.capturePage(), new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new ElectronVerificationError("TIMEOUT")), ELECTRON_LIMITS.requestMs);
-    })]);
-    this.#captures.add(capture);
     try {
-      const image = await capture; this.#current(generation);
+      // The native promise remains owned after the caller's timeout or retirement.
+      // Electron provides no cancellation API for capturePage.
+      const nativeCapture = this.window.webContents.capturePage();
+      this.#captures.add(nativeCapture);
+      const settled = () => { this.#captures.delete(nativeCapture); };
+      void nativeCapture.then(settled, settled);
+      const image = await Promise.race([nativeCapture, new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new ElectronVerificationError("TIMEOUT")), ELECTRON_LIMITS.requestMs);
+      }), new Promise<never>((_resolve, reject) => {
+        this.#retireCapture = () => reject(new ElectronVerificationError("CLOSED"));
+      })]);
+      this.#current(generation);
       const size = image.getSize();
       if (image.isEmpty() || size.width < 1 || size.height < 1 || size.width > BROWSER_LIMITS.WIDTH || size.height > BROWSER_LIMITS.HEIGHT) throw new ElectronVerificationError("CAPTURE_FAILED");
       const artifact = this.artifacts.admit(image.toPNG(), { kind: "screenshot", raw: true, rawConsent: true,
@@ -130,14 +145,26 @@ export class CooperatingElectronSession {
       if (error instanceof ElectronVerificationError && error.code === "TIMEOUT") void this.close();
       throw error instanceof ElectronVerificationError ? error : new ElectronVerificationError("CAPTURE_FAILED");
     }
-    finally { clearTimeout(timer); this.#captures.delete(capture); }
+    finally { clearTimeout(timer); this.#retireCapture = undefined; }
   }
-  async close(): Promise<void> {
+  close(waitMs: number = ELECTRON_LIMITS.closeMs): Promise<ElectronCloseResult> {
+    if (!Number.isSafeInteger(waitMs) || waitMs < 1 || waitMs > ELECTRON_LIMITS.closeMs) return Promise.reject(new ElectronVerificationError("INVALID_REQUEST"));
     if (!this.#closed) {
       this.#closed = true; this.#finish(new ElectronVerificationError("CLOSED"));
+      this.#retireCapture?.();
       this.host.ipcMain.removeListener(ELECTRON_CHANNEL + ":reply", this.#reply);
       for (const event of ["did-start-navigation", "render-process-gone", "destroyed"]) this.window.webContents.removeListener(event, this.#retire);
     }
-    await Promise.allSettled([...this.#captures]);
+    // One shared deadline/result prevents concurrent callers extending retirement.
+    this.#closing ??= (async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([Promise.allSettled([...this.#captures]), new Promise<void>(resolve => { timer = setTimeout(resolve, waitMs); })]);
+        const pendingNativeCaptures = this.#captures.size;
+        return { authority: "retired" as const, nativeCapture: pendingNativeCaptures ? "unconfirmed" as const : "settled" as const,
+          pendingNativeCaptures, nativeCancellation: "unsupported" as const };
+      } finally { clearTimeout(timer); }
+    })();
+    return this.#closing;
   }
 }
