@@ -23,9 +23,9 @@ test("deletion replaces held initial and broadcast lists without another event",
   await page.route(`${runPhantom.url}/api/runs`, async route => {
     const requestNumber = ++listRequests;
     const held = !deletionSettled;
+    if (held) heldLists++;
     const response = await route.fetch();
     if (held) {
-      heldLists++;
       if (requestNumber === 1) initialHeld.release();
       const runs = await response.json() as Array<{ id: string }>;
       if (!runs.some(run => run.id === FIXTURE_PRIMARY_RUN_ID)) broadcastHeld.release();
