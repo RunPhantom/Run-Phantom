@@ -1,10 +1,30 @@
-import { test, expect, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ReviewItem, ReviewQueue } from "../../src/review-queues/protocol";
 const evidence = process.env.REVIEW_QUEUE_EVIDENCE_DIR ?? path.resolve("test-results/review-queues-component");
-const connected = process.env.REVIEW_QUEUE_CONNECTED === "1";
+const externalProfile = process.env.REVIEW_QUEUE_CONNECTED !== undefined;
+const connected = process.env.REVIEW_QUEUE_CONNECTED !== "0";
 const fixturePath = connected ? "/review-queues" : "/tests-e2e/review-queue-component.html";
+if (!externalProfile) {
+  test.use({ baseURL: async ({ runPhantom }, use) => { await use(runPhantom.url); } });
+  test.beforeEach(async ({ request }) => {
+    for (const id of ["source-a", "source-b"]) {
+      const imported = await request.post("/api/import-run", { data: {
+        format: "runphantom-trace/v1",
+        run: { id, name: id === "source-a" ? "Checkout response" : "Refund response", started_at: 1, last_updated_at: 2 },
+        spans: [{ id: "response", run_id: id, name: "Agent response", span_type: "AGENT_ROOT", status: "OK",
+          input_payload: `Input for ${id}`, output_payload: JSON.stringify(id === "source-a" ? { status: "paid", score: 3, ok: true } : { status: "refunded", score: 4, ok: false }),
+          attributes: "{}", start_time_ms: 1, end_time_ms: 2, duration_ms: 1 }],
+        liveEvents: [], annotations: [],
+      } });
+      expect(imported.status()).toBe(200);
+      expect(await imported.json()).toMatchObject({ ok: true, runId: id, spansImported: 1 });
+    }
+    expect((await request.post("/api/evaluations/datasets", { data: { name: "Curated checkout examples" } })).status()).toBe(201);
+  });
+}
 const navigation = (page: Page) => connected
   ? page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Evaluations", exact: true })
   : page.getByRole("link", { name: "Fixture evaluations navigation", exact: true });
@@ -150,7 +170,7 @@ test("structured number, boolean and choice targets persist as actual typed data
   await expect(page.getByRole("region",{ name:"Dataset promotion",exact:true })).toContainText("Saved revision 2");
   const revision = await (await request.get(`/api/evaluations/datasets/${dataset.datasetId}?version=2`)).json();
   expect(revision.cases[0].rules).toEqual([{ kind:"jsonPath",path:"score",equals:3 },{ kind:"jsonPath",path:"ok",equals:true },{ kind:"jsonPath",path:"status",equals:"paid" }]);
-  mkdirSync(evidence,{ recursive:true }); writeFileSync(path.join(evidence,"typed-target-output.json"),JSON.stringify({ qualification:"unactivated native SQLite HTTP UI fixture",revision },null,2));
+  mkdirSync(evidence,{ recursive:true }); writeFileSync(path.join(evidence,"typed-target-output.json"),JSON.stringify({ qualification:connected ? "actual source app and daemon" : "unactivated native SQLite HTTP UI fixture",revision },null,2));
 });
 
 test("explicit approval and reapply keep source frames in the displayed window", async ({ page, request }) => {
@@ -205,5 +225,5 @@ test("explicit approval and reapply keep source frames in the displayed window",
   await page.getByRole("button",{ name:"Delete item",exact:true }).click(); await page.getByRole("button",{ name:"Confirm",exact:true }).click();
   await expect(source).toHaveCount(0); await expect(page.getByRole("dialog")).toHaveCount(0);
   const remaining = await (await request.get(`/api/review-queues/${queue.id}/items`)).json(); expect(remaining.items).toHaveLength(0);
-  mkdirSync(evidence,{ recursive:true }); writeFileSync(path.join(evidence,"source-window-lifetime-output.json"),JSON.stringify({ qualification:"unactivated native SQLite HTTP UI fixture",second:reopened,deletedItem:first.id,retainedDeletionRefused:true,confirmedItemDeletion:true,remainingItems:remaining.items.length },null,2));
+  mkdirSync(evidence,{ recursive:true }); writeFileSync(path.join(evidence,"source-window-lifetime-output.json"),JSON.stringify({ qualification:connected ? "actual source app and daemon" : "unactivated native SQLite HTTP UI fixture",second:reopened,deletedItem:first.id,retainedDeletionRefused:true,confirmedItemDeletion:true,remainingItems:remaining.items.length },null,2));
 });
