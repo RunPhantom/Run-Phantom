@@ -1,0 +1,27 @@
+{
+  "pr": 128,
+  "feature": "F11",
+  "source": "1be54ff68d9731cb55ff29ea7b031e7701a3e1fc",
+  "tree": "819783bad59a94b516087f181a8513eb1b38014f",
+  "base": "324e2e7bb6166a60acdd8fd70ebf86888b1caadd",
+  "draft": true,
+  "scope": "Exact-head copied macOS synthetic installed-context UI; not authentic producer or paid execution proof.",
+  "remaining_qualification": "See PR body; no merge or full-product/platform/paid acceptance claimed.",
+  "root_viewed_at": "2026-10-18T10:08:31.504770+00:00",
+  "screenshots": [
+    {
+      "file": "first-390.png",
+      "sha256": "aa2c56fbd508629e82fe1b74384e79eb34a3ef53fd99380a0c7f1ed46fb27ff8",
+      "bytes": 43237,
+      "platform": "macOS arm64",
+      "profile": "Exact-head copied macOS synthetic installed-context UI; not authentic producer or paid execution proof."
+    },
+    {
+      "file": "first-1440.png",
+      "sha256": "dbb2360d1249f16e93e42d38766d0523ac099df74f32591857cae9e7dc6e22db",
+      "bytes": 117579,
+      "platform": "macOS arm64",
+      "profile": "Exact-head copied macOS synthetic installed-context UI; not authentic producer or paid execution proof."
+    }
+  ]
+}
