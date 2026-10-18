@@ -881,7 +881,6 @@ function ViewHeader({
                       <ChevronDown className="h-3.5 w-3.5" />
                     </button>
                   </div>
-                  {replayUnavailable && <div role="status" className="basis-full text-[10px]" style={{ color: C.fg1 }}>Replay unavailable for partial, unverified observations.</div>}
                   {!replayUnavailable && agentRegistryStatus !== "success" && <ReplayRegistryNotice status={agentRegistryStatus} onRetry={refetchAgents} />}
                   <SetupReplayModal
                     open={setupModalOpen && !replayUnavailable}
@@ -986,6 +985,7 @@ function ViewHeader({
               </div>
             )}
           </div>
+          {!active && onFork && replayUnavailable && <div role="status" className="basis-full text-[10px]" style={{ color: C.fg1 }}>Replay unavailable for partial, unverified observations.</div>}
           <div className="flex items-center gap-1.5 text-[11px] flex-wrap">
             <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
             {run && (run.id || run.user_id || run.convo_id) && (
