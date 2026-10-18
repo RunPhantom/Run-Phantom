@@ -1435,6 +1435,9 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
     };
   }, [data?.run.id]);
 
+  // The handshake also covers updates persisted before this socket connected.
+  useRunPhantomEvent("agent_provider", () => { void fetchData(); });
+
   useRunPhantomEvent<SpansBroadcast | undefined>("spans", (data) => {
     if (initialData) return; // No WebSocket updates for pre-loaded data
     if (data?.runIds?.includes(runId)) fetchData();

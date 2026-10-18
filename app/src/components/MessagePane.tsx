@@ -184,6 +184,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const resizeRef = useRef<{ x: number; width: number; shouldCollapse: boolean } | null>(null);
   const activeClientMessageIdRef = useRef<string | null>(null);
+  const providerRevisionRef = useRef(0);
   const liveBlocksRef = useRef<AssistantMessageBlock[]>([]);
   const terminalCopyResetRef = useRef<number | null>(null);
   const collapseHoldTimerRef = useRef<number | null>(null);
@@ -393,20 +394,25 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
 
   useEffect(() => {
     let cancelled = false;
+    const revision = providerRevisionRef.current;
     (async () => {
       const res = await fetch("/api/agent/provider");
       if (!res.ok) return;
       const body = await res.json().catch(() => null);
-      if (!cancelled && isAgentProvider(body?.provider)) setProvider(body.provider);
+      if (!cancelled && revision === providerRevisionRef.current && isAgentProvider(body?.provider)) setProvider(body.provider);
     })();
     return () => { cancelled = true; };
   }, []);
 
   useRunPhantomEvent("agent_provider", (data: { provider?: string }) => {
     if (isAgentProvider(data.provider)) {
+      ++providerRevisionRef.current;
+      // Every connection starts with a snapshot, even when the provider is unchanged.
+      if (data.provider === provider) return;
       setProvider(data.provider);
       startNewChat();
       setShowList(true);
+      setSessions([]);
       void refreshSessions();
     }
   });
@@ -562,6 +568,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
   async function switchProvider(next: AgentProviderId) {
     if (next === provider || switchingProvider) return;
     const previous = provider;
+    ++providerRevisionRef.current;
     setProvider(next);
     setError(null);
     setSwitchingProvider(true);
