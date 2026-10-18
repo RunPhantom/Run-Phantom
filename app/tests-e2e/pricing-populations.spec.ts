@@ -199,6 +199,143 @@ function controlledNetwork(pages: { run: Page; settings: Page }, origin: string,
   };
 }
 
+type NativeCatalogueBody = {
+  calls: number; responses: number; status: number | null; bytes: number[] | null;
+  phase: "idle" | "pending" | "reading" | "complete" | "error";
+  failure: "duplicate" | "fetch-error" | "clone-error" | "read-error" | "oversize" | "observer-error" | null;
+  timing: { fetch: number | null; response: number | null; read: number | null; terminal: number | null };
+};
+type NativeCataloguePort = {
+  read(): Promise<NativeCatalogueBody>;
+  stop(): NativeCatalogueBody;
+};
+
+function nativeCatalogueBodies(pages: { run: Page; settings: Page }) {
+  const key = "__runPhantomPopulationCatalogueBody";
+  const receipts: Record<keyof typeof pages, unknown> = { run: null, settings: null };
+  const remember = (label: keyof typeof pages, value: NativeCatalogueBody) => {
+    const bytes = value.bytes === null ? null : Buffer.from(value.bytes);
+    receipts[label] = { calls: value.calls, responses: value.responses, status: value.status,
+      phase: value.phase, failure: value.failure, timing: value.timing, byteLength: bytes?.length ?? null,
+      bodySha256: bytes === null ? null : createHash("sha256").update(bytes).digest("hex"),
+      exactBytes: bytes === null ? null : bytes.equals(Buffer.from(CATALOGUE)) };
+  };
+  return {
+    async install() {
+      for (const label of ["run", "settings"] as const) {
+        await pages[label].addInitScript(({ url, key, maxBytes }) => {
+          // eslint-disable-next-line @typescript-eslint/unbound-method -- Reflect.apply below preserves the caller's fetch receiver and the actual Response receiver for clone.
+          const nativeFetch = window.fetch, nativeClone = Response.prototype.clone;
+          // eslint-disable-next-line @typescript-eslint/unbound-method -- Reflect.apply below supplies the actual cloned Response receiver.
+          const nativeRead = Response.prototype.arrayBuffer;
+          const monotonicNow = performance.now.bind(performance), installedAt = monotonicNow();
+          // Times are relative to this page's installation, not another page's clock.
+          const timing: NativeCatalogueBody["timing"] = { fetch: null, response: null, read: null, terminal: null };
+          let calls = 0, responses = 0, status: number | null = null, bytes: number[] | null = null;
+          let phase: NativeCatalogueBody["phase"] = "idle", failure: NativeCatalogueBody["failure"] = null;
+          let complete!: () => void;
+          const done = new Promise<void>(resolve => { complete = resolve; });
+          const snapshot = (): NativeCatalogueBody => ({ calls, responses, status,
+            bytes: bytes === null ? null : [...bytes], phase, failure, timing: { ...timing } });
+          const fail = (reason: NonNullable<NativeCatalogueBody["failure"]>) => {
+            if (failure === null) { failure = reason; timing.terminal = monotonicNow() - installedAt; }
+            phase = "error"; bytes = null; complete();
+          };
+          // Cloning tees the native stream. This observer is restricted to the
+          // fixed 153-byte catalogue, with a small cap and no application wait.
+          const observedFetch = function (this: unknown, ...args: Parameters<typeof nativeFetch>) {
+            let promise: ReturnType<typeof nativeFetch>;
+            try { promise = Reflect.apply(nativeFetch, this, args) as ReturnType<typeof nativeFetch>; }
+            catch (error) {
+              if (args[0] === url) { calls++; timing.fetch ??= monotonicNow() - installedAt; fail("fetch-error"); }
+              throw error;
+            }
+            if (args[0] !== url) return promise;
+            try {
+              calls++;
+              timing.fetch ??= monotonicNow() - installedAt;
+              if (calls !== 1) { fail("duplicate"); return promise; }
+              phase = "pending";
+              const observed = promise.then(response => {
+                try {
+                  if (failure !== null) return;
+                  responses++; status = response.status; phase = "reading";
+                  timing.response = monotonicNow() - installedAt;
+                  let clone: Response;
+                  try { clone = Reflect.apply(nativeClone, response, []) as Response; }
+                  catch { fail("clone-error"); return; }
+                  let reading: Promise<ArrayBuffer>;
+                  try { timing.read = monotonicNow() - installedAt; reading = Reflect.apply(nativeRead, clone, []) as Promise<ArrayBuffer>; }
+                  catch { fail("read-error"); return; }
+                  void reading.then(buffer => {
+                    try {
+                      if (failure !== null) return;
+                      if (buffer.byteLength > maxBytes) { fail("oversize"); return; }
+                      bytes = Array.from(new Uint8Array(buffer)); phase = "complete";
+                      timing.terminal = monotonicNow() - installedAt; complete();
+                    } catch { fail("observer-error"); }
+                  }, () => fail("read-error")).catch(() => fail("observer-error"));
+                } catch { fail("observer-error"); }
+              }, () => fail("fetch-error"));
+              void observed.catch(() => fail("observer-error"));
+            } catch { fail("observer-error"); }
+            return promise;
+          };
+          const port: NativeCataloguePort = Object.freeze({
+            async read() {
+              if (calls === 1 && failure === null && phase !== "complete") await done;
+              return snapshot();
+            },
+            stop() {
+              const value = snapshot();
+              if (window.fetch === observedFetch) window.fetch = nativeFetch;
+              const target = window as unknown as Record<string, unknown>;
+              if (target[key] === port) delete target[key];
+              return value;
+            },
+          });
+          try {
+            Object.defineProperty(window, key, { value: port, configurable: true });
+            window.fetch = observedFetch;
+          } catch { fail("observer-error"); }
+        }, { url: CATALOGUE_URL, key, maxBytes: 512 });
+      }
+    },
+    async text(label: keyof typeof pages) {
+      const value = await pages[label].evaluate(async key => {
+        const port = (window as unknown as Record<string, NativeCataloguePort | undefined>)[key];
+        return port ? await port.read() : null;
+      }, key);
+      if (!value) throw new Error("Native catalogue observer is unavailable");
+      remember(label, value);
+      expect({ calls: value.calls, responses: value.responses, status: value.status,
+        phase: value.phase, failure: value.failure }).toEqual({ calls: 1, responses: 1,
+        status: 200, phase: "complete", failure: null });
+      if (value.bytes === null) throw new Error("Native catalogue body is unavailable");
+      const bytes = Buffer.from(value.bytes);
+      expect(bytes).toEqual(Buffer.from(CATALOGUE));
+      return bytes.toString("utf8");
+    },
+    async stop() {
+      let failed = false;
+      // Do not join a pending read during failure cleanup: the existing fixture
+      // owns context closure. Successful body oracles already require completion.
+      for (const label of ["run", "settings"] as const) {
+        try {
+          const value = await pages[label].evaluate(key => {
+            const port = (window as unknown as Record<string, NativeCataloguePort | undefined>)[key];
+            return port ? port.stop() : null;
+          }, key);
+          if (value) { remember(label, value); if (value.failure !== null) failed = true; }
+          else { receipts[label] = { diagnosticUnavailable: true }; failed = true; }
+        } catch { receipts[label] = { diagnosticUnavailable: true }; failed = true; }
+      }
+      if (failed) throw new Error("Native catalogue observation or cleanup failed");
+    },
+    receipt() { return receipts; },
+  };
+}
+
 async function openDesktopDebug(page: Page) {
   await page.setViewportSize(DESKTOP);
   await page.getByRole("button", { name: "Debug", exact: true }).click();
@@ -379,11 +516,13 @@ for (const population of POPULATIONS) {
     const settings = await page.context().newPage();
     const promptCanary = `population-layout-private-prompt-${population.name}`;
     const network = controlledNetwork({ run: page, settings }, new URL(runPhantom.url).origin, [population.runId, promptCanary]);
+    const nativeBodies = nativeCatalogueBodies({ run: page, settings });
     const measurements: unknown[] = [];
     const cleanupErrors: Error[] = [];
     let primary: unknown, failed = false;
     try {
       await network.install();
+      await nativeBodies.install();
       const original = await capture(runPhantom.url, population, promptCanary);
       const snapshot = await readSnapshot(runPhantom.url, population);
       if (population.reported !== null) expect(snapshot.metrics.costUsd).toBe(population.reported);
@@ -419,7 +558,11 @@ for (const population of POPULATIONS) {
       expect(network.heldMilliseconds()).toBeLessThan(20_000);
       const responses = Promise.all([page.waitForResponse(CATALOGUE_URL), settings.waitForResponse(CATALOGUE_URL)]);
       network.release();
-      for (const response of await responses) { expect(response.status()).toBe(200); expect(await response.text()).toBe(CATALOGUE); }
+      const catalogueResponses = await responses;
+      for (const label of ["run", "settings"] as const) {
+        const response = catalogueResponses[label === "run" ? 0 : 1];
+        expect(response.status()).toBe(200); expect(await nativeBodies.text(label)).toBe(CATALOGUE);
+      }
       await expect.poll(() => [network.counts.run.fulfilled, network.counts.settings.fulfilled]).toEqual([1, 1]);
       network.verify(1, 1);
       const ready = await checkLayout(page, population, "ready", true); measurements.push(ready);
@@ -455,11 +598,13 @@ for (const population of POPULATIONS) {
       }
     } catch (error) { failed = true; primary = error; }
     finally {
+      try { await nativeBodies.stop(); } catch { cleanupErrors.push(new Error("Native catalogue observation cleanup failed")); }
       try { await network.stop(); } catch { cleanupErrors.push(new Error("Population route cleanup or network contract failed")); }
       try {
         await testInfo.attach("Population layout and safe network observations", {
           body: JSON.stringify({ population: population.name, catalogueRevision: REVISION, network: network.receipt(),
-            measurements, cleanupErrors: cleanupErrors.length, runtime: "fixture-owned-source-daemon", catalogue: "controlled-synthetic" }),
+            measurements, nativeCatalogue: nativeBodies.receipt(), cleanupErrors: cleanupErrors.length,
+            runtime: "fixture-owned-source-daemon", catalogue: "controlled-synthetic" }),
           contentType: "application/json",
         });
       } catch { cleanupErrors.push(new Error("Population observation attachment failed")); }
