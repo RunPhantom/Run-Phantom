@@ -1,0 +1,21 @@
+import { test, expect, seed, RUN_ID, SPAN_ID, OUTPUT } from "./fixtures";
+import { writeFileSync } from "node:fs";
+test("capture-navigation: real production routes retain exact captured run, selected span and export across reload", async ({ page, backend }, info) => {
+  const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+  await seed(backend);
+  const before = await backend.api<{ run: { id: string }; spans: Array<{ id: string; output_payload: string | null }> }>(`/api/runs/detail/${RUN_ID}`);
+  expect(before.status).toBe(200); expect(before.body.run.id).toBe(RUN_ID); expect(before.body.spans).toHaveLength(2); expect(before.body.spans.find(span => span.id === SPAN_ID)?.output_payload).toBe(OUTPUT);
+  await page.goto(backend.url + "/runs");
+  await page.locator(`[data-run-id="${RUN_ID}"]`).click(); await expect(page).toHaveURL(new RegExp(`/runs/${RUN_ID}$`));
+  await expect(page.getByText(OUTPUT, { exact: true }).first()).toBeVisible();
+  const overview = page.getByRole("tab", { name: "Overview", exact: true }), tree = page.getByRole("tab", { name: "Span Tree", exact: true });
+  await overview.focus(); await page.keyboard.press("ArrowRight"); await expect(tree).toBeFocused(); await expect(tree).toHaveAttribute("aria-selected", "true");
+  await page.locator(`[data-span-row="${SPAN_ID}"]`).click(); await expect(page).toHaveURL(new RegExp(`/runs/${RUN_ID}/span/${SPAN_ID}$`));
+  await page.reload(); await expect(tree).toHaveAttribute("aria-selected", "true"); await expect(page.locator(`[data-span-row="${SPAN_ID}"]`)).toBeVisible();
+  const exported = await backend.api<{ spans: Array<{ id: string; output_payload: string | null }> }>(`/api/runs/${RUN_ID}/export`);
+  expect(exported.status).toBe(200); expect(exported.body.spans.find(span => span.id === SPAN_ID)?.output_payload).toBe(OUTPUT);
+  await page.goto(`${backend.url}/runs/${RUN_ID}`); await expect(overview).toHaveAttribute("aria-selected", "true"); await expect(page.getByText(OUTPUT, { exact: true }).first()).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath("safe-captured-run-mobile.png") });
+  writeFileSync(info.outputPath("actual-capture-export.json"), JSON.stringify({ before: before.body, exported: exported.body, errors }, null, 2)); expect(errors).toEqual([]);
+});

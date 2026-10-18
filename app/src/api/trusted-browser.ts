@@ -1,6 +1,7 @@
 import { apiJson, jsonInit } from "./request";
 import type { BrowserAction, BrowserActionResult, BrowserObservation, BrowserOpen, BrowserSummary, BrowserArtifact } from "../../../src/verification/browser-types";
 import type { Predicate, VerificationReport } from "./verification";
+import type { AccessibilityEvidence, AccessibilityRequest } from "../../../src/verification/accessibility-types";
 export type { BrowserAction, BrowserActionResult, BrowserSummary, BrowserArtifact };
 export type BrowserProviderStatus = { available: boolean; attached: boolean; providerVersion?: string; reason?: string; engines: string[]; qualification: "launch-required"; networkProfile: "bounded-http-v1"; compatibility: "initial-only" };
 export type AttachedListing = { session: BrowserSummary; revision: string; pages: Array<{ pageId: string; origin: string }>; capped: boolean };
@@ -15,6 +16,7 @@ export const trustedBrowserApi = {
   observe: (id: string) => apiJson<BrowserObservation>(`${session(id)}/events`),
   action: (id: string, generation: number, action: BrowserAction) => apiJson<{ action: BrowserActionResult; observation: BrowserObservation }>(`${session(id)}/action`, jsonInit("POST", { generation, action })),
   check: (id: string, generation: number, predicate: Predicate, action?: BrowserAction) => apiJson<{ action?: BrowserActionResult; report: VerificationReport }>(`${session(id)}/check`, jsonInit("POST", { generation, predicate, ...(action ? { action } : {}) })),
+  audit: (id: string, body: AccessibilityRequest) => apiJson<AccessibilityEvidence>(`${session(id)}/audit`, jsonInit("POST", body)),
   capture: (id: string, generation: number, raw: boolean) => apiJson<BrowserArtifact>(`${session(id)}/capture`, jsonInit("POST", { generation, raw, ...(raw ? { rawConsent: true } : {}) })),
   close: (id: string, generation: number) => apiJson<{ session: BrowserSummary; artifacts: BrowserArtifact[] }>(`${session(id)}/cancel`, jsonInit("POST", { generation })),
   artifacts: () => apiJson<BrowserArtifact[]>(`${root}/artifacts`),

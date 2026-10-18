@@ -122,12 +122,12 @@ export function parseExecutionContext(value: unknown): ExecutionContext {
   if (Buffer.byteLength(JSON.stringify(result)) > 1024) invalid("Browser observation context exceeds budget");
   return result;
 }
-export type WorkerOperation = "open" | "list" | "select" | "observe" | "action" | "read" | "capture" | "close";
+export type WorkerOperation = "open" | "list" | "select" | "observe" | "action" | "read" | "capture" | "audit" | "close";
 export interface WorkerFrame { formatVersion: 1; nonce: string; id: string; generation: number; operation: WorkerOperation; data: unknown }
 export function parseWorkerFrame(raw: string, nonce: string): WorkerFrame {
   if (Buffer.byteLength(raw) > BROWSER_LIMITS.FRAME_BYTES) invalid("Browser worker frame exceeds budget");
   let value: unknown; try { value = JSON.parse(raw); } catch { return invalid("Invalid browser worker JSON"); }
   const body = browserObject(value, ["formatVersion", "nonce", "id", "generation", "operation", "data"]);
-  if (body.formatVersion !== 1 || body.nonce !== nonce || !["open", "list", "select", "observe", "action", "read", "capture", "close"].includes(body.operation as string)) invalid("Invalid browser worker authority");
+  if (body.formatVersion !== 1 || body.nonce !== nonce || !["open", "list", "select", "observe", "action", "read", "capture", "audit", "close"].includes(body.operation as string)) invalid("Invalid browser worker authority");
   return { formatVersion: 1, nonce, id: browserId(body.id), generation: browserGeneration(body.generation), operation: body.operation as WorkerOperation, data: body.data };
 }
