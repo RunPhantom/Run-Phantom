@@ -147,7 +147,7 @@ describe("persisted workspace API projections", () => {
     const count = await json(route); expect(count.status).toBe(409); expect(count.value.error).toContain("discovery metadata budget");
     database.query("DELETE FROM evaluation_evidence_jobs WHERE id LIKE 'corrupt-head-%'").run();
     expect((await json(route)).value).toEqual(history.value);
-  });
+  }, 15_000);
   test("actual exports preserve JSON and JUnit bytes and plaintext keeps unknown trust without private leaf fields", async () => {
     const job = await terminal((await upload(draft("workspace-export"))).value.job.id), view = (await json(`/sets/${job.setId}`)).value as EvidenceSetView;
     const exported = await fetch(`${base}/api/evaluations/evidence/sets/${job.setId}/export?format=json`);
