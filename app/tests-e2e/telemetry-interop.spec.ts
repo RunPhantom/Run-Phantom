@@ -86,3 +86,37 @@ for (const family of ["OpenInference JSON", "GenAI gzipped protobuf"]) {
     } finally { await client.close(); }
   });
 }
+
+test("failed LLM calls show their provider reason in the LLM Error banner and the errors tooltip", async ({ page, request, runPhantom }) => {
+  const traceId = "f01234567890abcdef1234567890abc033";
+  const reason = "401 Incorrect API key provided: sk-bad.";
+  const retryReason = "429 Rate limit reached for gpt-4o-mini.";
+  const messages = JSON.stringify([{ role: "user", content: "Say hello" }]);
+  const stamp = (offset: number) => String((1_790_000_000_000n + BigInt(offset)) * 1_000_000n);
+  const span = (spanId: string, name: string, attributes: Record<string, unknown>, message: string, parentSpanId?: string) => ({
+    traceId, spanId, parentSpanId, name, startTimeUnixNano: stamp(0), endTimeUnixNano: stamp(60), attributes: attrs(attributes),
+    status: { code: 2, message },
+  });
+  const llm = { "runphantom.span.kind": "llm_call", "gen_ai.operation.name": "chat", "gen_ai.provider.name": "openai",
+    "gen_ai.request.model": "gpt-4o-mini", "gen_ai.input.messages": messages };
+  // Shaped like the shipped examples' catch block: an object output on the first call,
+  // and a second call that fails with only a status message.
+  const body = { resourceSpans: [{ scopeSpans: [{ scope: { name: "runphantom.examples" }, spans: [
+    span("f000000000000031", "openai-chat", { "runphantom.span.kind": "agent_root", "runphantom.input": messages,
+      "runphantom.output": JSON.stringify({ error: reason }) }, reason),
+    span("f000000000000032", "openai.chat.completions", { ...llm, "gen_ai.output.messages": JSON.stringify({ error: reason }) }, reason, "f000000000000031"),
+    span("f000000000000033", "openai.chat.retry", llm, retryReason, "f000000000000031"),
+  ] }] }] };
+  expect((await request.post(`${runPhantom.url}/v1/traces`, { data: body })).status()).toBe(200);
+
+  await page.goto(`${runPhantom.url}/runs/${traceId}`);
+  const banner = page.getByLabel("LLM error. Focus or hover for details.").first();
+  await expect(banner).toContainText("LLM Error");
+  await expect(banner).toContainText("401 Incorrect API key");
+
+  const errors = page.getByLabel(/run errors?\. Focus for details\./);
+  await errors.focus();
+  await expect(errors.getByText("openai.chat.completions")).toBeVisible();
+  await expect(errors.getByText("openai.chat.retry")).toBeVisible();
+  await expect(errors.getByText(retryReason)).toBeVisible();
+});
