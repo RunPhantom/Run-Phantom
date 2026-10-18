@@ -1,0 +1,116 @@
+{
+  "pr": 44,
+  "source": "b93cd783addd56caacfe8a621f56d57cc822ee66",
+  "receiving_main": "1007322ca331d06c78bc1b3df1a5bbf940c1eb76",
+  "receiving_branch": "main",
+  "tested_pr_merge": "c98b7d2e1d82f0dbbbb27ce66ac98aa88e79ad09",
+  "source_tree": "54f1483e18e849773cfdb35ce7d00e1cb798f658",
+  "native_macos": {
+    "source": "3a2cdfcd01e02c8733584cc4840f99a9a1c15e43",
+    "app_types": "passed",
+    "browser_types": "passed",
+    "lint": "passed",
+    "prefix_units": "passed",
+    "build": "passed",
+    "browser": "Incomplete: one pass and one visibility assertion failure observed before overall480s deadline; remaining journeys unqualified. Heavy host load and memory pressure observed, causation not proven."
+  },
+  "scope": "Final composed PR44 including merged PR47 against actual receiving main. Synthetic fixtures only; no paid provider calls. Native macOS browser and broader product/platform acceptance remain open.",
+  "paired_original_source": "3a2cdfcd01e02c8733584cc4840f99a9a1c15e43",
+  "runs": [
+    {
+      "id": 39089171473,
+      "platform": "Linux",
+      "event": "push",
+      "attempt": 1,
+      "backend": {
+        "passed": 713,
+        "skipped": 1,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39089176187,
+      "platform": "Linux",
+      "event": "pull_request",
+      "attempt": 1,
+      "backend": {
+        "passed": 713,
+        "skipped": 1,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39089171518,
+      "platform": "Windows",
+      "event": "push",
+      "attempt": 1,
+      "backend": {
+        "passed": 681,
+        "skipped": 33,
+        "failed": 0
+      },
+      "browser": {
+        "passed": 129,
+        "skipped": 10,
+        "failed": 0
+      },
+      "compiled_browser": {
+        "passed": 3,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39089175960,
+      "platform": "Windows",
+      "event": "pull_request",
+      "attempt": 1,
+      "backend": {
+        "passed": 681,
+        "skipped": 33,
+        "failed": 0
+      },
+      "browser": {
+        "passed": 129,
+        "skipped": 10,
+        "failed": 0
+      },
+      "compiled_browser": {
+        "passed": 3,
+        "failed": 0
+      }
+    }
+  ],
+  "paired_source_history": {
+    "pr": 47,
+    "prior_linux_push_timeout": "One original child-stage Linux timeout and daemon cascade; identical-source repeat passed, original stall unexplained. All four final composed PR44 contexts passed attempt1."
+  },
+  "screenshots": [
+    {
+      "file": "replay-row-layout-1024.png",
+      "sha256": "b11ef586b735ef20868a99f6431ee9755036e568fd5c18dad3d21eaaf1742f0d",
+      "bytes": 42045,
+      "platform": "Windows x64",
+      "run_id": 39089175960,
+      "artifact_id": 12122136609,
+      "profile": "Final composed candidate, source Chromium, connected synthetic UI; the503replay refusal is expected"
+    },
+    {
+      "file": "replay-row-layout-1280.png",
+      "sha256": "cc6d360c8f16c786cab2dbf18c9132b3a998176044755f81d6124f83670b2065",
+      "bytes": 43887,
+      "platform": "Windows x64",
+      "run_id": 39089175960,
+      "artifact_id": 12122136609,
+      "profile": "Final composed candidate, source Chromium, connected synthetic UI; the503replay refusal is expected"
+    },
+    {
+      "file": "distinct-run-identifiers-and-complete-header.png",
+      "sha256": "27b334567692670753f12591b67e61dcd357a9857c3656309d3d154d12f36cba",
+      "bytes": 90018,
+      "platform": "Windows x64",
+      "run_id": 39089175960,
+      "artifact_id": 12122136609,
+      "profile": "Final composed candidate, source Chromium, connected synthetic UI; the503replay refusal is expected"
+    }
+  ]
+}
