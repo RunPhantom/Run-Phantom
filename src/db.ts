@@ -6,7 +6,7 @@ import os from "os";
 import fs from "fs";
 import { detectSubAgents } from "./agents";
 import { normalizeStoredSpan } from "./spans/normalize";
-import type { NormalizedSpan } from "./spans/normalized";
+import { captureCompletion, type NormalizedSpan } from "./spans/normalized";
 import * as schema from "./db/schema";
 import { embeddedMigrationFiles, embeddedMigrationJournal } from "./db/migration-assets";
 import { SOURCE_MIGRATIONS_DIR } from "./source-paths";
@@ -767,6 +767,13 @@ export function upsertEventSpan(span: { id: string; run_id: string; name: string
     .run();
 }
 
+function runCaptureCompletion(attributes: string | null) {
+  if (!attributes || Buffer.byteLength(attributes) > 16384) return null;
+  try {
+    return captureCompletion(normalizeStoredSpan({ name: "", span_type: "AGENT_ROOT", input_payload: null, output_payload: null, attributes }).normalized.capture);
+  } catch { return null; }
+}
+
 export function getRuns(limit = 200) {
   // Deliberately not `select()`: runs_with_hints also derives payload_total_chars,
   // which sums LENGTH() over every payload of every run it returns. Measured on
@@ -789,11 +796,14 @@ export function getRuns(limit = 200) {
       finished: schema.runs_with_hints.finished,
       span_count: schema.runs_with_hints.span_count,
       live_event_count: schema.runs_with_hints.live_event_count,
+      // The outer view must be qualified inside the correlated root lookup.
+      capture_attributes: drizzleSql<string | null>`(SELECT CASE WHEN length(CAST(root.attributes AS BLOB)) <= 16384 THEN root.attributes END FROM spans root WHERE root.run_id = runs_with_hints.id AND root.parent_span_id IS NULL AND root.span_type = 'AGENT_ROOT' ORDER BY root.start_time_ms, root.id LIMIT 1)`,
     })
     .from(schema.runs_with_hints)
     .orderBy(desc(schema.runs_with_hints.last_updated_at))
     .limit(limit)
-    .all();
+    .all()
+    .map(({ capture_attributes, ...run }) => ({ ...run, capture_completion: runCaptureCompletion(capture_attributes) }));
   if (rows.length === 0) return rows.map((r) => ({ ...r, error_count: 0 }));
   // The list view needs a failed/complete signal so a run with errors reads
   // "Run failed" in the sidebar, matching the detail header. The runs_with_hints
@@ -855,6 +865,9 @@ export function getRunWithSpans(runId: string) {
     .where(eq(schema.spans.run_id, runId))
     .orderBy(asc(schema.spans.start_time_ms))
     .all() as Array<{
+    id: string;
+    parent_span_id: string | null;
+    start_time_ms: number;
     name: string;
     span_type: string | null;
     input_payload: string | null;
@@ -862,7 +875,9 @@ export function getRunWithSpans(runId: string) {
     attributes: string | null;
   }>;
   const spans = rows.map(attachNormalized);
-  return { run: run ?? null, spans };
+  const root = [...spans].filter(span => span.span_type === "AGENT_ROOT" && span.parent_span_id === null)
+    .sort((a, b) => a.start_time_ms - b.start_time_ms || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0];
+  return { run: run ? { ...run, capture_completion: runCaptureCompletion(root?.attributes ?? null) } : null, spans };
 }
 
 /** See getSpanMeta on why an unscoped span id is ambiguous and how it resolves. */

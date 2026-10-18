@@ -3,7 +3,7 @@ import type { Response as ExpressResponse } from "express";
 import { getDrizzleDb, getRunWithSpans, upsertRun, updateRunMetadata, countReplaysBySource, findRunByEventId, deleteRun, reassignAnnotations } from "./db";
 import { getReplayTrace } from "./replay-map";
 import { ensureAgentEndpointDetailed, extractContextFromTrace } from "./agents-config";
-import type { NormalizedSpan } from "./spans/normalized";
+import { observationReplayUnavailable, type NormalizedSpan } from "./spans/normalized";
 
 export type ReplayMode = "local";
 
@@ -275,6 +275,12 @@ async function runLocalAgentReplay(
   const { run: sourceRun, spans: sourceSpans } = getRunWithSpans(config.sourceRunId);
   if (!sourceRun) {
     sendSSE(res, "error", { code: "source_run_not_found", message: "Source run not found" });
+    res.end();
+    return;
+  }
+
+  if (sourceSpans.some(span => observationReplayUnavailable(span.normalized.capture))) {
+    sendSSE(res, "error", { code: "observation_not_replayable", message: "Replay is unavailable for partial, unverified observations." });
     res.end();
     return;
   }

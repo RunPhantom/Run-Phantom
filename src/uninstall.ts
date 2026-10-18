@@ -1,4 +1,5 @@
 import { removeConfiguredClaudeHooks } from "./coding-hooks/commands";
+import { removeConfiguredCodexHooks } from "./coding-hooks/codex-install";
 import { createInterface } from "node:readline/promises";
 import fs from "node:fs";
 import os from "node:os";
@@ -489,6 +490,8 @@ export async function runUninstall(opts: RunUninstallOptions = {}): Promise<RunU
   const daemonStopFailed = failures.length > 0;
   let hookCleanupFailed = false;
   if (!dryRun && !daemonStopFailed) {
+    try { const count = await removeConfiguredCodexHooks(homeDir); if (count) removed.push(`removed ${count} owned Codex hook installations`); }
+    catch { hookCleanupFailed = true; failures.push("failed to remove owned Codex hooks; preserving installation state for retry"); }
     try { const count = await removeConfiguredClaudeHooks(process.env.RUNPHANTOM_DB_PATH || path.join(homeDir, ".runphantom/runphantom.db")); if (count) removed.push(`revoked and removed ${count} owned Claude hook installations`); }
     catch { hookCleanupFailed = true; failures.push("failed to revoke owned Claude hook installations; preserving installation state for retry"); }
   }

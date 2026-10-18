@@ -25,6 +25,7 @@ import { LocalAgentSetupCTA, SetupReplayModal } from "./LocalAgentSetupCTA";
 import { C } from "../utils/colors";
 import { fmt, isActive, plural, replayOutcome, runDisplayName, isoTimestamp, safeDecodeParam, spanErrorReason } from "../utils/helpers";
 import type { RunStatus } from "../utils/helpers";
+import { captureCompletion, observationReplayUnavailable } from "../../../src/spans/normalized";
 import { useQueryClient } from "@tanstack/react-query";
 import { parseReplayMetadata } from "../utils/types";
 import { deleteRun, renameRun } from "../api/runs";
@@ -325,12 +326,13 @@ function Badge({ label, copyValue }: { label: string; copyValue?: string }) {
   );
 }
 
-function StatsLine({ stats, model, spans, active, startedAt }: {
+function StatsLine({ stats, model, spans, active, startedAt, completionUnavailable }: {
   stats: { spans: number; tools: number; llms: number; errors: number; dur: number; agents?: number; inTokens?: number; outTokens?: number };
   model?: string | null;
   spans?: Span[];
   active?: boolean;
   startedAt?: number;
+  completionUnavailable?: boolean;
 }) {
   const [showCost, setShowCost] = useState(false);
   const costRef = useRef<HTMLSpanElement>(null);
@@ -344,10 +346,10 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
 
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    if (!active) return;
+    if (!active || completionUnavailable) return;
     const i = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(i);
-  }, [active]);
+  }, [active, completionUnavailable]);
 
   const breakdown = useMemo(() => {
     if (!spans) return [];
@@ -429,8 +431,10 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
           to whole seconds it read "6s" beside a span tree root of "6.2s", "0s"
           beside "420ms", and "205m" for a 3h run. Only the live tick animates;
           everything else goes through fmt(), exactly like the span tree. */}
-      <Stat last={!hasTokens && !hasCost}><Badge label="duration" /><span>{
-        !durValid
+      <Stat last={!hasTokens && !hasCost}><Badge label="duration" /><span data-run-duration>{
+        completionUnavailable
+          ? "Unavailable"
+          : !durValid
           ? "—"
           : !ticking || liveDur < 1000 || liveDur >= 3_600_000
             ? fmt(liveDur)
@@ -713,6 +717,7 @@ function ViewHeader({
   const parentName = breadcrumb?.parentName;
   const onFork = fork?.onFork;
   const userMessage = fork?.userMessage;
+  const replayUnavailable = allSpans?.some(span => observationReplayUnavailable(span.normalized?.capture)) === true;
   const queryClient = useQueryClient();
   const replayMeta = run ? parseReplayMetadata(run) : null;
   const traceModelFromMetadata = replayMeta?.replay?.model ?? null;
@@ -780,7 +785,7 @@ function ViewHeader({
   }, [queryClient, run]);
 
   useEffect(() => {
-    if (!optionsOpen || !run?.id || !agentConfigured) return;
+    if (replayUnavailable || !optionsOpen || !run?.id || !agentConfigured) return;
     fetch("/api/replay/context", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ runId: run.id, eventName: run.event_name }),
@@ -790,7 +795,7 @@ function ViewHeader({
         setContextEdits(Object.fromEntries(Object.entries(data.context).map(([k, v]) => [k, String(v)])));
       }
     }).catch(() => {});
-  }, [optionsOpen, run?.id, run?.event_name, agentConfigured]);
+  }, [optionsOpen, run?.id, run?.event_name, agentConfigured, replayUnavailable]);
 
   useEffect(() => {
     if (!optionsOpen) return;
@@ -812,10 +817,11 @@ function ViewHeader({
     };
   }, [optionsOpen]);
   const displayTitle = cleanTitle(title);
+  const completionUnavailable = run?.capture_completion === "unavailable" || allSpans?.some(span => captureCompletion(span.normalized?.capture) === "unavailable") === true;
   const status: RunStatus = (run && replayOutcome(run)) || (active ? "live" : stats.errors > 0 ? "failed" : "complete");
-  const statusLabel = { live: "Run live", failed: "Run failed", cancelled: "Run cancelled", complete: "Run complete" }[status];
-  const statusColor = status === "live" ? C.green : status === "failed" ? C.red : C.fg1;
-  const statusBackground = status === "live"
+  const statusLabel = completionUnavailable ? "Completion unavailable" : { live: "Run live", failed: "Run failed", cancelled: "Run cancelled", complete: "Run complete" }[status];
+  const statusColor = completionUnavailable ? C.fg1 : status === "live" ? C.green : status === "failed" ? C.red : C.fg1;
+  const statusBackground = completionUnavailable ? "var(--rp-ink-wash)" : status === "live"
     ? "color-mix(in oklch, var(--rp-success) 12%, transparent)"
     : status === "failed"
       ? "color-mix(in oklch, var(--rp-danger) 10%, transparent)"
@@ -839,7 +845,7 @@ function ViewHeader({
                   {statusLabel}
                 </span>
               </div>
-              <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
+              <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
             </div>
           </div>
         </>
@@ -854,7 +860,7 @@ function ViewHeader({
             </div>
             <MoreMenu runId={run?.id} />
           </div>
-          <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
+          <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
         </div>
       ) : (
         <>
@@ -971,14 +977,14 @@ function ViewHeader({
                   return <>
                   <div className="rp-clipped-ring flex items-stretch rounded-md overflow-hidden" style={{ border: `1px solid var(--rp-ink-a10)` }}>
                     <button
-                      disabled={agentRegistryStatus !== "success"}
+                      disabled={replayUnavailable || agentRegistryStatus !== "success"}
                       className="flex items-center gap-1.5 text-[11px] px-3 py-1 font-medium transition-colors rp-hover-wash disabled:opacity-50"
                       style={{
                         color: C.fg3,
                         background: "var(--rp-ink-a06)",
                       }}
                       onClick={() => {
-                        if (agentRegistryStatus !== "success") return;
+                        if (replayUnavailable || agentRegistryStatus !== "success") return;
                         if (agentConfigured) {
                           onFork(undefined, forkMode, forkModel || undefined);
                         } else {
@@ -996,10 +1002,11 @@ function ViewHeader({
                       aria-expanded={optionsOpen}
                       aria-controls={optionsOpen ? replayOptionsId : undefined}
                       aria-haspopup="dialog"
-                      disabled={agentRegistryStatus !== "success"}
+                      disabled={replayUnavailable || agentRegistryStatus !== "success"}
                       className="flex items-center justify-center px-1.5 transition-colors rp-hover-wash disabled:opacity-50"
                       style={{ color: C.fg1, background: "var(--rp-ink-a06)", borderLeft: "1px solid var(--rp-ink-a10)" }}
                       onClick={() => {
+                        if (replayUnavailable) return;
                         setAnnotationPopoverOpen(false);
                         setOptionsOpen(!optionsOpen);
                       }}
@@ -1008,13 +1015,13 @@ function ViewHeader({
                       <ChevronDown className="h-3.5 w-3.5" />
                     </button>
                   </div>
-                  {agentRegistryStatus !== "success" && <ReplayRegistryNotice status={agentRegistryStatus} onRetry={refetchAgents} />}
+                  {!replayUnavailable && agentRegistryStatus !== "success" && <ReplayRegistryNotice status={agentRegistryStatus} onRetry={refetchAgents} />}
                   <SetupReplayModal
-                    open={setupModalOpen}
+                    open={setupModalOpen && !replayUnavailable}
                     onClose={() => setSetupModalOpen(false)}
                     eventName={run?.event_name ?? undefined}
                   />
-                  {optionsOpen && (
+                  {optionsOpen && !replayUnavailable && (
                     <div
                       id={replayOptionsId}
                       data-replay-options
@@ -1081,7 +1088,7 @@ function ViewHeader({
                         </div>
                       )}
                       <button
-                        disabled={agentRegistryStatus !== "success"}
+                        disabled={replayUnavailable || agentRegistryStatus !== "success"}
                         className="w-full py-1.5 rounded text-[11px] font-medium transition-colors hover:brightness-110 disabled:opacity-50"
                         style={{
                           background: "var(--rp-ink-a08)",
@@ -1089,7 +1096,7 @@ function ViewHeader({
                           border: `1px solid var(--rp-ink-a10)`,
                         }}
                         onClick={() => {
-                          if (agentRegistryStatus !== "success") return;
+                          if (replayUnavailable || agentRegistryStatus !== "success") return;
                           if (!agentConfigured) {
                             setOptionsOpen(false);
                             setSetupModalOpen(true);
@@ -1112,10 +1119,11 @@ function ViewHeader({
               </div>
             )}
           </div>
+          {!active && onFork && replayUnavailable && <div role="status" className="basis-full text-[10px]" style={{ color: C.fg1 }}>Replay unavailable for partial, unverified observations.</div>}
           {/* Not on the stats row after a separator: at laptop widths the ids
               wrapped and left the separator dangling at the end of the stats. */}
           <div className="flex flex-col gap-1.5 text-[11px]">
-            <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
+            <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
             {run && (run.id || run.user_id || run.convo_id) && (
               <span className="rp-meta-ids flex min-w-0 max-w-full flex-wrap items-center gap-1.5" style={{ color: C.fg0 }}>
                 {run.user_id && <span className="inline-flex items-center gap-1" title={run.user_id}><Badge label="user" copyValue={run.user_id} />{run.user_id.length > 12 ? run.user_id.slice(0, 12) + "…" : run.user_id}</span>}
@@ -1744,6 +1752,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   }
 
   // Normal run view
+  const replayUnavailable = spans.some(span => observationReplayUnavailable(span.normalized?.capture));
   const active = isActive(run);
   const tools = spans.filter(s => s.span_type === "TOOL_CALL");
   const llms = spans.filter(s => s.span_type?.includes("LLM"));
@@ -1835,13 +1844,13 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
       ) : (
         <StickToBottom id={runPanelId} role="tabpanel" aria-labelledby={activeTab === "convo" ? runConversationTabId : runOverviewTabId} className="flex-1 relative min-h-0" resize={prefersReducedMotion ? "instant" : "smooth"} initial={false} contextRef={stickToBottomContextRef}>
           <StickToBottom.Content className="sb">
-            {activeTab === "chat" && <ChatFlow spans={spans} liveEvents={liveEvents} subAgents={subAgents} onDiveIn={setFocusedAgent} isActive={active} lastUpdatedAt={run.last_updated_at} onEditMessage={onForkStarted && !active ? (msg) => setEditModal({ userMessage: msg }) : undefined} replayError={replayMeta?.replay?.error ?? null} />}
+            {activeTab === "chat" && <ChatFlow spans={spans} liveEvents={liveEvents} subAgents={subAgents} onDiveIn={setFocusedAgent} isActive={active} lastUpdatedAt={run.last_updated_at} onEditMessage={onForkStarted && !active && !replayUnavailable ? (msg) => setEditModal({ userMessage: msg }) : undefined} replayError={replayMeta?.replay?.error ?? null} />}
             {activeTab === "convo" && run.convo_id && <ConvoDetail convoId={run.convo_id} onOpenTurn={openConversationTurn} />}
           </StickToBottom.Content>
           <ScrollToBottomButton />
         </StickToBottom>
       )}
-      {editModal && onForkStarted && (
+      {editModal && onForkStarted && !replayUnavailable && (
         <EditReplayModal
           userMessage={editModal.userMessage}
           model={model}

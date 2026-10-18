@@ -72,6 +72,10 @@ function activationIds(argv: string[]): string[] {
   return ids;
 }
 export async function cmdCodingHooks(argv: string[]): Promise<number> {
+  if (argv[1] === "codex") {
+    const { cmdCodexHooks } = await import("./codex-install");
+    return cmdCodexHooks(argv);
+  }
   try { console.log(JSON.stringify(await (argv[0] === "activate-context-v2" ? manageClaudeContextActivation(activationIds(argv)) : manageClaudeHooks(command(argv))))); return 0; }
   catch (error) { console.error(error instanceof Error ? error.message : "Hook management unavailable"); return 64; }
   finally { closeDb(); }

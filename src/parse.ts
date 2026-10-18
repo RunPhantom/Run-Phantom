@@ -286,11 +286,14 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
             undefined,
           name, spanType,
           // Imported observations do not acquire an ended-runtime guarantee from OTLP's UNSET default.
-          status: typeof allAttrs.captureContract === "string" && allAttrs.captureContract.startsWith("runphantom.cursor-hook.observation/")
-            ? status(s.status?.code) === "ERROR" ? "ERROR" : "UNSET" : status(s.status?.code),
+          status: match.normalized.capture?.contract === "runphantom.codex-hook.observation/v1"
+            ? "UNSET"
+            : typeof allAttrs.captureContract === "string" && allAttrs.captureContract.startsWith("runphantom.cursor-hook.observation/")
+              ? status(s.status?.code) === "ERROR" ? "ERROR" : "UNSET"
+              : status(s.status?.code),
           inputPayload: stripNul(inputPayload), outputPayload: stripNul(outputPayload),
           startTimeMs: startMs, endTimeMs: endMs,
-          durationMs: numericAttr(getAttr(attrs, "traceloop.entity.duration_ms")) ?? (endMs - startMs),
+          durationMs: match.normalized.capture?.contract === "runphantom.codex-hook.observation/v1" ? 0 : numericAttr(getAttr(attrs, "traceloop.entity.duration_ms")) ?? (endMs - startMs),
           model, provider,
           inputTokens: typeof inputTokens === "number" ? inputTokens : undefined,
           outputTokens: typeof outputTokens === "number" ? outputTokens : undefined,

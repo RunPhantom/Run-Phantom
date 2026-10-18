@@ -49,7 +49,7 @@ describe("team runtime authority boundary", () => {
     const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
     expect(tree.statements.filter(ts.isImportDeclaration)).toHaveLength(0);
     expect(source).toContain('process.argv[2] === "team"');
-    expect(runtimeImports(file).sort()).toEqual(["./coding-hooks/callback", "./coding-hooks/cursor", "./evaluations/evidence-worker", "./evaluations/evidence-worker-environment", "./local-cli", "./team/cli", "./verification/browser-worker"]);
+    expect(runtimeImports(file).sort()).toEqual(["./coding-hooks/callback", "./coding-hooks/codex-callback", "./coding-hooks/cursor", "./evaluations/evidence-worker", "./evaluations/evidence-worker-environment", "./local-cli", "./team/cli", "./verification/browser-worker"]);
     const dispatch = tree.statements.find(ts.isIfStatement)!;
     expect(dispatch.expression.getText(tree)).toBe('process.argv[2] === "--internal-browser-worker"');
     expect(runtimeImports(file, dispatch.thenStatement)).toEqual(["./verification/browser-worker"]);
@@ -90,6 +90,35 @@ describe("team runtime authority boundary", () => {
       "src/coding-hooks/acquisition.ts", "src/coding-hooks/callback.ts", "src/coding-hooks/capability.ts", "src/coding-hooks/claude.ts", "src/coding-hooks/client.ts", "src/coding-hooks/context-client.ts", "src/coding-hooks/context-v2.ts", "src/coding-hooks/projection.ts", "src/coding-hooks/protocol.ts", "src/coding-hooks/retained-version.ts", "src/coding-hooks/shared.ts",
       "src/evaluations/json-evidence.ts", "src/json-keys.ts", "src/verification/protocol.ts", "src/verification/redaction.ts", "src/verification/serialization.ts",
     ]);
+  });
+
+  test("Codex callback has an exact read-only acquisition graph without installers or database authority", () => {
+    const allowed = new Set([
+      "src/coding-hooks/codex-callback.ts", "src/coding-hooks/codex-registration.ts", "src/coding-hooks/codex-lock.ts", "src/coding-hooks/codex.ts",
+      "src/coding-hooks/acquisition.ts", "src/coding-hooks/callback.ts", "src/coding-hooks/capability.ts", "src/coding-hooks/claude.ts", "src/coding-hooks/client.ts", "src/coding-hooks/context-client.ts", "src/coding-hooks/context-v2.ts", "src/coding-hooks/projection.ts", "src/coding-hooks/protocol.ts", "src/coding-hooks/retained-version.ts", "src/coding-hooks/shared.ts",
+      "src/evaluations/json-evidence.ts", "src/json-keys.ts", "src/verification/protocol.ts", "src/verification/redaction.ts", "src/verification/serialization.ts",
+    ]);
+    const pending = [path.join(root, "src/coding-hooks/codex-callback.ts")], visited = new Set<string>(), violations: string[] = [];
+    while (pending.length) {
+      const file = pending.pop()!;
+      if (visited.has(file)) continue;
+      visited.add(file);
+      const relative = path.relative(root, file).split(path.sep).join("/");
+      if (!allowed.has(relative)) violations.push(relative);
+      for (const source of runtimeImports(file)) {
+        const dependency = resolveImport(source, file);
+        if (dependency) pending.push(dependency);
+        else {
+          const filesystem = (["src/coding-hooks/codex-callback.ts", "src/coding-hooks/codex-registration.ts", "src/coding-hooks/capability.ts", "src/coding-hooks/claude.ts"].includes(relative) && ["node:fs", "node:fs/promises"].includes(source))
+            || relative === "src/coding-hooks/codex-lock.ts" && source === "node:fs";
+          const utility = ["src/coding-hooks/protocol.ts", "src/coding-hooks/retained-version.ts"].includes(relative) && source === "node:util";
+          if (!["node:os", "node:path", "node:crypto"].includes(source) && !filesystem && !utility
+            && !(relative === "src/coding-hooks/client.ts" && source === "node:http")) violations.push(`${relative} imports ${source}`);
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+    expect([...visited].map(file => path.relative(root, file).split(path.sep).join("/")).sort()).toEqual([...allowed].sort());
   });
 
   test("Cursor callback keeps a separate exact silent closure without installation or provider authority", () => {

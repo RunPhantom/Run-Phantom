@@ -3,6 +3,14 @@
 if (process.argv[2] === "--internal-browser-worker") {
   const { runBrowserWorker } = await import("./verification/browser-worker");
   await runBrowserWorker();
+} else if (process.argv[2] === "hooks" && process.argv[3] === "handle" && process.argv[4] === "codex") {
+  const deadline = setTimeout(() => process.exit(0), 1500);
+  try {
+    const { runCodexHookCallback } = await import("./coding-hooks/codex-callback");
+    await runCodexHookCallback(process.argv.slice(5));
+  } catch { /* Telemetry is silent and cannot block the host. */ }
+  finally { clearTimeout(deadline); }
+  process.exit(0);
 } else if (process.argv[2] === "hooks" && process.argv[3] === "handle" && ["claude", "cursor"].includes(process.argv[4])) {
   // A host hook must not initialize the daemon/database or let telemetry failure affect its caller.
   const deadline = setTimeout(() => process.exit(0), 1500);

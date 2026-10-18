@@ -648,6 +648,10 @@ TEAM
     runphantom team --help           Show team configuration and access.
 
 TOOLS
+    runphantom hooks install codex --local --full --consent-full
+                                    Capture this project's Codex observations.
+    runphantom hooks doctor codex --local
+                                    Inspect configuration without claiming capture.
     runphantom sync                  Refresh tracked agent integrations.
     runphantom replay register       Register replay configuration for this project.
     runphantom uninstall             Remove Run Phantom from this machine.

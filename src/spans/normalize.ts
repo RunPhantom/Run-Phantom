@@ -37,10 +37,12 @@ import { captureKindAdapter, captureVisibility, readCaptureReceipt } from "./ada
 import { parseBoundedHookJson } from "../coding-hooks/shared";
 import { cursorHookAdapter } from "./adapters/cursor-hook";
 import { claudeHookAdapter } from "./adapters/claude-hook";
+import { codexHookAdapter } from "./adapters/codex-hook";
 
 const ADAPTERS: SpanAdapter[] = [
   cursorHookAdapter,
   claudeHookAdapter,
+  codexHookAdapter,
   captureKindAdapter,
   aiSdkLlmAdapter,
   livekitLlmAdapter,
