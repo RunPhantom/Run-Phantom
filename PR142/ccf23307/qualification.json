@@ -1,0 +1,51 @@
+{
+  "pr": 142,
+  "source": "ccf233073e922b0a57103a96d9a697b3904382aa",
+  "feature": "F12",
+  "state": "OPEN DRAFT; no merge authorized",
+  "actual_final_UI_case": {
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0,
+    "retries": 0,
+    "case_seconds": 6.1,
+    "installer_status": 0,
+    "installer_ms": 455.08,
+    "installer_budget_ms": 15000,
+    "owned_group_absent": true
+  },
+  "unchanged_backend_and_SDK_bridge": {
+    "source": "7f009cc3e1edafc8d92b9985d37b41d0508098f8",
+    "focused_native_tests": 51,
+    "assertions": 280,
+    "UI_cases": 2,
+    "UI_failures": 0,
+    "UI_retries": 0,
+    "last_change": "One markup-only explanation move; backend/test bytes unchanged"
+  },
+  "scope": "Synthetic producer records via actual public install and installed callback to real daemon/UI. Authentic producer session is not qualified.",
+  "open_gates": [
+    "Historical full native run at26963b5 remains1489pass3skip1historytimeout1continuationerror",
+    "Authentic installed producer/paid session",
+    "Actual Cursor receiving-tree replay qualification",
+    "Native Windows acquisition",
+    "Copied executable and assembled application",
+    "Search/conversation status projections"
+  ],
+  "screenshots": [
+    {
+      "file": "codex-synthetic-list.png",
+      "sha256": "9ea5d3ca3c00e7496dadc23e6dd3ba3ce6b1e297cdc605522a0e136c4cf64bef",
+      "bytes": 80959,
+      "platform": "Darwin arm64",
+      "profile": "Actual captured-run overview; unavailable completion/duration, disabled Replay and explanation"
+    },
+    {
+      "file": "codex-synthetic-capture.png",
+      "sha256": "b70ec08c3ba8a9c0a3d0f90193aac551f9c2a8cd1477b259964890b2daa1175c",
+      "bytes": 89269,
+      "platform": "Darwin arm64",
+      "profile": "Actual expanded captured tool output with disabled Replay; synthetic payload"
+    }
+  ]
+}
