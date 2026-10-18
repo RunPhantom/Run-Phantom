@@ -110,7 +110,9 @@ test("a refused public reset preserves the already streaming demo timers and liv
     let acknowledgeStart!: (id: string) => void, rejectStart!: (error: unknown) => void, rejectUpload!: (error: unknown) => void;
     const started = new Promise<string>((resolve, reject) => { acknowledgeStart = resolve; rejectStart = reject; });
     const uploadFailed = new Promise<never>((_resolve, reject) => { rejectUpload = reject; });
-    const actualStart = EvidenceStore.prototype.start;
+    const startMethod: unknown = Object.getOwnPropertyDescriptor(EvidenceStore.prototype, "start")?.value;
+    expect(typeof startMethod).toBe("function");
+    const actualStart = startMethod as EvidenceStore["start"];
     const startObserver = spyOn(EvidenceStore.prototype, "start").mockImplementation(function (this: EvidenceStore, id: string, token: string) {
       const result = actualStart.call(this, id, token);
       if (result) {
