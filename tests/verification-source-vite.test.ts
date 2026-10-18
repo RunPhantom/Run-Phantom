@@ -24,7 +24,7 @@ if (import.meta.env.DEV) { globalThis.fixtureToken = "${fixtureToken}"; globalTh
 `;
 
 // Vite's Node API is exercised in Node, isolated from Bun's test-worker esbuild lifecycle.
-async function runVite(mode: "dev" | "multi" | "single-disabled" | "single-enabled", source = code): Promise<any> {
+async function runVite(mode: "dev" | "multi" | "single-disabled" | "single-enabled", source = code, aliasedRoot = false): Promise<any> {
   const root = mkdtempSync(path.join(realpathSync(tmpdir()), "rp-source-vite-"));
   mkdirSync(path.join(repo, ".omx"), { recursive: true });
   const helperDir = mkdtempSync(path.join(repo, ".omx/source-vite-"));
@@ -35,11 +35,15 @@ async function runVite(mode: "dev" | "multi" | "single-disabled" | "single-enabl
     const adapter = path.join(helperDir, "adapter.mjs");
     await new Promise<void>((resolve, reject) => execFile("bun", ["build", path.join(repo, "src/verification/build/vite.ts"), "--target=node", "--format=esm", "--external=typescript", `--outfile=${adapter}`], { cwd: repo, timeout: 25_000 }, (error, _stdout, stderr) => error ? reject(new Error(`${error.message}\n${stderr}`)) : resolve()));
     const script = `import path from "node:path";
+import { realpathSync, symlinkSync, rmSync } from "node:fs";
 import * as vite from ${JSON.stringify(pathToFileURL(viteEntry).href)};
 import react from ${JSON.stringify(pathToFileURL(reactEntry).href)};
 import { runPhantomSourceProvenance } from ${JSON.stringify(pathToFileURL(adapter).href)};
-const root = ${JSON.stringify(root)};
-const config = { root, configFile: false, logLevel: "silent", plugins: [runPhantomSourceProvenance({ enabled: ${mode !== "single-disabled"}, renderer: "react-dom" }), react()],
+const root = realpathSync.native(${JSON.stringify(root)});
+const aliasRoot = ${aliasedRoot ? JSON.stringify(path.join(helperDir, "project-alias")) : "null"};
+try {
+if (aliasRoot) symlinkSync(root, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+const config = { root: aliasRoot ?? root, configFile: false, logLevel: "silent", plugins: [runPhantomSourceProvenance({ enabled: ${mode !== "single-disabled"}, renderer: "react-dom" }), react()],
  resolve: { alias: ${JSON.stringify({ "react-dom": path.dirname(appRequire.resolve("react-dom/package.json")), react: path.dirname(appRequire.resolve("react/package.json")) })} }, optimizeDeps: { noDiscovery: true } };
 let result;
 ${mode === "dev" ? `const server = await vite.createServer({ ...config, server: { host: "127.0.0.1", port: 0 } });
@@ -47,7 +51,8 @@ try { await server.listen(); result = await server.transformRequest("/src/main.t
 const custom = { format: "es", entryFileNames: "first-[name].js", sourcemapPathTransform(source, map) { mappingCalls++; return path.resolve(path.dirname(map), source); } };
 try { const output = await vite.build({ ...config, build: { write: false, sourcemap: true, rollupOptions: { output: ${mode === "multi" ? '[custom, { format: "es", entryFileNames: "second-[name].js" }]' : "custom"} } } });
 result = { bundles: Array.isArray(output) ? output : [output], mappingCalls }; } catch (error) { result = { buildError: error.message }; }`}
-process.stdout.write(JSON.stringify({ root, result }));`;
+process.stdout.write(JSON.stringify({ root, result }));
+} finally { if (aliasRoot) rmSync(aliasRoot, { recursive: true, force: true }); }`;
     const raw = await new Promise<string>((resolve, reject) => execFile("node", ["--input-type=module", "-e", script], { cwd: repo, env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.includes("API_KEY") && !key.startsWith("RUNPHANTOM_"))), NODE_ENV: mode === "dev" ? "development" : "production" }, timeout: 25_000, maxBuffer: 32 * 1024 * 1024 }, (error, stdout, stderr) => error ? reject(new Error(`${error.message}\n${stderr}`)) : resolve(stdout)));
     return JSON.parse(raw);
   } finally { rmSync(root, { recursive: true, force: true }); rmSync(helperDir, { recursive: true, force: true }); }
@@ -63,8 +68,8 @@ describe("actual Vite composition and production asset privacy", () => {
     expect(source.originalLine).toBe(4); expect(source.originalColumn).toBe(9);
     expect(path.resolve(root, "src", source.originalSource)).toBe(path.join(root, "src/main.tsx"));
   }, 30_000);
-  for (const mode of ["multi", "single-disabled"] as const) test(`real ${mode} custom-map builds omit source contents without replacing requested maps`, async () => {
-    const { root, result: { bundles, mappingCalls } } = await runVite(mode);
+  for (const [mode, aliasedRoot] of [["multi", false], ["single-disabled", false], ["multi", true]] as const) test(`real ${mode}${aliasedRoot ? " aliased-root" : ""} custom-map builds omit source contents without replacing requested maps`, async () => {
+    const { root, result: { bundles, mappingCalls } } = await runVite(mode, code, aliasedRoot);
     expect(bundles).toHaveLength(mode === "multi" ? 2 : 1); expect(mappingCalls).toBeGreaterThan(0);
     let externalSources: string[] | undefined;
     for (const bundle of bundles) {
