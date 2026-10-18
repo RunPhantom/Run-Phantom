@@ -1,0 +1,98 @@
+{
+  "pr": 125,
+  "source": "584df40692a31bc169856acadd56662363ef02bc",
+  "receiving_main": "ea253e7015867be2cdeb2d99cd043e65bd1f8146",
+  "source_tree": "537561e7fe78c5063ff5b2d43c024787f1d92d40",
+  "scope": "Six-path test fixture lifecycle ownership hardening; product source and workflows unchanged. Screens show preserved source Team/portable behavior; dedicated controls establish ownership semantics.",
+  "native_macos": {
+    "backend": {
+      "pass": 802,
+      "skip": 1,
+      "fail": 0,
+      "assertions": 4435
+    },
+    "native_control_cohorts_included": {
+      "portable": 31,
+      "Team": 34
+    },
+    "all_five_native_Team_consumers_pass": true,
+    "root_app_browser_types": "pass",
+    "full_lint": "pass, zero warnings",
+    "full_build": "pass",
+    "source_browser": {
+      "Team_pass": 9,
+      "portable_pass": 2,
+      "skip": 0,
+      "fail": 0,
+      "flaky": 0,
+      "retry": 0
+    },
+    "all_owned_groups_absent_before_lease_release": true
+  },
+  "local_seal_sha256": "3d2281560e1f620df1263755844d992d8a88faafb5b64b3a409c51e72d3ca16d",
+  "ci": {
+    "status": "PENDING at screenshot publication; no Windows or copied-executable acceptance claimed",
+    "linux_push": 39104883329,
+    "linux_pr": 39104886753,
+    "windows_push": 39104883347,
+    "windows_pr": 39104886775
+  },
+  "historical_startup_causes": "UNKNOWN; no causal startup-fix claim",
+  "provider_calls": 0,
+  "limits": [
+    "Test-fixture lifecycle hardening only; screenshots demonstrate preserved source product journeys, not lifecycle causality by themselves",
+    "No Windows/copied-executable/whole-theme/platform acceptance at this local stage",
+    "Portable refusal image does not independently prove the earlier successful import; complete journey assertions/logs supply that evidence"
+  ],
+  "screenshots": [
+    {
+      "file": "team-desktop-shared-trace.png",
+      "sha256": "a587f6bf943c9780d29da73d528f252db5b7ed22796e42edeaf137aff0814220",
+      "bytes": 81408,
+      "platform": "native macOS arm64 source daemon, Chromium",
+      "profile": "Exact584df406/tree537561e initial-pass source Team9 and portable2 journeys, workers1/retries0; root individually viewed"
+    },
+    {
+      "file": "team-mobile-search.png",
+      "sha256": "e9eb4f53b86cd6460ad5f9a4955057a39906af7d93c415d25ad9085f47ca649f",
+      "bytes": 44570,
+      "platform": "native macOS arm64 source daemon, Chromium",
+      "profile": "Exact584df406/tree537561e initial-pass source Team9 and portable2 journeys, workers1/retries0; root individually viewed"
+    },
+    {
+      "file": "team-membership-denial-clears-check.png",
+      "sha256": "b413d2de479ccf86334cbbbb7b5ee9c8b8dd8fd9f4eaa9c51edd2f78fb984d6f",
+      "bytes": 21174,
+      "platform": "native macOS arm64 source daemon, Chromium",
+      "profile": "Exact584df406/tree537561e initial-pass source Team9 and portable2 journeys, workers1/retries0; root individually viewed"
+    },
+    {
+      "file": "team-missing-object-retains-project.png",
+      "sha256": "7ba1ad342ff342f3fc798dba5cf5267930eae8da24324cc43f36df3c5833aa9d",
+      "bytes": 80522,
+      "platform": "native macOS arm64 source daemon, Chromium",
+      "profile": "Exact584df406/tree537561e initial-pass source Team9 and portable2 journeys, workers1/retries0; root individually viewed"
+    },
+    {
+      "file": "team-permission-denial-hides-key.png",
+      "sha256": "d93b11039ab97c63b33a7286ed1ee8c0510d7df2093f082f18d498d027ae95b0",
+      "bytes": 40816,
+      "platform": "native macOS arm64 source daemon, Chromium",
+      "profile": "Exact584df406/tree537561e initial-pass source Team9 and portable2 journeys, workers1/retries0; root individually viewed"
+    },
+    {
+      "file": "portable-annotated-import-refusal.png",
+      "sha256": "7ad4dc03a25b9e465db5b3f0c228eaa770d9b8fe53defb1b10c2f8fb623641a1",
+      "bytes": 65730,
+      "platform": "native macOS arm64 source daemon, Chromium",
+      "profile": "Exact584df406/tree537561e initial-pass source Team9 and portable2 journeys, workers1/retries0; root individually viewed"
+    },
+    {
+      "file": "portable-cached-evidence-after-clear.png",
+      "sha256": "9bac5997051f0697ab4a415a9e706dcd53820558ac06bb08cddb8fd8819251ca",
+      "bytes": 54595,
+      "platform": "native macOS arm64 source daemon, Chromium",
+      "profile": "Exact584df406/tree537561e initial-pass source Team9 and portable2 journeys, workers1/retries0; root individually viewed"
+    }
+  ]
+}
