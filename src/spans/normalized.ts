@@ -7,6 +7,11 @@ export function captureCompletion(capture: HookCaptureView | undefined): "unavai
   return capture?.coverage === "partial" && capture.runtimeVerified === false ? "unavailable" : null;
 }
 
+/** Only this validated observation contract withholds replay; partial Claude capture keeps its existing semantics. */
+export function observationReplayUnavailable(capture: HookCaptureView | undefined): boolean {
+  return capture?.contract === "runphantom.codex-hook.observation/v1" && captureCompletion(capture) === "unavailable";
+}
+
 /**
  * Canonical, SDK-agnostic view of a parsed span.
  *

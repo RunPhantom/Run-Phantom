@@ -1,3 +1,4 @@
+import { observationReplayUnavailable } from "./spans/normalized";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import { WebSocketServer, WebSocket } from "ws";
@@ -2736,12 +2737,16 @@ export async function createServer(port: number) {
       res.status(400).json({ error: "eventName must be a string when provided" });
       return;
     }
+    const { spans } = getRunWithSpans(runId);
+    if (spans.some(span => observationReplayUnavailable(span.normalized.capture))) {
+      res.status(422).json({ code: "observation_not_replayable", error: "Replay is unavailable for partial, unverified observations." });
+      return;
+    }
     const agents = loadAgentsConfig();
     const name = (eventName ?? "").replace(/^replay:/, "");
     const agentConfig = agents[name];
     const mapping = agentConfig?.prefillFromTrace;
     if (!mapping) { res.json({ context: {}, mapping: {} }); return; }
-    const { spans } = getRunWithSpans(runId);
     const context = extractContextFromTrace(spans, mapping);
     res.json({ context, mapping });
   });

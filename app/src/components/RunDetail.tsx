@@ -24,7 +24,7 @@ import { RotateCcw, Bookmark, Download, Pencil, ChevronDown, ArrowDown, ChevronR
 import { LocalAgentSetupCTA, SetupReplayModal } from "./LocalAgentSetupCTA";
 import { C } from "../utils/colors";
 import { fmt, isActive, plural, runDisplayName, isoTimestamp, safeDecodeParam } from "../utils/helpers";
-import { captureCompletion } from "../../../src/spans/normalized";
+import { captureCompletion, observationReplayUnavailable } from "../../../src/spans/normalized";
 import { useQueryClient } from "@tanstack/react-query";
 import { parseReplayMetadata } from "../utils/types";
 import { deleteRun, renameRun } from "../api/runs";
@@ -585,6 +585,7 @@ function ViewHeader({
   const parentName = breadcrumb?.parentName;
   const onFork = fork?.onFork;
   const userMessage = fork?.userMessage;
+  const replayUnavailable = allSpans?.some(span => observationReplayUnavailable(span.normalized?.capture)) === true;
   const queryClient = useQueryClient();
   const replayMeta = run ? parseReplayMetadata(run) : null;
   const traceModelFromMetadata = replayMeta?.replay?.model ?? null;
@@ -652,7 +653,7 @@ function ViewHeader({
   }, [queryClient, run]);
 
   useEffect(() => {
-    if (!optionsOpen || !run?.id || !agentConfigured) return;
+    if (replayUnavailable || !optionsOpen || !run?.id || !agentConfigured) return;
     fetch("/api/replay/context", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ runId: run.id, eventName: run.event_name }),
@@ -662,7 +663,7 @@ function ViewHeader({
         setContextEdits(Object.fromEntries(Object.entries(data.context).map(([k, v]) => [k, String(v)])));
       }
     }).catch(() => {});
-  }, [optionsOpen, run?.id, run?.event_name, agentConfigured]);
+  }, [optionsOpen, run?.id, run?.event_name, agentConfigured, replayUnavailable]);
 
   useEffect(() => {
     if (!optionsOpen) return;
@@ -842,14 +843,14 @@ function ViewHeader({
                   return <>
                   <div className="rp-clipped-ring flex items-stretch rounded-md overflow-hidden" style={{ border: `1px solid var(--rp-ink-a10)` }}>
                     <button
-                      disabled={agentRegistryStatus !== "success"}
+                      disabled={replayUnavailable || agentRegistryStatus !== "success"}
                       className="flex items-center gap-1.5 text-[11px] px-3 py-1 font-medium transition-colors rp-hover-wash disabled:opacity-50"
                       style={{
                         color: C.fg3,
                         background: "var(--rp-ink-a06)",
                       }}
                       onClick={() => {
-                        if (agentRegistryStatus !== "success") return;
+                        if (replayUnavailable || agentRegistryStatus !== "success") return;
                         if (agentConfigured) {
                           onFork(undefined, forkMode, forkModel || undefined);
                         } else {
@@ -867,10 +868,11 @@ function ViewHeader({
                       aria-expanded={optionsOpen}
                       aria-controls={optionsOpen ? replayOptionsId : undefined}
                       aria-haspopup="dialog"
-                      disabled={agentRegistryStatus !== "success"}
+                      disabled={replayUnavailable || agentRegistryStatus !== "success"}
                       className="flex items-center justify-center px-1.5 transition-colors rp-hover-wash disabled:opacity-50"
                       style={{ color: C.fg1, background: "var(--rp-ink-a06)", borderLeft: "1px solid var(--rp-ink-a10)" }}
                       onClick={() => {
+                        if (replayUnavailable) return;
                         setAnnotationPopoverOpen(false);
                         setOptionsOpen(!optionsOpen);
                       }}
@@ -879,13 +881,14 @@ function ViewHeader({
                       <ChevronDown className="h-3.5 w-3.5" />
                     </button>
                   </div>
-                  {agentRegistryStatus !== "success" && <ReplayRegistryNotice status={agentRegistryStatus} onRetry={refetchAgents} />}
+                  {replayUnavailable && <div role="status" className="basis-full text-[10px]" style={{ color: C.fg1 }}>Replay unavailable for partial, unverified observations.</div>}
+                  {!replayUnavailable && agentRegistryStatus !== "success" && <ReplayRegistryNotice status={agentRegistryStatus} onRetry={refetchAgents} />}
                   <SetupReplayModal
-                    open={setupModalOpen}
+                    open={setupModalOpen && !replayUnavailable}
                     onClose={() => setSetupModalOpen(false)}
                     eventName={run?.event_name ?? undefined}
                   />
-                  {optionsOpen && (
+                  {optionsOpen && !replayUnavailable && (
                     <div
                       id={replayOptionsId}
                       data-replay-options
@@ -952,7 +955,7 @@ function ViewHeader({
                         </div>
                       )}
                       <button
-                        disabled={agentRegistryStatus !== "success"}
+                        disabled={replayUnavailable || agentRegistryStatus !== "success"}
                         className="w-full py-1.5 rounded text-[11px] font-medium transition-colors hover:brightness-110 disabled:opacity-50"
                         style={{
                           background: "var(--rp-ink-a08)",
@@ -960,7 +963,7 @@ function ViewHeader({
                           border: `1px solid var(--rp-ink-a10)`,
                         }}
                         onClick={() => {
-                          if (agentRegistryStatus !== "success") return;
+                          if (replayUnavailable || agentRegistryStatus !== "success") return;
                           if (!agentConfigured) {
                             setOptionsOpen(false);
                             setSetupModalOpen(true);
@@ -1592,6 +1595,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   }
 
   // Normal run view
+  const replayUnavailable = spans.some(span => observationReplayUnavailable(span.normalized?.capture));
   const active = isActive(run);
   const tools = spans.filter(s => s.span_type === "TOOL_CALL");
   const llms = spans.filter(s => s.span_type?.includes("LLM"));
@@ -1679,13 +1683,13 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
       ) : (
         <StickToBottom id={runPanelId} role="tabpanel" aria-labelledby={activeTab === "convo" ? runConversationTabId : runOverviewTabId} className="flex-1 relative min-h-0" resize={prefersReducedMotion ? "instant" : "smooth"} initial={false} contextRef={stickToBottomContextRef}>
           <StickToBottom.Content className="sb">
-            {activeTab === "chat" && <ChatFlow spans={spans} liveEvents={liveEvents} subAgents={subAgents} onDiveIn={setFocusedAgent} isActive={active} lastUpdatedAt={run.last_updated_at} onEditMessage={onForkStarted && !active ? (msg) => setEditModal({ userMessage: msg }) : undefined} replayError={replayMeta?.replay?.error ?? null} />}
+            {activeTab === "chat" && <ChatFlow spans={spans} liveEvents={liveEvents} subAgents={subAgents} onDiveIn={setFocusedAgent} isActive={active} lastUpdatedAt={run.last_updated_at} onEditMessage={onForkStarted && !active && !replayUnavailable ? (msg) => setEditModal({ userMessage: msg }) : undefined} replayError={replayMeta?.replay?.error ?? null} />}
             {activeTab === "convo" && run.convo_id && <ConvoDetail convoId={run.convo_id} onOpenTurn={openConversationTurn} />}
           </StickToBottom.Content>
           <ScrollToBottomButton />
         </StickToBottom>
       )}
-      {editModal && onForkStarted && (
+      {editModal && onForkStarted && !replayUnavailable && (
         <EditReplayModal
           userMessage={editModal.userMessage}
           model={model}

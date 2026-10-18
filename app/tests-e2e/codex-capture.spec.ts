@@ -52,6 +52,9 @@ test("installed Codex callback observations appear in Runs without completion or
   await expect(page.getByText("Found the café result", { exact: true })).toBeVisible();
   await expect(page.getByRole("status").filter({ hasText: /producer.reported.*partial.*runtime unverified/i })).toBeVisible();
   await expect(page.getByRole("button", { name: "Edit message and replay run" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Replay", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Replay with options", exact: true })).toBeDisabled();
+  await expect(page.getByRole("status").filter({ hasText: "Replay unavailable for partial, unverified observations." })).toBeVisible();
   await page.getByRole("button", { name: "Expand tool call lookup" }).click();
   await expect(page.locator("[data-tool-span-id]")).toContainText("safe synthetic business result");
   await expect(page.locator("[data-run-duration]")).toHaveText("Unavailable");
