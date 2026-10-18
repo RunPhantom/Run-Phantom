@@ -226,7 +226,7 @@ function textResult(body: unknown) {
 
 function currentAnnotationSource(): AgentAnnotationSource {
   const explicit = process.env.RUNPHANTOM_ANNOTATION_SOURCE;
-  if (explicit === "claude-code" || explicit === "codex") return explicit;
+  if (explicit === "claude-code" || explicit === "codex" || explicit === "opencode") return explicit;
   return agentAnnotationSource(parseAgentProvider(process.env.RUNPHANTOM_AGENT_PROVIDER) ?? getAgentProvider());
 }
 
