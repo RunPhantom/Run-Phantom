@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { closeDb, getDrizzleDb } from "../src/db";
@@ -16,8 +17,8 @@ import { normalizeClaudeHook } from "../src/coding-hooks/claude";
 
 // The actual source migration supplies schema; these store fixtures use a trusted test-only guard. Product startup uses the kernel lease.
 let directory: string, prior: string | undefined, store: CodingHookStore, manager: ClaudeHookManagement, binding: InstallationBinding, capability: string;
-beforeEach(() => {
-  closeDb(); prior = process.env.RUNPHANTOM_DB_PATH; directory = realpathSync(mkdtempSync(path.join(tmpdir(), "runphantom-f11-management-")));
+beforeEach(async () => {
+  closeDb(); prior = process.env.RUNPHANTOM_DB_PATH; directory = await realpath(mkdtempSync(path.join(tmpdir(), "runphantom-f11-management-")));
   for (const relative of ["workspace/.claude", "projects/project", "projects/other", "home"]) mkdirSync(path.join(directory, relative), { recursive: true });
   process.env.RUNPHANTOM_DB_PATH = path.join(directory, "owner.sqlite"); const db = getDrizzleDb().$client;
   store = new CodingHookStore(db, {}, () => true); store.beginOwner(); manager = new ClaudeHookManagement(store, "http://127.0.0.1:5947");

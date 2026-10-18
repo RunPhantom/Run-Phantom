@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, symlinkSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, symlinkSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { lstat, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -31,7 +31,7 @@ async function expectAccepted(result: TranscriptAcquisition, candidate = file): 
   } catch { facts.diagnosticIO = "unavailable"; }
   throw new Error(`Expected accepted transcript acquisition; native refusal facts: ${JSON.stringify(facts)}`);
 }
-beforeEach(()=>{directory=realpathSync(mkdtempSync(join(tmpdir(),"runphantom-f11-transcript-")));root=join(directory,".claude","projects");mkdirSync(join(root,"fixture-project"),{recursive:true});file=join(root,"fixture-project",session+".jsonl");writeFileSync(file,body);});
+beforeEach(async()=>{directory=await realpath(mkdtempSync(join(tmpdir(),"runphantom-f11-transcript-")));root=join(directory,".claude","projects");mkdirSync(join(root,"fixture-project"),{recursive:true});file=join(root,"fixture-project",session+".jsonl");writeFileSync(file,body);});
 afterEach(()=>rmSync(directory,{recursive:true,force:true}));
 describe("trusted descriptor transcript acquisition",()=>{
   test("reads exact immutable source bytes and reports observed descriptor incarnation",async()=>{

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { symlinkSync, writeFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { symlinkSync, writeFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createServer, request } from "node:http";
 import { CodingHookController } from "../src/coding-hooks/service";
@@ -30,8 +31,8 @@ function installCatalogFixture(value = binding, roots = registrations, capabilit
   store.commitInstallation(value.installationId, receipt.installationGeneration, capability, settingsDigest, receipt.ownerGeneration);
   return capability;
 }
-beforeEach(() => {
-  closeDb(); prior = process.env.RUNPHANTOM_DB_PATH; directory = realpathSync(mkdtempSync(path.join(tmpdir(), "runphantom-f11-catalog-")));
+beforeEach(async () => {
+  closeDb(); prior = process.env.RUNPHANTOM_DB_PATH; directory = await realpath(mkdtempSync(path.join(tmpdir(), "runphantom-f11-catalog-")));
   for (const name of ["workspace-one/.claude", "workspace-two/.claude", "projects/one", "projects/two", "home/.claude"]) mkdirSync(path.join(directory, name), { recursive: true });
   process.env.RUNPHANTOM_DB_PATH = path.join(directory, "owner.sqlite"); const db = getDrizzleDb().$client; store = new CodingHookStore(db, {}, () => true); store.beginOwner(); manager = new ClaudeHookManagement(store, "http://127.0.0.1:5947");
   registrations = ["one", "two"].map(name => { const registeredWorkspace = path.join(directory, "workspace-" + name), transcriptRoot = path.join(directory, "projects"), projectDirectory = path.join(transcriptRoot, name); return { registrationId: hookDigest(JSON.stringify(["runphantom.claude.root/v1", registeredWorkspace, transcriptRoot, projectDirectory])), registeredWorkspace, transcriptRoot, projectDirectory, homeDirectory: path.join(directory, "home") }; });
