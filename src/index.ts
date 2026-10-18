@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 /** Select shared or local authority before loading either runtime. */
-if (process.argv[2] === "hooks" && process.argv[3] === "handle" && process.argv[4] === "claude") {
+if (process.argv[2] === "--internal-browser-worker") {
+  const { runBrowserWorker } = await import("./verification/browser-worker");
+  await runBrowserWorker();
+} else if (process.argv[2] === "hooks" && process.argv[3] === "handle" && process.argv[4] === "claude") {
   // A host hook must not initialize the daemon/database or let telemetry failure affect its caller.
   const deadline = setTimeout(() => process.exit(0), 1500);
   try {

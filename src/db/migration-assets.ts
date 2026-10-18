@@ -17,6 +17,7 @@ import migration0011Path from "../../drizzle/0011_review_queues.sql" with { type
 import migration0012Path from "../../drizzle/0012_prompt_registry.sql" with { type: "file" };
 import migration0013Path from "../../drizzle/0013_completion_reports.sql" with { type: "file" };
 import migration0014Path from "../../drizzle/0014_prompt_comparisons.sql" with { type: "file" };
+import migration0015Path from "../../drizzle/0015_semantic_snapshots.sql" with { type: "file" };
 
 export const embeddedMigrationJournal = {
   "version": "7",
@@ -126,6 +127,13 @@ export const embeddedMigrationJournal = {
       "when": 1791766000005,
       "tag": "0014_prompt_comparisons",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1791773224836,
+      "tag": "0015_semantic_snapshots",
+      "breakpoints": true
     }
   ]
 } as const;
@@ -190,5 +198,9 @@ export const embeddedMigrationFiles = [
   {
     relativePath: "0014_prompt_comparisons.sql",
     sourcePath: migration0014Path,
+  },
+  {
+    relativePath: "0015_semantic_snapshots.sql",
+    sourcePath: migration0015Path,
   },
 ] as const;
