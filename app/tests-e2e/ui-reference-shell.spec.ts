@@ -384,3 +384,90 @@ test("reference shell: keyboard focus contrasts on primary and outline controls 
   await expect(page.getByRole("textbox", { name: "Dataset JSON", exact: true })).toHaveValue(JSON.stringify(exported, null, 2));
   await testInfo.attach("keyboard-control-focus-styles", { body: JSON.stringify({ primary: primaryStyle, outline: outlineStyle }), contentType: "application/json" });
 });
+
+for (const viewport of [
+  { label: "desktop", width: 1440, height: 900, compact: false },
+  { label: "compact", width: 390, height: 844, compact: true },
+]) {
+  test.describe(`reference shell: ${viewport.label} Debug allocated height`, () => {
+    test.use({ viewport: { width: viewport.width, height: viewport.height }, hasTouch: viewport.compact });
+
+    test("keeps the complete composer reachable with real keyboard and send controls", async ({ page, runPhantom }, testInfo) => {
+      await seedRunPhantomFixtures(runPhantom.url);
+      await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
+      await expectHeader(page, "Runs");
+      const launcher = page.getByRole("button", { name: "Debug", exact: true });
+      if (viewport.compact) await launcher.tap();
+      else {
+        await launcher.focus();
+        await page.keyboard.press("Enter");
+      }
+      const pane = page.getByRole(viewport.compact ? "dialog" : "complementary", { name: "Coding-agent debug chat" });
+      const composer = pane.getByRole("combobox", { name: "Ask about this trace", exact: true });
+      const send = pane.getByRole("button", { name: "Send message", exact: true });
+      await expect(pane).toBeVisible();
+      await expect(composer).toBeAttached();
+      await expect(send).toBeAttached();
+      await expect(pane.getByText("Connect your coding agent", { exact: true })).toHaveCount(0);
+      const geometry = await pane.evaluate(element => {
+        const box = (node: Element | null) => {
+          if (!node) throw new Error("Debug layout target is missing");
+          const rect = node.getBoundingClientRect();
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, right: rect.right, bottom: rect.bottom,
+            centerReachable: hit !== null && (hit === node || node.contains(hit)) };
+        };
+        return { viewport: { x: 0, y: 0, right: window.innerWidth, bottom: window.innerHeight },
+          workspaceHeader: box(document.querySelector("[data-workspace-header]")), contentRow: box(element.parentElement),
+          pane: box(element), paneHeader: box(element.querySelector("header")), footer: box(element.querySelector("footer")),
+          composer: box(element.querySelector('[role="combobox"]')), send: box(element.querySelector('button[aria-label="Send message"]')) };
+      });
+      await testInfo.attach(`reference-debug-${viewport.label}-geometry`, { body: JSON.stringify(geometry, null, 2), contentType: "application/json" });
+      await capture(page, testInfo, `reference-debug-${viewport.label}-before-boundary`);
+      const allocated = viewport.compact ? geometry.viewport : geometry.contentRow;
+      for (const [name, bounds, container] of [
+        ["pane", geometry.pane, allocated],
+        ["pane header", geometry.paneHeader, geometry.pane],
+        ["footer", geometry.footer, geometry.pane],
+        ["composer", geometry.composer, geometry.footer],
+        ["Send", geometry.send, geometry.footer],
+      ] as const) {
+        expect(bounds.width, `${name} must have positive width`).toBeGreaterThan(0);
+        expect(bounds.height, `${name} must have positive height`).toBeGreaterThan(0);
+        expect(bounds.x, `${name} left within allocated bounds`).toBeGreaterThanOrEqual(container.x);
+        expect(bounds.y, `${name} top within allocated bounds`).toBeGreaterThanOrEqual(container.y);
+        expect(bounds.right, `${name} right within allocated bounds`).toBeLessThanOrEqual(container.right);
+        expect(bounds.bottom, `${name} bottom within allocated bounds`).toBeLessThanOrEqual(container.bottom);
+        expect(bounds.bottom, `${name} bottom within viewport`).toBeLessThanOrEqual(geometry.viewport.bottom);
+      }
+      expect(geometry.workspaceHeader.height).toBe(64);
+      expect(geometry.composer.centerReachable).toBe(true);
+      expect(geometry.send.centerReachable).toBe(true);
+      if (viewport.compact) await composer.tap();
+      else await composer.click();
+      await expect(composer).toBeFocused();
+      const prompt = `Explain this synthetic ${viewport.label} trace.`;
+      await composer.fill(prompt);
+      await composer.press("Tab");
+      await expect(send).toBeFocused();
+      await page.keyboard.press("Shift+Tab");
+      await expect(composer).toBeFocused();
+      await composer.press("Tab");
+      await expect(send).toBeFocused();
+      await expectUnobscured(send);
+      const [disabledResponse] = await Promise.all([
+        page.waitForResponse(response => response.request().method() === "POST"
+          && response.url() === `${runPhantom.url}/api/agent/messages`),
+        viewport.compact ? send.tap() : page.keyboard.press("Enter"),
+      ]);
+      expect(disabledResponse.status()).toBe(409);
+      await expect(pane.getByRole("log", { name: "Debug chat messages" })).toContainText(prompt);
+      await expect(pane.getByRole("alert")).toBeVisible();
+      if (viewport.compact) await composer.tap();
+      else await composer.click();
+      await expect(composer).toBeFocused();
+      await expectUnobscured(composer);
+      await expectUnobscured(send);
+    });
+  });
+}

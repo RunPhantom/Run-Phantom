@@ -184,6 +184,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const resizeRef = useRef<{ x: number; width: number; shouldCollapse: boolean } | null>(null);
   const activeClientMessageIdRef = useRef<string | null>(null);
+  const providerRevisionRef = useRef(0);
   const liveBlocksRef = useRef<AssistantMessageBlock[]>([]);
   const terminalCopyResetRef = useRef<number | null>(null);
   const collapseHoldTimerRef = useRef<number | null>(null);
@@ -393,20 +394,25 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
 
   useEffect(() => {
     let cancelled = false;
+    const revision = providerRevisionRef.current;
     (async () => {
       const res = await fetch("/api/agent/provider");
       if (!res.ok) return;
       const body = await res.json().catch(() => null);
-      if (!cancelled && isAgentProvider(body?.provider)) setProvider(body.provider);
+      if (!cancelled && revision === providerRevisionRef.current && isAgentProvider(body?.provider)) setProvider(body.provider);
     })();
     return () => { cancelled = true; };
   }, []);
 
   useRunPhantomEvent("agent_provider", (data: { provider?: string }) => {
     if (isAgentProvider(data.provider)) {
+      ++providerRevisionRef.current;
+      // Every connection starts with a snapshot, even when the provider is unchanged.
+      if (data.provider === provider) return;
       setProvider(data.provider);
       startNewChat();
       setShowList(true);
+      setSessions([]);
       void refreshSessions();
     }
   });
@@ -562,6 +568,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
   async function switchProvider(next: AgentProviderId) {
     if (next === provider || switchingProvider) return;
     const previous = provider;
+    ++providerRevisionRef.current;
     setProvider(next);
     setError(null);
     setSwitchingProvider(true);
@@ -655,6 +662,9 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
   const currentCwd = detail?.cwd ?? conversationCwd ?? workspaceCwd;
   const currentCwdDisplay = formatCwdDisplay(currentCwd);
   const canChangeConversationCwd = !selectedId && messages.length === 0 && !sending;
+  // Debug and agent questions open the chat before the intro is dismissed, so the
+  // header and the intro's Hide button follow the card on screen, not the flag.
+  const showProviderIntroCard = showList && showProviderIntro;
   useEffect(() => {
     setActiveSlashIndex((index) => Math.min(index, Math.max(0, slashItems.length - 1)));
   }, [slashItems.length]);
@@ -706,7 +716,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
       aria-label="Coding-agent debug chat"
       className={`${isOverlay
         ? "fixed inset-y-3 right-3 z-40 rounded-2xl border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] shadow-[0_24px_64px_var(--rp-ink-a22)]"
-        : "relative h-screen border-l border-[color:var(--rp-border)] bg-[color:var(--rp-surface)]"
+        : "relative h-full min-h-0 border-l border-[color:var(--rp-border)] bg-[color:var(--rp-surface)]"
       } flex origin-right flex-col overflow-hidden`}
       style={{
         width: paneWidth,
@@ -746,7 +756,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
           title="Resize sidebar; drag smaller to hide"
         />
       )}
-      {!showProviderIntro && (
+      {!showProviderIntroCard && (
         showList ? (
           <header className="flex items-start justify-between gap-3 border-b border-[color:var(--rp-border)] px-3 py-2">
             <div className="flex min-w-0 flex-col gap-1">
@@ -965,7 +975,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
           </footer>
         </div>
       )}
-      {showProviderIntro && (
+      {showProviderIntroCard && (
         <button
           onClick={() => setCollapsed(true)}
           className="absolute right-3 top-3 min-h-8 rounded-md px-2.5 text-xs font-medium text-[color:var(--rp-ink-muted)] transition-[transform,background-color,color] hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)] active:scale-[0.96]"

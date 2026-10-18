@@ -8,7 +8,9 @@ import { parseBrowserMessage, validateOrigin, parseFlowSteps } from "./validatio
 import { sanitizeWithReport } from "./serialization";
 import { isSensitiveKey } from "./redaction";
 import { RingBuffer } from "./ring-buffer";
-import { VERIFICATION_LIMITS as L, type AppCommand, type Coverage, type RuntimeEvent, type SessionSummary } from "./protocol";
+import { CAUSAL_CAPABILITY, CAUSAL_PROTOCOL_VERSION, relativeTargetKey, VERIFICATION_LIMITS as L,
+  type AppCommand, type Coverage, type RelativeTarget, type RuntimeEvent, type SessionSummary } from "./protocol";
+import { baselineScopeForTarget, captureBaselineReading, captureCausalAttribution, type BaselineReading, type CausalAttribution } from "./baseline";
 
 export class VerificationHttpError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -25,6 +27,22 @@ interface Pending {
   resolve(result: CommandResult): void;
   timer: ReturnType<typeof setTimeout>;
   boundary: boolean;
+  actionCursor?: number;
+  before?: Map<string, BaselineReading>;
+  after?: Map<string, BaselineReading>;
+}
+export interface CausalReadingPair {
+  readonly target: RelativeTarget;
+  readonly before: BaselineReading;
+  readonly after: BaselineReading;
+  readonly attribution?: CausalAttribution;
+}
+export interface CapturedCausalDispatch {
+  readonly actionId: string;
+  readonly actionCursor: number;
+  readonly startCursor: number;
+  readonly generation: number;
+  readonly pairs: ReadonlyMap<string, CausalReadingPair>;
 }
 export interface VerificationSession {
   id: string;
@@ -36,6 +54,7 @@ export interface VerificationSession {
   ws: WebSocket | null;
   generation: number;
   coverage: Coverage;
+  capabilities: Array<typeof CAUSAL_CAPABILITY>;
   cursor: number;
   events: RingBuffer;
   dropped: number;
@@ -46,6 +65,7 @@ export interface VerificationSession {
   pending: Pending | null;
   requests: Map<string, { actionId?: string }>;
   currentActionId?: string;
+  lastCausalResult?: CapturedCausalDispatch;
   lastCommandCursor: number;
   busy: boolean;
   secrets: string[];
@@ -74,7 +94,8 @@ export class VerificationBridge {
 
   summary(session: VerificationSession): SessionSummary {
     return { id: session.id, origin: session.origin, runId: session.runId, connected: session.ws?.readyState === WebSocket.OPEN,
-      createdAt: session.createdAt, coverage: { ...session.coverage }, cursor: session.cursor, dropped: session.dropped + session.events.bufferHealth().dropped };
+      createdAt: session.createdAt, coverage: { ...session.coverage }, cursor: session.cursor, dropped: session.dropped + session.events.bufferHealth().dropped,
+      ...(session.capabilities.length ? { capabilities: [...session.capabilities] } : {}) };
   }
 
   create(origin: unknown, runId: unknown): SessionSummary & { token: string } {
@@ -88,7 +109,7 @@ export class VerificationBridge {
     expires.unref();
     const session: VerificationSession = { id, origin: appOrigin, runId: runId as string | null ?? null,
       token: randomBytes(32).toString("hex"), createdAt: Date.now(), expires, ws: null, generation: 0,
-      coverage: emptyCoverage(), cursor: 0, events: new RingBuffer(), dropped: 0, lossCursor: 0, captureLost: false, generationCursor: 0,
+      coverage: emptyCoverage(), capabilities: [], cursor: 0, events: new RingBuffer(), dropped: 0, lossCursor: 0, captureLost: false, generationCursor: 0,
       lastActivity: Date.now(), pending: null, requests: new Map(), lastCommandCursor: 0, busy: false, secrets: [] };
     session.secrets.push(session.token);
     this.sessions.set(id, session);
@@ -117,8 +138,10 @@ export class VerificationBridge {
   private invalidate(session: VerificationSession, error: string): void {
     session.generation++;
     session.coverage = emptyCoverage();
+    session.capabilities = [];
     session.requests.clear();
     session.currentActionId = undefined;
+    session.lastCausalResult = undefined;
     if (session.pending) {
       const pending = session.pending;
       session.pending = null;
@@ -169,6 +192,7 @@ export class VerificationBridge {
           session.captureLost = false;
           session.lastCommandCursor = session.generationCursor;
           session.coverage = { ...msg.coverage };
+          session.capabilities = msg.version === CAUSAL_PROTOCOL_VERSION ? [...msg.capabilities] : [];
           session.lastActivity = Date.now();
           generation = session.generation;
           authenticated = true;
@@ -181,9 +205,12 @@ export class VerificationBridge {
         else {
           const pending = session.pending;
           if (!pending || msg.id !== pending.id) throw new Error("unexpected command result");
+          // Validate before resolving: a malformed causal reply must invalidate the owned turn,
+          // not leave its promise detached from the generation being closed.
+          if (pending.command.type === "causal-click" && msg.ok) this.captureDispatch(session, pending, !!msg.truncated);
           session.pending = null;
           clearTimeout(pending.timer);
-          const isAction = pending.command.type === "click" || pending.command.type === "fill";
+          const isAction = pending.command.type === "click" || pending.command.type === "fill" || pending.command.type === "causal-click";
           if (isAction && !pending.boundary) {
             pending.resolve({ ok: false, cursor: pending.cursor, error: "Application did not acknowledge the action boundary" });
             return;
@@ -230,9 +257,28 @@ export class VerificationBridge {
   }
 
   private acceptEvent(session: VerificationSession, event: Omit<RuntimeEvent, "t">): void {
+    if (event.type === "action.reading") {
+      const pending = session.pending;
+      if (!session.capabilities.includes(CAUSAL_CAPABILITY) || !pending || pending.command.type !== "causal-click"
+        || pending.id !== event.actionId) throw new Error("reading outside its owned causal command");
+      const target = event.data.target as RelativeTarget;
+      const key = relativeTargetKey(target);
+      const expected = pending.command.targets.find((entry) => relativeTargetKey(entry) === key);
+      const phase = event.data.phase;
+      const readings = phase === "before" ? pending.before : pending.after;
+      if (!expected || !readings || readings.has(key) || phase === "before" && pending.boundary
+        || phase === "after" && (!pending.boundary || !pending.before?.has(key))) throw new Error("unmatched or unordered causal reading");
+      const captured = this.append(session, event);
+      if (!captured) throw new Error("causal reading exceeded capture capacity");
+      readings.set(key, captureBaselineReading({ scope: baselineScopeForTarget(session.id, session.generation, expected),
+        cursor: captured.t, fresh: true, complete: captured.data.available === true,
+        ...(phase === "after" ? { actionId: pending.id } : {}), truncated: !!captured.truncated }, captured.data.value));
+      return;
+    }
     if (event.type === "action.boundary") {
       const pending = session.pending;
-      if (!pending || pending.id !== event.actionId || !["click", "fill"].includes(pending.command.type) || pending.boundary) throw new Error("invalid action boundary");
+      if (!pending || pending.id !== event.actionId || !["click", "fill", "causal-click"].includes(pending.command.type) || pending.boundary
+        || pending.command.type === "causal-click" && pending.before?.size !== pending.command.targets.length) throw new Error("invalid action boundary");
       pending.boundary = true;
       session.currentActionId = pending.id;
     }
@@ -256,7 +302,33 @@ export class VerificationBridge {
     // They cannot opt out of a negative assertion by omitting or changing a page-supplied action id.
     if (!["network", "network.start", "action.boundary"].includes(event.type)) event = { ...event, actionId: session.currentActionId };
     if (event.type === "capture.loss") { session.lossCursor = this.tick(session); session.captureLost = true; }
-    this.append(session, event);
+    const captured = this.append(session, event);
+    if (event.type === "action.boundary" && session.pending) session.pending.actionCursor = captured?.t;
+  }
+
+  private captureDispatch(session: VerificationSession, pending: Pending, truncated: boolean): void {
+    if (pending.command.type !== "causal-click" || !pending.boundary || pending.actionCursor === undefined
+      || pending.before?.size !== pending.command.targets.length || pending.after?.size !== pending.command.targets.length) {
+      throw new Error("causal result did not contain its complete owned turn");
+    }
+    const result = this.append(session, { type: "action.result", actionId: pending.id,
+      data: { source: "sdk-reported", acknowledged: true }, ...(truncated ? { truncated: true } : {}) });
+    if (!result) throw new Error("causal result exceeded capture capacity");
+    const complete = this.observe(session, pending.cursor).complete && !truncated && !result.truncated;
+    const pairs = new Map<string, CausalReadingPair>();
+    for (const target of pending.command.targets) {
+      const key = relativeTargetKey(target);
+      const before = pending.before.get(key)!;
+      const after = pending.after.get(key)!;
+      if (!(before.cursor < pending.actionCursor && pending.actionCursor < after.cursor && after.cursor < result.t)) throw new Error("causal result cursor order mismatch");
+      const attribution = complete && before.availability === "complete" && after.availability === "complete"
+        ? captureCausalAttribution({ t: result.t, type: "action.result", actionId: pending.id,
+          data: { scope: before.scope, baselineCursor: before.cursor, baselineValue: before.value,
+            readingCursor: after.cursor, value: after.value } }) : undefined;
+      pairs.set(key, Object.freeze({ target: Object.freeze({ ...target }), before, after, ...(attribution ? { attribution } : {}) }));
+    }
+    session.lastCausalResult = Object.freeze({ actionId: pending.id, actionCursor: pending.actionCursor,
+      startCursor: pending.cursor, generation: session.generation, pairs });
   }
 
   private loss(session: VerificationSession, reason: string): void {
@@ -266,12 +338,13 @@ export class VerificationBridge {
     this.append(session, { type: "capture.loss", data: { reason } });
   }
 
-  append(session: VerificationSession, raw: Omit<RuntimeEvent, "t">, activity = true): void {
+  append(session: VerificationSession, raw: Omit<RuntimeEvent, "t">, activity = true): RuntimeEvent | null {
     const event: RuntimeEvent = { ...this.sanitizeEvent(session, raw), t: this.tick(session) };
     const size = Buffer.byteLength(JSON.stringify(event));
-    if (size > L.MAX_EVENT_BYTES) { session.lossCursor = event.t; session.captureLost = true; session.dropped++; return; }
+    if (size > L.MAX_EVENT_BYTES) { session.lossCursor = event.t; session.captureLost = true; session.dropped++; return null; }
     session.events.push(event, session.cursor, size);
     if (activity) session.lastActivity = Date.now();
+    return event;
   }
 
   observe(session: VerificationSession, since: number) {
@@ -283,12 +356,17 @@ export class VerificationBridge {
     const cursor = this.tick(session);
     if (!session.ws || session.ws.readyState !== WebSocket.OPEN) return Promise.resolve({ ok: false, cursor, error: "Application is disconnected" });
     if (session.pending) throw new VerificationHttpError(409, "An application command is already pending");
+    if (command.type === "click" || command.type === "fill" || command.type === "causal-click") session.lastCausalResult = undefined;
+    if (command.type === "causal-click" && !session.capabilities.includes(CAUSAL_CAPABILITY)) {
+      return Promise.resolve({ ok: false, cursor, unavailable: true,
+        error: "Application does not support causal readings; no action was executed" });
+    }
     if (command.type === "fill" && command.value && !session.secrets.includes(command.value)) {
       if (session.secrets.length >= 65) throw new VerificationHttpError(409, "Fill redaction capacity reached; pair a new session");
       session.secrets.push(command.value);
     }
     const id = randomUUID();
-    if (command.type === "click" || command.type === "fill") session.lastCommandCursor = cursor;
+    if (command.type === "click" || command.type === "fill" || command.type === "causal-click") session.lastCommandCursor = cursor;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         if (session.pending?.id !== id) return;
@@ -298,7 +376,8 @@ export class VerificationBridge {
         session.ws?.terminate();
       }, Math.min(timeoutMs, this.options.commandTimeoutMs ?? L.COMMAND_TIMEOUT_MS));
       timer.unref();
-      session.pending = { id, command, cursor, resolve, timer, boundary: false };
+      session.pending = { id, command, cursor, resolve, timer, boundary: false,
+        ...(command.type === "causal-click" ? { before: new Map(), after: new Map() } : {}) };
       try { session.ws!.send(JSON.stringify({ type: "command", id, command })); }
       catch { clearTimeout(timer); session.pending = null; resolve({ ok: false, cursor, error: "Application disconnected" }); }
     });
@@ -332,6 +411,7 @@ export class VerificationBridge {
       }
       // These are validated protocol discriminators, not page text. Losing an error level can invert an absence verdict.
       if (raw.type === "console" && key === "level" || raw.type === "observer.error" && key === "observer"
+        || raw.type === "action.reading" && ["phase", "available"].includes(key)
         || ["network", "network.start"].includes(raw.type) && (["initiator", "status", "ok", "durationMs"].includes(key)
           || key === "method" && ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"].includes(String(value).toUpperCase()))) {
         data[key] = value;
@@ -341,7 +421,9 @@ export class VerificationBridge {
         incomplete ||= clean.incomplete;
       }
     }
-    return { ...raw, data, ...(incomplete ? { truncated: true } : {}) };
+    const event = { ...raw, data, ...(incomplete ? { truncated: true } : {}) };
+    if (event.actionId === undefined) delete event.actionId;
+    return event;
   }
 
   private sanitizeReadResult(session: VerificationSession, command: AppCommand, raw: unknown): { value: unknown; incomplete: boolean } {
