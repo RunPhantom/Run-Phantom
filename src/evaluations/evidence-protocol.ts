@@ -20,10 +20,10 @@ export const EVIDENCE_PREDICATE_TYPE = "https://in-toto.io/attestation/test-resu
 export const EVIDENCE_PAYLOAD_TYPES = ["application/vnd.in-toto+json"] as const;
 
 export type EvidenceScope = { kind: "local"; id: "local" } | { kind: "project"; id: string };
-export type EvidenceCapability = "normalized_read" | "import" | "inventory_edit" | "raw_export" | "delete";
+export type EvidenceCapability = "normalized_read" | "import" | "inventory_edit" | "raw_export" | "delete" | "compare";
 export type EvidenceAttachment = { kind: "inspection" | "experiment" | "check" | "run"; id: string };
-export type EvidenceKind = "junit" | "json" | "jsonl" | "attestation";
-export type EvidenceDialect = "junit-xml/v1" | "in-toto-statement/v1" | "dsse-envelope/v1" | "dsse-envelope-jsonl/v1";
+export type EvidenceKind = "junit" | "json" | "jsonl" | "attestation" | "finding";
+export type EvidenceDialect = "junit-xml/v1" | "in-toto-statement/v1" | "dsse-envelope/v1" | "dsse-envelope-jsonl/v1" | "runphantom-findings-json/v1";
 export type EvidenceParseState = "parsed" | "unparsed" | "rejected";
 export type EvidenceOutcome = "reports_pass" | "reports_fail" | "no_tests" | "unknown";
 export type EvidenceCoverage = "complete" | "incomplete" | "not_declared";
@@ -121,6 +121,7 @@ export interface NormalizedEvidenceSource {
   attestation: EvidenceAttestationSummary | null;
   reasonCodes: EvidenceReason[];
   leaves: EvidenceLeaf[];
+  findingBatch?: import("./finding-protocol").FindingBatch;
 }
 export interface EvidenceSourceObservation {
   sourceId: string;
@@ -173,6 +174,12 @@ export interface EvidenceSetView {
   sources: { sourceId: string; rawAvailable: boolean; normalizedAvailable: boolean; normalized: NormalizedEvidenceSource | null }[];
 }
 export type EvidenceJobStatus = "queued" | "running" | "completed" | "cancelled" | "failed";
+/** Owner-selected codes only: request content and worker diagnostics never become durable failure text. */
+export const EVIDENCE_IMPORT_FAILURE_CODES = ["upload_aborted", "upload_timeout", "source_integrity", "worker_unavailable",
+  "worker_failed", "worker_protocol", "worker_timeout", "import_timeout", "queue_full", "shutdown", "attachment_unavailable"] as const;
+export type EvidenceImportFailureCode = typeof EVIDENCE_IMPORT_FAILURE_CODES[number];
+export type EvidenceJobFailureCode = EvidenceImportFailureCode | "deadline_exceeded" | "restart_interrupted" |
+  "scope_invalidated" | "revision_conflict" | "retention_changed" | "cancelled";
 export interface EvidenceJob {
   id: string;
   scopeGeneration: number;
@@ -181,7 +188,7 @@ export interface EvidenceJob {
   admittedAt: number;
   deadlineAt: number;
   setId: string | null;
-  failureCode: "deadline_exceeded" | "restart_interrupted" | "scope_invalidated" | "revision_conflict" | "retention_changed" | "cancelled" | null;
+  failureCode: EvidenceJobFailureCode | null;
 }
 export interface EvidencePublicationSource { sourceId: string; raw: Uint8Array; normalized: unknown }
 export class EvidenceError extends Error {

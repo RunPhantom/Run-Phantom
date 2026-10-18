@@ -299,6 +299,38 @@ For provider integrations, follow the [example setup guides](./examples/README.m
 `bun run dev:examples` starts its own daemon and example suite; stop the regular
 development server first. Individual examples may need additional runtimes.
 
+Browser journeys use a fresh source daemon by default. To qualify an installed
+executable, first run `bun scripts/build-bun.ts` on the target host, then run:
+
+```bash
+bun scripts/qualify-native.ts --binary=/absolute/path/to/runphantom --sha256=<artifact-sha256> --output=/absolute/path/to/new-receipts-directory
+```
+
+The output directory must have an existing parent and must not already exist.
+Compute the SHA256 from the artifact you intend to test. The command runs the
+fresh-store and live reconnection journeys in Chromium with one worker and
+zero retries. Append managed journey filenames such as `connection-readiness.spec.ts`
+to select other tests. Each test runs a copied executable outside the checkout
+with its own empty working directory, profile and database; start and cleanup
+receipts record the artifact hashes, process identity, listener and actual exit.
+Missing artifacts, wrong digests, skipped journeys and incomplete cleanup fail
+qualification. Optional provider credentials are blank during these tests.
+
+For a direct Playwright invocation, set `RUNPHANTOM_E2E_RUNTIME=installed`,
+`RUNPHANTOM_E2E_BINARY` to an absolute executable path and
+`RUNPHANTOM_E2E_SHA256` to its SHA256. Source remains the default and is labelled
+as source in receipts. The three standalone compiled smoke gates retain their
+existing opt-in commands. The qualifier owns each copied daemon through a
+private authenticated fixture channel and closes those handles even if the
+Playwright runner is interrupted. It accepts only pinned fixture start/stop
+jobs; it cannot execute arbitrary commands or terminate supplied PIDs.
+Catchable SIGINT/SIGTERM also closes the runner and fixtures. Abrupt SIGKILL
+of the qualifier or host shutdown cannot run cleanup and is not covered by
+this JavaScript lifecycle guarantee. Selected native journeys qualify only the
+host and features actually executed; other architectures, Windows, Linux and provider
+acceptance require their own runs. Windows records the requested working
+directory separately because CIM does not expose an observed process cwd.
+
 See the [agent and contributor guide](./AGENTS.md) for repository conventions
 and verification requirements.
 
@@ -310,6 +342,7 @@ and verification requirements.
 | [Replay setup](./skills/setup-agent-replay/SKILL.md) | Project-owned replay endpoints and configuration. |
 | [Application verification](./src/verification/README.md) | Connected browser sessions, outcomes, and saved flows. |
 | [Regression evaluations](./src/evaluations/README.md) | Datasets, frozen evidence, grading, reports, and repeated trials. |
+| [Captured definition versions](./src/agent-definitions.md) | Exact prompt/configuration hashes, partial capture, private projections and frozen report provenance. |
 | [Shared team service](./src/team/README.md) | Accounts, project roles, ingestion, deployment, and operational limits. |
 | [Environment reference](./.env.example) | Local configuration and optional provider features. |
 | [Research and source audit](./RESEARCH.md) | Inspected architecture references and the limits of the comparison evidence. |

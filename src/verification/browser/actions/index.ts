@@ -1,4 +1,4 @@
-import type { AppCommand, SemanticCommand } from "../../protocol.js";
+import type { AppCommand, SemanticCommand, ControlSourceObservation } from "../../protocol.js";
 import { sanitizeWithReport } from "../../serialization.js";
 import { isHtmlElement, isInput, isTextArea } from "../dom/realm.js";
 import { assertEditable, assertNotRichText, setNativeValue } from "./value-input.js";
@@ -101,9 +101,10 @@ export function runSemanticDomCommand(
   refs: LiveElementRefs,
   sanitize: (value: unknown) => { value: unknown; truncated: boolean },
   beforeMutation: (element: Element) => void,
+  source?: (element: Element) => ControlSourceObservation,
 ): { result: unknown; truncated?: boolean } {
-  if (command.type === "find") return findSemantic(command.query, refs, sanitize);
-  if (command.type === "semantic-snapshot") return snapshotSemantic(refs, sanitize);
+  if (command.type === "find") return findSemantic(command.query, refs, sanitize, source);
+  if (command.type === "semantic-snapshot") return snapshotSemantic(refs, sanitize, source);
   const element = semanticTarget(command.ref, refs, command.type === "ref-fill");
   // Resolve and validate before recording an action or invoking any page focus handler.
   beforeMutation(element);

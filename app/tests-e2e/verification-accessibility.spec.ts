@@ -4,6 +4,7 @@ import { once } from "node:events";
 import { existsSync, writeFileSync } from "node:fs";
 import type { Page, Locator, TestInfo } from "@playwright/test";
 import { ACCESSIBILITY_FIXTURE_HTML } from "../../tests/helpers/accessibility-fixture";
+import { BROWSER_LIMITS } from "../../src/verification/browser-contract";
 
 const test = browserTest.extend({
   browserTarget: async ({}, use) => {
@@ -133,7 +134,10 @@ test("actual Firefox connection leaves the initial audit disabled without runnin
   test.skip(!process.env.RUNPHANTOM_TEST_BROWSER_MODULE, "Requires the explicitly selected installed native browser closure.");
   await page.goto(`${browserApp.url}/verification`); const panel = page.getByRole("region", { name: "Trusted browser", exact: true });
   await panel.getByLabel(/^Browser target URL/).fill(browserTarget.origin); await panel.getByRole("combobox", { name: "Browser engine", exact: true }).selectOption("firefox");
-  await panel.getByRole("button", { name: "Open browser", exact: true }).click(); await expect(panel.getByRole("combobox", { name: "Browser connection", exact: true })).toContainText("firefox · owned · ready");
+  const opening = page.waitForResponse(response => response.url() === `${browserApp.url}/api/verification/browser/sessions` && response.request().method() === "POST", { timeout: BROWSER_LIMITS.START_MS + 2000 });
+  await panel.getByRole("button", { name: "Open browser", exact: true }).click();
+  const response = await opening; expect(response.status()).toBe(201); expect(await response.json()).toMatchObject({ state: "ready", engine: "firefox" });
+  await expect(panel.getByRole("combobox", { name: "Browser connection", exact: true })).toContainText("firefox · owned · ready");
   const audit = panel.getByRole("region", { name: "Accessibility evidence", exact: true }); await audit.getByLabel("Audit regions", { exact: true }).fill("#audit");
   await expect(audit).toContainText("Audit adapter unavailable for this connection."); await expect(audit.getByRole("button", { name: "Run accessibility audit", exact: true })).toBeDisabled();
   await audit.scrollIntoViewIfNeeded(); await page.screenshot({ path: testInfo.outputPath("f35-native-unsupported.png") });
