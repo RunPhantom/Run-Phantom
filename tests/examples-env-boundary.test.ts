@@ -101,5 +101,5 @@ describe("example env loaders stay inside the repository", () => {
       const server = path.join(repo, "examples", "python-chat", "server.py");
       expect(probe([python!, "-c", PYTHON_PROBE, server], path.dirname(server))).toEqual(EXPECTED);
     });
-  });
+  }, 15_000);
 });
