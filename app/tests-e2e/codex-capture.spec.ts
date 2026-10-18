@@ -1,6 +1,6 @@
 import { test, expect } from "./fixtures";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { codexHook, codexJsonl, codexRecords } from "../../tests/fixtures/coding-hooks-codex";
 
@@ -11,7 +11,17 @@ test("installed Codex callback observations appear in Runs without completion or
   const source = path.join(sessions, "synthetic-rollout.jsonl"); writeFileSync(source, codexJsonl(codexRecords(workspace)), { mode: 0o600 });
   const entry = path.resolve(import.meta.dirname, "../../src/index.ts");
   const bun = execFileSync("which", ["bun"], { encoding: "utf8" }).trim();
-  const installed = execFileSync(bun, ["--no-env-file", entry, "hooks", "install", "codex", "--local", "--cwd", workspace, "--full", "--consent-full", "--port", String(runPhantom.port)], { cwd: workspace, env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }, timeout: 5000, encoding: "utf8" });
+  const installBudget = testInfo.project.use.actionTimeout;
+  if (installBudget !== 15_000) throw new Error("Hook installation uses the configured 15s action admission budget");
+  const installArgv = ["--no-env-file", entry, "hooks", "install", "codex", "--local", "--cwd", workspace, "--full", "--consent-full", "--port", String(runPhantom.port)];
+  const installStartedAt = new Date().toISOString(), installStarted = performance.now();
+  const install = spawnSync(bun, installArgv, { cwd: workspace, env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }, timeout: installBudget, encoding: "utf8" });
+  const installElapsedMs = performance.now() - installStarted, installTerminalAt = new Date().toISOString();
+  const safeOutput = (value: string | null | undefined) => (value ?? "").replace(/\b[a-f0-9]{32,}\b/gi, "<redacted-identifier>").replace(/\b(?:sk|rk|pk)-[A-Za-z0-9_-]+/g, "<redacted-token>").slice(0, 4096);
+  await testInfo.attach("codex-hook-install-admission.json", { contentType: "application/json", body: JSON.stringify({ executable: bun, argv: installArgv, port: runPhantom.port, timeoutMs: installBudget, startedAt: installStartedAt, terminalAt: installTerminalAt, elapsedMs: installElapsedMs, pid: install.pid, status: install.status, signal: install.signal, error: install.error ? { name: install.error.name, code: "code" in install.error ? String(install.error.code) : null, message: safeOutput(install.error.message) } : null, stdout: safeOutput(install.stdout), stderr: safeOutput(install.stderr) }) });
+  if (install.error) throw install.error;
+  expect(install.status).toBe(0);
+  const installed = install.stdout;
   expect(JSON.parse(installed)).toMatchObject({ configuration: "installed", captureVerified: false });
   const config = JSON.parse(readFileSync(path.join(workspace, ".codex/hooks.json"), "utf8")) as { hooks: { Stop: { hooks: { command: string }[] }[] } };
   const child = spawn("/bin/sh", ["-c", "exec " + config.hooks.Stop[0].hooks[0].command], { cwd: workspace, env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }, stdio: "pipe" });
