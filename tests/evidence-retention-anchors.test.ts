@@ -42,7 +42,9 @@ test("actual experiment retention protects a nonterminal anchor then allows evic
 });
 test("actual check retention protects a nonterminal anchor and corruption cannot make it evictable", () => {
   const db = getDrizzleDb().$client, insert = db.query("INSERT INTO verification_reports(id,session_id,name,status,reason,evidence,created_at) VALUES(?,'actual-session',?,'pass','Observed','[]',?)");
-  for (let index = 0; index < VERIFICATION_LIMITS.MAX_REPORTS; index++) insert.run(`c-${index}`, `c-${index}`, index);
+  db.transaction(() => {
+    for (let index = 0; index < VERIFICATION_LIMITS.MAX_REPORTS; index++) insert.run(`c-${index}`, `c-${index}`, index);
+  }).immediate();
   const { store, admitted } = admission("check", "c-0");
   saveReport(report("next", 1_000));
   expect(db.query("SELECT id FROM verification_reports WHERE id='c-0'").get()).toEqual({ id: "c-0" });

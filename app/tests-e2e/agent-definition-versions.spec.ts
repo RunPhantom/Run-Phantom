@@ -81,9 +81,43 @@ test.describe("actual touch definition navigation", () => {
     const record = definitions.locator('[data-definition-side="candidate"] [data-definition-record]'), summary = record.locator("summary");
     await summary.tap(); await expect(record).toHaveAttribute("open", ""); expect((await summary.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     await expect(record.locator('[data-definition-hash="version"]')).toHaveText(original.agentDefinitions!.candidate!.records[0].sha256!);
-    const before = await comparison.evaluate(element => element.scrollTop), box = (await comparison.boundingBox())!, touch = await page.context().newCDPSession(page);
-    try { await touch.send("Input.synthesizeScrollGesture", { x: box.x + box.width / 2, y: box.y + box.height - 24, yDistance: -1000, speed: 800, gestureSourceType: "touch", preventFling: true }); }
-    finally { await touch.detach(); }
+    const before = await comparison.evaluate(element => element.scrollTop);
+    const gesture = await comparison.evaluate(element => {
+      const box = element.getBoundingClientRect(), x = (Math.max(0, box.left) + Math.min(innerWidth, box.right)) / 2;
+      const startY = Math.min(innerHeight, box.bottom) - 24, endY = Math.max(0, box.top) + 24;
+      const distance = Math.min(1000 / 3, startY - endY);
+      return { x, startY, distance, scrollHeight: element.scrollHeight, clientHeight: element.clientHeight,
+        startInside: element.contains(document.elementFromPoint(x, startY)), endInside: element.contains(document.elementFromPoint(x, startY - distance)) };
+    });
+    expect(gesture.scrollHeight - gesture.clientHeight).toBeGreaterThan(before); expect(gesture.distance).toBeGreaterThan(0);
+    expect(gesture.startInside).toBe(true); expect(gesture.endInside).toBe(true);
+    const observation = await comparison.evaluateHandle(element => {
+      const events: Array<{ type: string; x: number; y: number; defaultPrevented: boolean; inside: boolean }> = [];
+      const types = ["touchstart", "touchmove", "touchend", "touchcancel"] as const;
+      const observe = (event: TouchEvent) => {
+        if (!element.contains(event.target as Node)) return;
+        const point = event.changedTouches[0] ?? event.touches[0];
+        if (point) events.push({ type: event.type, x: point.clientX, y: point.clientY, defaultPrevented: event.defaultPrevented,
+          inside: element.contains(document.elementFromPoint(point.clientX, point.clientY)) });
+      };
+      for (const type of types) window.addEventListener(type, observe, { passive: true });
+      return { events, dispose: () => { for (const type of types) window.removeEventListener(type, observe); } };
+    });
+    const touch = await page.context().newCDPSession(page);
+    try {
+      for (let swipe = 0; swipe < 3; swipe++) {
+        await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: gesture.x, y: gesture.startY, id: 0 }] });
+        for (let step = 1; step <= 12; step++) await touch.send("Input.dispatchTouchEvent", { type: "touchMove",
+          touchPoints: [{ x: gesture.x, y: gesture.startY - gesture.distance * step / 12, id: 0 }] });
+        await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      }
+    } finally { await touch.detach(); await observation.evaluate(value => value.dispose()); }
+    const delivered = await observation.evaluate(value => value.events); await observation.dispose();
+    await testInfo.attach("actual-touch-gesture-receipt.json", { body: JSON.stringify({ beforeScroll: before, gesture, delivered }, null, 2), contentType: "application/json" });
+    expect(delivered.filter(event => event.type === "touchstart")).toHaveLength(3); expect(delivered.filter(event => event.type === "touchmove").length).toBeGreaterThan(0);
+    expect(delivered.filter(event => event.type !== "touchmove").map(event => event.type === "touchstart" ? "start" : "terminal"))
+      .toEqual(["start", "terminal", "start", "terminal", "start", "terminal"]);
+    expect(delivered.every(event => event.inside && !event.defaultPrevented)).toBe(true);
     await expect.poll(() => comparison.evaluate(element => element.scrollTop)).toBeGreaterThan(before);
     const link = record.getByRole("link", { name: "Open candidate definition source span in a new tab" }); await expect(link).toBeVisible();
     const target = (await link.boundingBox())!; expect(target.height).toBeGreaterThanOrEqual(44);
