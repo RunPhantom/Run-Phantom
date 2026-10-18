@@ -35,9 +35,11 @@ for (const caseCount of [1, 2]) test(`explicit repeated trials preserve mixed ou
   const text = await readFile(file, "utf8"); const report = JSON.parse(text);
   expect(report.format).toBe("runphantom-repeated-trial-analysis/v1"); expect(report.trials.map((item: { experimentId: string }) => item.experimentId)).toEqual(trials.slice(0, 3).map(item => item.id));
   expect(report.summary).toMatchObject({ pass: caseCount, fail: caseCount, inconclusive: caseCount, total: 3 * caseCount }); expect(text).not.toContain("Describe the result of this checkout.");
+  await result.screenshot({ path: testInfo.outputPath(`repeated-trial-results-${caseCount}-cases.png`) });
   await result.getByRole("button", { name: "Trial 1: pass", exact: true }).first().click();
   await expect(page.getByRole("combobox", { name: "View experiment", exact: true })).toHaveValue(trials[0].id);
   await expect(page.getByRole("region", { name: "Experiment results", exact: true })).toContainText(caseCount === 1 ? "1 / 1 case passed" : "2 / 2 cases passed");
+  await page.getByRole("region", { name: "Experiment results", exact: true }).screenshot({ path: testInfo.outputPath(`experiment-summary-${caseCount}-cases.png`) });
   await panel.getByRole("checkbox", { name: /^Trial 4 ·/ }).check();
   await expect(panel.getByLabel("Repeated trial results")).toHaveCount(0);
   await panel.getByRole("button", { name: "Analyze selected trials" }).click();
