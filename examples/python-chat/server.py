@@ -13,7 +13,12 @@ from openai import AsyncOpenAI
 
 def load_env() -> None:
     known = set(os.environ)
-    for directory in reversed((Path(__file__).resolve().parent, *Path(__file__).resolve().parents)):
+    example_dir = Path(__file__).resolve().parent
+    examples_dir = example_dir.parent
+    # Stop at the repository root, the parent of examples/. A .env above the
+    # checkout (say ~/Downloads/.env) belongs to something else and can hold
+    # unrelated credentials.
+    for directory in (examples_dir.parent, examples_dir, example_dir):
         for name in (".env", ".env.local"):
             path = directory / name
             if not path.is_file():
