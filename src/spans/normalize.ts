@@ -24,6 +24,7 @@
  */
 import type { AdapterInput, AdapterMatch, SpanAdapter } from "./adapters/types";
 import { emptyNormalized } from "./normalized";
+import { hasDuplicateJsonKeys } from "../json-keys";
 import { aiSdkLlmAdapter, aiSdkToolAdapter } from "./adapters/ai-sdk";
 import { rawPromptLlmAdapter } from "./adapters/raw-prompt";
 import { livekitLlmAdapter, livekitToolAdapter } from "./adapters/livekit";
@@ -32,9 +33,11 @@ import { openInferenceLlmAdapter, openInferenceToolAdapter } from "./adapters/op
 import { genAiMetadataAdapter, genAiToolAdapter } from "./adapters/gen-ai";
 
 import { parseBoundedHookJson } from "../coding-hooks/shared";
+import { cursorHookAdapter } from "./adapters/cursor-hook";
 import { claudeHookAdapter } from "./adapters/claude-hook";
 
 const ADAPTERS: SpanAdapter[] = [
+  cursorHookAdapter,
   claudeHookAdapter,
   aiSdkLlmAdapter,
   livekitLlmAdapter,
@@ -50,6 +53,7 @@ const ADAPTERS: SpanAdapter[] = [
 ];
 
 export function normalizeSpan(input: AdapterInput): AdapterMatch {
+  if (input.attributesUnavailable) return { normalized: emptyNormalized() };
   for (const a of ADAPTERS) {
     const result = a.apply(input);
     if (result) return result;
@@ -70,8 +74,11 @@ export function adapterInputFromStoredSpan(row: {
 }): AdapterInput {
   let attrs: Record<string, string | number | boolean> = {};
   if (row.attributes) {
-    try { attrs = JSON.parse(row.attributes); } catch { /* leave empty */ }
-    if (typeof attrs?.captureContract === "string" && attrs.captureContract.startsWith("runphantom.claude-hook.observation/") && parseBoundedHookJson(row.attributes, 16384).status !== "accepted") {
+    try {
+      attrs = JSON.parse(row.attributes);
+      if (hasDuplicateJsonKeys(row.attributes)) return { spanName: row.name, spanType: "INTERNAL", attrs: {}, attributesUnavailable: true };
+    } catch { /* leave empty */ }
+    if (typeof attrs?.captureContract === "string" && (attrs.captureContract.startsWith("runphantom.claude-hook.observation/") || attrs.captureContract.startsWith("runphantom.cursor-hook.observation/")) && parseBoundedHookJson(row.attributes, 16384).status !== "accepted") {
       attrs = { captureContract: attrs.captureContract, invalidCapture: true };
     }
   }

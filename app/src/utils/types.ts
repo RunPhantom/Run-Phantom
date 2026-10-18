@@ -1,3 +1,4 @@
+import type { CursorHookCaptureView } from "../../../src/spans/adapters/cursor-hook";
 import type { ClaudeHookCaptureView } from "../../../src/spans/adapters/claude-hook";
 
 export interface Run {
@@ -67,7 +68,7 @@ export interface NormalizedMessage {
 }
 
 export interface NormalizedLLMSpan {
-  capture?: ClaudeHookCaptureView;
+  capture?: ClaudeHookCaptureView | CursorHookCaptureView;
   kind: "llm";
   messages: NormalizedMessage[];
   userMessage: string;
@@ -77,7 +78,7 @@ export interface NormalizedLLMSpan {
 }
 
 export interface NormalizedToolSpan {
-  capture?: ClaudeHookCaptureView;
+  capture?: ClaudeHookCaptureView | CursorHookCaptureView;
   kind: "tool";
   name: string;
   args: unknown;
@@ -86,7 +87,7 @@ export interface NormalizedToolSpan {
 }
 
 export interface NormalizedOtherSpan {
-  capture?: ClaudeHookCaptureView;
+  capture?: ClaudeHookCaptureView | CursorHookCaptureView;
   kind: "other";
 }
 

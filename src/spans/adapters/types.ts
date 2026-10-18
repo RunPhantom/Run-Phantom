@@ -6,6 +6,8 @@ import type { NormalizedSpan } from "../normalized";
  * dispatcher) — adapters don't care which path they ran from.
  */
 export interface AdapterInput {
+  /** Ambiguous stored attributes disable SDK inference and raw payload recovery. */
+  attributesUnavailable?: true;
   /** OTLP span name (e.g. `"ai.streamText"`, `"ai.toolCall"`). */
   spanName: string;
   /** Flat attribute record. String / number / boolean values; nested JSON is left as a string. */

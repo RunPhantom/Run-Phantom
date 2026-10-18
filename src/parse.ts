@@ -345,7 +345,9 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
             s.parentSpanId ??
             undefined,
           name, spanType,
-          status: status(s.status?.code),
+          // Imported observations do not acquire an ended-runtime guarantee from OTLP's UNSET default.
+          status: typeof allAttrs.captureContract === "string" && allAttrs.captureContract.startsWith("runphantom.cursor-hook.observation/")
+            ? status(s.status?.code) === "ERROR" ? "ERROR" : "UNSET" : status(s.status?.code),
           inputPayload: stripNul(inputPayload), outputPayload: stripNul(outputPayload),
           startTimeMs: startMs, endTimeMs: endMs,
           durationMs: numericAttr(getAttr(attrs, "traceloop.entity.duration_ms")) ?? (endMs - startMs),
