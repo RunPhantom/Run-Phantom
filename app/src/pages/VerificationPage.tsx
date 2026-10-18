@@ -252,7 +252,7 @@ export function VerificationPage() {
 
     {session && <div className="flex flex-wrap items-start gap-8">
       <div className="min-w-0 flex-[2_1_420px] space-y-6">
-        <div id="verification-inspect" tabIndex={-1} className="min-w-0 scroll-mt-20"><SemanticInspector key={`${session.id}:${linkedRunId}`} sessionId={session.id} connected={connected} capable={(observation.data?.session.capabilities ?? session.capabilities)?.includes("semantic-refs") ?? false} disabled={!!busy} onAction={cursor => { setSince(cursor); setInspection(null); }} /></div>
+        <div id="verification-inspect" tabIndex={-1} className="min-w-0 scroll-mt-20"><SemanticInspector key={linkedRunId} sessionId={session.id} connected={connected} capable={(observation.data?.session.capabilities ?? session.capabilities)?.includes("semantic-refs") ?? false} disabled={!!busy} onAction={cursor => { setSince(cursor); setInspection(null); }} /></div>
         <div id="verification-performance" tabIndex={-1} className="min-w-0 scroll-mt-20"><PerformanceEvidence key={`${session.id}:${linkedRunId}`} sessionId={session.id} connected={connected} capable={(observation.data?.session.capabilities ?? session.capabilities)?.includes("performance-evidence") ?? false} disabled={!!busy} perform={perform} onReport={() => { void refresh(); setNotice("Native lab report saved. Review its window and coverage below."); }} /></div>
         <section aria-labelledby="action-heading" className="min-w-0 space-y-4 rounded-[7px] border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] p-4 sm:p-5">
           <h2 id="action-heading" className="text-sm font-semibold" style={{ color: C.fg3 }}>1. Exercise the app</h2>

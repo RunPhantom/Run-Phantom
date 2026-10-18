@@ -49,7 +49,7 @@ test("verification workspace: deep links retain real outcomes, filters and respo
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(new RegExp(`runId=${FIXTURE_PRIMARY_RUN_ID}.*section=reports`));
     await expect(page.locator("#verification-reports")).toBeFocused();
-    await page.getByLabel("Report status", { exact: true }).selectOption("fail");
+    await page.getByRole("combobox", { name: "Report status", exact: true }).selectOption("fail");
     await expect(page.getByText("Showing 1 of 3 loaded reports.", { exact: true })).toBeVisible();
     await expect(page.getByRole("article", { name: "Workspace checkout outcome: fail", exact: true })).toBeVisible();
     await expect(page.getByRole("article", { name: "Workspace checkout outcome: pass", exact: true })).toHaveCount(0);
