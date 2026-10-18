@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import http from "node:http";
+import { homedir } from "node:os";
+import { recordAcpFixtureStage, safeAcpFixtureProbe, type AcpFixtureProbe } from "./acp-native-launcher";
 import { WebSocket } from "ws";
 import { createServer } from "../../src/server";
 import { setActiveWorkspace, getActiveWorkspaceSelection } from "../../src/active-workspace";
@@ -17,9 +19,10 @@ for(const folder of [workspace,other,third])mkdirSync(folder,{recursive:true});
 setActiveWorkspace(workspace);
 const receipt=path.join(profile,"native-pids.jsonl");process.env.RUNPHANTOM_ACP_FIXTURE_RECEIPT_PATH=receipt;
 process.env.RUNPHANTOM_AGENT_PROVIDER="opencode";process.env.RUNPHANTOM_ACP_FIXTURE_MODE="positive";
-const wrapper=path.join(profile,"opencode-fixture");const quote=(value:string)=>`'${value.replace(/'/g,"'\\''")}'`;
-writeFileSync(wrapper,`#!/bin/sh\nexec ${quote(process.execPath)} ${quote(path.join(import.meta.dir,"acp-provider.ts"))} "$@"\n`,{mode:0o700});
-process.env.RUNPHANTOM_OPENCODE_BIN=wrapper;
+assert.equal(process.env.USERPROFILE,profile);assert.equal(realpathSync(homedir()),realpathSync(profile));
+assert(process.env.RUNPHANTOM_ACP_FIXTURE_BIN&&path.isAbsolute(process.env.RUNPHANTOM_ACP_FIXTURE_BIN));
+process.env.RUNPHANTOM_OPENCODE_BIN=process.env.RUNPHANTOM_ACP_FIXTURE_BIN;
+recordAcpFixtureStage(profile,"private-profile");
 const unhandled:unknown[]=[];process.on("unhandledRejection",value=>unhandled.push(value));
 const {server,app,close}=await createServer(0);server.listen(0,"127.0.0.1");await once(server,"listening");
 const base=`http://127.0.0.1:${(server.address() as {port:number}).port}`;
@@ -32,10 +35,12 @@ async function until(check:()=>boolean,timeout=4_000){const start=Date.now();whi
 function reaped(){for(const {pid} of births().filter(entry=>entry.event==="birth"))assert.throws(()=>process.kill(pid,0));}
 const ws=new WebSocket(base.replace("http:","ws:")+"/ws");await once(ws,"open");
 const events:any[]=[];ws.on("message",raw=>events.push(JSON.parse(String(raw))));
-const checks:string[]=[];
+const checks:string[]=[];let availabilityProof:AcpFixtureProbe|undefined;
+recordAcpFixtureStage(profile,"http-ready");
 try {
  const availability=await request(`/api/agent/acp/status?cwd=${encodeURIComponent(workspace)}`);
- assert.equal(availability.status,200);assert.equal(availability.body.available,true);assert.equal(availability.body.authentication,"unknown");assert.match(availability.body.workspaceGeneration,/^[a-f0-9]{64}$/);reaped();checks.push("actual initialize-only API auth unknown and native reap");
+ availabilityProof=safeAcpFixtureProbe(availability.status,availability.body);recordAcpFixtureStage(profile,"availability",availabilityProof);
+ assert.equal(availability.status,200);assert.equal(availability.body.available,true);assert.equal(availability.body.protocolVersion,1);assert.equal(availability.body.authentication,"unknown");assert.match(availability.body.workspaceGeneration,/^[a-f0-9]{64}$/);reaped();checks.push("actual initialize-only API auth unknown and native reap");
  const positive=await request("/api/agent/messages",{cwd:workspace,content:"Controlled question",client_message_id:"positive_1"});
  assert.equal(positive.status,200);assert.equal(positive.body.text,"Permission denied. Fixture answer ✓");assert(positive.body.events.some((event:any)=>event.type==="permission_denied"));assert.equal(positive.body.session.capture.status,"complete");reaped();checks.push("real selected native process, typed permission denial and stored transcript");
  const before=births().length;
@@ -99,7 +104,10 @@ try {
  await closingProbe;reaped();assert.equal((alreadyError as NodeJS.ErrnoException)?.code,"ERR_SERVER_NOT_RUNNING");
  await Bun.sleep(20);assert.equal(unhandled.length,0);checks.push("already-closing HTTP error is observed while joining held native probe");
  writeFileSync(path.join(profile,"final-controls.json"),JSON.stringify({originalCallbackErrorIdentityPreserved:closeError===originalError,nativeBirthsAndReaps:births(),unhandledRejections:unhandled.length}));
+ recordAcpFixtureStage(profile,"http-complete",availabilityProof);
  console.log(JSON.stringify({checks,passed:checks.length,paidRequests:0,controlledProvider:true,actualInstalledProviderChat:false,nativeBirths:births().filter(entry=>entry.event==="birth").length}));
+} catch(error) {
+ recordAcpFixtureStage(profile,"http-failed",availabilityProof);throw error;
 } finally {
  ws.terminate();await close().catch(()=>{});closeDb();
 }

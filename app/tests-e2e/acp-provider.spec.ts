@@ -7,6 +7,8 @@ import {createServer as httpServer} from "node:http";
 import type {VerificationReport} from "../../src/verification/protocol";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
+import { compileNativeAcpFixture } from "../../tests/fixtures/acp-native-launcher";
+let nativeDirectory:string,nativeExecutable:string;
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"../..");
 async function port(){return new Promise<number>((resolve,reject)=>{const server=createServer();server.on("error",reject);server.listen(0,"127.0.0.1",()=>{const address=server.address() as {port:number};server.close(error=>error?reject(error):resolve(address.port));});});}
 async function stop(child:ChildProcess){if(child.exitCode!==null||child.signalCode!==null)return;await new Promise<void>(resolve=>{child.once("exit",()=>{clearTimeout(timer);resolve();});const timer=setTimeout(()=>child.kill("SIGKILL"),3_000);child.kill("SIGTERM");});}
@@ -15,19 +17,21 @@ const test=base.extend<{app:{url:string;profile:string};mode:string}>({
  app:async({mode},use,testInfo)=>{
   const profile=mkdtempSync(path.join(realpathSync(tmpdir()),"runphantom-acp-ui-"));const number=await port();
   const env:Record<string,string>={};for(const key of["PATH","LANG","LC_ALL","TMPDIR","SHELL"])if(process.env[key])env[key]=process.env[key]!;
-  Object.assign(env,{HOME:profile,USERPROFILE:profile,RUNPHANTOM_ACP_UI_PROFILE:profile,RUNPHANTOM_ACP_UI_MODE:mode,RUNPHANTOM_PORT:String(number),RUNPHANTOM_DB_PATH:path.join(profile,"traces.db"),RUNPHANTOM_SECRET_STORE_PATH:path.join(profile,"secrets.json"),RUNPHANTOM_CLAUDE_CLI_CHAT:"0"});
+  Object.assign(env,{HOME:profile,USERPROFILE:profile,TMPDIR:profile,TMP:profile,TEMP:profile,RUNPHANTOM_ACP_FIXTURE_BIN:nativeExecutable,RUNPHANTOM_ACP_UI_PROFILE:profile,RUNPHANTOM_ACP_UI_MODE:mode,RUNPHANTOM_PORT:String(number),RUNPHANTOM_DB_PATH:path.join(profile,"traces.db"),RUNPHANTOM_SECRET_STORE_PATH:path.join(profile,"secrets.json"),RUNPHANTOM_CLAUDE_CLI_CHAT:"0"});
   const child=spawn("bun",[path.join(root,"tests/fixtures/acp-ui-daemon.ts")],{cwd:root,env,stdio:["ignore","pipe","pipe"]});let stdout="",stderr="";child.stdout?.on("data",chunk=>{stdout+=String(chunk);});child.stderr?.on("data",chunk=>{stderr+=String(chunk);});
   const url=`http://127.0.0.1:${number}`;const start=Date.now();
   try{
    while(true){if(child.exitCode!==null||child.signalCode!==null)throw new Error("ACP UI daemon exited during boot");try{if((await fetch(url+"/health")).ok)break;}catch{}if(Date.now()-start>15_000)throw new Error("ACP UI daemon health deadline");await new Promise(resolve=>setTimeout(resolve,100));}
    await use({url,profile});
   }finally{
-   await stop(child);await testInfo.attach("native-daemon-stdout",{body:stdout,contentType:"text/plain"});await testInfo.attach("native-daemon-stderr",{body:stderr,contentType:"text/plain"});
+   await stop(child);const diagnostic=path.join(profile,"launch-diagnostic.json");if(existsSync(diagnostic))await testInfo.attach("controlled-native-launch-stage",{path:diagnostic,contentType:"application/json"});await testInfo.attach("native-daemon-stdout",{body:stdout,contentType:"text/plain"});await testInfo.attach("native-daemon-stderr",{body:stderr,contentType:"text/plain"});
    const receipt=path.join(profile,"native-pids.jsonl");expect(existsSync(receipt), "actual native receipt exists").toBe(true);if(existsSync(receipt)){const raw=readFileSync(receipt,"utf8");const proof=testInfo.outputPath("controlled-native-births.jsonl");mkdirSync(path.dirname(proof),{recursive:true});writeFileSync(proof,raw);await testInfo.attach("controlled-native-births",{path:proof,contentType:"application/x-ndjson"});for(const entry of raw.trim().split("\n").map(line=>JSON.parse(line) as {event:string;pid:number}))if(entry.event==="birth")expect(()=>process.kill(entry.pid,0)).toThrow();}
    expect(()=>process.kill(child.pid!,0)).toThrow();rmSync(profile,{recursive:true,force:true});
   }
  },
 });
+test.beforeAll(async()=>{nativeDirectory=mkdtempSync(path.join(realpathSync(tmpdir()),"runphantom-acp native-ui-"));nativeExecutable=await compileNativeAcpFixture(nativeDirectory,"bun");});
+test.afterAll(()=>{if(nativeDirectory)rmSync(nativeDirectory,{recursive:true,force:true});});
 async function selectOpenCode(page:import("@playwright/test").Page,url:string){
  await page.goto(url);await page.getByRole("button",{name:"Ask Claude Code",exact:true}).click();
  await page.getByRole("button",{name:"OpenCode",exact:true}).click();await page.getByRole("button",{name:"Connect OpenCode",exact:true}).click();
