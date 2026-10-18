@@ -111,12 +111,29 @@ describe.skipIf(process.platform === "win32")("actual isolated Cursor hook trans
       expect(check).toThrow();
     }
     db.query("UPDATE coding_hook_sessions SET data=? WHERE source_key=?").run(row.data, row.source_key); expect(check()).toBe("legacy-main-v1");
-    for (const attributes of [{ source: "cursor_hook" }, { captureContract: "runphantom.cursor-hook.observation/v1" }]) {
+    const orphanAttributes = [
+      '{"source":"cursor_hook"}', '{"captureContract":"runphantom.cursor-hook.observation/v1"}',
+      '{"captureContract":"ordinary","captureContract":"runphantom.cursor-hook.observation/v1"}',
+      '{"captureContract":"runphantom.cursor-hook.observation/v1","captureContract":"ordinary"}',
+      String.raw`{"captureContract":"ordinary","cap\u0074ureContract":"runphantom.cursor-hook.observation/v1"}`,
+      '{"source":"ordinary","source":"cursor_hook"}', '{"source":"cursor_hook","source":"ordinary"}',
+    ];
+    for (const attributes of orphanAttributes) {
       db.exec("SAVEPOINT orphan_control");
       try {
-        db.query("INSERT INTO spans(id,run_id,name,attributes) VALUES(?,?,?,?)").run("orphan-cursor", row.run_id, "Unanchored", JSON.stringify(attributes));
+        db.query("INSERT INTO spans(id,run_id,name,attributes) VALUES(?,?,?,?)").run("orphan-cursor", row.run_id, "Unanchored", attributes);
         expect(check).toThrow();
       } finally { db.exec("ROLLBACK TO orphan_control"); db.exec("RELEASE orphan_control"); }
+    }
+    for (const attributes of [
+      '{"captureContract":"ordinary","note":"runphantom.cursor-hook.observation/v1"}',
+      String.raw`{"cap\u0074ureContract":"ordinary","note":"cursor_hook"}`,
+    ]) {
+      db.exec("SAVEPOINT ordinary_control");
+      try {
+        db.query("INSERT INTO spans(id,run_id,name,attributes) VALUES(?,?,?,?)").run("ordinary-extra", row.run_id, "Ordinary", attributes);
+        expect(check()).toBe("legacy-main-v1");
+      } finally { db.exec("ROLLBACK TO ordinary_control"); db.exec("RELEASE ordinary_control"); }
     }
     expect(check()).toBe("legacy-main-v1");
   }, 10000);

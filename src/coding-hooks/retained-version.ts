@@ -73,7 +73,7 @@ export function validateLegacySource(db: Database, key: string, registration: st
   ids.add(spanId);
  }
  if (roots !== 1) refuse("corrupt",503);
- const spans = db.query("SELECT id,CASE WHEN length(CAST(attributes AS BLOB))<=16384 THEN attributes END attributes FROM spans WHERE run_id=? AND CASE WHEN json_valid(attributes) THEN json_extract(attributes,'$.source') IN ('claude_hook','cursor_hook') OR json_extract(attributes,'$.captureContract') LIKE 'runphantom.claude-hook.observation/%' OR json_extract(attributes,'$.captureContract') LIKE 'runphantom.cursor-hook.observation/%' ELSE attributes LIKE '%runphantom.claude-hook.observation/%' OR attributes LIKE '%runphantom.cursor-hook.observation/%' END LIMIT 1001").all(row.run_id) as {id:string;attributes:string|null}[];
+ const spans = db.query("SELECT id,CASE WHEN length(CAST(attributes AS BLOB))<=16384 THEN attributes END attributes FROM spans WHERE run_id=? AND CASE WHEN json_valid(attributes) THEN EXISTS(SELECT 1 FROM json_each(CASE WHEN json_valid(attributes) THEN attributes ELSE '{}' END) member WHERE member.type='text' AND ((member.key='source' AND member.value IN ('claude_hook','cursor_hook')) OR (member.key='captureContract' AND (member.value LIKE 'runphantom.claude-hook.observation/%' OR member.value LIKE 'runphantom.cursor-hook.observation/%')))) ELSE attributes LIKE '%runphantom.claude-hook.observation/%' OR attributes LIKE '%runphantom.cursor-hook.observation/%' END LIMIT 1001").all(row.run_id) as {id:string;attributes:string|null}[];
  if (spans.length > 1000) refuse("quota",507);
  for (const span of spans) { deadline(); if (!ids.has(span.id)) refuse("corrupt",503); }
  deadline(); return "legacy-main-v1";
