@@ -1,5 +1,5 @@
 import { randomUUID, createHash } from "node:crypto";
-import { asc, desc, eq, and, count, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, ne, count, inArray, notInArray } from "drizzle-orm";
 import { getDrizzleDb, getRunById } from "../db";
 import { verification_flows, verification_reports } from "../db/schema";
 import { redactForPersistence, sanitizeWithReport } from "./serialization";
@@ -7,6 +7,7 @@ import { decodeFlowDocument } from "./flow-anchors";
 import { VERIFICATION_LIMITS as L, type VerificationFlow, type VerificationReport, type RuntimeEvent } from "./protocol";
 import { VerificationHttpError, parseAppOrigin } from "./bridge";
 import { boundReportContext, reopenExecutionContext, revalidatePerformanceContext } from "./report-context";
+import { activeLocalEvidenceAttachmentIds } from "../evaluations/evidence-inventory";
 
 export function boundedEvidence(events: RuntimeEvent[]): RuntimeEvent[] {
   const out: RuntimeEvent[] = [];
@@ -31,9 +32,15 @@ export function saveReport(report: VerificationReport): VerificationReport {
     tx.insert(verification_reports).values({ id: clean.id, session_id: clean.sessionId, run_id: clean.runId,
       flow_id: clean.flowId, name: clean.name, status: clean.status, reason: clean.reason,
       evidence: JSON.stringify(clean.evidence), context: clean.context ? JSON.stringify(clean.context) : null, created_at: clean.createdAt }).run();
-    const excess = tx.select({ id: verification_reports.id }).from(verification_reports)
-      .orderBy(desc(verification_reports.created_at), desc(verification_reports.id)).limit(L.MAX_REPORTS).offset(L.MAX_REPORTS).all();
-    if (excess.length) tx.delete(verification_reports).where(inArray(verification_reports.id, excess.map((r) => r.id))).run();
+    const excessCount = (tx.select({ n: count() }).from(verification_reports).get()?.n ?? 0) - L.MAX_REPORTS;
+    if (excessCount > 0) {
+      const protectedIds = [...activeLocalEvidenceAttachmentIds(db.$client, "check")];
+      const excess = tx.select({ id: verification_reports.id }).from(verification_reports)
+        .where(and(ne(verification_reports.id, clean.id), protectedIds.length ? notInArray(verification_reports.id, protectedIds) : undefined))
+        .orderBy(asc(verification_reports.created_at), asc(verification_reports.id)).limit(excessCount).all();
+      if (excess.length < excessCount) throw new VerificationHttpError(409, "Report retention is full while evidence imports are active");
+      tx.delete(verification_reports).where(inArray(verification_reports.id, excess.map((r) => r.id))).run();
+    }
   });
   return clean;
 }

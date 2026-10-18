@@ -62,6 +62,17 @@ function Report({ report }: { report: VerificationReport }) {
   </article>;
 }
 
+type OperationScope = "pair" | "session" | "action" | "outcome" | "flow" | "flows";
+type OperationError = { scope: OperationScope; message: string };
+
+// Focus moves to the refusal: an operation disables the control that started it, which drops
+// keyboard focus to the document body, far from the form that needs correcting.
+function OperationAlert({ error }: { error: OperationError }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  useEffect(() => { ref.current?.focus(); }, [error]);
+  return <p ref={ref} role="alert" tabIndex={-1} className="break-words rounded-md border p-3 text-sm" style={{ borderColor: C.red, color: C.red }}>{error.message}</p>;
+}
+
 function snippet(session: CreatedSession, performance = false): string {
   const sdkUrl = new URL(session.sdkUrl, window.location.origin).href;
   const daemon = new URL(session.wsUrl, window.location.origin);
@@ -75,7 +86,7 @@ export function VerificationPage() {
   const queryClient = useQueryClient();
   const runs = useRuns();
   const sessions = useQuery({ queryKey: ["verification", "sessions"], queryFn: verificationApi.sessions, refetchInterval: 1000 });
-  const flows = useQuery({ queryKey: ["verification", "flows"], queryFn: verificationApi.flows });
+  const flows = useQuery({ queryKey: ["verification", "flows"], queryFn: verificationApi.flows, refetchInterval: 2000 });
   const reports = useQuery({ queryKey: ["verification", "reports", linkedRunId], queryFn: () => verificationApi.reports(linkedRunId || undefined), refetchInterval: 2000 });
   const [reportStatus, setReportStatus] = useState<VerificationStatus | "all">("all");
   const [reportSearch, setReportSearch] = useState("");
@@ -103,7 +114,7 @@ export function VerificationPage() {
   const operationEpoch = useRef(0);
   const scope = `${session?.id ?? ""}:${linkedRunId}`;
   const currentScope = useRef(scope); currentScope.current = scope;
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<OperationError | null>(null);
   const [notice, setNotice] = useState("");
   const connected = observation.data?.session.connected ?? session?.connected ?? false;
 
@@ -118,14 +129,14 @@ export function VerificationPage() {
     setNotice("");
   }, [session?.id, linkedRunId]);
 
-  async function perform(label: string, operation: (current: () => boolean) => Promise<void>) {
+  async function perform(label: string, operationScope: OperationScope, operation: (current: () => boolean) => Promise<void>) {
     if (busyRef.current) return;
     busyRef.current = true;
     const ownedScope = currentScope.current, ticket = ++operationEpoch.current;
     const current = () => operationEpoch.current === ticket && currentScope.current === ownedScope;
     setBusy(label);
     setError(null);
-    try { await operation(current); } catch (cause) { if (current()) setError(cause instanceof Error ? cause.message : "This operation could not be completed."); }
+    try { await operation(current); } catch (cause) { if (current()) setError({ scope: operationScope, message: cause instanceof Error ? cause.message : "This operation could not be completed." }); }
     finally { if (current()) { busyRef.current = false; setBusy(""); } }
   }
 
@@ -153,7 +164,7 @@ export function VerificationPage() {
 
   function pair(event: FormEvent) {
     event.preventDefault();
-    void perform("Pairing app…", async current => {
+    void perform("Pairing app…", "pair", async current => {
       // Keep the one-time credential out of the React Query cache and browser storage.
       const created = await verificationApi.createSession(origin.trim(), runId || undefined);
       if (!current()) return;
@@ -165,7 +176,7 @@ export function VerificationPage() {
   }
 
   function runAction() {
-    void perform("Running action…", async current => {
+    void perform("Running action…", "action", async current => {
       if (!session) throw new Error("Pair an app first.");
       const command = currentCommand();
       // Filled values live only in this request; React Query mutations retain variables.
@@ -183,7 +194,7 @@ export function VerificationPage() {
   }
 
   function checkOutcome() {
-    void perform("Checking outcome…", async current => {
+    void perform("Checking outcome…", "outcome", async current => {
       if (!session) throw new Error("Pair an app first.");
       const predicate = currentPredicate();
       const report = await verificationApi.assert(session.id, predicate, since, checkName.trim() || describePredicate(predicate).slice(0, 128));
@@ -203,10 +214,11 @@ export function VerificationPage() {
       const command = includeAction ? currentCommand() : undefined;
       setSteps(previous => [...previous, { ...(command ? { command } : {}), predicate: currentPredicate() }]);
       setNotice("Step added to the flow draft.");
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not add this step."); }
+    } catch (cause) { setError({ scope: "flow", message: cause instanceof Error ? cause.message : "Could not add this step." }); }
   }
 
   const queryError = sessions.error ?? observation.error ?? flows.error ?? reports.error;
+  const operationAlert = (scope: OperationScope) => error?.scope === scope ? <OperationAlert error={error} /> : null;
   const events = (observation.data?.events ?? []).slice(-60).reverse();
   const coverage = observation.data?.session.coverage ?? session?.coverage;
   const loadedReports = reports.data ?? [];
@@ -222,7 +234,7 @@ export function VerificationPage() {
     <WorkspaceNavigation ready={!sessions.isLoading} sessionId={session?.id} reports={reports.isSuccess ? reports.data.length : undefined} />
 
     <div className="sr-only" role="status" aria-live="polite">{busy || notice}</div>
-    {(error || queryError) && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3 text-sm" style={{ borderColor: C.red, color: C.red }}><span>{error ?? queryError?.message}</span><Button variant="ghost" onClick={() => { setError(null); void refresh(); }}>Retry refresh</Button></div>}
+    {queryError && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3 text-sm" style={{ borderColor: C.red, color: C.red }}><span>{queryError.message}</span><Button variant="ghost" onClick={() => void refresh()}>Retry refresh</Button></div>}
     {notice && <p className="break-words text-xs leading-relaxed" style={{ color: C.fg1 }}>{notice}</p>}
 
     <section id="verification-pair" tabIndex={-1} aria-labelledby="pair-heading" className="min-w-0 scroll-mt-20 space-y-4 rounded-[7px] border bg-[color:var(--rp-surface)] p-4 sm:p-5" style={{ borderColor: C.border }}>
@@ -233,9 +245,10 @@ export function VerificationPage() {
         <Button type="submit" disabled={!!busy || !origin.trim()} className="mb-5">Pair app</Button>
       </form>
       <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={performanceOptIn} onChange={event => setPerformanceOptIn(event.target.checked)} disabled={!!busy} />Include native performance capture in setup (no location metadata)</label>
+      {operationAlert("pair")}
       {runs.isError && <p className="text-xs" style={{ color: C.orange }}>Run choices could not load. You can still pair an app without a linked run.</p>}
       {setup && <div className="space-y-3 rounded-md border p-4" style={{ background: C.surface, borderColor: C.border }}>
-        <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-sm font-semibold">Connect in {setup.origin}</h3><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => void perform("Copying connection setup…", async current => { await navigator.clipboard.writeText(snippet(setup, performanceOptIn)); if (current()) setNotice("Connection setup copied."); })}><Copy aria-hidden="true" />Copy setup</Button><Button variant="ghost" size="sm" onClick={() => setSetup(null)}>Dismiss setup</Button></div></div>
+        <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-sm font-semibold">Connect in {setup.origin}</h3><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => void perform("Copying connection setup…", "pair", async current => { await navigator.clipboard.writeText(snippet(setup, performanceOptIn)); if (current()) setNotice("Connection setup copied."); })}><Copy aria-hidden="true" />Copy setup</Button><Button variant="ghost" size="sm" onClick={() => setSetup(null)}>Dismiss setup</Button></div></div>
         <p className="max-w-2xl text-xs leading-relaxed" style={{ color: C.fg1 }}>Run this module in your app's development entry point. The connection credential is shown only here; keep it out of committed source. Reloading the app requires reconnecting.</p>
         <pre aria-label="Application connection snippet" className="max-h-72 overflow-auto rounded-md p-3 text-[11px] leading-relaxed" style={{ background: C.bg }}>{snippet(setup, performanceOptIn)}</pre>
       </div>}
@@ -243,7 +256,8 @@ export function VerificationPage() {
 
     <section aria-label="Application session" className="min-w-0 space-y-3 rounded-[7px] border border-[color:var(--rp-accent-border)] bg-[color:var(--rp-accent-soft)] p-4 sm:p-5">
       {sessions.isLoading ? <p className="text-sm" role="status">Loading app sessions…</p> : sessions.isError ? <p className="text-xs" style={{ color: C.red }}>App sessions could not load. Refresh the connection list before pairing or selecting an app.</p> : !session ? <div id="verification-connect-first" tabIndex={-1} className="space-y-2"><h2 className="text-sm font-semibold text-[color:var(--rp-ink-strong)]">Connect your first app</h2><p className="max-w-[65ch] text-xs leading-relaxed" style={{ color: C.fg1 }}>Pair a local origin above, then connect the SDK. Inspect live elements, declare outcomes and save repeatable checks once the app connects.</p><p className="text-xs text-[color:var(--rp-ink-soft)]">Saved reports, snapshots and optional browser tools remain available below.</p></div> : <>
-        <div className="flex flex-wrap items-end gap-3"><div className="min-w-[180px] max-w-lg flex-1"><Field label="Active session"><Select value={session.id} onChange={event => setSelectedId(event.target.value)} disabled={!!busy}>{sessions.data?.map(item => <option key={item.id} value={item.id}>{item.origin} · {item.connected ? "Connected" : "Disconnected"} · {new Date(item.createdAt).toLocaleTimeString()}</option>)}</Select></Field></div><span role="status" className="pb-2 text-xs font-medium" style={{ color: connected ? C.green : C.orange }}>{connected ? "Connected" : "Disconnected"}</span><Button variant="outline" disabled={!!busy} onClick={() => void perform("Disconnecting app…", async current => { await verificationApi.disconnect(session.id); if (!current()) return; if (setup?.id === session.id) setSetup(null); setSelectedId(""); await refresh(); if (current()) setNotice("Session disconnected. Its saved reports are retained."); })}><Unplug aria-hidden="true" />Disconnect</Button></div>
+        <div className="flex flex-wrap items-end gap-3"><div className="min-w-[180px] max-w-lg flex-1"><Field label="Active session"><Select value={session.id} onChange={event => setSelectedId(event.target.value)} disabled={!!busy}>{sessions.data?.map(item => <option key={item.id} value={item.id}>{item.origin} · {item.connected ? "Connected" : "Disconnected"} · {new Date(item.createdAt).toLocaleTimeString()}</option>)}</Select></Field></div><span role="status" className="pb-2 text-xs font-medium" style={{ color: connected ? C.green : C.orange }}>{connected ? "Connected" : "Disconnected"}</span><Button variant="outline" disabled={!!busy} onClick={() => void perform("Disconnecting app…", "session", async current => { await verificationApi.disconnect(session.id); if (!current()) return; if (setup?.id === session.id) setSetup(null); setSelectedId(""); await refresh(); if (current()) setNotice("Session disconnected. Its saved reports are retained."); })}><Unplug aria-hidden="true" />Disconnect</Button></div>
+        {operationAlert("session")}
         {session.runId && <Link className="inline-flex min-h-9 items-center gap-1 text-xs text-[color:var(--rp-accent)] underline underline-offset-2" to={`/runs/${encodeURIComponent(session.runId)}`}>Open linked run<ArrowUpRight aria-hidden="true" className="size-3" /></Link>}
         {!connected && <p className="text-xs leading-relaxed" style={{ color: C.fg1 }}>The app is not connected. Use the setup snippet in your local app, or pair again if you no longer have its credential. Checks while disconnected produce an inconclusive report.</p>}
         {coverage && <div className="flex flex-wrap gap-x-4 gap-y-2 text-[11px]" aria-label="Observer coverage">{Object.entries(coverage).map(([name, available]) => <span key={name} style={{ color: available && connected ? C.fg1 : C.orange }}>{name}: {available && connected ? "observing" : "unavailable"}</span>)}</div>}
@@ -262,6 +276,7 @@ export function VerificationPage() {
             {action === "fill" && <Field label="Fill value" hint="Used only for this live action. Cleared after sending and excluded from saved flows."><Input type="password" autoComplete="new-password" value={fillValue} onChange={event => setFillValue(event.target.value)} /></Field>}
             <Button onClick={runAction}><Play aria-hidden="true" />Run action</Button>
           </fieldset>
+          {operationAlert("action")}
           {inspection && <Inspection response={inspection} onSelect={value => setSelector(value)} />}
         </section>
         <section id="verification-checks" tabIndex={-1} aria-labelledby="outcome-heading" className="min-w-0 scroll-mt-20 space-y-4 rounded-[7px] border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] p-4 sm:p-5">
@@ -273,15 +288,17 @@ export function VerificationPage() {
             {checks.length > 1 && <Field label="Combine outcomes"><Select value={combination} onChange={event => setCombination(event.target.value as "allOf" | "anyOf")}><option value="allOf">All outcomes must pass</option><option value="anyOf">At least one outcome must pass</option></Select></Field>}
             <div className="flex flex-wrap gap-2"><Button onClick={checkOutcome}>Check outcome</Button><Button variant="ghost" disabled={checks.length >= 10} onClick={() => setChecks(previous => [...previous, emptyCheck()])}>Add expected outcome</Button></div>
           </fieldset>
+          {operationAlert("outcome")}
         </section>
         <section aria-labelledby="draft-heading" className="min-w-0 space-y-4 border-t pt-5" style={{ borderColor: C.border }}>
           <h2 id="draft-heading" className="text-sm font-semibold" style={{ color: C.fg3 }}>3. Save a repeatable flow</h2>
           <p className="text-xs leading-relaxed" style={{ color: C.fg1 }}>Build a sequence of actions and checks for this origin. Saved flows exclude all fill actions to keep entered values out of storage. Fill the app live before replaying a flow that needs input.</p>
           <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={includeAction} onChange={event => setIncludeAction(event.target.checked)} disabled={!!busy} />Include current action in step</label>
           <Button variant="outline" onClick={addStep} disabled={!!busy || steps.length >= 20}>Add step to flow</Button>
+          {operationAlert("flow")}
           {steps.length > 0 && <ol className="space-y-3 text-xs">{steps.map((step, index) => <li className="flex items-start justify-between gap-3" key={index}><span className="min-w-0 break-words"><span className="mr-2" style={{ color: C.fg0 }}>{index + 1}.</span>{step.command ? `${step.command.type} → ` : ""}{describePredicate(step.predicate)}</span><Button size="sm" variant="ghost" aria-label={`Remove flow step ${index + 1}`} disabled={!!busy} onClick={() => setSteps(previous => previous.filter((_, at) => at !== index))}>Remove</Button></li>)}</ol>}
           <Field label="Flow name"><Input value={flowName} onChange={event => setFlowName(event.target.value)} placeholder="Checkout smoke check" maxLength={128} /></Field>
-          <Button disabled={!!busy || !steps.length || !flowName.trim()} onClick={() => void perform("Saving flow…", async current => { await verificationApi.saveFlow(flowName.trim(), session.origin, steps); if (!current()) return; setSteps([]); setFlowName(""); await refresh(); if (current()) setNotice("Flow saved. Replay it against a connected app at the same origin."); })}>Save flow</Button>
+          <Button disabled={!!busy || !steps.length || !flowName.trim()} onClick={() => void perform("Saving flow…", "flow", async current => { await verificationApi.saveFlow(flowName.trim(), session.origin, steps); if (!current()) return; setSteps([]); setFlowName(""); await refresh(); if (current()) setNotice("Flow saved. Replay it against a connected app at the same origin."); })}>Save flow</Button>
         </section>
       </div>
       <section aria-labelledby="evidence-heading" className="min-w-0 flex-[1_1_280px] space-y-3 rounded-[7px] border bg-[color:var(--rp-surface)] p-4 sm:p-5" style={{ borderColor: C.border }}>
@@ -295,7 +312,8 @@ export function VerificationPage() {
     <div id="verification-snapshots" tabIndex={-1} className="min-w-0 scroll-mt-20"><SnapshotDiff key={linkedRunId} sessionId={session?.id} connected={connected} capable={(observation.data?.session.capabilities ?? session?.capabilities)?.includes("semantic-tree") ?? false} disabled={!!busy} runId={linkedRunId || undefined} /></div>
     <section id="verification-flows" tabIndex={-1} aria-labelledby="flows-heading" className="min-w-0 scroll-mt-20 space-y-3 border-t pt-5" style={{ borderColor: C.border }}>
       <h2 id="flows-heading" className="text-sm font-semibold" style={{ color: C.fg3 }}>Saved flows</h2>
-      {flows.isLoading ? <p role="status" className="text-xs">Loading saved flows…</p> : flows.isError ? <p className="text-xs" style={{ color: C.red }}>Saved flows could not load. Refresh before replaying or deleting a flow.</p> : !flows.data?.length ? <p className="text-xs" style={{ color: C.fg1 }}>No saved flows. Add an expected outcome to a flow draft above to reuse it.</p> : <ul className="divide-y divide-[color:var(--rp-border)]">{flows.data.map(flow => <li key={flow.id} className="flex flex-wrap items-center justify-between gap-3 py-3"><div className="min-w-0 space-y-1"><h3 className="break-words text-sm font-medium">{flow.name}</h3><p className="break-words text-[11px]" style={{ color: C.fg1 }}>{flow.origin} · {flow.steps.length} {flow.steps.length === 1 ? "step" : "steps"}</p>{session && session.origin !== flow.origin && <p className="text-[11px]" style={{ color: C.orange }}>Select a connected session at this origin to replay.</p>}</div><div className="flex gap-2"><Button variant="outline" disabled={!!busy || !connected || !session || session.origin !== flow.origin} aria-label={`Replay ${flow.name}`} onClick={() => void perform("Replaying flow…", async current => { const report = await verificationApi.runFlow(flow.id, session!.id); if (!current()) return; await refresh(); if (current()) setNotice(`${flow.name}: ${report.status}. ${report.reason}`); })}><Play aria-hidden="true" />Replay</Button><Button variant="ghost" disabled={!!busy} aria-label={`Delete ${flow.name}`} onClick={() => void perform("Deleting flow…", async current => { await verificationApi.deleteFlow(flow.id); if (!current()) return; await refresh(); if (current()) setNotice("Flow deleted. Its previous reports remain available."); })}>Delete</Button></div><FlowRepair key={`${flow.id}:${session?.id ?? ""}:${linkedRunId}`} flow={flow} sessionId={session?.id ?? ""} available={!!connected && !!session && session.origin === flow.origin && !!(observation.data?.session.capabilities ?? session.capabilities)?.includes("semantic-refs")} disabled={!!busy} onCommitted={refresh} /></li>)}</ul>}
+      {operationAlert("flows")}
+      {flows.isLoading ? <p role="status" className="text-xs">Loading saved flows…</p> : flows.isError ? <p className="text-xs" style={{ color: C.red }}>Saved flows could not load. Refresh before replaying or deleting a flow.</p> : !flows.data?.length ? <p className="text-xs" style={{ color: C.fg1 }}>No saved flows. Add an expected outcome to a flow draft above to reuse it.</p> : <ul className="divide-y divide-[color:var(--rp-border)]">{flows.data.map(flow => <li key={flow.id} className="flex flex-wrap items-center justify-between gap-3 py-3"><div className="min-w-0 space-y-1"><h3 className="break-words text-sm font-medium">{flow.name}</h3><p className="break-words text-[11px]" style={{ color: C.fg1 }}>{flow.origin} · {flow.steps.length} {flow.steps.length === 1 ? "step" : "steps"}</p>{session && session.origin !== flow.origin && <p className="text-[11px]" style={{ color: C.orange }}>Select a connected session at this origin to replay.</p>}</div><div className="flex gap-2"><Button variant="outline" disabled={!!busy || !connected || !session || session.origin !== flow.origin} aria-label={`Replay ${flow.name}`} onClick={() => void perform("Replaying flow…", "flows", async current => { const report = await verificationApi.runFlow(flow.id, session!.id); if (!current()) return; await refresh(); if (current()) setNotice(`${flow.name}: ${report.status}. ${report.reason}`); })}><Play aria-hidden="true" />Replay</Button><Button variant="ghost" disabled={!!busy} aria-label={`Delete ${flow.name}`} onClick={() => void perform("Deleting flow…", "flows", async current => { await verificationApi.deleteFlow(flow.id); if (!current()) return; await refresh(); if (current()) setNotice("Flow deleted. Its previous reports remain available."); })}>Delete</Button></div><FlowRepair key={`${flow.id}:${session?.id ?? ""}:${linkedRunId}`} flow={flow} sessionId={session?.id ?? ""} available={!!connected && !!session && session.origin === flow.origin && !!(observation.data?.session.capabilities ?? session.capabilities)?.includes("semantic-refs")} disabled={!!busy} onCommitted={refresh} /></li>)}</ul>}
     </section>
     <section id="verification-reports" tabIndex={-1} aria-labelledby="reports-heading" className="min-w-0 scroll-mt-20 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="reports-heading" className="text-sm font-semibold" style={{ color: C.fg3 }}>Verification reports</h2>{linkedRunId && <Link to="/verification" className="text-xs underline underline-offset-2">Show reports for all runs</Link>}</div>

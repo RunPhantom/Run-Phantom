@@ -15,6 +15,11 @@ import { evaluatePerformancePredicate } from "./performance";
 
 export interface VerificationServiceOptions extends VerificationBridgeOptions { checkTimeoutMs?: number }
 
+export function flowPassReason(steps: number): string {
+  const scope = steps === 1 ? "1 step verified during its observed interval; it" : `${steps} steps verified during their observed intervals; each`;
+  return `${scope} completed with no tracked requests pending and at least ${L.QUIET_MS}ms quiet.`;
+}
+
 export class VerificationService {
   readonly bridge: VerificationBridge;
   readonly repairs = new FlowRepairReviews();
@@ -145,7 +150,7 @@ export class VerificationService {
       const performanceChecks = flow.steps.some(step => this.reads(step.predicate).some(read => read.type === "performance"));
       return this.report(session, flow.name, flow.id, { status: "pass", reason: performanceChecks
         ? `${flow.steps.length} declared steps met their checks. Native numeric checks describe selected lab populations; other checks retain their bounded quiet requirements.`
-        : `${flow.steps.length} steps verified during their observed intervals; each completed with no tracked requests pending and at least ${L.QUIET_MS}ms quiet.`, evidence }, checks);
+        : flowPassReason(flow.steps.length), evidence }, checks);
     });
   }
 

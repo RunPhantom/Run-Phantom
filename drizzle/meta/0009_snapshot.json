@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "b2af9761-49e9-407d-a0c9-2a8b15d7bbb0",
+  "id": "ba3aa561-b85d-4719-bf6f-6fa48d885bd8",
   "prevId": "f0577994-8c5d-4f61-9ae7-2764c2081537",
   "tables": {
     "annotations": {
@@ -1012,6 +1012,411 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "evaluation_finding_comparisons": {
+      "name": "evaluation_finding_comparisons",
+      "columns": {
+        "scope_key": {
+          "name": "scope_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scope_generation": {
+          "name": "scope_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "operation_key": {
+          "name": "operation_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "request_digest": {
+          "name": "request_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "baseline_set": {
+          "name": "baseline_set",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "baseline_revision": {
+          "name": "baseline_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidate_set": {
+          "name": "candidate_set",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidate_revision": {
+          "name": "candidate_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "baseline_attachment_kind": {
+          "name": "baseline_attachment_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "baseline_attachment_id": {
+          "name": "baseline_attachment_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidate_attachment_kind": {
+          "name": "candidate_attachment_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidate_attachment_id": {
+          "name": "candidate_attachment_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "mapping_id": {
+          "name": "mapping_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "data": {
+          "name": "data",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "digest": {
+          "name": "digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "finding_comparison_scope": {
+          "name": "finding_comparison_scope",
+          "columns": [
+            "scope_key",
+            "scope_generation",
+            "created_at"
+          ],
+          "isUnique": false
+        },
+        "finding_comparison_baseline_attachment": {
+          "name": "finding_comparison_baseline_attachment",
+          "columns": [
+            "scope_key",
+            "scope_generation",
+            "baseline_attachment_kind",
+            "baseline_attachment_id",
+            "created_at"
+          ],
+          "isUnique": false
+        },
+        "finding_comparison_candidate_attachment": {
+          "name": "finding_comparison_candidate_attachment",
+          "columns": [
+            "scope_key",
+            "scope_generation",
+            "candidate_attachment_kind",
+            "candidate_attachment_id",
+            "created_at"
+          ],
+          "isUnique": false
+        },
+        "finding_comparison_operation": {
+          "name": "finding_comparison_operation",
+          "columns": [
+            "scope_key",
+            "scope_generation",
+            "operation_key"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "evaluation_finding_comparisons_scope_key_evaluation_evidence_scopes_scope_key_fk": {
+          "name": "evaluation_finding_comparisons_scope_key_evaluation_evidence_scopes_scope_key_fk",
+          "tableFrom": "evaluation_finding_comparisons",
+          "tableTo": "evaluation_evidence_scopes",
+          "columnsFrom": [
+            "scope_key"
+          ],
+          "columnsTo": [
+            "scope_key"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "evaluation_finding_comparisons_scope_key_baseline_set_baseline_revision_evaluation_evidence_sets_scope_key_id_revision_fk": {
+          "name": "evaluation_finding_comparisons_scope_key_baseline_set_baseline_revision_evaluation_evidence_sets_scope_key_id_revision_fk",
+          "tableFrom": "evaluation_finding_comparisons",
+          "tableTo": "evaluation_evidence_sets",
+          "columnsFrom": [
+            "scope_key",
+            "baseline_set",
+            "baseline_revision"
+          ],
+          "columnsTo": [
+            "scope_key",
+            "id",
+            "revision"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "evaluation_finding_comparisons_scope_key_candidate_set_candidate_revision_evaluation_evidence_sets_scope_key_id_revision_fk": {
+          "name": "evaluation_finding_comparisons_scope_key_candidate_set_candidate_revision_evaluation_evidence_sets_scope_key_id_revision_fk",
+          "tableFrom": "evaluation_finding_comparisons",
+          "tableTo": "evaluation_evidence_sets",
+          "columnsFrom": [
+            "scope_key",
+            "candidate_set",
+            "candidate_revision"
+          ],
+          "columnsTo": [
+            "scope_key",
+            "id",
+            "revision"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "evaluation_finding_comparisons_scope_key_mapping_id_evaluation_finding_mappings_scope_key_id_fk": {
+          "name": "evaluation_finding_comparisons_scope_key_mapping_id_evaluation_finding_mappings_scope_key_id_fk",
+          "tableFrom": "evaluation_finding_comparisons",
+          "tableTo": "evaluation_finding_mappings",
+          "columnsFrom": [
+            "scope_key",
+            "mapping_id"
+          ],
+          "columnsTo": [
+            "scope_key",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "evaluation_finding_comparisons_scope_key_id_pk": {
+          "columns": [
+            "scope_key",
+            "id"
+          ],
+          "name": "evaluation_finding_comparisons_scope_key_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "finding_comparison_generation": {
+          "name": "finding_comparison_generation",
+          "value": "\"evaluation_finding_comparisons\".\"scope_generation\">0"
+        },
+        "finding_comparison_bytes": {
+          "name": "finding_comparison_bytes",
+          "value": "length(cast(\"evaluation_finding_comparisons\".\"data\" AS BLOB))<=4194304"
+        }
+      }
+    },
+    "evaluation_finding_mappings": {
+      "name": "evaluation_finding_mappings",
+      "columns": {
+        "scope_key": {
+          "name": "scope_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scope_generation": {
+          "name": "scope_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "baseline_set": {
+          "name": "baseline_set",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "baseline_revision": {
+          "name": "baseline_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidate_set": {
+          "name": "candidate_set",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidate_revision": {
+          "name": "candidate_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "data": {
+          "name": "data",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "digest": {
+          "name": "digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "finding_mapping_scope": {
+          "name": "finding_mapping_scope",
+          "columns": [
+            "scope_key",
+            "scope_generation",
+            "created_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "evaluation_finding_mappings_scope_key_evaluation_evidence_scopes_scope_key_fk": {
+          "name": "evaluation_finding_mappings_scope_key_evaluation_evidence_scopes_scope_key_fk",
+          "tableFrom": "evaluation_finding_mappings",
+          "tableTo": "evaluation_evidence_scopes",
+          "columnsFrom": [
+            "scope_key"
+          ],
+          "columnsTo": [
+            "scope_key"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "evaluation_finding_mappings_scope_key_baseline_set_baseline_revision_evaluation_evidence_sets_scope_key_id_revision_fk": {
+          "name": "evaluation_finding_mappings_scope_key_baseline_set_baseline_revision_evaluation_evidence_sets_scope_key_id_revision_fk",
+          "tableFrom": "evaluation_finding_mappings",
+          "tableTo": "evaluation_evidence_sets",
+          "columnsFrom": [
+            "scope_key",
+            "baseline_set",
+            "baseline_revision"
+          ],
+          "columnsTo": [
+            "scope_key",
+            "id",
+            "revision"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "evaluation_finding_mappings_scope_key_candidate_set_candidate_revision_evaluation_evidence_sets_scope_key_id_revision_fk": {
+          "name": "evaluation_finding_mappings_scope_key_candidate_set_candidate_revision_evaluation_evidence_sets_scope_key_id_revision_fk",
+          "tableFrom": "evaluation_finding_mappings",
+          "tableTo": "evaluation_evidence_sets",
+          "columnsFrom": [
+            "scope_key",
+            "candidate_set",
+            "candidate_revision"
+          ],
+          "columnsTo": [
+            "scope_key",
+            "id",
+            "revision"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "evaluation_finding_mappings_scope_key_id_pk": {
+          "columns": [
+            "scope_key",
+            "id"
+          ],
+          "name": "evaluation_finding_mappings_scope_key_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "finding_mapping_generation": {
+          "name": "finding_mapping_generation",
+          "value": "\"evaluation_finding_mappings\".\"scope_generation\">0"
+        },
+        "finding_mapping_bytes": {
+          "name": "finding_mapping_bytes",
+          "value": "length(cast(\"evaluation_finding_mappings\".\"data\" AS BLOB))<=4194304"
+        }
+      }
+    },
     "evaluation_reviews": {
       "name": "evaluation_reviews",
       "columns": {
@@ -1952,145 +2357,6 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
-    },
-    "verification_snapshots": {
-      "name": "verification_snapshots",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "run_id": {
-          "name": "run_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "session_id": {
-          "name": "session_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "origin": {
-          "name": "origin",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "captured_at": {
-          "name": "captured_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "stored_at": {
-          "name": "stored_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "source": {
-          "name": "source",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "content_sha256": {
-          "name": "content_sha256",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "coverage_sha256": {
-          "name": "coverage_sha256",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "payload": {
-          "name": "payload",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "idx_verification_snapshots_stored": {
-          "name": "idx_verification_snapshots_stored",
-          "columns": [
-            "stored_at",
-            "id"
-          ],
-          "isUnique": false
-        },
-        "idx_verification_snapshots_run": {
-          "name": "idx_verification_snapshots_run",
-          "columns": [
-            "run_id",
-            "stored_at",
-            "id"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "verification_snapshots_run_id_runs_id_fk": {
-          "name": "verification_snapshots_run_id_runs_id_fk",
-          "tableFrom": "verification_snapshots",
-          "tableTo": "runs",
-          "columnsFrom": [
-            "run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "verification_snapshots_payload_bound": {
-          "name": "verification_snapshots_payload_bound",
-          "value": "json_valid(\"verification_snapshots\".\"payload\") AND length(cast(\"verification_snapshots\".\"payload\" AS blob)) <= 32768"
-        },
-        "verification_snapshots_text_bound": {
-          "name": "verification_snapshots_text_bound",
-          "value": "length(\"verification_snapshots\".\"id\") BETWEEN 1 AND 128 AND length(cast(\"verification_snapshots\".\"id\" AS blob)) <= 512 AND length(\"verification_snapshots\".\"name\") BETWEEN 1 AND 128 AND length(cast(\"verification_snapshots\".\"name\" AS blob)) <= 512 AND length(cast(\"verification_snapshots\".\"origin\" AS blob)) BETWEEN 1 AND 2048 AND (\"verification_snapshots\".\"session_id\" IS NULL OR length(cast(\"verification_snapshots\".\"session_id\" AS blob)) BETWEEN 1 AND 512)"
-        },
-        "verification_snapshots_time_bound": {
-          "name": "verification_snapshots_time_bound",
-          "value": "typeof(\"verification_snapshots\".\"captured_at\") = 'integer' AND \"verification_snapshots\".\"captured_at\" BETWEEN 0 AND 9007199254740991 AND typeof(\"verification_snapshots\".\"stored_at\") = 'integer' AND \"verification_snapshots\".\"stored_at\" BETWEEN 0 AND 9007199254740991"
-        },
-        "verification_snapshots_source_bound": {
-          "name": "verification_snapshots_source_bound",
-          "value": "(\"verification_snapshots\".\"source\" = 'paired-sdk' AND \"verification_snapshots\".\"session_id\" IS NOT NULL) OR (\"verification_snapshots\".\"source\" = 'imported-evidence' AND \"verification_snapshots\".\"session_id\" IS NULL)"
-        },
-        "verification_snapshots_digest_bound": {
-          "name": "verification_snapshots_digest_bound",
-          "value": "length(\"verification_snapshots\".\"content_sha256\") = 64 AND \"verification_snapshots\".\"content_sha256\" NOT GLOB '*[^0-9a-f]*' AND length(\"verification_snapshots\".\"coverage_sha256\") = 64 AND \"verification_snapshots\".\"coverage_sha256\" NOT GLOB '*[^0-9a-f]*'"
-        }
-      }
     }
   },
   "views": {
