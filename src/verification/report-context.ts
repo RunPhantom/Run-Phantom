@@ -1,7 +1,8 @@
 import type { Predicate, VerificationReportContext } from "./protocol";
 import { VERIFICATION_LIMITS as L } from "./protocol";
-import { parseFlowSteps } from "./validation";
+import { parseFlowSteps, parseRelativeTarget } from "./validation";
 import { sanitizeWithReport } from "./serialization";
+import { boundControlSource } from "./build/source";
 
 interface Sanitized { value: unknown; redacted: boolean; truncated: boolean }
 type Scrub = (value: unknown) => Sanitized;
@@ -24,7 +25,7 @@ export function boundReportContext(input: VerificationReportContext, scrub: Scru
     if (raw === "[TRUNCATED]") { context.truncated = true; return raw; }
     if (raw === "[REDACTED]") { context.redacted = true; return raw; }
     let parsed: Predicate;
-    try { parsed = parseFlowSteps([{ predicate: raw }])[0].predicate; }
+    try { parsed = parseFlowSteps([{ command: { type: "click", selector: ":root" }, predicate: raw }])[0].predicate; }
     catch {
       // Live credential-oriented checks are allowed to return inconclusive, but their
       // selectors/expectations must never become durable secrets after that verdict.
@@ -41,24 +42,93 @@ export function boundReportContext(input: VerificationReportContext, scrub: Scru
       case "signal": return { kind: parsed.kind, name: clean(parsed.name) };
       case "state": return { kind: parsed.kind, store: clean(parsed.store), path: clean(parsed.path), equals: clean(parsed.equals) };
       case "element": return { kind: parsed.kind, selector: clean(parsed.selector), state: parsed.state };
+      case "relative": return { kind: parsed.kind, target: clean(parsed.target), relation: parsed.relation,
+        ...(parsed.relation === "becomes" ? { equals: clean(parsed.equals) } : {}) };
       case "allOf": case "anyOf": return { kind: parsed.kind, predicates: parsed.predicates.map(predicate) };
     }
   };
   for (const check of input.checks.slice(0, L.MAX_STEPS)) {
     const reason = String(clean(check.reason));
     if (reason.length > L.MAX_REASON_LENGTH) context.truncated = true;
-    context.checks.push({ step: check.step, predicate: predicate(check.predicate), status: check.status,
+    const controlSource = check.controlSource ? boundControlSource(check.controlSource, value => String(clean(value))) : undefined;
+    if (check.controlSource && !controlSource || check.controlSourceOmitted === "context-limit") context.truncated = true;
+    if (controlSource?.observation.status === "unavailable" && controlSource.observation.reason === "redacted") context.redacted = true;
+    const retained = { step: check.step, predicate: predicate(check.predicate), status: check.status,
       reason: reason.slice(0, L.MAX_REASON_LENGTH), since: check.since, through: check.through,
       generation: check.generation, coverage: { ...check.coverage }, complete: check.complete,
-      dropped: check.dropped, settled: check.settled });
+      dropped: check.dropped, settled: check.settled, ...(controlSource ? { controlSource } : {}),
+      ...(!controlSource && check.controlSourceOmitted === "context-limit" ? { controlSourceOmitted: "context-limit" as const } : {}) };
+    if (check.causal) {
+      let unavailable = check.causal.attribution !== "captured";
+      const readings: NonNullable<typeof check.causal>["readings"] = [];
+      for (const pair of check.causal.readings.slice(0, L.MAX_BASELINE_TARGETS)) {
+        let target;
+        try { target = parseRelativeTarget(pair.target); }
+        catch { context.redacted = true; unavailable = true; continue; }
+        const safeTarget = scrub(target);
+        context.redacted ||= safeTarget.redacted;
+        context.truncated ||= safeTarget.truncated;
+        unavailable ||= safeTarget.redacted || safeTarget.truncated;
+        const retain = (reading: typeof pair.before): typeof pair.before => {
+          if (!reading) { unavailable = true; return null; }
+          const safe = scrub(reading.value);
+          context.redacted ||= safe.redacted;
+          context.truncated ||= safe.truncated;
+          unavailable ||= reading.availability !== "complete" || safe.redacted || safe.truncated;
+          return { cursor: reading.cursor, availability: safe.redacted || safe.truncated ? "partial" : reading.availability, value: safe.value };
+        };
+        readings.push({ target: safeTarget.value as typeof target, before: retain(pair.before), after: retain(pair.after) });
+      }
+      const omitted = check.causal.omitted || check.causal.readings.length > L.MAX_BASELINE_TARGETS;
+      context.truncated ||= !!omitted;
+      context.checks.push({ ...retained, causal: { source: "sdk-reported", attribution: unavailable || omitted ? "unavailable" : "captured",
+        ...(check.causal.actionId ? { actionId: String(clean(check.causal.actionId)) } : {}),
+        ...(omitted ? { omitted: true } : {}), readings } });
+    } else context.checks.push(retained);
   }
   // Preserve every executed check's outcome/window even when large expected values do not fit.
   while (Buffer.byteLength(JSON.stringify(context)) > L.MAX_CONTEXT_BYTES) {
+    // Optional location context must yield before existing expectations or captured readings.
+    // The next loop measures the omission marker and truncated flag as part of the same budget.
+    const sources = context.checks.filter(check => check.controlSource).sort((a, b) =>
+      Buffer.byteLength(JSON.stringify(b.controlSource)) - Buffer.byteLength(JSON.stringify(a.controlSource)));
+    if (sources.length) {
+      delete sources[0].controlSource;
+      sources[0].controlSourceOmitted = "context-limit";
+      context.truncated = true;
+      continue;
+    }
+    const values = context.checks.flatMap(check => (check.causal?.readings ?? []).flatMap(pair => [pair.before, pair.after]
+      .flatMap(reading => reading ? [{ check, reading, bytes: Buffer.byteLength(JSON.stringify(reading.value)) }] : [])))
+      .sort((a, b) => b.bytes - a.bytes);
+    if (values[0]?.bytes > 128) {
+      values[0].reading.value = "[TRUNCATED]";
+      values[0].reading.availability = "partial";
+      values[0].check.causal!.attribution = "unavailable";
+      context.truncated = true;
+      continue;
+    }
     const largest = context.checks.map((check, index) => ({ index, bytes: Buffer.byteLength(JSON.stringify(check.predicate)) }))
       .sort((a, b) => b.bytes - a.bytes)[0];
-    if (!largest || largest.bytes <= 32) break;
-    context.checks[largest.index].predicate = "[TRUNCATED]";
-    context.truncated = true;
+    if (largest?.bytes > 32) { context.checks[largest.index].predicate = "[TRUNCATED]"; context.truncated = true; continue; }
+    const groups = context.checks.filter(check => check.causal?.readings.length).sort((a, b) =>
+      Buffer.byteLength(JSON.stringify(b.causal!.readings)) - Buffer.byteLength(JSON.stringify(a.causal!.readings)));
+    if (groups.length) {
+      groups[0].causal!.readings = [];
+      groups[0].causal!.omitted = true;
+      groups[0].causal!.attribution = "unavailable";
+      context.truncated = true;
+      continue;
+    }
+    // Human display reasons are optional context; the report's evaluated reason is untouched.
+    const reasons = context.checks.map(check => ({ check, bytes: Buffer.byteLength(JSON.stringify(check.reason)) }))
+      .sort((a, b) => b.bytes - a.bytes);
+    if (reasons[0]?.bytes > Buffer.byteLength(JSON.stringify("[TRUNCATED]"))) {
+      reasons[0].check.reason = "[TRUNCATED]";
+      context.truncated = true;
+      continue;
+    }
+    throw new Error("Saved verification context exceeds its required outcome budget");
   }
   return context;
 }

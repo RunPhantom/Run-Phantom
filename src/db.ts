@@ -16,6 +16,7 @@ import { OTLP_EVIDENCE_LIMITS } from "./spans/otlp-evidence";
 import { activeLocalEvidenceAttachmentIds } from "./evaluations/evidence-inventory";
 import { EvidenceError } from "./evaluations/evidence-protocol";
 import { bridgeLegacyFindingMigration } from "./db/legacy-finding-migration";
+import { assertRecognizedSemanticMigration } from "./db/legacy-semantic-migration";
 import { migrateDatabase } from "./db/migrate";
 
 const RUNPHANTOM_DB_PATH_ENV_VAR = "RUNPHANTOM_DB_PATH";
@@ -76,14 +77,65 @@ export function getDbPath(): string {
   return _dbPath;
 }
 
+function preflightExistingSemanticDatabase(dbPath: string, migrationsFolder: string): Database | null {
+  const existing = new Database(dbPath, { readonly: true, create: false });
+  let needsWalCoordination = false;
+  try {
+    existing.transaction(() => {
+      try {
+        existing.query("SELECT name FROM sqlite_master LIMIT 1").all();
+      } catch (error) {
+        // Apple's SQLite can refuse the first read of a closed WAL database
+        // without sidecars. Only this native probe may select the guarded path.
+        if (error instanceof Error && "code" in error && error.code === "SQLITE_CANTOPEN"
+          && "errno" in error && error.errno === 14) {
+          needsWalCoordination = true;
+          return;
+        }
+        throw error;
+      }
+      assertRecognizedSemanticMigration(existing, migrationsFolder);
+    })();
+  } finally {
+    existing.close(true);
+  }
+  if (!needsWalCoordination) return null;
+
+  // SQLite may coordinate or recover its WAL here; query_only protects logical
+  // schema/data during strict preflight, not physical file bytes or sidecars.
+  const guarded = new Database(dbPath, { readwrite: true, create: false });
+  try {
+    guarded.exec("PRAGMA query_only = ON");
+    if ((guarded.query("PRAGMA query_only").get() as { query_only: number }).query_only !== 1) {
+      throw new Error("Unable to establish read-only migration preflight");
+    }
+    guarded.exec("PRAGMA busy_timeout = 1000");
+    guarded.transaction(() => {
+      guarded.query("SELECT name FROM sqlite_master LIMIT 1").all();
+      assertRecognizedSemanticMigration(guarded, migrationsFolder);
+    })();
+    guarded.exec("PRAGMA query_only = OFF");
+    if ((guarded.query("PRAGMA query_only").get() as { query_only: number }).query_only !== 0) {
+      throw new Error("Unable to leave read-only migration preflight");
+    }
+    return guarded;
+  } catch (error) {
+    guarded.close(true);
+    throw error;
+  }
+}
+
 export function getDrizzleDb(): RunPhantomDb {
   if (_drizzleDb) return _drizzleDb;
   const dbPath = resolveDbPath();
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  _dbPath = dbPath;
-  _sqliteDb = new Database(dbPath, { create: true });
-  _drizzleDb = drizzle(_sqliteDb, { schema });
   try {
+    const migrationsFolder = resolveMigrationsFolder();
+    const existingTarget = fs.existsSync(dbPath);
+    if (existingTarget) _sqliteDb = preflightExistingSemanticDatabase(dbPath, migrationsFolder);
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    _dbPath = dbPath;
+    _sqliteDb ??= new Database(dbPath, { readwrite: true, create: !existingTarget });
+    _drizzleDb = drizzle(_sqliteDb, { schema });
     _sqliteDb.exec("PRAGMA busy_timeout = 1000");
     _sqliteDb.exec("PRAGMA journal_mode = WAL");
     // Both pragmas are required for the table rebuild in
@@ -105,7 +157,6 @@ export function getDrizzleDb(): RunPhantomDb {
     // enforcement off while a referenced table is dropped and recreated.
     _sqliteDb.exec("PRAGMA legacy_alter_table = ON");
     _sqliteDb.exec("PRAGMA foreign_keys = OFF");
-    const migrationsFolder = resolveMigrationsFolder();
     // SQLite's immediate transaction coordinates the finite legacy backfill;
     // all startup work stays synchronous, before feature stores or listeners.
     const validateLegacyUpgrade = bridgeLegacyFindingMigration(_sqliteDb, migrationsFolder);
@@ -1028,6 +1079,7 @@ export function clearAll() {
     tx.delete(schema.evaluation_experiments).run();
     tx.delete(schema.evaluation_revisions).run();
     tx.delete(schema.evaluation_datasets).run();
+    tx.delete(schema.verification_snapshots).run();
     tx.delete(schema.verification_reports).run();
     tx.delete(schema.verification_flows).run();
     tx.delete(schema.live_events).run();

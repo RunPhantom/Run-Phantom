@@ -1,10 +1,12 @@
 import type { Database } from "bun:sqlite";
 import { readMigrationFiles } from "drizzle-orm/migrator";
+import { assertRecognizedSemanticMigration, bridgeLegacySemanticMigration } from "./legacy-semantic-migration";
 
 /** Read the journal position under the same SQLite lock that applies its suffix. */
 export function migrateDatabase(db: Database, migrationsFolder: string): void {
   const migrations = readMigrationFiles({ migrationsFolder });
   db.transaction(() => {
+    const validateSemanticUpgrade = bridgeLegacySemanticMigration(db, migrationsFolder);
     db.exec(`CREATE TABLE IF NOT EXISTS "__drizzle_migrations" (
       id SERIAL PRIMARY KEY,
       hash text NOT NULL,
@@ -17,5 +19,7 @@ export function migrateDatabase(db: Database, migrationsFolder: string): void {
       for (const statement of migration.sql) db.exec(statement);
       insert.run(migration.hash, migration.folderMillis);
     }
+    validateSemanticUpgrade?.();
+    assertRecognizedSemanticMigration(db, migrationsFolder);
   }).immediate();
 }

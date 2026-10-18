@@ -99,6 +99,13 @@
       "when": 1791766000004,
       "tag": "0013_completion_reports",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1791773224836,
+      "tag": "0014_semantic_snapshots",
+      "breakpoints": true
     }
   ]
 }
