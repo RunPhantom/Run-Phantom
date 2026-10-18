@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, readdirSync, realpathSync, lstatSync, writeF
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { CooperatingTauriAdapter, TauriArtifactStore, TauriError, TauriProcessTransport, type TauriRequest, type TauriTransport } from "../src/verification/adapters/tauri";
-import { parseReply } from "../src/verification/adapters/tauri/contract";
+import { parseReply, record } from "../src/verification/adapters/tauri/contract";
 
 const registration = { application: "dev.runphantom.tauri-fixture", window: "verification-fixture", nonce: "a".repeat(64), actions: ["increment", "reset"] };
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP1sAAAAASUVORK5CYII=", "base64");
@@ -55,6 +55,84 @@ describe("cooperating Tauri authority and result provenance", () => {
   test("arbitrary transport errors cannot leak private text", async () => {
     const adapter = fixture(() => Promise.reject(new Error("secret/path/provider-canary")));
     try { await adapter.observe(); throw new Error("unexpected-success"); } catch (error) { expect(String(error)).not.toContain("canary"); expect((error as TauriError).code).toBe("unavailable"); }
+  });
+});
+
+describe("complete Tauri object boundary", () => {
+  test("plain JSON remains accepted and observations are independent data snapshots", async () => {
+    const original = { source: "cooperating-tauri", value: 4, sequence: 2 };
+    const adapter = fixture(request => Promise.resolve(JSON.parse(JSON.stringify(reply(request, { observation: original })))));
+    expect(await adapter.compare(4)).toMatchObject({ status: "pass", observation: original });
+    const snapshot = record(original); expect(snapshot).not.toBe(original); original.value = 9; expect(snapshot.value).toBe(4);
+  });
+  test.each(["reply", "observation"] as const)("%s rejects symbol and hidden data properties", async scope => {
+    for (const hidden of [false, true]) {
+      const adapter = fixture(request => {
+        const value = reply(request) as Record<string, unknown>, target = scope === "reply" ? value : value.observation as object;
+        Object.defineProperty(target, hidden ? "hiddenCanary" : Symbol("dataCanary"), { value: "private-canary", enumerable: !hidden });
+        return Promise.resolve(value);
+      });
+      expect(await code(adapter.observe())).toBe("invalid-reply");
+    }
+  });
+  test.each([
+    ["reply", "string", true], ["reply", "symbol", true], ["reply", "string", false], ["reply", "symbol", false],
+    ["observation", "string", true], ["observation", "symbol", true], ["observation", "string", false], ["observation", "symbol", false],
+  ] as const)("%s %s accessor (enumerable %s) never executes or escapes", async (scope, keyKind, enumerable) => {
+    let getters = 0;
+    const adapter = fixture(request => {
+      const value = reply(request) as Record<string, unknown>, target = scope === "reply" ? value : value.observation as object;
+      Object.defineProperty(target, keyKind === "string" ? "accessorCanary" : Symbol("accessorCanary"), { enumerable, get() { getters++; throw new Error("raw-accessor-private-canary"); } });
+      return Promise.resolve(value);
+    });
+    expect(await code(adapter.observe())).toBe("invalid-reply"); expect(getters).toBe(0);
+  });
+  test.each(["getPrototypeOf", "ownKeys", "getOwnPropertyDescriptor", "get"] as const)("Proxy %s traps are rejected before reflection and capture dispatch", async trap => {
+    let traps = 0, dispatched = 0;
+    const hostile = new Proxy({ mode: "private-raw", consent: true }, { [trap]: () => { traps++; throw new Error("raw-proxy-private-canary"); } });
+    const adapter = fixture(request => { dispatched++; return Promise.resolve(reply(request, { png })); });
+    expect(await code(adapter.capture(hostile as never))).toBe("invalid-reply"); expect(traps).toBe(0); expect(dispatched).toBe(0);
+  });
+  test("nested observation Proxy cannot execute a post-validation getter", async () => {
+    let gets = 0;
+    const adapter = fixture(request => Promise.resolve(reply(request, { observation: new Proxy({ source: "cooperating-tauri", value: 0, sequence: 0 }, { get() { gets++; throw new Error("raw-observation-private-canary"); } }) })));
+    expect(await code(adapter.observe())).toBe("invalid-reply"); expect(gets).toBe(0);
+  });
+  test("revoked Proxy input and hostile rejected errors become fixed typed failures", async () => {
+    const revoked = Proxy.revocable({}, {}); revoked.revoke();
+    expect(() => record(revoked.proxy)).toThrow(TauriError);
+    let traps = 0; const hostile = new Proxy(new Error("private-canary"), { getPrototypeOf() { traps++; throw new Error("raw-rejection-private-canary"); }, get() { traps++; throw new Error("raw-rejection-get-private-canary"); } });
+    const adapter = fixture(() => Promise.reject(hostile));
+    expect(await code(adapter.observe())).toBe("unavailable"); expect(traps).toBe(0);
+  });
+  test("registration accessors never run before authority validation", () => {
+    let getters = 0; const hostile = { ...registration };
+    Object.defineProperty(hostile, "application", { enumerable: true, get() { getters++; throw new Error("raw-registration-private-canary"); } });
+    const store = new TauriArtifactStore(path.join(root(), "captures"));
+    expect(() => new CooperatingTauriAdapter(hostile, { exchange: () => Promise.reject(new Error("unused")), close: () => Promise.resolve(true) }, store)).toThrow(TauriError);
+    expect(getters).toBe(0); expect(store.close()).toBe(true);
+  });
+  test.each(["symbol", "index-accessor", "proxy"] as const)("registered action arrays reject %s before reading executable properties", kind => {
+    let gets = 0; const actions = ["increment"];
+    if (kind === "symbol") Object.defineProperty(actions, Symbol("private-action-canary"), { value: "unexpected" });
+    if (kind === "index-accessor") Object.defineProperty(actions, "0", { enumerable: true, get() { gets++; throw new Error("raw-action-private-canary"); } });
+    const input = kind === "proxy" ? new Proxy(actions, { get() { gets++; throw new Error("raw-array-proxy-private-canary"); } }) : actions;
+    const store = new TauriArtifactStore(path.join(root(), "captures"));
+    expect(() => new CooperatingTauriAdapter({ ...registration, actions: input }, { exchange: () => Promise.reject(new Error("unused")), close: () => Promise.resolve(true) }, store)).toThrow(TauriError);
+    expect(gets).toBe(0); expect(store.close()).toBe(true);
+  });
+  test("rejected error code getters are never read or reused", async () => {
+    let gets = 0; const error = new TauriError("denied");
+    Object.defineProperty(error, "code", { get() { gets++; throw new Error("raw-code-private-canary"); } });
+    const adapter = fixture(() => Promise.reject(error));
+    expect(await code(adapter.observe())).toBe("unavailable"); expect(gets).toBe(0);
+  });
+  test("binary capture copies intrinsic bytes without consulting byteLength accessors", async () => {
+    let gets = 0; const bytes = new Uint8Array(png);
+    Object.defineProperty(bytes, "byteLength", { get() { gets++; throw new Error("raw-png-private-canary"); } });
+    const adapter = fixture(request => Promise.resolve(reply(request, { png: bytes })));
+    const capture = await adapter.capture({ mode: "private-raw", consent: true });
+    expect(capture.bytes).toBe(png.length); expect(gets).toBe(0);
   });
 });
 

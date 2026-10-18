@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { TauriArtifactStore, type TauriCapture } from "./artifacts";
-import { authority, parseReply, record, TAURI_LIMITS, TauriError, type TauriAuthority, type TauriObservation, type TauriOperation, type TauriReply, type TauriRequest, type TauriTransport } from "./contract";
+import { authority, parseReply, record, registeredActions, tauriError, TAURI_LIMITS, TauriError, type TauriAuthority, type TauriObservation, type TauriOperation, type TauriReply, type TauriRequest, type TauriTransport } from "./contract";
 
 /** Construct only from an owned fixture registration, never imported evidence. */
 export class CooperatingTauriAdapter {
@@ -11,9 +11,10 @@ export class CooperatingTauriAdapter {
   #closed = false;
   #close?: Promise<void>;
   constructor(registration: TauriAuthority & { actions: readonly string[] }, readonly transport: TauriTransport, readonly artifacts: TauriArtifactStore) {
-    this.#authority = authority({ application: registration.application, window: registration.window, nonce: registration.nonce });
-    if (!Array.isArray(registration.actions) || registration.actions.length > 16 || registration.actions.some(action => !/^[a-z][a-z0-9-]{0,63}$/.test(action))) throw new TauriError("denied");
-    this.#actions = new Set(registration.actions);
+    const object = record(registration);
+    if (Object.keys(object).sort().join() !== "actions,application,nonce,window") throw new TauriError("denied");
+    this.#authority = authority({ application: object.application, window: object.window, nonce: object.nonce });
+    this.#actions = new Set(registeredActions(object.actions));
   }
   get generation(): number { return this.#generation; }
   async #exchange(operation: TauriOperation): Promise<TauriReply> {
@@ -32,19 +33,19 @@ export class CooperatingTauriAdapter {
       if (controller.signal.aborted || this.#closed || request.generation !== this.#generation) throw new TauriError("cancelled");
       if (reply.status !== "ok") throw new TauriError(reply.status);
       return reply;
-    } catch (error) { if (error instanceof TauriError) throw error; throw new TauriError("unavailable"); }
+    } catch (error) { throw tauriError(error); }
     finally { clearTimeout(timer); if (abortListener) controller.signal.removeEventListener("abort", abortListener); if (this.#active === controller) this.#active = undefined; }
   }
   async observe(): Promise<TauriObservation> {
     const reply = await this.#exchange({ kind: "observe" });
     if (!("observation" in reply)) throw new TauriError("invalid-reply");
-    return { ...reply.observation };
+    return { source: "cooperating-tauri", value: reply.observation.value, sequence: reply.observation.sequence };
   }
   async action(action: string): Promise<TauriObservation> {
     if (!this.#actions.has(action)) throw new TauriError("denied");
     const reply = await this.#exchange({ kind: "action", action });
     if (!("observation" in reply)) throw new TauriError("invalid-reply");
-    return { ...reply.observation };
+    return { source: "cooperating-tauri", value: reply.observation.value, sequence: reply.observation.sequence };
   }
   async compare(expected: number): Promise<{ status: "pass" | "fail"; source: "cooperating-tauri"; observation: TauriObservation }> {
     if (!Number.isSafeInteger(expected)) throw new TauriError("denied");
