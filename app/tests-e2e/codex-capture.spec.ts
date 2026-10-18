@@ -18,7 +18,9 @@ test("installed Codex callback observations appear in Runs without completion or
   const install = spawnSync(bun, installArgv, { cwd: workspace, env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }, timeout: installBudget, encoding: "utf8" });
   const installElapsedMs = performance.now() - installStarted, installTerminalAt = new Date().toISOString();
   const safeOutput = (value: string | null | undefined) => (value ?? "").replace(/\b[a-f0-9]{32,}\b/gi, "<redacted-identifier>").replace(/\b(?:sk|rk|pk)-[A-Za-z0-9_-]+/g, "<redacted-token>").slice(0, 4096);
-  await testInfo.attach("codex-hook-install-admission.json", { contentType: "application/json", body: JSON.stringify({ executable: bun, argv: installArgv, port: runPhantom.port, timeoutMs: installBudget, startedAt: installStartedAt, terminalAt: installTerminalAt, elapsedMs: installElapsedMs, pid: install.pid, status: install.status, signal: install.signal, error: install.error ? { name: install.error.name, code: "code" in install.error ? String(install.error.code) : null, message: safeOutput(install.error.message) } : null, stdout: safeOutput(install.stdout), stderr: safeOutput(install.stderr) }) });
+  const admissionPath = testInfo.outputPath("codex-hook-install-admission.json");
+  writeFileSync(admissionPath, JSON.stringify({ executable: bun, argv: installArgv, port: runPhantom.port, timeoutMs: installBudget, startedAt: installStartedAt, terminalAt: installTerminalAt, elapsedMs: installElapsedMs, pid: install.pid, status: install.status, signal: install.signal, error: install.error ? { name: install.error.name, code: "code" in install.error ? String(install.error.code) : null, message: safeOutput(install.error.message) } : null, stdout: safeOutput(install.stdout), stderr: safeOutput(install.stderr) }));
+  await testInfo.attach("codex-hook-install-admission.json", { contentType: "application/json", path: admissionPath });
   if (install.error) throw install.error;
   expect(install.status).toBe(0);
   const installed = install.stdout;
