@@ -15,7 +15,11 @@ import { parseHookAdmission, parseHookPublication, validateClaudeBatch, hookDige
 let directory: string, store: CodingHookStore, db: ReturnType<typeof getDrizzleDb>["$client"], prior: string | undefined;
 const admit = (token: string, identity: string) => store.admit(token, identity, claimsForRegistration(store.authenticate(token).binding));
 const token = "a".repeat(64), id = "a".repeat(32), sourceIdentity = "b".repeat(64);
-const binding = (mode: "metadata" | "full" = "metadata", installationId = id): InstallationBinding => ({ installationId, scope: "local", captureMode: mode, workspace: "/private/project", registeredWorkspace: "/private/project", transcriptRoot: "/private/projects", projectDirectory: "/private/projects/project", homeDirectory: "/private/fixture-home", settingsPath: "/private/project/.claude/settings.local.json", executable: "/private/bin/runphantom" });
+const binding = (mode: "metadata" | "full" = "metadata", installationId = id): InstallationBinding => ({
+  installationId, scope: "local", captureMode: mode, workspace: path.join(directory, "project"), registeredWorkspace: path.join(directory, "project"),
+  transcriptRoot: path.join(directory, "projects"), projectDirectory: path.join(directory, "projects", "project"), homeDirectory: path.join(directory, "fixture-home"),
+  settingsPath: path.join(directory, "project", ".claude", "settings.local.json"), executable: path.join(directory, "bin", "runphantom"),
+});
 beforeEach(() => { closeDb(); prior = process.env.RUNPHANTOM_DB_PATH; directory = mkdtempSync(path.join(tmpdir(), "runphantom-f11-store-")); process.env.RUNPHANTOM_DB_PATH = path.join(directory, "owner.sqlite"); db = getDrizzleDb().$client; store = new CodingHookStore(db, {}, () => true); store.beginOwner(); });
 afterEach(() => { closeDb(); if (prior === undefined) delete process.env.RUNPHANTOM_DB_PATH; else process.env.RUNPHANTOM_DB_PATH = prior; rmSync(directory, { recursive: true, force: true }); });
 function active(mode: "metadata" | "full" = "metadata") {
@@ -66,10 +70,10 @@ test("identical management preserves policy generation; changed policy and token
   store.commitInstallation(id, changed.installationGeneration, changedToken, "c".repeat(64), changed.ownerGeneration); expect(admit(changedToken, sourceIdentity).captureMode).toBe("metadata");
 });
 test("global target and local full authority over the same registered project deduplicate identities without sharing policy", () => {
-  const local = active("full"), globalId = "e".repeat(32), globalToken = "e".repeat(64), globalBinding = { ...binding("metadata", globalId), scope: "global" as const, workspace: null, settingsPath: "/private/fixture-home/.claude/settings.json" };
+  const local = active("full"), globalId = "e".repeat(32), globalToken = "e".repeat(64), globalBinding = { ...binding("metadata", globalId), scope: "global" as const, workspace: null, settingsPath: path.join(directory, "fixture-home", ".claude", "settings.json") };
   const receipt = store.prepareInstallation(globalBinding, globalToken, "f".repeat(64)); store.commitInstallation(globalId, receipt.installationGeneration, globalToken, "f".repeat(64), receipt.ownerGeneration);
   const global = admit(globalToken, sourceIdentity); expect(global.sourceKey).toBe(local.sourceKey); expect(global.runId).toBe(local.runId); expect(global.captureMode).toBe("metadata");
-  const foreignId = "f".repeat(32), foreignToken = "f".repeat(64), foreignBinding = { ...binding("full", foreignId), workspace: "/private/other-project", registeredWorkspace: "/private/other-project", projectDirectory: "/private/projects/other-project", settingsPath: "/private/other-project/.claude/settings.local.json" };
+  const foreignId = "f".repeat(32), foreignToken = "f".repeat(64), foreignBinding = { ...binding("full", foreignId), workspace: path.join(directory, "other-project"), registeredWorkspace: path.join(directory, "other-project"), projectDirectory: path.join(directory, "projects", "other-project"), settingsPath: path.join(directory, "other-project", ".claude", "settings.local.json") };
   const foreignReceipt = store.prepareInstallation(foreignBinding, foreignToken, "f".repeat(64)); store.commitInstallation(foreignId, foreignReceipt.installationGeneration, foreignToken, "f".repeat(64), foreignReceipt.ownerGeneration);
   const foreign = admit(foreignToken, sourceIdentity); expect(foreign.sourceKey).not.toBe(local.sourceKey);
   expect(() => store.publish(token, foreign, batch(foreign))).toThrow();
@@ -92,7 +96,19 @@ test("row and encoded-state quota refusals roll back session/entity/canonical cr
   expect((db.query("SELECT count(*) count FROM coding_hook_sessions").get() as { count: number }).count).toBe(1);
   const admission = admit(token, sourceIdentity), oneEntity = new CodingHookStore(db, { sessionEntities: 1 }, () => true); expect(() => oneEntity.publish(token, admission, batch(admission))).toThrow();
   expect(db.query("SELECT id FROM runs WHERE id=?").get(admission.runId)).toBeNull(); expect((db.query("SELECT count(*) count FROM coding_hook_entities").get() as { count: number }).count).toBe(0);
-  const boundedBytes = new CodingHookStore(db, { bytes: 2000 }, () => true); expect(() => boundedBytes.publish(token, admission, batch(admission))).toThrow(); expect(db.query("SELECT id FROM runs WHERE id=?").get(admission.runId)).toBeNull();
+  const rows = (table: string) => db.query(`SELECT * FROM ${table}`).all() as Record<string, string | null>[];
+  const utf8 = (...values: (string | null)[]) => values.reduce((sum, value) => sum + Buffer.byteLength(value ?? ""), 0);
+  // No entities exist yet; leave one byte above the actual owner, installation and session state.
+  const initialBytes = rows("coding_hook_owner").length * 80
+    + rows("coding_hook_installations").reduce((sum, row) => sum + 2 * utf8(row.id) + 2 * utf8(row.token_sha256)
+      + utf8(row.generation, row.state, row.capture_mode, row.scope, row.workspace, row.transcript_root, row.source_root_key, row.config_sha256, row.data) + 8, 0)
+    + rows("coding_hook_sessions").reduce((sum, row) => sum + 2 * utf8(row.source_key) + 3 * utf8(row.run_id)
+      + utf8(row.source_root_key, row.root_span_id, row.state, row.incarnation_key, row.prefix_sha256, row.data) + 40, 0);
+  const boundedBytes = new CodingHookStore(db, { bytes: initialBytes + 1 }, () => true), beforeByteWrite = snapshot();
+  const byteAdmission = boundedBytes.admit(token, sourceIdentity, claimsForRegistration(store.authenticate(token).binding));
+  expect(byteAdmission.sourceKey).toBe(admission.sourceKey); expect(snapshot()).toBe(beforeByteWrite);
+  expect(() => boundedBytes.publish(token, byteAdmission, batch(byteAdmission))).toThrow("quota");
+  expect(snapshot()).toBe(beforeByteWrite); expect(db.query("SELECT id FROM runs WHERE id=?").get(admission.runId)).toBeNull();
 });
 test("growing same-incarnation records correct usage once, while older and replaced snapshots cannot erase it", () => {
   const admission = active("full"), first = transcriptSnapshot([transcriptRecord()]);

@@ -92,7 +92,8 @@ describe("actual silent CLI callback without authority activation", () => {
       expect(result.status).toBe(0); expect(result.stdout.length).toBe(0); expect(result.stderr.length).toBe(0); expect(requests).toBe(0); noAuthoritySideEffects();
     } finally { await new Promise<void>((resolve, reject) => trap.close(error => error ? reject(error) : resolve())); }
   });
-  test("direct executable vectors survive spaces, quotes, dollars and backticks without shell interpretation", async () => {
+  // This fixture launches the POSIX development wrapper through a symlink with a quoted filename.
+  test.skipIf(process.platform === "win32")("direct executable vectors survive spaces, quotes, dollars and backticks without shell interpretation", async () => {
     const executable = path.join(directory, "run phantom ' \" $dollar `backtick`"); symlinkSync(path.join(checkout, "bin/runphantom-dev"), executable);
     const result = await native(hookFixture("Stop"), [], executable);
     expect(result.status).toBe(0); expect(result.stdout.length).toBe(0); expect(result.stderr.length).toBe(0); expect(result.wallMs).toBeLessThan(CALLBACK_LIMITS.lifetimeMs); noAuthoritySideEffects();

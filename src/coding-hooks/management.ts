@@ -36,6 +36,7 @@ export async function acquireRegisteredClaudeTranscript(hook: ClaudeHookInput, a
 export class ClaudeHookManagement {
   constructor(readonly store: CodingHookStore, private readonly transportOrigin: string | null = null) { if (transportOrigin !== null && !validClaudeCapabilityOrigin(transportOrigin)) refuse("malformed", 400); }
   private async directory(): Promise<string> {
+    if (process.platform === "win32") refuse("unavailable", 503);
     if (!path.isAbsolute(this.store.db.filename)) refuse("inactive", 503);
     const profile = await realpath(path.dirname(this.store.db.filename));
     let directory = profile;
@@ -48,6 +49,10 @@ export class ClaudeHookManagement {
   private async binding(value: InstallationBinding): Promise<InstallationBinding> {
     value = validateInstallationBinding(value);
     if (value.installationId !== installationIdForSettings(value.scope, value.settingsPath)) refuse("malformed", 400);
+    if (process.platform === "win32") {
+      if (value.scope === "local" && value.settingsPath !== path.join(value.registeredWorkspace, ".claude/settings.local.json")) refuse("unauthorized", 401);
+      refuse("unavailable", 503);
+    }
     for (const directory of [value.registeredWorkspace, value.transcriptRoot, value.projectDirectory, value.homeDirectory]) {
       const stats = await lstat(directory); if (!stats.isDirectory() || stats.isSymbolicLink() || await realpath(directory) !== directory) refuse("unauthorized", 401);
     }
@@ -120,11 +125,23 @@ export class ClaudeHookManagement {
     const registrations = before.registrations.filter(value => value.registrationId !== registrationId);
     if (registrations.length === before.registrations.length) return { status: "unchanged" as const, captureVerified: false as const };
     if (!registrations.length) return this.uninstall(id);
+    if (process.platform === "win32") { if (!this.store.isOwnerActive()) refuse("inactive", 503); this.store.disableInstallation(id); refuse("unavailable", 503); }
     const primary = registrations.find(value => value.registrationId === registrationForBinding(before.binding).registrationId) ?? registrations[0];
     return this.install({ ...before.binding, registeredWorkspace: primary.registeredWorkspace, transcriptRoot: primary.transcriptRoot, projectDirectory: primary.projectDirectory, homeDirectory: primary.homeDirectory }, { registrations, expectedInstallationGeneration: before.row.generation });
   }
   async uninstall(id: string, input?: InstallationBinding): Promise<{ status: "removed" | "configuration_preserved"; capturePolicy: "disabled"; captureVerified: false }> {
-    if (!isHex(id, 32)) refuse("malformed", 400); const known = input === undefined ? null : await this.binding(input); if (known && known.installationId !== id) refuse("malformed", 400);
+    if (!isHex(id, 32)) refuse("malformed", 400);
+    if (process.platform === "win32") {
+      if (input !== undefined) {
+        const known = validateInstallationBinding(input);
+        if (known.installationId !== id || known.installationId !== installationIdForSettings(known.scope, known.settingsPath)) refuse("malformed", 400);
+        if (known.scope === "local" && known.settingsPath !== path.join(known.registeredWorkspace, ".claude/settings.local.json")) refuse("unauthorized", 401);
+      }
+      // Revoke trusted SQL authority even though uncertain Windows files are preserved.
+      if (this.store.readInstallation(id)) { if (!this.store.isOwnerActive()) refuse("inactive", 503); this.store.disableInstallation(id); }
+      return { status: "configuration_preserved", capturePolicy: "disabled", captureVerified: false };
+    }
+    const known = input === undefined ? null : await this.binding(input); if (known && known.installationId !== id) refuse("malformed", 400);
     const directory = await this.directory(), file = path.join(directory, id + ".json"), ownerKey = capabilityOwnerKey(await realpath(this.store.db.filename));
     return this.lease(directory, id, async () => {
       const before = this.store.readInstallation(id), binding = before?.binding ?? known; if (!binding) return { status: "configuration_preserved", capturePolicy: "disabled", captureVerified: false };
@@ -135,7 +152,16 @@ export class ClaudeHookManagement {
     });
   }
   async doctor(id: string, input?: InstallationBinding) {
-    if (!isHex(id, 32)) refuse("malformed", 400); const known = input === undefined ? null : await this.binding(input); if (known && known.installationId !== id) refuse("malformed", 400);
+    if (!isHex(id, 32)) refuse("malformed", 400);
+    if (process.platform === "win32") {
+      if (input !== undefined) {
+        const known = validateInstallationBinding(input);
+        if (known.installationId !== id || known.installationId !== installationIdForSettings(known.scope, known.settingsPath)) refuse("malformed", 400);
+        if (known.scope === "local" && known.settingsPath !== path.join(known.registeredWorkspace, ".claude/settings.local.json")) refuse("unauthorized", 401);
+      }
+      return { configuration: "unavailable", capability: "unavailable", capturePolicy: "inactive", transport: "unavailable", captureVerified: false, captureCoverage: "inactive", registrationCount: 0 } as const;
+    }
+    const known = input === undefined ? null : await this.binding(input); if (known && known.installationId !== id) refuse("malformed", 400);
     const before = this.store.readInstallation(id), binding = before?.binding ?? known; if (!binding) return { configuration: "missing", capturePolicy: "unavailable", transport: "unavailable", captureVerified: false, captureCoverage: "inactive" } as const;
     const file = path.join(await realpath(path.dirname(this.store.db.filename)), "coding-hooks/claude", id + ".json"), ownerKey = capabilityOwnerKey(await realpath(this.store.db.filename));
     const config = await inspectClaudeHookSettings(binding.settingsPath, { installationId: id, executable: binding.executable, capabilityFile: file });

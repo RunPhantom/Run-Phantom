@@ -1,9 +1,10 @@
 import { beforeEach, afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, symlinkSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { lstat, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { acquireClaudeTranscript, TRANSCRIPT_LIMITS } from "../src/coding-hooks/claude";
+import { acquireClaudeTranscript, TRANSCRIPT_LIMITS, type TranscriptAcquisition } from "../src/coding-hooks/claude";
 import { parseClaudeHookInput, type ClaudeHookInput } from "../src/coding-hooks/shared";
 let directory: string, root: string, file: string;
 const session="11111111-1111-4111-8111-111111111111";
@@ -13,30 +14,47 @@ function hook(path=file,event="Stop",agent?:string):ClaudeHookInput {
   if(r.status!=="accepted")throw new Error("fixture admission failed");return r.value;
 }
 const authority=()=>({projectsRoot:root,homeDirectory:directory,cursor:0,prefixBytes:0,expectedPrefixSha256:null,expectedIncarnationKey:null});
+// Diagnose unexpected native refusals without printing source paths or transcript bytes.
+async function expectAccepted(result: TranscriptAcquisition, candidate = file): Promise<void> {
+  if (result.status === "accepted") { expect(result.status).toBe("accepted"); return; }
+  const facts: Record<string, unknown> = { status: result.status, reason: result.reason };
+  const shape = (parent: string, child: string) => {
+    const value = relative(parent, child), parts = value.split(sep);
+    return { boundary: !value ? "empty" : isAbsolute(value) ? "absolute" : parts[0] === ".." ? "parent" : "inside", segments: parts.length, sessionLeaf: basename(child) === `${session}.jsonl` };
+  };
+  try {
+    const [nativeRoot, nativeCandidate, lexicalRootStat, canonicalRootStat, candidateStat] = await Promise.all([realpath(root), realpath(candidate), lstat(root, { bigint: true }), realpath(root).then(value => lstat(value, { bigint: true })), lstat(candidate, { bigint: true })]);
+    facts.rootSpellingMatches = nativeRoot === root; facts.candidateSpellingMatches = nativeCandidate === candidate;
+    facts.lexical = shape(nativeRoot, resolve(candidate)); facts.canonical = shape(nativeRoot, nativeCandidate);
+    facts.rootIdentityMatches = lexicalRootStat.dev === canonicalRootStat.dev && lexicalRootStat.ino === canonicalRootStat.ino && lexicalRootStat.birthtimeNs === canonicalRootStat.birthtimeNs;
+    facts.candidateIsRegular = candidateStat.isFile(); facts.candidateIdentityAvailable = candidateStat.ino > 0n && candidateStat.birthtimeNs > 0n;
+  } catch { facts.diagnosticIO = "unavailable"; }
+  throw new Error(`Expected accepted transcript acquisition; native refusal facts: ${JSON.stringify(facts)}`);
+}
 beforeEach(()=>{directory=realpathSync(mkdtempSync(join(tmpdir(),"runphantom-f11-transcript-")));root=join(directory,".claude","projects");mkdirSync(join(root,"fixture-project"),{recursive:true});file=join(root,"fixture-project",session+".jsonl");writeFileSync(file,body);});
 afterEach(()=>rmSync(directory,{recursive:true,force:true}));
 describe("trusted descriptor transcript acquisition",()=>{
   test("reads exact immutable source bytes and reports observed descriptor incarnation",async()=>{
-    const r=await acquireClaudeTranscript(hook(),authority());expect(r.status).toBe("accepted");if(r.status!=="accepted")return;
+    const r=await acquireClaudeTranscript(hook(),authority());await expectAccepted(r);if(r.status!=="accepted")return;
     expect(r.value.text).toBe(body);expect(r.value.fileBytes).toBe(Buffer.byteLength(body));expect(r.value.startOffset).toBe(0);expect(r.value.endOffset).toBe(Buffer.byteLength(body));
     expect(r.value.incarnationKey).toMatch(/^[a-f0-9]{64}$/);expect(r.value.prefixSha256).toMatch(/^[a-f0-9]{64}$/);expect(r.value.prefixBytes).toBe(Buffer.byteLength(body));expect(readFileSync(file,"utf8")).toBe(body);
     expect(Object.hasOwn(r.value,"path")).toBe(false);
   });
   test("a frozen prefix length survives ordinary append and reads only after the admitted cursor",async()=>{
-    const first=await acquireClaudeTranscript(hook(),authority());expect(first.status).toBe("accepted");if(first.status!=="accepted")return;
+    const first=await acquireClaudeTranscript(hook(),authority());await expectAccepted(first);if(first.status!=="accepted")return;
     writeFileSync(file,body+body);
     const second=await acquireClaudeTranscript(hook(),{...authority(),cursor:first.value.endOffset,prefixBytes:first.value.prefixBytes,expectedPrefixSha256:first.value.prefixSha256,expectedIncarnationKey:first.value.incarnationKey});
-    expect(second.status).toBe("accepted");if(second.status!=="accepted")return;
+    await expectAccepted(second);if(second.status!=="accepted")return;
     expect(second.value.text).toBe(body);expect(second.value.incarnationKey).toBe(first.value.incarnationKey);expect(second.value.prefixSha256).toBe(first.value.prefixSha256);expect(second.value.endOffset).toBe(Buffer.byteLength(body)*2);
   });
   test("truncation and changed source prefix cannot be treated as a newer snapshot",async()=>{
-    const first=await acquireClaudeTranscript(hook(),authority());expect(first.status).toBe("accepted");if(first.status!=="accepted")return;
+    const first=await acquireClaudeTranscript(hook(),authority());await expectAccepted(first);if(first.status!=="accepted")return;
     const prior={...authority(),cursor:first.value.endOffset,prefixBytes:first.value.prefixBytes,expectedPrefixSha256:first.value.prefixSha256,expectedIncarnationKey:first.value.incarnationKey};
     writeFileSync(file,"{}\n");expect((await acquireClaudeTranscript(hook(),prior)).reason).toBe("source_changed");
     writeFileSync(file,body.replace("business output","private changed"));expect((await acquireClaudeTranscript(hook(),{...prior,cursor:0})).reason).toBe("source_changed");
   });
   test("a replaced inode is refused despite the exact same content and prefix",async()=>{
-    const first=await acquireClaudeTranscript(hook(),authority());expect(first.status).toBe("accepted");if(first.status!=="accepted")return;
+    const first=await acquireClaudeTranscript(hook(),authority());await expectAccepted(first);if(first.status!=="accepted")return;
     rmSync(file);writeFileSync(file,body);
     expect((await acquireClaudeTranscript(hook(),{...authority(),prefixBytes:first.value.prefixBytes,expectedPrefixSha256:first.value.prefixSha256,expectedIncarnationKey:first.value.incarnationKey})).reason).toBe("source_changed");
   });
@@ -70,17 +88,17 @@ describe("trusted descriptor transcript acquisition",()=>{
   });
   test("an exact authorized subagent path preserves the independent descriptor source",async()=>{
     const agent="agent_fixture",sub=join(root,"fixture-project",session,"subagents","agent-"+agent+".jsonl");mkdirSync(join(root,"fixture-project",session,"subagents"),{recursive:true});writeFileSync(sub,body);
-    const r=await acquireClaudeTranscript(hook(sub,"SubagentStop",agent),authority());expect(r.status).toBe("accepted");if(r.status==="accepted")expect(r.value.text).toBe(body);
+    const r=await acquireClaudeTranscript(hook(sub,"SubagentStop",agent),authority());await expectAccepted(r,sub);if(r.status==="accepted")expect(r.value.text).toBe(body);
     expect((await acquireClaudeTranscript(hook(sub,"SubagentStop","different"),authority())).reason).toBe("path_not_authorized");
   });
   test("home shorthand uses only the trusted profile and exact projects root",async()=>{
-    const r=await acquireClaudeTranscript(hook("~/.claude/projects/fixture-project/"+session+".jsonl"),authority());expect(r.status).toBe("accepted");
+    const r=await acquireClaudeTranscript(hook("~/.claude/projects/fixture-project/"+session+".jsonl"),authority());await expectAccepted(r);
     expect((await acquireClaudeTranscript(hook("~/outside/"+session+".jsonl"),authority())).reason).toBe("path_not_authorized");
   });
 });
 
 test("exact 8MiB descriptor snapshot is bounded and accepted without a larger fallback",async()=>{
-  writeFileSync(file,Buffer.alloc(TRANSCRIPT_LIMITS.fileBytes,32));const r=await acquireClaudeTranscript(hook(),authority());expect(r.status).toBe("accepted");if(r.status!=="accepted")return;
+  writeFileSync(file,Buffer.alloc(TRANSCRIPT_LIMITS.fileBytes,32));const r=await acquireClaudeTranscript(hook(),authority());await expectAccepted(r);if(r.status!=="accepted")return;
   expect(r.value.text.length).toBe(TRANSCRIPT_LIMITS.fileBytes);expect(r.value.fileBytes).toBe(TRANSCRIPT_LIMITS.fileBytes);expect(r.value.prefixBytes).toBe(TRANSCRIPT_LIMITS.prefixBytes);
 });
 test("a resumed cursor requires the exact prior incarnation and prefix provenance",async()=>{
@@ -88,15 +106,14 @@ test("a resumed cursor requires the exact prior incarnation and prefix provenanc
   expect((await acquireClaudeTranscript(hook(),{...authority(),prefixBytes:4,expectedPrefixSha256:"a".repeat(64)})).reason).toBe("invalid_authority");
 });
 test("UTF8 byte offsets and business Unicode survive the exact observed snapshot",async()=>{
-  const raw=body.replace("business output","🧪中文 café");writeFileSync(file,raw);const r=await acquireClaudeTranscript(hook(),authority());expect(r.status).toBe("accepted");if(r.status!=="accepted")return;
+  const raw=body.replace("business output","🧪中文 café");writeFileSync(file,raw);const r=await acquireClaudeTranscript(hook(),authority());await expectAccepted(r);if(r.status!=="accepted")return;
   expect(r.value.text).toBe(raw);expect(r.value.endOffset).toBe(Buffer.byteLength(raw));expect(r.value.endOffset).toBeGreaterThan(raw.length);
 });
 test("cancellation during real async acquisition cannot return a publishable snapshot",async()=>{
   const controller=new AbortController();queueMicrotask(()=>controller.abort());const r=await acquireClaudeTranscript(hook(),authority(),controller.signal);expect(r.reason).toBe("aborted");expect(readFileSync(file,"utf8")).toBe(body);
 });
 
-test("an actual FIFO is refused without opening or waiting for a producer",async()=>{
-  if(process.platform==="win32")return;
+test.skipIf(process.platform==="win32")("an actual FIFO is refused without opening or waiting for a producer",async()=>{
   rmSync(file);const made=spawnSync("mkfifo",[file],{stdio:"pipe"});expect(made.status).toBe(0);
   const started=performance.now();expect((await acquireClaudeTranscript(hook(),authority())).reason).toBe("not_regular_file");
   expect(performance.now()-started).toBeLessThan(TRANSCRIPT_LIMITS.acquisitionMs);
