@@ -1,0 +1,22 @@
+import { test, expect, open } from "./fixtures";
+import { writeFileSync } from "node:fs";
+import type { BrowserActionResult, BrowserSummary } from "../../../src/verification/browser-types";
+test("request-lifecycle: initial real capture and reversed identical requests retain identity while concurrent cancel fences authority", async ({ backend, browserName }, info) => {
+  const session = await open(backend, browserName), initial = await backend.observe(session.id);
+  expect(initial.events.some(event => event.type === "console" && String(event.data.message).includes("initial controlled capture"))).toBe(true);
+  expect(initial.events.some(event => event.type === "network.start" && event.data.resourceType === "document")).toBe(true);
+  const duplicate = await backend.api<{ action: BrowserActionResult }>(`/api/verification/browser/sessions/${session.id}/action`, { generation: session.generation, action: { type: "click", target: { kind: "css", selector: "#duplicates" } } });
+  expect(duplicate.body.action).toMatchObject({ dispatch: "completed", inputMode: "trusted-browser" });
+  await expect.poll(async () => (await backend.observe(session.id)).events.filter(event => event.type === "network" && String(event.data.url).includes("/duplicate")).length).toBe(2);
+  const observed = await backend.observe(session.id), starts = observed.events.filter(event => event.type === "network.start" && String(event.data.url).endsWith("/duplicate")), completed = observed.events.filter(event => event.type === "network" && String(event.data.url).endsWith("/duplicate"));
+  expect(starts).toHaveLength(2); expect(new Set(starts.map(event => event.data.requestId)).size).toBe(2); expect(completed.map(event => event.data.status)).toEqual([202, 201]);
+  expect(completed.map(event => event.data.requestId)).toEqual([starts[1].data.requestId, starts[0].data.requestId]); expect(starts.every(event => event.actionId === duplicate.body.action.actionId)).toBe(true);
+  for (const finish of completed) expect(starts.find(start => start.data.requestId === finish.data.requestId)!.t).toBeLessThan(finish.t);
+  const held = backend.api<{ action: BrowserActionResult }>(`/api/verification/browser/sessions/${session.id}/action`, { generation: session.generation, action: { type: "click", target: { kind: "css", selector: "#covered" } } });
+  await expect.poll(async () => (await backend.api<BrowserSummary[]>("/api/verification/browser/sessions")).body.find(item => item.id === session.id)?.state).toBe("busy");
+  const concurrent = await backend.api(`/api/verification/browser/sessions/${session.id}/action`, { generation: session.generation, action: { type: "click", target: { kind: "css", selector: "#pay" } } }); expect(concurrent.status).toBe(409);
+  const closed = await backend.api<{ session: BrowserSummary }>(`/api/verification/browser/sessions/${session.id}/cancel`, { generation: session.generation }); expect(closed.status).toBe(200); expect(closed.body.session.state).toBe("closed");
+  const late = await held; expect(late.body.action).toMatchObject({ dispatch: "unknown", inputMode: "unknown" }); expect(backend.events.filter(event => ["covered", "click"].includes(event.type))).toEqual([]);
+  const stale = await backend.api(`/api/verification/browser/sessions/${session.id}/action`, { generation: session.generation, action: { type: "click", target: { kind: "css", selector: "#pay" } } }); expect(stale.status).toBe(409);
+  backend.sample(); writeFileSync(info.outputPath("actual-requests-cancel.json"), JSON.stringify({ initial, starts, completed, concurrent, closed, late, stale }, null, 2));
+});
