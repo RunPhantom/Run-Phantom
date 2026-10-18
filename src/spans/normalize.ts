@@ -33,9 +33,11 @@ import { genAiMetadataAdapter, genAiToolAdapter } from "./adapters/gen-ai";
 
 import { parseBoundedHookJson } from "../coding-hooks/shared";
 import { claudeHookAdapter } from "./adapters/claude-hook";
+import { codexHookAdapter } from "./adapters/codex-hook";
 
 const ADAPTERS: SpanAdapter[] = [
   claudeHookAdapter,
+  codexHookAdapter,
   aiSdkLlmAdapter,
   livekitLlmAdapter,
   traceloopLlmAdapter,

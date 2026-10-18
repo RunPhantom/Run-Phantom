@@ -1,4 +1,4 @@
-import type { ClaudeHookCaptureView } from "../../../src/spans/adapters/claude-hook";
+import type { HookCaptureView } from "../../../src/spans/normalized";
 
 export interface Run {
   id: string;
@@ -67,7 +67,7 @@ export interface NormalizedMessage {
 }
 
 export interface NormalizedLLMSpan {
-  capture?: ClaudeHookCaptureView;
+  capture?: HookCaptureView;
   kind: "llm";
   messages: NormalizedMessage[];
   userMessage: string;
@@ -77,7 +77,7 @@ export interface NormalizedLLMSpan {
 }
 
 export interface NormalizedToolSpan {
-  capture?: ClaudeHookCaptureView;
+  capture?: HookCaptureView;
   kind: "tool";
   name: string;
   args: unknown;
@@ -86,7 +86,7 @@ export interface NormalizedToolSpan {
 }
 
 export interface NormalizedOtherSpan {
-  capture?: ClaudeHookCaptureView;
+  capture?: HookCaptureView;
   kind: "other";
 }
 

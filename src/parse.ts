@@ -345,10 +345,10 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
             s.parentSpanId ??
             undefined,
           name, spanType,
-          status: status(s.status?.code),
+          status: match.normalized.capture?.contract === "runphantom.codex-hook.observation/v1" ? "UNSET" : status(s.status?.code),
           inputPayload: stripNul(inputPayload), outputPayload: stripNul(outputPayload),
           startTimeMs: startMs, endTimeMs: endMs,
-          durationMs: numericAttr(getAttr(attrs, "traceloop.entity.duration_ms")) ?? (endMs - startMs),
+          durationMs: match.normalized.capture?.contract === "runphantom.codex-hook.observation/v1" ? 0 : numericAttr(getAttr(attrs, "traceloop.entity.duration_ms")) ?? (endMs - startMs),
           model, provider,
           inputTokens: typeof inputTokens === "number" ? inputTokens : undefined,
           outputTokens: typeof outputTokens === "number" ? outputTokens : undefined,
