@@ -31,7 +31,7 @@ export function safeAcpFixtureProbe(status: number, body: Record<string, unknown
   return { status, available: body.available === true, reason: typeof body.reason === "string" && reasons.has(body.reason) ? body.reason : body.reason === undefined ? null : "unknown", protocolPresent: typeof body.protocolVersion === "number", versionPresent: typeof body.version === "string" };
 }
 /** Fixed-size private diagnostics: no provider stderr, arguments, paths or credentials. */
-export function recordAcpFixtureStage(profile: string, stage: AcpFixtureStage, probe?: AcpFixtureProbe): void {
+export function recordAcpFixtureStage(profile: string, stage: AcpFixtureStage, probe?: AcpFixtureProbe): string | undefined {
   try {
     let births: { event: string; pid: number }[] = [], receiptAvailable = false;
     const file = path.join(profile, "native-pids.jsonl");
@@ -43,6 +43,6 @@ export function recordAcpFixtureStage(profile: string, stage: AcpFixtureStage, p
       }
     } catch { /* Absence is recorded, never confused with an observed birth. */ }
     const value = { stage, pid: process.pid, privateHome: realpathSync(homedir()) === realpathSync(profile), userProfile: process.env.USERPROFILE === profile, receiptAvailable, nativeBirthCount: births.filter(v => v.event === "birth").length, observations: births.slice(0, 16), truncated: births.length > 16, probe: probe ?? null };
-    const text = JSON.stringify(value); if (Buffer.byteLength(text) <= 4096) writeFileSync(path.join(profile, "launch-diagnostic.json"), text + "\n");
+    const text = JSON.stringify(value); if (Buffer.byteLength(text) <= 4096) { writeFileSync(path.join(profile, "launch-diagnostic.json"), text + "\n"); return text; }
   } catch { /* Diagnostic failure must not replace a business assertion or cleanup error. */ }
 }

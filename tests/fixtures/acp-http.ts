@@ -107,7 +107,8 @@ try {
  recordAcpFixtureStage(profile,"http-complete",availabilityProof);
  console.log(JSON.stringify({checks,passed:checks.length,paidRequests:0,controlledProvider:true,actualInstalledProviderChat:false,nativeBirths:births().filter(entry=>entry.event==="birth").length}));
 } catch(error) {
- recordAcpFixtureStage(profile,"http-failed",availabilityProof);throw error;
+ const diagnostic=recordAcpFixtureStage(profile,"http-failed",availabilityProof);
+ console.error("F38_ACP_FIXTURE_FAILURE "+(diagnostic??JSON.stringify({stage:"http-failed",diagnostic:"unavailable",pid:process.pid})));throw error;
 } finally {
  ws.terminate();await close().catch(()=>{});closeDb();
 }

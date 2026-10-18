@@ -41,3 +41,18 @@ test("one private native launcher initializes both controlled ACP fixtures with 
   }
  }finally{rmSync(profile,{recursive:true,force:true});}
 },5_000);
+
+test("failed native launcher retains a bounded safe stage in default child stderr before cleanup",async()=>{
+ const profile=mkdtempSync(path.join(realpathSync(tmpdir()),"runphantom-acp-launch-failure-"));
+ const env:Record<string,string>={HOME:profile,USERPROFILE:profile,TMPDIR:profile,TMP:profile,TEMP:profile,RUNPHANTOM_ACP_HTTP_PROFILE:profile,RUNPHANTOM_DB_PATH:path.join(profile,"traces.db"),RUNPHANTOM_SECRET_STORE_PATH:path.join(profile,"secrets.json"),RUNPHANTOM_ACP_FIXTURE_BIN:path.join(profile,"missing native fixture.exe")};
+ for(const key of["PATH","LANG","LC_ALL"])if(process.env[key])env[key]=process.env[key]!;
+ expect(Object.hasOwn(env,"RUNPHANTOM_ACP_TEST_EVIDENCE_DIR")).toBe(false);expect(existsSync(env.RUNPHANTOM_ACP_FIXTURE_BIN!)).toBe(false);
+ const child=Bun.spawn([process.execPath,"--no-env-file",path.join(import.meta.dir,"fixtures","acp-http.ts")],{cwd:profile,env,stdout:"ignore",stderr:"pipe"});const errorText=new Response(child.stderr).text();
+ try{
+  expect(await child.exited).not.toBe(0);const stderr=await errorText;
+  const line=stderr.split("\n").find(value=>value.startsWith("F38_ACP_FIXTURE_FAILURE "));expect(line).toBeDefined();
+  const raw=line!.slice("F38_ACP_FIXTURE_FAILURE ".length);expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(4096);expect(raw).not.toContain(profile);
+  expect(JSON.parse(raw)).toMatchObject({stage:"http-failed",pid:child.pid,privateHome:true,userProfile:true,receiptAvailable:false,nativeBirthCount:0,observations:[],probe:{status:200,available:false,reason:"unavailable",protocolPresent:false,versionPresent:false}});
+  expect(()=>process.kill(child.pid,0)).toThrow();
+ }finally{child.kill();await child.exited;rmSync(profile,{recursive:true,force:true});}
+},15_000);
