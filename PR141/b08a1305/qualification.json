@@ -1,0 +1,49 @@
+{
+  "pr": 141,
+  "source": "b08a1305ffe2efee2a14e6e47b001032798d00ca",
+  "feature": "F40",
+  "state": "OPEN DRAFT; no merge authorized",
+  "actual_native_journey": {
+    "runs": 1,
+    "stages_passed": 8,
+    "retries": 0,
+    "presentation_sleeps": 0,
+    "displayed_counter_transition": "0 to1; actual images independently viewed",
+    "native_binary_sha256": "42bf6180ac30ebb9942a06e27c2541e3cfca8d7b1a2d3fc354e2fcf865cfbfa8",
+    "known_owned_group_empty": true,
+    "private_profile_removed": true,
+    "WebKit_XPC_ownership": "UNKNOWN"
+  },
+  "qualification": {
+    "component_cases": 48,
+    "component_assertions": 154,
+    "component_qualified_source": "4a0682e6ee359c73f6d0b5628eb05249a79a7ff5",
+    "unchanged_component_byte_bridge": true,
+    "actual_SDK_fixture_cases": 19,
+    "actual_render_controls": 15,
+    "offline_native_build": "PASS"
+  },
+  "open_gates": [
+    "Central daemon/worker/Team/product UI registry integration",
+    "Other native platforms",
+    "Installed/copied/signed distribution",
+    "Native stdin is serial; response timeout does not preempt an entered OS job",
+    "WebKit/XPC ownership remains UNKNOWN"
+  ],
+  "screenshots": [
+    {
+      "file": "tauri-native-counter-zero.png",
+      "sha256": "ffe0e8e6c6aca0b3de0eefe8bafed2dd954ed606bedb40f4201eee82127791e7",
+      "bytes": 80749,
+      "platform": "Darwin arm64",
+      "profile": "Actual native1280x800 owned-window capture; displayed counter0"
+    },
+    {
+      "file": "tauri-native-counter-one.png",
+      "sha256": "b9accb169f18e4d23f6adb6a467c210b2cf11e2aa1ebab081c274a87eb439eb4",
+      "bytes": 78135,
+      "platform": "Darwin arm64",
+      "profile": "Actual native1280x800 owned-window capture; displayed counter1"
+    }
+  ]
+}
