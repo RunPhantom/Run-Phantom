@@ -88,7 +88,8 @@ test.describe("actual touch definition navigation", () => {
       const geometry = () => {
         const box = element.getBoundingClientRect(), link = source.getBoundingClientRect();
         const x = (Math.max(0, box.left) + Math.min(innerWidth, box.right)) / 2, startY = Math.min(innerHeight, box.bottom) - 24;
-        const distance = Math.min(1000 / 3, startY - Math.max(0, box.top) - 24), cx = link.x + link.width / 2, cy = link.y + link.height / 2;
+        // Chromium extends touch motion by native slop; reserve extra interior space.
+        const distance = Math.min(1000 / 3, startY - Math.max(0, box.top) - 48), cx = link.x + link.width / 2, cy = link.y + link.height / 2;
         return { x, startY, distance, scrollTop: element.scrollTop, maximum: element.scrollHeight - element.clientHeight,
           startInside: element.contains(document.elementFromPoint(x, startY)), endInside: element.contains(document.elementFromPoint(x, startY - distance)),
           linkUsable: link.height > 0 && cx >= Math.max(0, box.left) && cx < Math.min(innerWidth, box.right)
@@ -97,7 +98,7 @@ test.describe("actual touch definition navigation", () => {
       type Input = { sequence: number; at: number; type: string; trusted: boolean; defaultPrevented: boolean; x: number | null; y: number | null;
         inside: boolean; targetInsideAnchor: boolean; hitInsideAnchor: boolean; userActivation: { isActive: boolean; hasBeenActive: boolean } };
       type Scroll = { sequence: number; at: number; type: string; trusted: boolean; scrollTop: number };
-      type Contact = { generation: number; armedAt: number; geometry: ReturnType<typeof geometry>; touch: Input[]; scroll: Scroll[]; releaseAcknowledgedAt: number | null };
+      type Contact = { generation: number; armedAt: number; geometry: ReturnType<typeof geometry>; touch: Input[]; scroll: Scroll[]; gestureAcknowledgedAt: number | null };
       const contacts: Contact[] = [], activation: Input[] = [], activationScroll: Scroll[] = [], unassignedScroll: Scroll[] = [];
       let sequence = 0, activationArmedAt: number | null = null, activationGeometry: ReturnType<typeof geometry> | null = null;
       const types = ["touchstart", "touchmove", "touchend", "touchcancel", "pointerdown", "pointerup", "pointercancel", "click"] as const;
@@ -121,15 +122,21 @@ test.describe("actual touch definition navigation", () => {
       for (const type of types) window.addEventListener(type, input, { passive: true });
       element.addEventListener("scroll", scroll, { passive: true }); element.addEventListener("scrollend", scroll, { passive: true });
       return { geometry,
-        begin: () => { const contact: Contact = { generation: contacts.length + 1, armedAt: performance.now(), geometry: geometry(), touch: [], scroll: [], releaseAcknowledgedAt: null }; contacts.push(contact); return contact.geometry; },
-        released: () => { contacts.at(-1)!.releaseAcknowledgedAt = performance.now(); },
+        begin: () => { const contact: Contact = { generation: contacts.length + 1, armedAt: performance.now(), geometry: geometry(), touch: [], scroll: [], gestureAcknowledgedAt: null }; contacts.push(contact); return { generation: contact.generation, ...contact.geometry }; },
+        acknowledged: (generation: number) => {
+          const contact = contacts.at(-1);
+          if (!contact || contact.generation !== generation || contact.gestureAcknowledgedAt !== null) throw new Error("Unexpected native gesture acknowledgment");
+          contact.gestureAcknowledgedAt = performance.now();
+        },
         completed: () => {
-          const contact = contacts.at(-1), start = contact?.touch.find(event => event.type === "touchstart");
-          const terminal = contact?.touch.find(event => event.type === "touchend" || event.type === "touchcancel");
-          if (!contact || contact.releaseAcknowledgedAt === null || !start || !terminal || terminal.sequence <= start.sequence) return false;
-          // Native completion may precede CDP's release acknowledgment.
+          const contact = contacts.at(-1), start = contact?.touch[0], terminal = contact?.touch.at(-1);
+          if (!contact || contact.gestureAcknowledgedAt === null || !start || start.type !== "touchstart" || !terminal
+            || (terminal.type !== "touchend" && terminal.type !== "touchcancel") || terminal.sequence <= start.sequence) return false;
+          // A whole-gesture acknowledgment still requires actual native contact and pane progress.
+          const moves = contact.touch.slice(1, -1);
           const update = contact.scroll.filter(event => event.type === "scroll" && event.trusted && event.sequence > start.sequence).at(-1);
-          return !!update && contact.scroll.some(event => event.type === "scrollend" && event.trusted && event.sequence > update.sequence && event.sequence > terminal.sequence);
+          return moves.length > 0 && moves.every(event => event.type === "touchmove") && contact.touch.every(event => event.trusted && event.inside && !event.defaultPrevented)
+            && !!update && element.scrollTop > contact.geometry.scrollTop;
         },
         current: () => ({ contact: contacts.at(-1)!, scrollTop: element.scrollTop }),
         activate: () => { activationGeometry = geometry(); activationArmedAt = performance.now(); return activationGeometry; },
@@ -151,11 +158,9 @@ test.describe("actual touch definition navigation", () => {
         const gesture = await observation.evaluate(value => value.begin());
         expect(gesture.linkUsable).toBe(false); expect(gesture.maximum).toBeGreaterThan(gesture.scrollTop);
         expect(gesture.distance).toBeGreaterThan(0); expect(gesture.startInside).toBe(true); expect(gesture.endInside).toBe(true);
-        await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: gesture.x, y: gesture.startY, id: 0 }] });
-        for (let step = 1; step <= 12; step++) await touch.send("Input.dispatchTouchEvent", { type: "touchMove",
-          touchPoints: [{ x: gesture.x, y: gesture.startY - gesture.distance * step / 12, id: 0 }] });
-        await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-        await observation.evaluate(value => value.released());
+        await touch.send("Input.synthesizeScrollGesture", { x: gesture.x, y: gesture.startY, yDistance: -gesture.distance,
+          gestureSourceType: "touch", preventFling: true, speed: 800, repeatCount: 0 });
+        await observation.evaluate((value, generation) => value.acknowledged(generation), gesture.generation);
         await expect.poll(() => observation.evaluate(value => value.completed()), { message: "Current native comparison pan must complete" }).toBe(true);
         const completed = await observation.evaluate(value => value.current()), delivered = completed.contact.touch;
         expect(delivered.filter(event => event.type === "touchstart")).toHaveLength(1); expect(delivered.filter(event => event.type === "touchmove").length).toBeGreaterThan(0);
