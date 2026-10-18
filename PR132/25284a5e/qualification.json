@@ -1,0 +1,37 @@
+{
+  "pr": 132,
+  "source": "25284a5e1508343b81437848b306450d49a29bc7",
+  "feature": "F49",
+  "state": "OPEN DRAFT; no merge authorized",
+  "scope": "One actual targeted Mac coarse-pointer definition-pane regression; staticpost-pan screenshot. FullF49 andWindowsqualification not established.",
+  "actual_case": {
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0,
+    "retries": 0,
+    "pan_offsets": [
+      408,
+      740,
+      1041
+    ],
+    "retained_event_receipts": true,
+    "trace_retained": false,
+    "forced_outer_cleanup": false,
+    "secondary_faults": false,
+    "owned_closure_confirmed": true
+  },
+  "open_gates": [
+    "Fresh nativeWindows CI",
+    "Separate native capture-visibility case",
+    "FullF49/assembled/provider qualification"
+  ],
+  "screenshots": [
+    {
+      "file": "definition-touch-post-pan.png",
+      "sha256": "0cf62f7c481b5dbffba17f62ea6660a829de4232f6d8fa1038b5138557d9e7e0",
+      "bytes": 54475,
+      "platform": "Darwin arm64",
+      "profile": "Actual390x844 post-pan definition pane; temporal gesture and IO are separately asserted"
+    }
+  ]
+}
