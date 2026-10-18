@@ -17,6 +17,7 @@ import {
   insertSpan,
   getRuns,
   getDrizzleDb,
+  closeDb,
   getRunWithSpans,
   SpanSearchLimitError,
   getRunsByConvoId,
@@ -51,6 +52,13 @@ import {
   queryTracesBounded,
 } from "./db";
 import { sliceSpanPayload } from "./payload-slice";
+import { startCodingHookOwner } from "./coding-hooks/owner";
+import { CodingHookController } from "./coding-hooks/service";
+import { ClaudeHookManagement } from "./coding-hooks/management";
+import { executeHookManagement, parseHookManagementCommand } from "./coding-hooks/configuration";
+import { parseBoundedHookJson } from "./coding-hooks/shared";
+import { HookRefusal } from "./coding-hooks/protocol";
+import { capabilityOwnerKey } from "./coding-hooks/capability";
 import { exportTrace, importTrace, InvalidTraceImportError } from "./trace-export";
 import { detectSubAgents } from "./agents";
 import { detectProvider, getProviderBaseURL, getProviderHeaders, isSupportedProvider } from "./provider-options";
@@ -382,6 +390,8 @@ function demoChatHtml(): string {
       --border: #9C8870;
       --accent: #B83C24;
       --mark-accent: #C7462D;
+      --mark-shield: #EEE7DE;
+      --mark-shield-edge: #D8D0C7;
       --accent-strong: #9F301D;
       --focus: #9F301D;
       --info: #275EA8;
@@ -416,19 +426,10 @@ function demoChatHtml(): string {
     header { padding: 24px 24px 18px; border-bottom: 1px solid var(--border); }
     .brand { display: flex; gap: 16px; align-items: flex-start; }
     .mark {
-      position: relative;
       flex: 0 0 auto;
       width: 52px;
       height: 52px;
-      border-radius: 16px;
-      border: 1px solid var(--border);
-      background: var(--canvas);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.86);
-      padding: 8px;
-      color: var(--ink);
     }
-    .mark path { stroke: currentColor; }
-    .mark circle { fill: var(--mark-accent); }
     .eyebrow {
       margin: 1px 0 7px;
       color: var(--muted);
@@ -567,7 +568,7 @@ function demoChatHtml(): string {
       .shell { height: min(760px, calc(100svh - 24px)); border-radius: 22px; }
       header { padding: 20px 18px 16px; }
       .brand { gap: 12px; }
-      .mark { width: 46px; height: 46px; border-radius: 14px; }
+      .mark { width: 46px; height: 46px; }
       main { padding: 14px; }
       form { padding: 12px; }
       .actions { flex-direction: column; align-items: stretch; }
@@ -583,10 +584,14 @@ function demoChatHtml(): string {
   <div class="shell">
     <header>
       <div class="brand">
-        <svg class="mark" viewBox="0 0 64 64" fill="none" role="img" aria-label="Run Phantom">
-          <path d="M12 26V12H26M38 52H52V38" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"></path>
-          <path d="M12 42C20 42 20 22 30 22C40 22 39 42 52 42" stroke-width="4.5" stroke-linecap="round"></path>
-          <circle cx="30" cy="22" r="5"></circle>
+        <svg class="mark" viewBox="0 0 32 32" fill="none" role="img" aria-label="Run Phantom">
+          <path d="M15.05 1.95Q16 1.6 16.95 1.95L26.75 6.2Q27.85 6.65 27.85 7.85V19.2Q27.85 22.6 17.1 29.9Q16 30.6 14.9 29.9Q4.15 22.6 4.15 19.2V7.85Q4.15 6.65 5.25 6.2Z" fill="var(--mark-shield)" stroke="var(--mark-shield-edge)" stroke-width="0.5" stroke-linejoin="round"></path>
+          <path d="M10.42 19.66A6.9 6.9 0 0 1 20.96 10.81" stroke="var(--mark-accent)" stroke-width="2.6" stroke-linecap="round"></path>
+          <path d="M22.87 8.97L22.8 14.4L19.06 12.65Z" fill="var(--mark-accent)" stroke="var(--mark-accent)" stroke-width="0.6" stroke-linejoin="round"></path>
+          <rect x="12.1" y="20.75" width="2.4" height="2.4" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.8"></rect>
+          <rect x="15.62" y="21.36" width="2.2" height="2.2" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.62"></rect>
+          <rect x="18.96" y="20.25" width="2" height="2" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.46"></rect>
+          <rect x="21.3" y="17.72" width="1.8" height="1.8" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.34"></rect>
         </svg>
         <div>
           <p class="eyebrow">Run Phantom demo</p>
@@ -700,6 +705,11 @@ function demoChatHtml(): string {
 export async function createServer(port: number, options: { comparisons?: ComparisonRuntimeOptions } = {}) {
   const app = express();
   const server = http.createServer(app);
+  const hookOwner = await startCodingHookOwner(getDrizzleDb().$client, undefined, { contextTransport: true });
+  let hookController: CodingHookController;
+  let clearingHooks = false;
+  const hookManagementWork = new Set<Promise<void>>();
+  try {
 
   const currentServerPort = (): number | null => {
     const address = server.address();
@@ -759,6 +769,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
     const msg = JSON.stringify({ event, data });
     for (const ws of clients) { if (ws.readyState === WebSocket.OPEN) ws.send(msg); }
   }
+  hookController = new CodingHookController(hookOwner.store, runId => broadcast("spans", { runIds: [runId] }));
 
   const verification = createVerificationService({ broadcast, allowedSourceIps, allowedHosts });
   const evaluations = createEvaluationService();
@@ -1015,6 +1026,25 @@ export async function createServer(port: number, options: { comparisons?: Compar
 
   // Keep the bounded review parser behind local access guards and ahead of the global JSON parser.
   app.use("/api/review-queues", createReviewQueueRouter());
+  app.post(["/api/coding-hooks/claude/admission", "/api/coding-hooks/claude/publication", "/api/coding-hooks/claude/transport"], (req, res) => { void hookController.handle(req, res); });
+  app.post("/api/coding-hooks/claude/manage", express.raw({ type: "application/json", limit: 16384 }), (req, res) => {
+    if (clearingHooks || !hookOwner.store.isOwnerActive() || hookManagementWork.size >= 2) { res.status(503).json({ status: "unavailable", reason: "unavailable" }); return; }
+    const work = (async () => {
+      try {
+        if (req.headers["x-runphantom-hook-owner"] !== capabilityOwnerKey(hookOwner.store.db.filename)) throw new HookRefusal("unauthorized", 403);
+        if (!Buffer.isBuffer(req.body)) throw new HookRefusal("malformed", 400);
+        const parsed = parseBoundedHookJson(new TextDecoder("utf-8", { fatal: true }).decode(req.body), 16384);
+        if (parsed.status !== "accepted") throw new HookRefusal("malformed", 400);
+        const currentPort = currentServerPort(); if (!currentPort) throw new HookRefusal("inactive", 503);
+        const manager = new ClaudeHookManagement(hookOwner.store, `http://127.0.0.1:${currentPort}`, true);
+        if (parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value) && parsed.value.action === "activate-context-v2") {
+          // The trusted owner action is distinct from hook bodies and never promotes capture policy.
+          res.json(await manager.transitionContextV2(new TextDecoder("utf-8", { fatal: true }).decode(req.body), hookController));
+        } else res.json(await executeHookManagement(manager, parseHookManagementCommand(parsed.value)));
+      } catch (error) { res.status(error instanceof HookRefusal ? error.status : 503).json({ status: "unavailable", reason: error instanceof HookRefusal ? error.reason : "unavailable" }); }
+    })();
+    hookManagementWork.add(work); void work.finally(() => hookManagementWork.delete(work));
+  });
 
   app.use(["/api/verification", "/api/evaluations"], (req, res, next) => {
     const hasBody = req.headers["transfer-encoding"] !== undefined || Number(req.headers["content-length"] ?? 0) > 0;
@@ -1071,14 +1101,19 @@ export async function createServer(port: number, options: { comparisons?: Compar
   const nativeClose = server.close.bind(server);
   let closePromise: Promise<void> | undefined;
   server.close = ((callback?: (error?: Error) => void) => {
-    closePromise ??= Promise.all([evidenceImports.shutdown(), comparisons?.close()]).then(() => {
+    if (!closePromise) {
+      // Revoke current in-flight calls synchronously, before any shutdown await.
+      let revocationError: Error | undefined;
+      try { hookOwner.store.rotateOwner(); } catch (error) { revocationError = error instanceof Error ? error : new Error("Hook revocation unavailable"); } finally { hookOwner.revoke(); }
+      closePromise = Promise.all([hookController.close(), evidenceImports.shutdown(), comparisons?.close(), ...hookManagementWork]).then(() => {
       closeServices();
       return new Promise<void>((resolve, reject) => {
-        nativeClose(error => { if (error) reject(error); else resolve(); });
+        nativeClose(error => { if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") reject(error); else resolve(); });
         // Register close completion before terminating sockets; Bun's force-close also stops its listener.
         server.closeAllConnections();
       });
-    });
+      }).finally(async () => { closeDb(); await hookOwner.close(); }).then(() => { if (revocationError) throw revocationError; });
+    }
     if (callback) void closePromise.then(() => callback(), error => callback(error));
     else void closePromise.catch(() => {});
     return server;
@@ -1688,10 +1723,13 @@ export async function createServer(port: number, options: { comparisons?: Compar
     res.json(tailLiveEvents(req.params.id, opts));
   });
   app.post("/api/clear", (_req, res) => {
-    void evidenceImports.clear(evidenceOwner).then(() => {
+    hookOwner.store.rotateOwner();
+    clearingHooks = true;
+    const draining = hookController.close();
+    void Promise.all([draining, evidenceImports.clear(evidenceOwner), ...hookManagementWork]).then(() => {
       evaluations.reset();
       for (const id of verification.bridge.sessions.keys()) verification.bridge.remove(id);
-      clearAll(); broadcast("clear", {}); res.json({ ok: true });
+      clearAll(); hookController = new CodingHookController(hookOwner.store, runId => broadcast("spans", { runIds: [runId] })); clearingHooks = false; broadcast("clear", {}); res.json({ ok: true });
     }).catch(() => res.status(500).json({ error: "Workspace clear failed" }));
   });
 
@@ -2841,10 +2879,12 @@ export async function createServer(port: number, options: { comparisons?: Compar
   return {
     app,
     server,
+    codingHooks: { store: hookOwner.store, get controller() { return hookController; }, management: () => new ClaudeHookManagement(hookOwner.store, server.listening && currentServerPort() ? `http://127.0.0.1:${currentServerPort()}` : null, server.listening) },
     get port() {
       return currentServerPort() ?? port;
     },
   };
+  } catch (error) { closeDb(); await hookOwner.close(); throw error; }
 }
 
 export const _serverInternal = { createReplayAbortLifecycle, extractAgentAskContinuation };

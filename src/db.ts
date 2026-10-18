@@ -80,8 +80,11 @@ export function getDrizzleDb(): RunPhantomDb {
   if (_drizzleDb) return _drizzleDb;
   const dbPath = resolveDbPath();
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  _dbPath = dbPath;
-  _sqliteDb = new Database(dbPath, { create: true });
+  // Trusted startup resolves the real parent once so OS aliases such as /var
+  // cannot create a second lifetime-lease identity for the same owner file.
+  const actualDbPath = path.join(fs.realpathSync(path.dirname(dbPath)), path.basename(dbPath));
+  _dbPath = actualDbPath;
+  _sqliteDb = new Database(actualDbPath, { create: true });
   _drizzleDb = drizzle(_sqliteDb, { schema });
   try {
     _sqliteDb.exec("PRAGMA busy_timeout = 1000");
@@ -196,7 +199,8 @@ function tokenizeSql(sql: string): SqlToken[] {
   const tokens: SqlToken[] = [];
   for (let index = 0; index < sql.length;) {
     const char = sql[index];
-    if (/[ \t\n\r\f]/.test(char)) {
+    // SQLite treats a BOM as whitespace at token start, but retains it inside identifiers.
+    if (/[ \t\n\r\f\uFEFF]/.test(char)) {
       index++;
       continue;
     }
@@ -363,10 +367,15 @@ function maskSqlLiterals(sql: string): string {
 }
 
 function assertReadOnlyTraceQuery(sql: string): string {
-  const trimmed = stripSqlComments(sql).trim();
+  // JavaScript trim() also removes characters that SQLite retains in identifiers.
+  const trimmed = stripSqlComments(sql)
+    .replace(/^[ \t\n\r\f\uFEFF]+/, "")
+    .replace(/[ \t\n\r\f]+$/, "");
   if (!trimmed) throw new Error("sql required");
 
-  const withoutTrailingSemicolon = trimmed.replace(/;\s*$/, "").trim();
+  const withoutTrailingSemicolon = trimmed
+    .replace(/;[ \t\n\r\f\uFEFF]*$/, "")
+    .replace(/[ \t\n\r\f]+$/, "");
   // Mask literals for keyword/separator checks; token-based name checks below
   // retain quoted function and table identifiers.
   const code = maskSqlLiterals(withoutTrailingSemicolon);
@@ -1023,6 +1032,8 @@ export function getRunsByConvoId(convoId: string) {
 
 export function clearAll() {
   getDrizzleDb().transaction((tx) => {
+    // Keep source epochs and suppression tombstones while fencing every old callback.
+    tx.update(schema.coding_hook_owner).set({ generation: drizzleSql`lower(hex(randomblob(16)))`, updated_at: Date.now() }).where(eq(schema.coding_hook_owner.id, 1)).run();
     tx.delete(schema.review_queues).run();
     tx.delete(schema.evaluation_reviews).run();
     tx.delete(schema.evaluation_experiments).run();

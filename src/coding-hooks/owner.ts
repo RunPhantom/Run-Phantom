@@ -70,10 +70,11 @@ export async function acquireCodingHookOwner(databasePath: string, signal?: Abor
 }
 
 /** The migrated owner connection is supplied by trusted startup, never selected by callback input. */
-export async function startCodingHookOwner(db: Database, signal?: AbortSignal): Promise<{ store: CodingHookStore; lease: CodingHookOwnerLease; close(): Promise<void> }> {
+export async function startCodingHookOwner(db: Database, signal?: AbortSignal, options: { contextTransport: boolean } = { contextTransport: false }): Promise<{ store: CodingHookStore; lease: CodingHookOwnerLease; revoke(): void; close(): Promise<void> }> {
   const lease = await acquireCodingHookOwner(db.filename, signal);
   try {
-    const store = new CodingHookStore(db, {}, () => lease.isActive()); store.beginOwner();
-    return Object.freeze({ store, lease, close: () => lease.release() });
+    let active = true;
+    const store = new CodingHookStore(db, {}, () => active && lease.isActive(), options); store.beginOwner();
+    return Object.freeze({ store, lease, revoke: () => { active = false; }, close: () => { active = false; return lease.release(); } });
   } catch (error) { await lease.release(); throw error; }
 }

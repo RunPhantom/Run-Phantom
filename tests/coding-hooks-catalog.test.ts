@@ -54,7 +54,7 @@ test("exact catalog reinstall is idempotent and conflicting workspace/project ma
 test("same actual project global metadata/local full shares once-only usage without sharing capture policy", async () => {
   await install(binding, registrations); const globalToken = await token(), global = admit(globalToken, registrations[0]), first = registrations[0], settingsPath = path.join(first.registeredWorkspace, ".claude/settings.local.json"), local = { ...binding, installationId: installationIdForSettings("local", settingsPath), scope: "local" as const, captureMode: "full" as const, workspace: first.registeredWorkspace, settingsPath };
   await install(local, [first]); const fullToken = await token(local.installationId), full = admit(fullToken, first); expect(full.sourceKey).toBe(global.sourceKey);
-  store.publish(fullToken, full, batch(full)); store.publish(globalToken, global, batch(global)); expect(store.db.query("SELECT input_tokens,output_tokens FROM spans WHERE run_id=? AND span_type='llm'").all(full.runId)).toEqual([{ input_tokens: 10, output_tokens: 4 }]);
+  store.publish(fullToken, full, batch(full)); store.publish(globalToken, global, batch(global)); expect(store.db.query("SELECT input_tokens,output_tokens FROM spans WHERE run_id=? AND span_type='LLM_GENERATION'").all(full.runId)).toEqual([{ input_tokens: 10, output_tokens: 4 }]);
   const other = admit(globalToken, registrations[1]); store.publish(globalToken, other, batch(other)); expect(JSON.stringify(store.db.query("SELECT * FROM spans WHERE run_id=?").all(other.runId))).not.toContain("safe exact business result"); expect(() => store.publish(fullToken, other, batch(other))).toThrow();
 });
 
@@ -128,5 +128,5 @@ test("both actual registered workspace descriptors admit their own source bytes 
     const normalized = normalizeClaudeHook(rawHook, { sourceKey: admission.sourceKey, captureMode: admission.captureMode }, snapshot.value); if (normalized.status !== "accepted") throw new Error("fixture normalization");
     expect(JSON.stringify(normalized.value)).not.toContain("safe exact business result"); expect(store.publish(capability, admission, normalized.value).status).toBe("accepted");
   }
-  expect(store.db.query("SELECT id FROM runs").all()).toHaveLength(2); expect(store.db.query("SELECT input_tokens,output_tokens FROM spans WHERE span_type='llm'").all()).toEqual([{ input_tokens: 10, output_tokens: 4 }, { input_tokens: 10, output_tokens: 4 }]);
+  expect(store.db.query("SELECT id FROM runs").all()).toHaveLength(2); expect(store.db.query("SELECT input_tokens,output_tokens FROM spans WHERE span_type='LLM_GENERATION'").all()).toEqual([{ input_tokens: 10, output_tokens: 4 }, { input_tokens: 10, output_tokens: 4 }]);
 });

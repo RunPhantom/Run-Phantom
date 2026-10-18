@@ -188,5 +188,6 @@ export function fmtCost(cost: number): string {
   return "$" + cost.toFixed(2);
 }
 
+// Four significant digits absorb float noise while preserving sub-cent rates.
 const rateFormat = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 4 });
 export function fmtRate(rate: number): string { return Number.isFinite(rate) && rate >= 0 ? "$" + rateFormat.format(rate) : "Unavailable"; }

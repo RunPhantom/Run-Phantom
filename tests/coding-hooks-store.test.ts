@@ -29,7 +29,7 @@ function batch(admission: ReturnType<CodingHookStore["admit"]>, event = "PostToo
 test("actual canonical publication is idempotent and producer-only with exact ordinary OTLP behavior preserved", () => {
   const admission = active("full"), value = batch(admission);
   expect(store.publish(token, admission, value).status).toBe("accepted"); expect(store.publish(token, admission, value).status).toBe("accepted");
-  expect(db.query("SELECT output_payload FROM spans WHERE run_id=? AND span_type='tool'").get(admission.runId)).toEqual({ output_payload: JSON.stringify("exact business output") });
+  expect(db.query("SELECT output_payload FROM spans WHERE run_id=? AND span_type='TOOL_CALL'").get(admission.runId)).toEqual({ output_payload: JSON.stringify("exact business output") });
   expect((db.query("SELECT count(*) AS count FROM coding_hook_entities").get() as { count: number }).count).toBe(2);
   const ordinary = { id: "1".repeat(16), run_id: "1".repeat(32), name: "ordinary", start_time_ms: 1, end_time_ms: 2, duration_ms: 1, output_payload: "original OTLP" };
   db.query("INSERT INTO runs(id,started_at,last_updated_at) VALUES(?,1,1)").run(ordinary.run_id); insertSpan(ordinary); insertSpan({ ...ordinary, output_payload: "ordinary correction" });
@@ -48,9 +48,9 @@ test("current metadata authority strips full body claims without promoting captu
 });
 test("external canonical mutation is refused rather than restoring cached hook projection", () => {
   const admission = active("full"), value = batch(admission); store.publish(token, admission, value);
-  db.query("UPDATE spans SET output_payload='external original replacement' WHERE run_id=? AND span_type='tool'").run(admission.runId);
+  db.query("UPDATE spans SET output_payload='external original replacement' WHERE run_id=? AND span_type='TOOL_CALL'").run(admission.runId);
   expect(() => store.publish(token, admission, value)).toThrow();
-  expect(db.query("SELECT output_payload FROM spans WHERE run_id=? AND span_type='tool'").get(admission.runId)).toEqual({ output_payload: "external original replacement" });
+  expect(db.query("SELECT output_payload FROM spans WHERE run_id=? AND span_type='TOOL_CALL'").get(admission.runId)).toEqual({ output_payload: "external original replacement" });
 });
 test("actual delete transaction tombstone rejects late callbacks and cannot resurrect the run", () => {
   const admission = active("full"), value = batch(admission); store.publish(token, admission, value); deleteRun(admission.runId);
@@ -100,9 +100,9 @@ test("growing same-incarnation records correct usage once, while older and repla
   store.publish(token, admission, normalize(first));
   const nextRecord = transcriptRecord({ uuid: "record_2", message: { id: "msg_1", model: "fixture-model", content: [{ type: "text", text: "later exact output" }], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 7 } } });
   const appended = { ...transcriptSnapshot([nextRecord], "", first.endOffset), prefixBytes: first.prefixBytes, prefixSha256: first.prefixSha256 };
-  store.publish(token, admission, normalize(appended)); expect(db.query("SELECT input_tokens,output_tokens,output_payload FROM spans WHERE run_id=? AND span_type='llm'").get(admission.runId)).toEqual({ input_tokens: 10, output_tokens: 7, output_payload: JSON.stringify([{ type: "text", text: "later exact output" }]) });
+  store.publish(token, admission, normalize(appended)); expect(db.query("SELECT input_tokens,output_tokens,output_payload FROM spans WHERE run_id=? AND span_type='LLM_GENERATION'").get(admission.runId)).toEqual({ input_tokens: 10, output_tokens: 7, output_payload: JSON.stringify([{ type: "text", text: "later exact output" }]) });
   expect(() => store.publish(token, admission, normalize(first))).toThrow(); expect(() => store.publish(token, admission, normalize({ ...appended, incarnationKey: "e".repeat(64) }))).toThrow();
-  expect((db.query("SELECT count(*) count FROM spans WHERE run_id=? AND span_type='llm'").get(admission.runId) as { count: number }).count).toBe(1);
+  expect((db.query("SELECT count(*) count FROM spans WHERE run_id=? AND span_type='LLM_GENERATION'").get(admission.runId) as { count: number }).count).toBe(1);
 });
 test("empty source freezes its first nonempty prefix and Stop never closes or reopens the session", () => {
   const admission = active(), empty = transcriptSnapshot([]), first = transcriptSnapshot([transcriptRecord()]);
@@ -189,7 +189,7 @@ test("stored transition columns independently disagreeing with retained JSON ref
 });
 test("current projection without a retained NEXT witness refuses instead of inferring or repairing cached state", () => {
   const admission = active("full"); store.publish(token, admission, batch(admission));
-  const span = db.query("SELECT * FROM spans WHERE run_id=? AND span_type='tool'").get(admission.runId) as { id: string; attributes: string };
+  const span = db.query("SELECT * FROM spans WHERE run_id=? AND span_type='TOOL_CALL'").get(admission.runId) as { id: string; attributes: string };
   const attributes = JSON.parse(span.attributes); delete attributes.retainedEntitySha256; db.query("UPDATE spans SET attributes=? WHERE run_id=? AND id=?").run(JSON.stringify(attributes), admission.runId, span.id);
   const current = db.query("SELECT id,run_id,parent_span_id,name,span_type,status,input_payload,output_payload,start_time_ms,end_time_ms,duration_ms,model,provider,input_tokens,output_tokens,attributes,otlp_evidence FROM spans WHERE run_id=? AND id=?").get(admission.runId, span.id);
   db.query("UPDATE coding_hook_entities SET projection_sha256=? WHERE source_key=? AND kind='tool'").run(hookDigest(JSON.stringify(current)), admission.sourceKey);

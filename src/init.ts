@@ -1,3 +1,4 @@
+import { manageClaudeHooks } from "./coding-hooks/commands";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -18,6 +19,8 @@ interface ParsedArgs {
   registryFile: string | null;
   bundleRoot: string | null;
   explicit: boolean;
+  hookCaptureMode: "metadata" | "full";
+  hookFullConsent: boolean;
 }
 
 class UsageError extends Error {}
@@ -30,11 +33,15 @@ function parseArgs(argv: string[]): ParsedArgs {
     registryFile: null,
     bundleRoot: null,
     explicit: argv.length > 0,
+    hookCaptureMode: "metadata",
+    hookFullConsent: false,
   };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--global") out.scope = "global";
+    if (arg === "--full") out.hookCaptureMode = "full";
+    else if (arg === "--consent-full") out.hookFullConsent = true;
+    else if (arg === "--global") out.scope = "global";
     else if (arg === "--local") out.scope = "local";
     else if (arg.startsWith("--scope=")) out.scope = parseScope(arg.slice("--scope=".length));
     else if (arg === "--scope") out.scope = parseScope(argv[++i] ?? "");
@@ -54,6 +61,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
   }
 
+  if (out.hookCaptureMode === "full" && (out.scope !== "local" || !out.hookFullConsent)) throw new UsageError("full hook capture requires --local --full --consent-full");
   return out;
 }
 
@@ -92,6 +100,7 @@ FLAGS
     --local           Install only for --cwd / current project
     --scope=<scope>   global | local
     --cwd=<dir>       Project directory for local installs (default: cwd)
+    --full --consent-full  Explicit local consent to retained redacted bodies
     --bin-path=<p>    Override the runphantom binary path used by MCP entries
 `);
 }
@@ -160,13 +169,19 @@ function warnMcpCleanupFailures(result: Awaited<ReturnType<typeof applyInstallPl
   }
 }
 
-function finishSetup(args: ParsedArgs, result: Awaited<ReturnType<typeof applyInstallPlan>>): number {
+async function finishSetup(args: ParsedArgs, result: Awaited<ReturnType<typeof applyInstallPlan>>): Promise<number> {
   warnMcpCleanupFailures(result);
   const success = installSucceeded(result);
   if (success && shouldStartRunPhantom(args)) {
     configureStartup(args);
     const startCode = openRunPhantom();
     if (startCode !== 0) return startCode;
+  }
+  if (success && !args.registryFile && !args.bundleRoot) {
+    try {
+      const result = await manageClaudeHooks({ action: "install", scope: args.scope ?? "global", workspace: fs.realpathSync(args.cwd), captureMode: args.hookCaptureMode, fullConsent: args.hookFullConsent });
+      console.log("Claude hooks:", JSON.stringify(result));
+    } catch (error) { console.error("setup: Claude hook configuration failed:", error instanceof Error ? error.message : "unavailable"); return 1; }
   }
   process.stdout.write(summarizeInstall());
   return success ? 0 : 1;
@@ -194,12 +209,13 @@ export async function cmdSetup(argv: string[]): Promise<number> {
     if (!args.explicit && interactive) {
       const { plan, skipped } = await runInstallWizard({ cwd: args.cwd, input: ttyInput ?? undefined });
       if (skipped) return 0;
+      args.scope = plan.items[0]?.scope ?? args.scope;
       const result = await applyInstallPlan(plan, {
         binPath: args.binPath ?? undefined,
         registryFile: args.registryFile ?? undefined,
         bundleRoot: args.bundleRoot ?? undefined,
       });
-      const code = finishSetup(args, result);
+      const code = await finishSetup(args, result);
       return code;
     }
 
@@ -216,7 +232,7 @@ export async function cmdSetup(argv: string[]): Promise<number> {
       registryFile: args.registryFile ?? undefined,
       bundleRoot: args.bundleRoot ?? undefined,
     });
-    return finishSetup(args, result);
+    return await finishSetup(args, result);
   } finally {
     ttyInput?.destroy();
   }
