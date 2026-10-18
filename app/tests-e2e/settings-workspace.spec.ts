@@ -29,6 +29,7 @@ const test = base.extend<{ local: { url: string } }>({
       }, { timeout: 15000 }).toBe(true);
       await use({ url });
     } finally {
+      let reaped = true;
       if (!launchError && child.exitCode === null && child.signalCode === null) {
         const exited = once(child, "exit");
         child.kill("SIGTERM");
@@ -37,10 +38,12 @@ const test = base.extend<{ local: { url: string } }>({
           try { return await Promise.race([exited.then(() => true), new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), 2500); })]); }
           finally { clearTimeout(timer); }
         };
-        if (!await wait()) { child.kill("SIGKILL"); if (!await wait()) throw new Error("Isolated daemon did not exit; its private profile was retained."); }
+        if (!await wait()) { child.kill("SIGKILL"); reaped = await wait(); }
+        expect.soft(reaped, "Isolated daemon did not exit; its private profile was retained.").toBe(true);
       }
       if (testInfo.status !== testInfo.expectedStatus) await testInfo.attach("isolated-daemon-log", { body: logs, contentType: "text/plain" });
-      rmSync(profile, { recursive: true, force: true });
+      await testInfo.attach("isolated-daemon-cleanup", { body: JSON.stringify({ pid: child.pid, reaped, profileRemoved: reaped }), contentType: "application/json" });
+      if (reaped) rmSync(profile, { recursive: true, force: true });
     }
   },
   // Daemon and default profile outlive the browser context and artifact finalizers.
