@@ -1,11 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createManifest, HOSTS, type Receipt } from "../../scripts/qualification/assembled-contracts";
 import { actualHost, executeStage, privateEnvironment, sourceIdentity } from "../../scripts/qualification/assembled-executor";
-import { nativeArtifactMatches } from "../../scripts/qualification/assembled-installed-probe";
+import { nativeArtifactMatches, observeDatabaseFile } from "../../scripts/qualification/assembled-installed-probe";
 import { sha256 } from "../../scripts/qualification/assembled-validation";
 
 async function rejects(operation: Promise<unknown>, message?: string): Promise<void> {
@@ -88,4 +89,22 @@ test("native artifact format checks distinguish real host executable from cross-
   expect(await nativeArtifactMatches(process.execPath, HOSTS.find(h => h.platform === host.platform && h.arch !== host.arch) ?? HOSTS[0])).toBe(false);
   const fake = path.join(f.root, "script"); await writeFile(fake, "#!/bin/sh\necho unavailable\n" + " ".repeat(100));
   expect(await nativeArtifactMatches(fake, host)).toBe(false);
+});
+
+test("actual database descriptor distinguishes the opened file from a same-path replacement", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "phantom-default-db-identity-")); directories.push(directory);
+  const file = path.join(directory, "owned.db"), database = new Database(file, { create: true });
+  try {
+    database.exec("CREATE TABLE actual_owned_control (id INTEGER PRIMARY KEY)");
+    const observed = await observeDatabaseFile(process.pid, file);
+    expect(observed.inode).toBe((await stat(file, { bigint: true })).ino.toString());
+    if (process.platform === "darwin" || process.platform === "linux") {
+      expect(observed.openByProcess).toBe(true);
+      await rename(file, file + ".original"); await writeFile(file, "not-the-open-database");
+      await rejects(observeDatabaseFile(process.pid, file), "assembly_database_not_open_by_process");
+    } else {
+      expect(observed.openByProcess).toBeNull();
+      expect(observed.coverage).toContain("unavailable");
+    }
+  } finally { database.close(); }
 });

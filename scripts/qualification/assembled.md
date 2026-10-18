@@ -23,10 +23,14 @@ The outer controller must acquire its actual checkout/global resource lease and 
 
 Integrity checks cannot authenticate a remote native host or demonstrate assertion truth from JSON alone. Final acceptance additionally requires independently approved exact receipt/source/host/stage bindings in an explicit `--reviews=/private/reviewer/reviews.json` input outside the evidence bundle. This is a trusted operator input, not a self-attestation field. Review must inspect original runtime/test outputs and host provenance; a supplied review file is not a cryptographic identity claim. Tests deliberately show that a complete manufactured control bundle can satisfy checks-only while remaining unqualified. `--checks-only=true` can return zero only for complete integrity/roster checks; it never sets `releaseQualified`. Normal checks return nonzero unless every selected cell, dependency and independent review is accepted. Stage counts remain separate.
 
-The optional `probe` action requires an explicit native artifact digest:
+The optional `probe` (explicit DB path) and separate `probe-default` (no DB override, HOME-derived database) actions require an explicit native artifact digest:
 
 ```sh
 bun --no-env-file --no-install scripts/qualification/assembled.ts probe --binary=/private/build/runphantom --sha256=<64-hex> --output=/private/run/default-installed-probe
 ```
 
 It checks artifact format/architecture/digest, copies the executable outside the checkout into an empty working directory, launches the real default backend with an isolated profile/DB, asserts real health/import/export/malformed refusal and embedded HTML, closes the first owned process, restarts against the same DB, compares actual exported data, and verifies final teardown/artifact identity. This is a diagnostic observation, not a full installed cell: missing live application runtime/SQLite settings, selected workers/resources, migration/rollback, engines and providers remain explicit. It never substitutes the launcher's runtime version for the application's version, a fresh DB for a populated upgrade, or HTML availability for browser execution.
+
+`probe-default` starts from fresh HOME/USERPROFILE and empty CWD without a DB or secret-store path override. It observes the actual created default database file and native open descriptor where supported, then compares device/inode/path and real exported content across the two public `serve` boots. Existing explicit-path results remain separate. Native descriptor observation unavailable on a host is named coverage loss; it cannot become full native/default-path acceptance.
+
+Aggregation memoizes successful artifact checks only within that invocation, retaining at most 16 MiB and 4,096 cache entries. It then freshly rehashes every unique artifact/path binding without the cache before returning; a changed binding blocks the result and clears valid/accepted stage counts. Direct receipt validation has no cross-call cache.

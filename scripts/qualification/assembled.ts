@@ -13,7 +13,7 @@ async function main() {
   const [action, ...args] = process.argv.slice(2), options = new Map<string, string>();
   const permitted: Record<string, string[]> = {
     plan: ["output", "feature-heads"], host: ["output"], check: ["manifest", "bundle", "submissions", "reviews", "output", "checks-only"],
-    execute: ["manifest", "command", "output"], probe: ["binary", "sha256", "output"],
+    execute: ["manifest", "command", "output"], probe: ["binary", "sha256", "output"], "probe-default": ["binary", "sha256", "output"],
   };
   if (!permitted[action]) throw new Error("assembly_action_required");
   for (const arg of args) {
@@ -28,8 +28,8 @@ async function main() {
     const heads = options.has("feature-heads") ? await readJson(required("feature-heads")) as Partial<Record<FeatureId, string>> : {};
     const manifest = createManifest(source, heads); validateManifest(manifest); await save(required("output"), manifest); return;
   }
-  if (action === "probe") {
-    const result = await probeInstalledBackend(root, source, required("binary"), required("sha256"), required("output"));
+  if (action === "probe" || action === "probe-default") {
+    const result = await probeInstalledBackend(root, source, required("binary"), required("sha256"), required("output"), action === "probe-default" ? "default" : "explicit");
     console.log(JSON.stringify({ status: result.status, releaseQualified: false, scope: result.scope }));
     if (result.failures.length) process.exitCode = 1;
     return;

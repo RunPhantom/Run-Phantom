@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { readdir, readlink } from "node:fs/promises";
 import { EventEmitter } from "node:events";
 import { copyFile, chmod, mkdir, mkdtemp, open, realpath, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -27,7 +29,36 @@ async function port(): Promise<number> {
     });
   });
 }
-export async function probeInstalledBackend(root: string, source: SourcePin, binary: string, digest: string, output: string) {
+export async function observeDatabaseFile(pid: number, dbPath: string) {
+  const file = await realpath(dbPath), metadata = await stat(file, { bigint: true });
+  if (!metadata.isFile() || metadata.ino <= 0n) throw new Error("assembly_database_identity_unavailable");
+  let openByProcess = false;
+  if (process.platform === "darwin") {
+    const listing = await new Promise<string>((resolve, reject) => {
+      execFile("/usr/sbin/lsof", ["-a", "-p", String(pid), "-F", "pfin"], { timeout: 3000, maxBuffer: 128 * 1024 },
+        (error, stdout) => error ? reject(error instanceof Error ? error : new Error("assembly_database_descriptor_observation_failed")) : resolve(stdout));
+    });
+    let inode = "";
+    for (const line of listing.split("\n")) {
+      if (line.startsWith("f")) inode = "";
+      if (line.startsWith("i")) inode = line.slice(1);
+      if (line === `n${file}` && inode === metadata.ino.toString()) openByProcess = true;
+    }
+  } else if (process.platform === "linux") {
+    for (const descriptor of await readdir(`/proc/${pid}/fd`)) {
+      const fd = `/proc/${pid}/fd/${descriptor}`;
+      if (await readlink(fd).catch(() => "") !== file) continue;
+      const opened = await stat(fd, { bigint: true });
+      if (opened.dev === metadata.dev && opened.ino === metadata.ino) openByProcess = true;
+    }
+  } else return { path: file, device: metadata.dev.toString(), inode: metadata.ino.toString(), openByProcess: null,
+    coverage: "file-identity-only; native open-descriptor observation unavailable" };
+  if (!openByProcess) throw new Error("assembly_database_not_open_by_process");
+  return { path: file, device: metadata.dev.toString(), inode: metadata.ino.toString(), openByProcess,
+    coverage: "actual native open descriptor and file identity" };
+}
+export async function probeInstalledBackend(root: string, source: SourcePin, binary: string, digest: string, output: string,
+  databaseMode: "explicit" | "default" = "explicit") {
   if (canonical(sourceIdentity(root)) !== canonical(source)) throw new Error("assembly_candidate_changed");
   const host = actualHost(), original = await realpath(binary);
   if (!/^[a-f0-9]{64}$/.test(digest) || await fileSha256(original) !== digest || !await nativeArtifactMatches(original, host)) throw new Error("assembly_artifact_host_or_digest");
@@ -45,8 +76,12 @@ export async function probeInstalledBackend(root: string, source: SourcePin, bin
     await mkdir(cwd); await mkdir(home); await mkdir(temporary); await copyFile(original, bin);
     if (process.platform !== "win32") await chmod(bin, (await stat(original)).mode & 0o777);
     if (await fileSha256(bin) !== digest) throw new Error("assembly_copy_digest");
-    const listen = await port(), url = `http://127.0.0.1:${listen}`, db = path.join(state, "runphantom.db");
-    const env = { ...privateEnvironment(home, temporary), RUNPHANTOM_DB_PATH: db, RUNPHANTOM_SECRET_STORE_PATH: path.join(state, "secrets.json"), RUNPHANTOM_PORT: String(listen), RUNPHANTOM_BIND_HOST: "127.0.0.1" };
+    const listen = await port(), url = `http://127.0.0.1:${listen}`, db = databaseMode === "default" ? path.join(home, ".runphantom", "runphantom.db") : path.join(state, "runphantom.db");
+    let existed = true; try { await stat(db); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") existed = false; else throw error; }
+    if (existed) throw new Error("assembly_default_database_not_fresh");
+    const env = { ...privateEnvironment(home, temporary), ...(databaseMode === "explicit" ? { RUNPHANTOM_DB_PATH: db, RUNPHANTOM_SECRET_STORE_PATH: path.join(state, "secrets.json") } : {}), RUNPHANTOM_PORT: String(listen), RUNPHANTOM_BIND_HOST: "127.0.0.1" };
+    if (databaseMode === "default" && Object.prototype.hasOwnProperty.call(env, "RUNPHANTOM_DB_PATH")) throw new Error("assembly_default_database_override");
+    checks.databaseSelection = { mode: databaseMode, overridePresent: Object.prototype.hasOwnProperty.call(env, "RUNPHANTOM_DB_PATH"), expectedHomeDerivedPath: databaseMode === "default" ? db : null, existedBeforeLaunch: existed, publicCommand: [bin, "serve"] };
     const request = async (route: string, method = "GET", data?: unknown) => {
       if (interrupted) throw new Error("assembly_probe_interrupted");
       const response = await fetch(url + route, { method, headers: { "Content-Type": "application/json" }, body: data === undefined ? undefined : JSON.stringify(data), signal: AbortSignal.timeout(5000) });
@@ -82,6 +117,7 @@ export async function probeInstalledBackend(root: string, source: SourcePin, bin
     const empty = await request("/api/runs");
     if (empty.status !== 200 || canonical(JSON.parse(empty.body)) !== "[]") throw new Error("assembly_fresh_database_not_empty");
     checks.initialEmptyDatabase = true;
+    const firstFile = await observeDatabaseFile(first.child.pid!, db); checks.databaseFileFirstBoot = firstFile;
     const id = "f4500000000000000000000000000001", span = "f450000000000001";
     const trace = { format: "runphantom-trace/v1", run: { id, name: "assembled-owned-control", started_at: 1, last_updated_at: 2 }, spans: [{ id: span, run_id: id, name: "owned-real-import", start_time_ms: 1, end_time_ms: 2, duration_ms: 1 }], liveEvents: [], annotations: [] };
     const imported = await request("/api/import-run", "POST", trace);
@@ -95,6 +131,9 @@ export async function probeInstalledBackend(root: string, source: SourcePin, bin
     checks.embeddedHTML = { sha256: sha256(ui.body), bytes: Buffer.byteLength(ui.body), scope: "HTML availability only; no browser or font execution" };
     await stopOwnedProcess(first); closed.add(first);
     const second = await start(); if (first.child.pid === second.child.pid) throw new Error("assembly_restart_identity");
+    const secondFile = await observeDatabaseFile(second.child.pid!, db); checks.databaseFileSecondBoot = secondFile;
+    if (secondFile.path !== firstFile.path || secondFile.device !== firstFile.device || secondFile.inode !== firstFile.inode) throw new Error("assembly_default_database_identity_changed");
+    if (databaseMode === "default" && (firstFile.openByProcess !== true || secondFile.openByProcess !== true)) missing.push("native open-descriptor authority for default-path database");
     const after = await request(`/api/runs/${id}/export`);
     if (after.status !== 200 || canonical(JSON.parse(after.body)) !== canonical(actual)) throw new Error("assembly_restart_output_changed");
     checks.restart = { firstPid: first.child.pid, secondPid: second.child.pid, firstClosedBeforeRestart: true, sameDatabase: true, beforeSHA256: sha256(canonical(actual)), afterSHA256: sha256(canonical(JSON.parse(after.body))) };
@@ -118,9 +157,9 @@ export async function probeInstalledBackend(root: string, source: SourcePin, bin
   }
   try { if (canonical(sourceIdentity(root)) !== canonical(source)) failures.push("assembly_candidate_changed"); }
   catch { failures.push("assembly_candidate_changed"); }
-  const result = { schema: "runphantom.assembly-installed-probe/v1", source, artifactSHA256: digest, actualHost: host,
+  const result = { schema: "runphantom.assembly-installed-probe/v1", source, artifactSHA256: digest, actualHost: host, databaseMode,
     launcherRuntimeVersion: Bun.version, applicationRuntimeVersion: null, applicationDatabaseSettings: null,
     status: failures.length ? "failed" : "observed-partial", checks, starts, logFacts, cleanup: { allOwnedClosed: owned.every(p => closed.has(p)), profileRemoved: removed },
-    failures, missing, releaseQualified: false, scope: "Owned default installed backend import/export/restart/HTML probe only; cannot fill a full installed, platform or assembled cell" };
+    failures, missing, releaseQualified: false, scope: `Owned ${databaseMode === "default" ? "HOME-derived default-path" : "explicit-DB"} installed backend import/export/restart/HTML probe only; cannot fill a full installed, platform or assembled cell` };
   await writeFile(path.join(directory, "probe-result.json"), JSON.stringify(result, null, 2)); return result;
 }
