@@ -1,0 +1,1 @@
+{ "identifier": "fixture", "description": "Local fixture window only; no shell, file, network or automation plugins", "local": true, "windows": ["verification-fixture"], "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "allow-fixture-increment"] }
