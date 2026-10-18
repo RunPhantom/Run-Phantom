@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { plural } from "../../utils/helpers";
 import { Button } from "../ui/button";
 import { evaluationsApi, type ExperimentSummary, type TrialAnalysis } from "../../api/evaluations";
 
@@ -44,7 +45,7 @@ export function RepeatedTrials({ experiments, onOpen }: { experiments: Experimen
     <Button disabled={selected.length < 2 || busy} onClick={() => void analyze()}>{busy ? "Analyzing trials…" : "Analyze selected trials"}</Button>
     {error && <p role="alert" className="text-xs">{error}</p>}
     {analysis && <div aria-label="Repeated trial results" className="space-y-3 text-xs">
-      <p role="status">{analysis.trials.length} selected trials · {analysis.cases.length} cases · {analysis.summary.total} case-trial outcomes</p>
+      <p role="status">{analysis.trials.length} selected trials · {plural(analysis.cases.length, "case")} · {analysis.summary.total} case-trial outcomes</p>
       <p>Pass: {analysis.summary.pass} · Fail: {analysis.summary.fail} · Inconclusive: {analysis.summary.inconclusive}</p>
       <p>Observed pass: {percent(analysis.summary.passRate)} · Resolved coverage: {percent(analysis.summary.resolvedCoverage)}</p>
       <p>Unresolved-outcome bounds: {percent(analysis.summary.unresolvedBounds.lower)}–{percent(analysis.summary.unresolvedBounds.upper)}. This range reflects missing evidence; it is not a confidence interval.</p>
