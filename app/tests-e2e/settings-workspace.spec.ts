@@ -25,7 +25,7 @@ const test = base.extend<{ local: { url: string } }>({
     try {
       await expect.poll(async () => {
         if (launchError || child.exitCode !== null) throw new Error(`Local settings fixture failed: ${logs}`);
-        return fetch(`${url}/health`, { signal: AbortSignal.timeout(500) }).then(response => response.ok()).catch(() => false);
+        return fetch(`${url}/health`, { signal: AbortSignal.timeout(500) }).then(response => response.ok).catch(() => false);
       }, { timeout: 15000 }).toBe(true);
       await use({ url });
     } finally {
