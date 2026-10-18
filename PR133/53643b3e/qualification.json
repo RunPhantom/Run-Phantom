@@ -1,0 +1,27 @@
+{
+  "pr": 133,
+  "feature": "F37",
+  "source": "53643b3edeec57518c341d66af783b81c17e6232",
+  "tree": "9b9397ddcc4d2b9766326876f1a9a1a1ae3ea568",
+  "base": "b90e148545470d47f5d4ec39a2d131b152a1ac3c",
+  "draft": true,
+  "scope": "Exact-source component/native fixture only. Current source has no production registration or canonical activation.",
+  "remaining_qualification": "Connected implementation review, product facade and canonical activation, Team isolation, copied/installed/platform qualification remain pending.",
+  "root_viewed_at": "2026-10-18T10:16:00Z",
+  "screenshots": [
+    {
+      "file": "native-chromium-player-1440.png",
+      "sha256": "4d68a458b7e4df52cbcd2660890f037993401b41b6633330f9aeb4e75db96ada",
+      "bytes": 50263,
+      "platform": "macOS arm64",
+      "profile": "Inactive component fixture: real native masked producer to private disk SQLite to inert React player; not a production route."
+    },
+    {
+      "file": "native-webkit-player-320.png",
+      "sha256": "54d95c99a2805e50102106dff86aaf6563cb91dfd634eb3a28782e5df87094bc",
+      "bytes": 52590,
+      "platform": "macOS arm64",
+      "profile": "Inactive component fixture: real native masked producer to private disk SQLite to inert React player; not a production route."
+    }
+  ]
+}
