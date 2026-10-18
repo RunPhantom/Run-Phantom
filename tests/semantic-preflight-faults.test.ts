@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { FaultEvent, FaultNode, FaultReceipt } from "./fixtures/semantic-preflight-fault-runner";
+import type { FaultEvent, FaultNode, FaultReceipt, SelectedErrorVariant } from "./fixtures/semantic-preflight-fault-runner";
 
 // Original semantic lineage, including its real receipt timestamp and unchanged SQL hash.
 const legacy = [
@@ -85,10 +85,10 @@ const boundaries: Boundary[] = [
   { node: "O1", title: "transferred handle closes on startup setting failure and separate recovery resets facade", constructors: 2, probes: 2, eligibility: 1, phase: "startup", kind: "exec", sql: "PRAGMA busy_timeout = 1000", controls: ["1:BEGIN", "1:COMMIT", "2:BEGIN", "2:COMMIT"] },
 ];
 
-async function child(node: FaultNode, directory: string, filename: string) {
+async function child(node: FaultNode, directory: string, filename: string, selectedErrorVariant?: SelectedErrorVariant) {
   const home = path.join(directory, "home"), temporary = path.join(directory, "tmp"), output = path.join(directory, "receipt.json");
   mkdirSync(home, { mode: 0o700 }); mkdirSync(temporary, { mode: 0o700 });
-  const processChild = spawn(process.execPath, ["--no-env-file", path.resolve(import.meta.dir, "fixtures/semantic-preflight-fault-runner.ts"), node, filename, output], {
+  const processChild = spawn(process.execPath, ["--no-env-file", path.resolve(import.meta.dir, "fixtures/semantic-preflight-fault-runner.ts"), node, filename, output, ...(selectedErrorVariant ? [selectedErrorVariant] : [])], {
     cwd: path.resolve(import.meta.dir, ".."), detached: true, stdio: ["ignore", "pipe", "pipe"],
     env: { PATH: path.dirname(process.execPath) + path.delimiter + "/usr/bin:/bin", HOME: home, USERPROFILE: home, TMPDIR: temporary, RUNPHANTOM_DB_PATH: filename },
   });
@@ -121,7 +121,7 @@ function instrumentation(receipt: FaultReceipt, selected: number, eligibility: n
   expect(receipt.outstandingAfterTeardown).toEqual([]);
 }
 const mainEvents = (receipt: FaultReceipt) => receipt.events.filter(event => event.operation === "main");
-function refusal(receipt: FaultReceipt, boundary: Boundary) {
+function refusal(receipt: FaultReceipt, boundary: Boundary, selectedCode = "SQLITE_CANTOPEN", selectedErrno = 14) {
   instrumentation(receipt, 1, boundary.eligibility, boundary.node === "T7" ? 1 : 0);
   const events = mainEvents(receipt), selected = events.filter(event => event.fault === "selected")[0];
   expect(receipt.accepted).toBe(false); expect(receipt.operationError).toContain(`component selected ${boundary.node}`);
@@ -179,7 +179,7 @@ function refusal(receipt: FaultReceipt, boundary: Boundary) {
   if (["T3-before", "T4", "T5"].includes(boundary.node)) expect(events.findIndex(event => event.kind === "control" && event.sql === "ROLLBACK")).toBeGreaterThan(events.indexOf(selected));
   if (boundary.node === "Q3") expect(selected.guard).toBe(0);
   if (boundary.node === "Q2") expect(selected.guard).toBe(1);
-  if (boundary.node === "Q1") { expect(selected.errorCode).toBe("SQLITE_CANTOPEN"); expect(selected.errorErrno).toBe(14); }
+  if (boundary.node === "Q1") { expect(selected.errorCode).toBe(selectedCode); expect(selected.errorErrno).toBe(selectedErrno); }
   if (boundary.node === "O1") {
     expect(events.indexOf(selected)).toBeGreaterThan(events.indexOf(off[0]));
     expect(receipt.recovery?.accepted).toBe(true); expect(receipt.recovery?.error).toBeUndefined();
@@ -245,6 +245,76 @@ for (const node of ["T3-native-before", "L1-native-before"] as const) test(`${no
     expect(typeof receipt.publicErrorSameAsSelected).toBe("boolean"); // Observed separately; public wrapping need not preserve the object.
     expect(selected.selectedErrorIdentity).toEqual({ label: `selected-native:${node}`, sameSelectedObject: true, isError: true, target: filename });
     expect(selected.errorCode).toBe("SQLITE_CANTOPEN"); expect(selected.errorErrno).toBe(14);
+    expect(selected.connection).toBe(1); expect(selected.phase).toBe("ro"); expect(selected.options).toEqual({ readonly: true, create: false });
+    expect(selected.attempted).toBe(true); expect(selected.nativeExecuted).toBe(false); expect(selected.nativeSucceeded).toBe(false);
+    expect(eligibility.kind).toBe("query"); expect(eligibility.sql).toBe(probe); expect(eligibility.connection).toBe(1); expect(eligibility.phase).toBe("ro");
+    expect(eligibility.inTransaction).toBe(true); expect(events.indexOf(selected)).toBeGreaterThan(events.indexOf(eligibility));
+    const constructors = events.filter(event => event.kind === "constructor"); expect(constructors).toHaveLength(1);
+    expect(constructors[0].options).toEqual({ readonly: true, create: false }); expect(constructors[0].nativeSucceeded).toBe(true);
+    expect(events.filter(event => event.kind === "query")).toEqual([eligibility]);
+    expect(events.filter(event => event.kind === "exec")).toEqual([]); expect(events.some(event => event.phase === "guarded")).toBe(false);
+    const controls = events.filter(event => event.kind === "control"), closes = events.filter(event => event.kind === "close");
+    expect(controls.map(event => event.sql)).toEqual(node === "T3-native-before" ? ["BEGIN", "COMMIT", "ROLLBACK"] : ["BEGIN", "COMMIT"]);
+    for (const control of controls) {
+      expect(events.some(event => event.kind === "prepare-control" && event.connection === control.connection && event.sql === control.sql && event.nativeSucceeded)).toBe(true);
+      expect(control.connection).toBe(1); expect(control.phase).toBe("ro");
+      if (control !== selected) { expect(control.nativeExecuted).toBe(true); expect(control.nativeSucceeded).toBe(true); }
+      expect(control.inTransactionAfter).toBe(control.sql === "BEGIN" || control === selected);
+    }
+    expect(closes).toHaveLength(1); expect(closes[0].inTransaction).toBe(false);
+    if (node === "T3-native-before") {
+      expect(selected.kind).toBe("control"); expect(selected.sql).toBe("COMMIT"); expect(selected.inTransaction).toBe(true);
+      expect(events.indexOf(controls[2])).toBeGreaterThan(events.indexOf(selected)); expect(events.indexOf(closes[0])).toBeGreaterThan(events.indexOf(controls[2]));
+      expect(closes[0].nativeExecuted).toBe(true); expect(closes[0].nativeSucceeded).toBe(true);
+      expect(receipt.outstandingBeforeTeardown).toEqual([]); expect(receipt.teardown).toEqual([]);
+    } else {
+      expect(selected.kind).toBe("close"); expect(selected.sql).toBeUndefined(); expect(selected.inTransaction).toBe(false); expect(selected).toBe(closes[0]);
+      expect(events.indexOf(selected)).toBeGreaterThan(events.indexOf(controls[1]));
+      expect(receipt.outstandingBeforeTeardown).toEqual([1]); expect(receipt.teardown).toEqual([{ connection: 1, nativeExecuted: true, nativeSucceeded: true }]);
+    }
+    expect(snapshot(filename)).toEqual(before);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+}, 15_000);
+
+
+for (const node of ["K1", "Q1"] as const) test(`${node}: selected READONLY_ROLLBACK776 cannot select another fallback`, async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "semantic-native776-")), filename = path.join(directory, "owner.sqlite");
+  try {
+    seed(filename, false); const before = snapshot(filename), physicalBefore = physical(filename);
+    const result = await child(node, directory, filename, "readonly-rollback776");
+    console.info(JSON.stringify({ boundary: node, selectedErrorVariant: "readonly-rollback776", receipt: result.receipt, physicalBefore, physicalAfter: physical(filename) }));
+    const receipt = result.receipt, boundary = boundaries.find(value => value.node === node)!;
+    expect(result.exit, result.stderr).toBe(0); refusal(receipt, boundary, "SQLITE_READONLY_ROLLBACK", 776);
+    const events = mainEvents(receipt), selected = events.find(event => event.fault === "selected")!;
+    expect(selected.errorCode).toBe("SQLITE_READONLY_ROLLBACK"); expect(selected.errorErrno).toBe(776);
+    expect(selected.selectedErrorIdentity).toEqual({ label: `selected-native:${node}`, sameSelectedObject: true, isError: true, target: filename });
+    expect(selected.connection).toBe(node === "K1" ? 1 : 2); expect(selected.attempted).toBe(true);
+    expect(selected.nativeExecuted).toBe(false); expect(selected.nativeSucceeded).toBe(false);
+    expect(events.filter(event => event.kind === "exec" && event.sql === "PRAGMA query_only = OFF")).toEqual([]);
+    if (node === "Q1") {
+      const eligibility = events.find(event => event.fault === "eligibility")!;
+      expect(eligibility.errorCode).toBe("SQLITE_CANTOPEN"); expect(eligibility.errorErrno).toBe(14);
+      expect(receipt.eligibilityErrorDistinctFromSelected).toBe(true); expect(selected.guard).toBe(1);
+      expect(events.indexOf(selected)).toBeGreaterThan(events.indexOf(eligibility));
+    }
+    expect(snapshot(filename)).toEqual(before);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+}, 15_000);
+
+for (const node of ["T3-native-before", "L1-native-before"] as const) test(`${node}: selected READONLY_ROLLBACK776 after CANTOPEN14 eligibility cannot select fallback`, async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "semantic-native-shaped-")), filename = path.join(directory, "owner.sqlite");
+  try {
+    seed(filename, false); const before = snapshot(filename), physicalBefore = physical(filename);
+    const result = await child(node, directory, filename, "readonly-rollback776");
+    console.info(JSON.stringify({ boundary: node, receipt: result.receipt, physicalBefore, physicalAfter: physical(filename) }));
+    const receipt = result.receipt; instrumentation(receipt, 1, 1); expect(result.exit, result.stderr).toBe(0);
+    const events = mainEvents(receipt), selected = events.find(event => event.fault === "selected")!, eligibility = events.find(event => event.fault === "eligibility")!;
+    expect(receipt.accepted).toBe(false); expect(receipt.operationError).toContain(`component selected ${node}`);
+    expect(receipt.eligibilityErrorDistinctFromSelected).toBe(true);
+    expect(typeof receipt.publicErrorSameAsSelected).toBe("boolean"); // Observed separately; public wrapping need not preserve the object.
+    expect(selected.selectedErrorIdentity).toEqual({ label: `selected-native:${node}`, sameSelectedObject: true, isError: true, target: filename });
+    expect(selected.errorCode).toBe("SQLITE_READONLY_ROLLBACK"); expect(selected.errorErrno).toBe(776);
+    expect(eligibility.errorCode).toBe("SQLITE_CANTOPEN"); expect(eligibility.errorErrno).toBe(14);
     expect(selected.connection).toBe(1); expect(selected.phase).toBe("ro"); expect(selected.options).toEqual({ readonly: true, create: false });
     expect(selected.attempted).toBe(true); expect(selected.nativeExecuted).toBe(false); expect(selected.nativeSucceeded).toBe(false);
     expect(eligibility.kind).toBe("query"); expect(eligibility.sql).toBe(probe); expect(eligibility.connection).toBe(1); expect(eligibility.phase).toBe("ro");

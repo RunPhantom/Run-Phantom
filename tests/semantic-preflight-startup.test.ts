@@ -62,7 +62,7 @@ function fixture(work: (value: { filename: string; writer: Database; before: Ret
 
 interface Event { kind: "query" | "exec" | "close"; connection: number; sql?: string; guard?: number; }
 interface ObservationOptions {
-  firstProbeError?: Error;
+  firstProbeError?: unknown;
   helperError?: Error;
   readback?: "on-zero" | "on-missing" | "off-stuck";
   guardSetError?: boolean;
@@ -85,6 +85,7 @@ function observe(filename: string, options: ObservationOptions = {}) {
     events.push({ kind: "query", connection: id(this), sql, ...(isGuarded ? { guard: guard(this) } : {}) });
     if (sql === probe) {
       probes++;
+      // eslint-disable-next-line @typescript-eslint/only-throw-error -- The fixture deliberately throws a non-Error to verify fail-closed routing.
       if (probes === 1 && options.firstProbeError) throw options.firstProbeError;
     }
     if (sql.includes("SELECT type,name,tbl_name,")) {
@@ -269,4 +270,56 @@ for (const forcedFallback of [false, true]) test(`existing target disappearing a
   try { expect(() => getDrizzleDb()).toThrow(); expect(existsSync(filename)).toBe(false); expect(applicationWrites(seen)).toHaveLength(0); }
   finally { seen.restore(); }
   expect(readSnapshot(retainedPath)).toEqual(before); expect(existsSync(filename)).toBe(false);
+}));
+
+test("component forced own RO probe READONLY_ROLLBACK776 keeps query_only ON through strict validation and blocks six real writes", () => fixture(({ filename, before, settle }) => {
+  settle(); const seen = observe(filename, { firstProbeError: nativeError("SQLITE_READONLY_ROLLBACK", 776), denyWritesDuringHelper: true });
+  try {
+    const db = getDrizzleDb().$client; preserved(db, before);
+    expect(guardEvents(seen, "ON")).toHaveLength(1); expect(guardEvents(seen, "OFF")).toHaveLength(1); expect(seen.deniedWrites).toBe(6); expect(seen.guardedReads).toBeGreaterThan(0);
+    expect(seen.probes).toBe(2); expect(seen.nativeProbeErrors).toEqual([]);
+    const on = seen.events.findIndex(event => event.sql === "PRAGMA query_only = ON"), off = seen.events.findIndex(event => event.sql === "PRAGMA query_only = OFF");
+    expect(off).toBeGreaterThan(on);
+    const reads = seen.events.slice(on + 1, off).filter(event => event.kind === "query");
+    expect(reads.length).toBeGreaterThan(3); for (const event of reads) expect(event.guard).toBe(1);
+    expect(reads.some(event => event.sql === "PRAGMA integrity_check(1)")).toBe(true); expect(reads.some(event => event.sql === "SELECT 1 FROM pragma_foreign_key_check LIMIT 1")).toBe(true);
+    expect(seen.events.findIndex(event => event === applicationWrites(seen)[0])).toBeGreaterThan(off);
+    expect(db.query("PRAGMA query_only").get()).toEqual({ query_only: 0 });
+  } finally { seen.restore(); }
+}));
+
+for (const [code, errno] of [
+  ["SQLITE_READONLY", 8], ["SQLITE_READONLY", 776], ["SQLITE_READONLY_ROLLBACK", 14], ["SQLITE_CANTOPEN", 776], ["SQLITE_IOERR", 776],
+] as const) test(`component own RO probe ${code}/${errno} cannot select native coordination`, () => fixture(({ filename, before, settle }) => {
+  settle(); const seen = observe(filename, { firstProbeError: nativeError(code, errno) });
+  try {
+    expect(() => getDrizzleDb()).toThrow("controlled native probe error");
+    expect(guardEvents(seen, "ON")).toHaveLength(0); expect(guardEvents(seen, "OFF")).toHaveLength(0);
+    expect(seen.probes).toBe(1); expect(seen.guardedReads).toBe(0); expect(applicationWrites(seen)).toHaveLength(0);
+  } finally { seen.restore(); }
+  expect(readSnapshot(filename)).toEqual(before);
+}));
+
+for (const forcedFallback of [false, true]) test(`component native-looking helper READONLY_ROLLBACK776 is terminal (${forcedFallback ? "guarded helper" : "genuine RO helper"})`, () => fixture(({ filename, before, settle }) => {
+  settle(); const seen = observe(filename, {
+    helperError: nativeError("SQLITE_READONLY_ROLLBACK", 776), ...(forcedFallback ? { firstProbeError: nativeError("SQLITE_READONLY_ROLLBACK", 776) } : {}),
+  });
+  try {
+    expect(() => getDrizzleDb()).toThrow("Unrecognized legacy semantic migration");
+    expect(guardEvents(seen, "ON")).toHaveLength(forcedFallback ? 1 : 0); expect(guardEvents(seen, "OFF")).toHaveLength(0);
+    expect(seen.probes).toBe(forcedFallback ? 2 : 1); expect(applicationWrites(seen)).toHaveLength(0);
+  } finally { seen.restore(); }
+  expect(readSnapshot(filename)).toEqual(before);
+}));
+
+for (const variant of ["READONLY_RECOVERY264", "non-Error exact776"] as const) test(`component own RO probe ${variant} cannot select native coordination`, () => fixture(({ filename, before, settle }) => {
+  const error = variant === "READONLY_RECOVERY264" ? nativeError("SQLITE_READONLY_RECOVERY", 264) : { code: "SQLITE_READONLY_ROLLBACK", errno: 776 };
+  expect(error instanceof Error).toBe(variant === "READONLY_RECOVERY264");
+  settle(); const seen = observe(filename, { firstProbeError: error });
+  try {
+    expect(() => getDrizzleDb()).toThrow();
+    expect(guardEvents(seen, "ON")).toHaveLength(0); expect(guardEvents(seen, "OFF")).toHaveLength(0);
+    expect(seen.probes).toBe(1); expect(seen.guardedReads).toBe(0); expect(applicationWrites(seen)).toHaveLength(0);
+  } finally { seen.restore(); }
+  expect(readSnapshot(filename)).toEqual(before);
 }));

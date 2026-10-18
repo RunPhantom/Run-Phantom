@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 
 export type FaultNode = "control" | "K1" | "K2" | "K3" | "K4" | "T1" | "T2" | "T3-before" | "T3-after" | "T4" | "T5" | "T6" | "T7" | "L1-before" | "L1-after" | "L2-before" | "L2-after" | "Q1" | "Q2" | "Q3" | "O1" | "T3-native-before" | "L1-native-before";
+export type SelectedErrorVariant = "readonly-rollback776";
 type Phase = "ro" | "guarded" | "startup";
 export interface FaultEvent {
   kind: "constructor" | "prepare-control" | "control" | "query" | "exec" | "close" | "readback";
@@ -61,7 +62,9 @@ const probe = "SELECT name FROM sqlite_master LIMIT 1";
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const nativeLooking = (text: string) => Object.assign(new Error(text), { code: "SQLITE_CANTOPEN", errno: 14 });
 
-async function run(node: FaultNode, filename: string): Promise<FaultReceipt> {
+async function run(node: FaultNode, filename: string, selectedErrorVariant?: SelectedErrorVariant): Promise<FaultReceipt> {
+  assert(selectedErrorVariant === undefined || selectedErrorVariant === "readonly-rollback776"
+    && ["K1", "Q1", "T3-native-before", "L1-native-before"].includes(node), "unsupported selected error variant or boundary");
   const identity = new NativeDatabase(":memory:");
   let engine: unknown;
   try { engine = nativeQuery.call(identity, "SELECT sqlite_version() AS version,sqlite_source_id() AS source_id").get(); }
@@ -73,8 +76,9 @@ async function run(node: FaultNode, filename: string): Promise<FaultReceipt> {
     outstandingBeforeTeardown: [], teardown: [], outstandingAfterTeardown: [],
   };
   const fallback = new Set<FaultNode>(["K2", "T2", "T3-before", "T3-after", "T5", "T7", "L1-before", "L1-after", "L2-before", "L2-after", "Q1", "Q2", "Q3", "O1"]);
-  const selectedNativeError = node === "T3-native-before" || node === "L1-native-before" ? nativeLooking(`component selected ${node}`) : undefined;
-  if (selectedNativeError) fallback.add(node);
+  const selectedNativeError = selectedErrorVariant ? Object.assign(new Error(`component selected ${node}`), { code: "SQLITE_READONLY_ROLLBACK", errno: 776 })
+    : node === "T3-native-before" || node === "L1-native-before" ? nativeLooking(`component selected ${node}`) : undefined;
+  if (node === "T3-native-before" || node === "L1-native-before") fallback.add(node);
   const handles = new Map<Database, Handle>();
   let nextConnection = 0, operation: "main" | "recovery" = "main", injections = true;
   let restorers: Array<() => void> = [];
@@ -208,7 +212,7 @@ async function run(node: FaultNode, filename: string): Promise<FaultReceipt> {
         const value: FaultEvent = { kind: "constructor", operation, connection, phase, options, attempted: true, nativeExecuted: false, nativeSucceeded: false };
         receipt.events.push(value);
         const selected = node === "K1" && options.readonly || ["K2", "K3"].includes(node) && connection === 2 || node === "K4";
-        if (injections && selected) {
+        if (injections && selected && !selectedErrorVariant) {
           value.fault = "selected"; receipt.selectedHits++; value.error = `component selected ${node}`; value.errorCode = "SQLITE_CANTOPEN"; value.errorErrno = 14;
           throw nativeLooking(value.error);
         }
@@ -216,7 +220,7 @@ async function run(node: FaultNode, filename: string): Promise<FaultReceipt> {
           const db = Reflect.construct(NativeDatabase, args, NativeDatabase) as Database;
           receipt.nativePrototypeIdentity &&= Object.getPrototypeOf(db) === nativePrototype;
           handles.set(db, { db, connection, phase, options, closed: false }); return db;
-        });
+        }, selected && selectedErrorVariant !== undefined);
       },
     });
     const replacement: Record<string, unknown> = { ...nativeExports, Database: ProductDatabase };
@@ -273,9 +277,9 @@ async function run(node: FaultNode, filename: string): Promise<FaultReceipt> {
 }
 
 if (import.meta.main) {
-  const [node, filename, output] = process.argv.slice(2);
+  const [node, filename, output, selectedErrorVariant] = process.argv.slice(2);
   assert(node && filename && output, "node, owned target and receipt path required");
-  const receipt = await run(node as FaultNode, filename);
+  const receipt = await run(node as FaultNode, filename, selectedErrorVariant as SelectedErrorVariant | undefined);
   writeFileSync(output, JSON.stringify(receipt));
   if (receipt.setupError || receipt.cleanupError) process.exitCode = 1;
 }

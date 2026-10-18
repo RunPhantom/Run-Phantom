@@ -79,17 +79,18 @@ export function getDbPath(): string {
 
 function preflightExistingSemanticDatabase(dbPath: string, migrationsFolder: string): Database | null {
   const existing = new Database(dbPath, { readonly: true, create: false });
-  let needsWalCoordination = false;
+  let needsNativeCoordination = false;
   try {
     existing.transaction(() => {
       try {
         existing.query("SELECT name FROM sqlite_master LIMIT 1").all();
       } catch (error) {
-        // Apple's SQLite can refuse the first read of a closed WAL database
-        // without sidecars. Only this native probe may select the guarded path.
-        if (error instanceof Error && "code" in error && error.code === "SQLITE_CANTOPEN"
-          && "errno" in error && error.errno === 14) {
-          needsWalCoordination = true;
+        // SQLite can require native coordination for a closed WAL database or
+        // hot-journal rollback. Only this own RO probe may select the guarded path.
+        if (error instanceof Error && "code" in error && "errno" in error
+          && ((error.code === "SQLITE_CANTOPEN" && error.errno === 14)
+            || (error.code === "SQLITE_READONLY_ROLLBACK" && error.errno === 776))) {
+          needsNativeCoordination = true;
           return;
         }
         throw error;
@@ -99,9 +100,9 @@ function preflightExistingSemanticDatabase(dbPath: string, migrationsFolder: str
   } finally {
     existing.close(true);
   }
-  if (!needsWalCoordination) return null;
+  if (!needsNativeCoordination) return null;
 
-  // SQLite may coordinate or recover its WAL here; query_only protects logical
+  // SQLite may coordinate or recover here; query_only protects logical
   // schema/data during strict preflight, not physical file bytes or sidecars.
   const guarded = new Database(dbPath, { readwrite: true, create: false });
   try {
