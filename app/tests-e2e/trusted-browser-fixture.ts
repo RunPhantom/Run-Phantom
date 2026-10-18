@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { TRUSTED_BROWSER_FIXTURE_HTML } from "../../tests/helpers/trusted-browser-fixture";
+import { TRUSTED_BROWSER_FIXTURE_HTML } from "../../tests/helpers/trusted-browser-fixture-html";
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 export const test = base.extend<{ browserApp: { url: string }; browserTarget: { origin: string; events: { type: string; trusted: boolean; value?: string }[] } }>({
   browserTarget: async ({}, use) => {

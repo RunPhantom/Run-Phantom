@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { BROWSER_LIMITS as L, browserObject, browserId, parseBrowserAction,
   parseBrowserOpen, parseBrowserTarget, parseWorkerFrame, scrubBrowserSecrets, type BrowserTarget, type WorkerFrame, type BrowserAction } from "./browser-contract";
 import { validateOrigin } from "./validation";
+import { scanAccessibility, parseAccessibilityRequest, normalizeAccessibility, type AccessibilityPage } from "./accessibility";
 import { sanitizeWithReport } from "./serialization";
 import { createBrowserTransport, type BrowserTransportRequest, type BrowserTransportRoute } from "./browser-transport";
 
@@ -437,6 +438,19 @@ export async function runBrowserWorker(): Promise<void> {
         return { pending: requests.size, loss, lastActivity };
       }
       case "observe": browserObject(frame.data, []); state(); return { pending: requests.size, loss, lastActivity };
+      case "audit": {
+        const b = browserObject(frame.data, ["request", "identity"]), request = parseAccessibilityRequest(b.request, secrets);
+        const identity = browserObject(b.identity, ["sessionId", "generation", "capturedAt"]);
+        if (request.generation !== frame.generation || identity.generation !== frame.generation) throw new Error("generation");
+        if (host.ownership !== "owned" || engine !== "chromium") {
+          const unavailable = normalizeAccessibility(request, identity, undefined, secrets); unavailable.loss.push("unsupported-browser"); return unavailable;
+        }
+        if (!page || closing || frame.generation !== generation || !allowed(String(page.url()), true)) throw new Error("generation");
+        const selected = page, selectedContext = selected.context(), expectedEpoch = documentEpoch;
+        const current = () => !closing && page === selected && !selected.isClosed() && selected.context() === selectedContext
+          && frame.generation === generation && documentEpoch === expectedEpoch && allowed(String(selected.url()), true);
+        return await scanAccessibility(selected as unknown as AccessibilityPage, request, identity, { current, terminate: async () => { await closeRuntime(); } }, secrets);
+      }
       case "capture": {
         const b = browserObject(frame.data, ["raw", "rawConsent"]);
         if (b.raw !== undefined && typeof b.raw !== "boolean" || b.raw && b.rawConsent !== true || b.rawConsent !== undefined && b.rawConsent !== true) throw new Error("consent");
