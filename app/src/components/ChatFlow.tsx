@@ -24,7 +24,7 @@ type ChatItem =
   | { type: "tool"; span: Span; time: number }
   | { type: "tool_group"; items: ToolGroupItem[]; time: number; liveTools?: LiveToolItem[] }
   | { type: "sub_agent"; agent: SubAgent; time: number }
-  | { type: "user_msg"; content: string; parts?: string[]; images?: string[]; time: number }
+  | { type: "user_msg"; content: string; parts?: string[]; images?: string[]; time: number; independentObservation?: boolean }
   | { type: "system_msg"; content: string; time: number; prevMessages?: { role: string; content: string }[] }
   | { type: "llm_out"; span: Span; time: number }
   | LiveToolItem
@@ -72,10 +72,11 @@ function PreviousMessages({ messages }: { messages: { role: string; content: str
   );
 }
 
-function SubAgentBlock({ agent, spans, onDiveIn }: { agent: SubAgent; spans: Span[]; onDiveIn?: (id: string) => void }) {
+function SubAgentBlock({ agent, spans, subAgentBySpan, onDiveIn }: { agent: SubAgent; spans: Span[]; subAgentBySpan: Map<string, string>; onDiveIn?: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [focusRequest, setFocusRequest] = useState(0);
   const a = agent;
 
   const agentSpanSet = new Set(a.span_ids);
@@ -93,7 +94,23 @@ function SubAgentBlock({ agent, spans, onDiveIn }: { agent: SubAgent; spans: Spa
       const spaceBelow = window.innerHeight - rect.bottom - 8;
       setPos({ top: spaceBelow >= popH ? rect.bottom + 4 : Math.max(4, rect.top - popH - 4), left: rect.left });
     }
-  }, [open]);
+  }, [open, focusRequest]);
+
+  // The parent transcript renders none of this sub-agent's spans, so Trajectory
+  // focus requests for any of them land on this chip. The scroll is instant
+  // because the popover is fixed-positioned from the chip's settled rect.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const spanId = (e as CustomEvent<{ spanId?: string }>).detail?.spanId;
+      if (!spanId || subAgentBySpan.get(spanId) !== a.root_span_id || !btnRef.current) return;
+      btnRef.current.scrollIntoView({ behavior: "instant", block: "center" });
+      btnRef.current.focus({ preventScroll: true });
+      setOpen(true);
+      setFocusRequest(n => n + 1);
+    };
+    document.addEventListener("runphantom:focus-tool", handler);
+    return () => document.removeEventListener("runphantom:focus-tool", handler);
+  }, [a.root_span_id, subAgentBySpan]);
 
   useEffect(() => {
     if (!open) return;
@@ -152,8 +169,8 @@ function SubAgentBlock({ agent, spans, onDiveIn }: { agent: SubAgent; spans: Spa
                 <div className="flex flex-wrap gap-1">
                   {agentToolSpans.map(s => (
                     <span key={s.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono"
-                      style={{ background: "var(--rp-ink-a04)", border: `1px solid ${C.border}`, color: C.fg3 }}>
-                      <Check /> {s.name} <span style={{ color: C.fg0 }}>{fmt(s.duration_ms)}</span>
+                      style={{ background: "var(--rp-ink-a04)", border: `1px solid ${C.border}`, color: s.status === "ERROR" ? C.red : C.fg3 }}>
+                      {s.status === "ERROR" ? <AlertCircle /> : <Check />} {s.name} <span style={{ color: C.fg0 }}>{fmt(s.duration_ms)}</span>
                     </span>
                   ))}
                 </div>
@@ -170,13 +187,13 @@ function SubAgentBlock({ agent, spans, onDiveIn }: { agent: SubAgent; spans: Spa
             </div>
 
             {/* Footer — always visible */}
-            <div className="flex-shrink-0 flex items-center justify-between px-3 py-2" style={{ borderTop: `1px solid ${C.border}` }}>
+            <div className="flex-shrink-0 flex flex-wrap items-center justify-between gap-2 px-3 py-2" style={{ borderTop: `1px solid ${C.border}` }}>
               {onDiveIn ? (
-                <Button onClick={() => { setOpen(false); onDiveIn(a.root_span_id); }}>
+                <Button className="shrink-0 whitespace-nowrap" onClick={() => { setOpen(false); onDiveIn(a.root_span_id); }}>
                   Open Sub-Agent &rarr;
                 </Button>
               ) : <div />}
-              <div className="text-[10px] font-mono text-right" style={{ color: C.fg0 }}>
+              <div className="min-w-0 flex-1 break-words text-[10px] font-mono text-right" style={{ color: C.fg0 }}>
                 {a.model && <>{a.model} &middot; </>}
                 {a.llm_count} LLM &middot; {plural(a.tool_count, "tool")} &middot; {fmt(a.duration_ms)}
                 {a.total_input_tokens > 0 && <> &middot; {a.total_input_tokens.toLocaleString()} in</>}
@@ -430,6 +447,16 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const colorMap = useMemo(() => new Map<string, string>(), []);
+  // detectSubAgents also reports agents nested inside another, and the outer
+  // agent's span_ids include the inner one's. The smallest agent holding a span
+  // owns it, so a Trajectory focus request opens exactly one chip.
+  const subAgentBySpan = useMemo(() => {
+    const owner = new Map<string, string>();
+    for (const agent of [...subAgents].sort((a, b) => b.span_ids.length - a.span_ids.length)) {
+      for (const id of agent.span_ids) owner.set(id, agent.root_span_id);
+    }
+    return owner;
+  }, [subAgents]);
   const [md, setMd] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
     return window.localStorage.getItem(RENDER_MODE_KEY) !== "raw";
@@ -467,6 +494,11 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
         continue;
       }
 
+      const capture = span.normalized?.capture;
+      if (capture?.entityKind === "prompt") {
+        if (capture.userText !== null) all.push({ type: "user_msg", content: capture.userText, time: span.start_time_ms ?? 0, independentObservation: true });
+        continue;
+      }
       if (agentRootIds.has(span.id)) {
         const agent = subAgents.find(a => a.root_span_id === span.id)!;
         all.push({ type: "sub_agent", agent, time: span.start_time_ms });
@@ -488,6 +520,10 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
     let prevMsgCount = 0;
     for (let i = 0; i < visibleLlmSpans.length; i++) {
       const span = visibleLlmSpans[i];
+      if (span.normalized?.capture?.entityKind === "assistant") {
+        all.push({ type: "llm_out", span, time: span.start_time_ms ?? 0 });
+        continue;
+      }
       // Prefer the richest child span's messages — the last doStream/doGenerate
       // child has the full conversation including system prompt, all previous
       // messages, and tool results. Fall back to the parent span if no children.
@@ -621,21 +657,35 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
     if (replayError) {
       return (
         <div className="flex flex-col items-center justify-center h-48 text-sm gap-2 px-6 text-center" style={{ color: C.fg1 }}>
-          <div className="font-medium" style={{ color: C.red }}>Replay failed</div>
+          <div className="font-medium" style={{ color: replayError.code === "replay_cancelled" ? C.fg2 : C.red }}>
+            {replayError.code === "replay_cancelled" ? "Replay cancelled" : "Replay failed"}
+          </div>
           <div className="font-mono text-xs opacity-70">{replayError.code}</div>
           <div className="max-w-xl text-xs whitespace-pre-wrap">{replayError.message}</div>
         </div>
       );
     }
-    // "Waiting for activity" promises something more is coming. On a run that has
-    // already finished nothing ever will, and the copy contradicted the run's own
-    // status — so say what is actually true: the trace holds no conversation.
+    if (spans.some(span => span.normalized?.capture)) {
+      return (
+        <div className="flex flex-col items-center justify-center h-48 gap-1.5 px-6 text-center">
+          <div className="text-sm" style={{ color: C.fg2 }}>No model messages in the captured trace</div>
+          <div role="status" className="text-xs" style={{ color: C.fg1 }}>Producer-reported observations · Partial capture · Runtime unverified</div>
+          <div className="text-xs" style={{ color: C.fg1 }}>Completion unverified. Captured spans are in the Span Tree tab.</div>
+        </div>
+      );
+    }
+    const roots = spans.filter(span => span.parent_span_id === null);
+    const endedRoot = roots.length > 0 && roots.every(span => typeof span.start_time_ms === "number" && Number.isFinite(span.start_time_ms)
+      && typeof span.end_time_ms === "number" && Number.isFinite(span.end_time_ms)
+      && span.end_time_ms >= span.start_time_ms);
     if (!isActive) {
       return (
         <div className="flex flex-col items-center justify-center h-48 gap-1.5 px-6 text-center">
           <div className="text-sm" style={{ color: C.fg2 }}>No conversation in this trace</div>
           <div className="text-xs" style={{ color: C.fg1 }}>
-            This run finished without recording any model messages. Its spans are in the Span Tree tab.
+            {endedRoot
+              ? "This run finished without recording any model messages. Its spans are in the Span Tree tab."
+              : "No model messages were recorded. Completion is unverified. Its spans are in the Span Tree tab."}
           </div>
         </div>
       );
@@ -651,7 +701,8 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
 
   return (
     <div ref={scrollRef} className="space-y-1.5 py-2 pb-24">
-      <div className="px-3"><FlameTimeline spans={spans} /></div>
+      {spans.some(span => span.normalized?.capture) && <div role="status" className="px-4 text-xs" style={{ color: C.fg1 }}>Producer-reported observations · Partial capture · Runtime unverified</div>}
+      <div className="px-3"><FlameTimeline spans={spans} subAgents={subAgents} /></div>
       {(() => { let seenLLM = false; return items.map((item, i) => {
         const isFirstLLM = hasLLMOutput && item.type === "llm_out" && !seenLLM;
         if (item.type === "llm_out") seenLLM = true;
@@ -661,7 +712,7 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
               {item.items.map((gi, j) =>
                 gi.type === "tool"
                   ? <ToolCallPill key={gi.span.id} span={gi.span} colorMap={colorMap} />
-                  : <SubAgentBlock key={`sa${j}`} agent={gi.agent} spans={spans} onDiveIn={onDiveIn} />
+                  : <SubAgentBlock key={`sa${j}`} agent={gi.agent} spans={spans} subAgentBySpan={subAgentBySpan} onDiveIn={onDiveIn} />
               )}
               {item.liveTools?.map((lt, j) => { const tc = spanColor(lt.name, colorMap); return lt.type === "live_tool_start" ? (
                 <span key={`lts${j}`} className="inline-flex items-center gap-1.5 py-1 rounded text-xs font-medium"
@@ -694,12 +745,14 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
         }
 
         if (item.type === "user_msg") {
-          return <UserMessage key={`usr${i}`} content={item.content} parts={item.parts} images={item.images} onEdit={onEditMessage} />;
+          return <UserMessage key={`usr${i}`} content={item.content} parts={item.parts} images={item.images} onEdit={item.independentObservation ? undefined : onEditMessage} />;
         }
 
         if (item.type === "llm_out") {
           const s = item.span;
           const isErr = s.status === "ERROR";
+          const capture = s.normalized?.capture;
+          const content = capture?.entityKind === "assistant" ? capture.assistantText : s.output_payload;
           return (
             <div key={`lo${i}`} className="px-4 py-2">
               {isFirstLLM && (
@@ -707,11 +760,12 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
                   <RenderModeToggle md={md} onChange={handleMdChange} />
                 </div>
               )}
-              {isErr && s.output_payload && (
-                <div className="max-w-[85%]"><LLMErrorBanner content={s.output_payload} /></div>
+              {isErr && content !== null && (
+                <div className="max-w-[85%]"><LLMErrorBanner content={content} /></div>
               )}
-              {!isErr && s.output_payload && (
-                <LLMOutput content={s.output_payload} md={md} />
+              {capture?.entityKind === "assistant" && content === null && <div className="text-xs" style={{ color: C.fg1 }}>Assistant observation · Text unavailable; inspect the captured span payload.</div>}
+              {!isErr && content !== null && (
+                <LLMOutput content={content} md={md} />
               )}
             </div>
           );

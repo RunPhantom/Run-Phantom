@@ -33,7 +33,11 @@ import { genAiMetadataAdapter, genAiToolAdapter } from "./adapters/gen-ai";
 
 import { captureKindAdapter, captureVisibility, readCaptureReceipt } from "./adapters/capture-visibility";
 
+import { parseBoundedHookJson } from "../coding-hooks/shared";
+import { claudeHookAdapter } from "./adapters/claude-hook";
+
 const ADAPTERS: SpanAdapter[] = [
+  claudeHookAdapter,
   captureKindAdapter,
   aiSdkLlmAdapter,
   livekitLlmAdapter,
@@ -72,6 +76,9 @@ export function adapterInputFromStoredSpan(row: {
   let attrs: Record<string, string | number | boolean> = {};
   if (row.attributes) {
     try { const parsed = JSON.parse(row.attributes); if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) attrs = parsed; } catch { /* leave empty */ }
+    if (typeof attrs?.captureContract === "string" && attrs.captureContract.startsWith("runphantom.claude-hook.observation/") && parseBoundedHookJson(row.attributes, 16384).status !== "accepted") {
+      attrs = { captureContract: attrs.captureContract, invalidCapture: true };
+    }
   }
   const spanType =
     row.span_type === "LLM_GENERATION" ||
