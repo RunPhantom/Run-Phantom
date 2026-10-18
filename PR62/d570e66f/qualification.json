@@ -1,0 +1,79 @@
+{
+  "pr": 62,
+  "source": "d570e66f05a317506d31b8bc5fcf5271309c7bd2",
+  "receiving_main": "cf28e89c0a234069f292e9bd5b2c0d91c67a4df1",
+  "receiving_branch": "main",
+  "actual_PR_checkout": "ae36b9aee3977d342741dc8d7304bff9676164cd",
+  "source_tree": "e585a0350005e6c00dbb0041f77ddb1880362025",
+  "scope": "Exact persisted replay identity, concurrent-attempt isolation and cancellation/late-arrival regression coverage; scoped desktop replay-state screenshots, not assembled UI acceptance.",
+  "ci": {
+    "linux_push": 39102799001,
+    "linux_pr": 39102802857,
+    "windows_push": 39102799004,
+    "windows_pr": 39102802862,
+    "all4_success_attempt1": true,
+    "linux_each_backend": {
+      "pass": 737,
+      "skip": 1,
+      "fail": 0
+    },
+    "windows_each_backend": {
+      "pass": 705,
+      "skip": 33,
+      "fail": 0
+    },
+    "windows_each_source": {
+      "pass": 140,
+      "skip": 10,
+      "fail": 0,
+      "flaky": 0,
+      "retry": 0
+    },
+    "copied_native_each": {
+      "pass": 3,
+      "skip": 0,
+      "fail": 0,
+      "flaky": 0,
+      "retry": 0
+    },
+    "all32_replay_and13_MCP_cases_pass_every_backend": true,
+    "attribution_UI_first_attempt_each": true
+  },
+  "receiving_main_ci": "Both actual main cf28 workflows succeeded on attempt1. Two Windows source initial failures passed automatic retry; causes UNKNOWN and separately retained. This is not a no-flake or production-readiness claim.",
+  "prior_native_macos": "32 focused native cases/65 assertions, one complete real UI journey with zero retries, root/app/browser types/scoped lint/build. Explicit exact-input bridge; not freshly rerun on d570.",
+  "artifact": {
+    "run": 39102802862,
+    "artifact_id": 12127163456,
+    "bytes": 3250038,
+    "sha256": "37de849f000d1c5a4b1073256f21793d602267627f9728cef76fdbd9a383b7e5",
+    "all_member_CRCs_pass": true,
+    "member_count": 54,
+    "downloaded_rich_archive_count": 1,
+    "only_two_requested_PNGs_extracted": true
+  },
+  "provider_calls": 0,
+  "limits": [
+    "Installed attribution, in-flight resume and nonempty annotation transfer remain unqualified",
+    "Full mobile/reference-theme/product/provider/platform acceptance remains open"
+  ],
+  "screenshots": [
+    {
+      "file": "replay-cancelled-late.png",
+      "sha256": "fc3e9e43aec4cb7ea03953e963839e33dc1a0a72aa8b9de562e8cdb6e0277148",
+      "bytes": 50913,
+      "platform": "native Windows x64 Chromium",
+      "run_id": 39102802862,
+      "artifact_id": 12127163456,
+      "profile": "Initial-pass replay-attribution journey with synthetic checkout data; root individually viewed"
+    },
+    {
+      "file": "replay-attributed-comparison.png",
+      "sha256": "804d3bbaf2ea2bb976e409c3881f1695983c38d44fc6ded1bbbfdff766d0bd0d",
+      "bytes": 122744,
+      "platform": "native Windows x64 Chromium",
+      "run_id": 39102802862,
+      "artifact_id": 12127163456,
+      "profile": "Initial-pass replay-attribution journey with synthetic checkout data; root individually viewed"
+    }
+  ]
+}
