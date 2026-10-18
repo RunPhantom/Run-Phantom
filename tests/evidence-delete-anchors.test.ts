@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { request as httpRequest, type Server } from "node:http";
@@ -10,6 +10,7 @@ import { promoteLocalReplayRun } from "../src/replay";
 import { createLocalEvidenceOwner } from "../src/evaluations/evidence-inventory";
 import { EVIDENCE_IMPORT_CONTENT_TYPE, EVIDENCE_READER_IDENTITY } from "../src/evaluations/evidence-import";
 import { evidenceDigest } from "../src/evaluations/evidence-validation";
+import { EvidenceStore } from "../src/evaluations/evidence-store";
 import type { EvidenceAttachment } from "../src/evaluations/evidence-protocol";
 import { WebSocket } from "ws";
 
@@ -94,6 +95,7 @@ test("a refused public reset preserves the already streaming demo timers and liv
   const delivered: { event: string; data: { traceId?: string; content?: string } }[] = [];
   socket.on("message", data => delivered.push(JSON.parse(data.toString()))); await once(socket, "open");
   let upload: ReturnType<typeof httpRequest> | undefined;
+  let restoreStart: (() => void) | undefined, startTimer: ReturnType<typeof setTimeout> | undefined, holdingUpload = false;
   try {
     demoDrainUntil = performance.now() + 14_000;
     const initial = await fetch(`${base}/api/demo-traces/replay`, { method: "POST" }); expect(initial.status).toBe(200); await initial.json();
@@ -105,13 +107,33 @@ test("a refused public reset preserves the already streaming demo timers and liv
     const metadata = Buffer.from(JSON.stringify({ version: 1, request: { ...EVIDENCE_READER_IDENTITY, operationKey: "live-demo-refusal", attachment: { kind: "run", id: "demo_review" },
       target: null, inventory: null, retention: "raw_and_normalized", sources: [{ sourceId: "unit", kind: "junit", dialect: "junit-xml/v1", shardId: "unit", artifactSha256: evidenceDigest(raw), byteLength: raw.length }] } }));
     const prefix = Buffer.alloc(4); prefix.writeUInt32BE(metadata.length);
-    upload = httpRequest(`${base}/api/evaluations/evidence/imports`, { method: "POST", headers: { "Content-Type": EVIDENCE_IMPORT_CONTENT_TYPE } }, response => response.resume()); upload.on("error", () => {});
+    let acknowledgeStart!: (id: string) => void, rejectStart!: (error: unknown) => void, rejectUpload!: (error: unknown) => void;
+    const started = new Promise<string>((resolve, reject) => { acknowledgeStart = resolve; rejectStart = reject; });
+    const uploadFailed = new Promise<never>((_resolve, reject) => { rejectUpload = reject; });
+    const actualStart = EvidenceStore.prototype.start;
+    const startObserver = spyOn(EvidenceStore.prototype, "start").mockImplementation(function (this: EvidenceStore, id: string, token: string) {
+      const result = actualStart.call(this, id, token);
+      if (result) {
+        try { if (db.query("SELECT id FROM evaluation_evidence_jobs WHERE id=? AND operation_key='live-demo-refusal'").get(id)) acknowledgeStart(id); }
+        catch (error) { rejectStart(error); }
+      }
+      return result;
+    });
+    restoreStart = () => startObserver.mockRestore();
+    // Bound real admission readiness separately from the unchanged demo completion budgets.
+    startTimer = setTimeout(() => rejectStart(new Error("Partial evidence upload did not acknowledge its real job start within 5000ms")), 5_000);
+    holdingUpload = true;
+    upload = httpRequest(`${base}/api/evaluations/evidence/imports`, { method: "POST", headers: { "Content-Type": EVIDENCE_IMPORT_CONTENT_TYPE } }, response => {
+      response.resume(); if (holdingUpload) rejectUpload(new Error(`Partial evidence upload returned unexpected HTTP ${response.statusCode} before reset refusal`));
+    });
+    upload.on("error", error => { if (holdingUpload) rejectUpload(error); });
     upload.write(Buffer.concat([prefix, metadata, raw.subarray(0, 1)]));
-    await until(() => db.query("SELECT id FROM evaluation_evidence_jobs WHERE operation_key='live-demo-refusal' AND status='running'").get() !== null, 1_000);
-    const deliveredBeforeRefusal = delivered.length, refused = await fetch(`${base}/api/demo-traces/replay`, { method: "POST" });
-    expect(refused.status).toBe(409); expect(await refused.json()).not.toHaveProperty("ok", true);
+    const startedJobId = await Promise.race([started, uploadFailed]); clearTimeout(startTimer); startTimer = undefined; restoreStart(); restoreStart = undefined;
+    expect(db.query("SELECT id,status FROM evaluation_evidence_jobs WHERE id=? AND operation_key='live-demo-refusal'").get(startedJobId)).toEqual({ id: startedJobId, status: "running" });
+    const deliveredBeforeRefusal = delivered.length, refused = await Promise.race([fetch(`${base}/api/demo-traces/replay`, { method: "POST" }), uploadFailed]);
+    expect(refused.status).toBe(409); expect(await Promise.race([refused.json(), uploadFailed])).not.toHaveProperty("ok", true);
     for (const original of originalRuns) expect(db.query("SELECT id,started_at FROM runs WHERE id=?").get(original.id)).toEqual(original);
-    upload.destroy();
+    holdingUpload = false; upload.destroy();
     await until(() => roots().length === 3 && roots().every(root => root.status === "OK"), 14_000);
     expect(roots()).toEqual(finished);
     for (const original of originalRuns) expect(db.query("SELECT id,started_at FROM runs WHERE id=?").get(original.id)).toEqual(original);
@@ -123,5 +145,5 @@ test("a refused public reset preserves the already streaming demo timers and liv
     const control = await fetch(`${base}/api/demo-traces/replay`, { method: "POST" }); expect(control.status).toBe(200); await control.json();
     await until(() => roots().length === 3 && roots().every(root => root.status === "OK"), 14_000); expect(roots()).toEqual(finished);
     expect(db.query("SELECT status,reserved_raw_bytes,reserved_normalized_bytes FROM evaluation_evidence_jobs WHERE operation_key='live-demo-refusal'").get()).toMatchObject({ status: "failed", reserved_raw_bytes: 0, reserved_normalized_bytes: 0 });
-  } finally { upload?.destroy(); socket.terminate(); }
+  } finally { holdingUpload = false; clearTimeout(startTimer); restoreStart?.(); upload?.destroy(); socket.terminate(); }
 }, 35_000);
