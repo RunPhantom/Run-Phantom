@@ -423,7 +423,7 @@ async function replayFinishedDemoReview(url: string): Promise<void> {
   }, { timeout: 20_000 }).toBe(1);
 }
 
-test("Run Phantom UI: the errors tooltip shows its last line whole and signals overflow", async ({ page, runPhantom }) => {
+test("Run Phantom UI: the errors tooltip shows its last line whole and signals overflow", async ({ page, runPhantom }, testInfo) => {
   await replayFinishedDemoReview(runPhantom.url);
 
   // The error message was capped at 80px with overflow hidden, which cut
@@ -453,6 +453,7 @@ test("Run Phantom UI: the errors tooltip shows its last line whole and signals o
   });
   expect(clipped).toEqual([]);
   await expect(page.locator("[data-errors-overflow-hint]")).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("errors-tooltip-complete-message.png") });
 
   // When the viewport is too short for the whole list, the region must say so
   // and stay reachable from the keyboard without closing the tooltip.
@@ -463,16 +464,22 @@ test("Run Phantom UI: the errors tooltip shows its last line whole and signals o
   await expect(region).toBeVisible();
   expect(await region.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
   await expect(page.locator("[data-errors-overflow-hint]")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("errors-tooltip-short-viewport-overflow.png") });
+  await trigger.hover();
   await page.keyboard.press("Tab");
+  await expect(region).toBeFocused();
+  await page.mouse.move(1270, 190);
+  await expect(region).toBeVisible();
   await expect(region).toBeFocused();
   await page.keyboard.press("End");
   await expect(page.locator("[data-errors-overflow-hint]")).toHaveCount(0);
   await expect(lastLine).toBeInViewport();
   await page.keyboard.press("Escape");
   await expect(region).toHaveCount(0);
+  await expect(trigger).toBeFocused();
 });
 
-test("Run Phantom UI: the span detail pane shows the whole span id", async ({ page, runPhantom }) => {
+test("Run Phantom UI: the span detail pane shows the whole span id", async ({ page, runPhantom }, testInfo) => {
   await replayFinishedDemoReview(runPhantom.url);
 
   await page.setViewportSize({ width: 1280, height: 720 });
@@ -491,9 +498,10 @@ test("Run Phantom UI: the span detail pane shows the whole span id", async ({ pa
   }));
   expect(overflow.textOverflow).toBe("ellipsis");
   expect(overflow.truncates).toBe(false);
+  await page.screenshot({ path: testInfo.outputPath("span-detail-complete-identifier.png") });
 });
 
-test("Run Phantom UI: the header duration agrees with the span tree root", async ({ page, runPhantom }) => {
+test("Run Phantom UI: the header duration agrees with the span tree root", async ({ page, runPhantom }, testInfo) => {
   await replayFinishedDemoReview(runPhantom.url);
 
   // The header rounded the finished 6200ms run to whole seconds ("6s") while
@@ -504,4 +512,5 @@ test("Run Phantom UI: the header duration agrees with the span tree root", async
   await expect(rootDuration).toHaveText("6.2s");
   const headerDuration = page.locator(".rp-meta-metrics").getByText("duration", { exact: true }).locator("xpath=following-sibling::span[1]");
   await expect(headerDuration).toHaveText("6.2s", { timeout: 10_000 });
+  await page.screenshot({ path: testInfo.outputPath("settled-duration-matches-span-root.png") });
 });

@@ -212,7 +212,10 @@ function ErrorsTooltip({ spans }: { spans: Span[] }) {
 
   return (
     <span ref={triggerRef} className="relative cursor-help" tabIndex={0} aria-label={`${plural(errorSpans.length, "run error")}. Focus for details.`}
-      onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={(event) => {
+        if (!event.currentTarget.contains(document.activeElement)) setShow(false);
+      }}
       onFocus={() => {
         if (dismissedRef.current) dismissedRef.current = false;
         else setShow(true);
