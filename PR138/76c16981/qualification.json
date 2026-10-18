@@ -1,0 +1,29 @@
+{
+  "pr": 138,
+  "feature": "F45",
+  "source": "76c16981ffa010342f70ee8fb45a8383fcb3fdbc",
+  "tree": "6365b424b7c4b1b7424191424de3a96f206341ab",
+  "base": "ee1e263b2b940c45b45cf04032c393f6d754f212",
+  "draft": true,
+  "scope": "One actual copied-native Chromium journey and two-boot default-HOME persistence;38focusedcontrols. Full assembled CLI remains nonzero/BLOCKED374.",
+  "remaining_qualification": "Combined feature source, other native hosts/engines/providers and complete mandatory acceptance cells are pending.",
+  "root_review_recorded_at": "2026-10-18T11:31:36.118453+00:00",
+  "screenshots": [
+    {
+      "file": "detail-1440.png",
+      "sha256": "31647367961b1347fa5fd96a7a49d9a88e625f9356b60166408eda0683108d28",
+      "bytes": 81369,
+      "platform": "macOS arm64",
+      "artifact_id": "a5fa54adef05ae3360fca7d7e934e305c8a7173c95d841ca618a2c82a3b5c1c3",
+      "profile": "Actual copied-native executable import/Runs/detail/reload UI; synthetic local trace, no providers. Not full assembled acceptance."
+    },
+    {
+      "file": "runs-320.png",
+      "sha256": "97cd5e889a708e2a1134079625308675656396d6b5f44e6da4200a4acfb7a107",
+      "bytes": 17734,
+      "platform": "macOS arm64",
+      "artifact_id": "a5fa54adef05ae3360fca7d7e934e305c8a7173c95d841ca618a2c82a3b5c1c3",
+      "profile": "Actual copied-native executable import/Runs/detail/reload UI; synthetic local trace, no providers. Not full assembled acceptance."
+    }
+  ]
+}
