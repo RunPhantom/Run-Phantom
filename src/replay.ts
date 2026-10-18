@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import type { Response as ExpressResponse } from "express";
-import { getRunWithSpans, upsertRun, updateRunMetadata, countReplaysBySource, findRecentRunByEventName, findRunByEventId, deleteRun, reassignAnnotations } from "./db";
+import { getDrizzleDb, getRunWithSpans, upsertRun, updateRunMetadata, countReplaysBySource, findRunByEventId, deleteRun, reassignAnnotations } from "./db";
 import { getReplayTrace } from "./replay-map";
 import { ensureAgentEndpointDetailed, extractContextFromTrace } from "./agents-config";
 import type { NormalizedSpan } from "./spans/normalized";
@@ -245,23 +245,25 @@ export function promoteLocalReplayRun(args: {
   replayMetadata: string;
   replayName: string;
 }): string {
-  const otlpRun = getRunWithSpans(args.otlpRunId).run as any;
-  if (!otlpRun) return args.placeholderRunId;
+  return getDrizzleDb().transaction(() => {
+    const otlpRun = getRunWithSpans(args.otlpRunId).run as any;
+    if (!otlpRun) return args.placeholderRunId;
 
-  updateRunMetadata(args.otlpRunId, args.replayMetadata);
-  upsertRun({
-    id: args.otlpRunId,
-    name: args.replayName,
-    started_at: otlpRun.started_at,
-    last_updated_at: otlpRun.last_updated_at,
+    updateRunMetadata(args.otlpRunId, args.replayMetadata);
+    upsertRun({
+      id: args.otlpRunId,
+      name: args.replayName,
+      started_at: otlpRun.started_at,
+      last_updated_at: otlpRun.last_updated_at,
+    });
+    if (args.placeholderRunId !== args.otlpRunId) {
+      // Ordering matters: deleteRun removes the run's annotations, so anything the
+      // user flagged on the placeholder during the replay has to be moved first.
+      reassignAnnotations(args.placeholderRunId, args.otlpRunId);
+      deleteRun(args.placeholderRunId);
+    }
+    return args.otlpRunId;
   });
-  if (args.placeholderRunId !== args.otlpRunId) {
-    // Ordering matters: deleteRun removes the run's annotations, so anything the
-    // user flagged on the placeholder during the replay has to be moved first.
-    reassignAnnotations(args.placeholderRunId, args.otlpRunId);
-    deleteRun(args.placeholderRunId);
-  }
-  return args.otlpRunId;
 }
 
 async function runLocalAgentReplay(
@@ -337,7 +339,7 @@ async function runLocalAgentReplay(
     return;
   }
 
-  const { replayRunId, replayEventName, replayName, now } = setupReplay(config, sourceRun, broadcast);
+  const { replayRunId, replayName } = setupReplay(config, sourceRun, broadcast);
   sendSSE(res, "replay_started", { replayRunId, sourceRunId: config.sourceRunId, mode: "local" });
 
   // Extract agent-specific context from trace, then apply overrides
@@ -473,35 +475,14 @@ async function runLocalAgentReplay(
       broadcast("spans", { runIds: [finalRunId] });
       sendSSE(res, "replay_complete", { replayRunId: finalRunId, iterations: 0, toolCallCount: 0, matchStats: { exact: 0, ordered: 0, name_only: 0, fallback: 0 } });
     } else {
-      // Fallback: try the old event-name heuristic.
-      const otlpRun = findRecentRunByEventName(replayEventName, now - 5000, replayRunId);
-      let finalRunId = replayRunId;
-      if (otlpRun) {
-        const replayMeta = JSON.stringify({
-          replay: { sourceRunId: config.sourceRunId, mode: config.mode, model: config.model ?? null, overrides: { model: !!config.model, systemPrompt: !!config.systemPrompt } },
-        });
-        // Same promotion as the primary path, which also moves annotations off the
-        // placeholder and deletes it. Hand-rolling it here left a zero-span replay
-        // row behind on every fallback stitch, with no error and no way to tell it
-        // from a replay that genuinely produced nothing.
-        finalRunId = promoteLocalReplayRun({
-          placeholderRunId: replayRunId,
-          otlpRunId: otlpRun.id,
-          replayMetadata: replayMeta,
-          replayName,
-        });
-        broadcast("spans", { runIds: [finalRunId] });
-        sendSSE(res, "replay_complete", { replayRunId: finalRunId, iterations: 0, toolCallCount: 0, matchStats: { exact: 0, ordered: 0, name_only: 0, fallback: 0 } });
-      } else {
-        const message = `Agent accepted replay${agentReplayId ? ` ${agentReplayId}` : ""}, but Run Phantom did not receive a replay trace within ${Math.round(maxWaitMs / 1000)}s.`;
-        recordPlaceholderError(replayRunId, config, { code: "replay_timeout", message }, broadcast);
-        sendSSE(res, "error", {
-          code: "replay_timeout",
-          message,
-          replayRunId,
-          replayId: agentReplayId,
-        });
-      }
+      const message = `Agent accepted replay${agentReplayId ? ` ${agentReplayId}` : ""}, but Run Phantom did not receive a replay trace within ${Math.round(maxWaitMs / 1000)}s.`;
+      recordPlaceholderError(replayRunId, config, { code: "replay_timeout", message }, broadcast);
+      sendSSE(res, "error", {
+        code: "replay_timeout",
+        message,
+        replayRunId,
+        replayId: agentReplayId,
+      });
     }
   }
 

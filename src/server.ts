@@ -9,6 +9,7 @@ import { randomUUID } from "crypto";
 import { normalizeOtelId } from "./ids";
 import { searchRuns, RunSearchError } from "./run-search";
 import { getRunComparison, RunComparisonError } from "./run-comparison";
+import { withholdAgentDefinitionCapture } from "./agent-definitions";
 import { parseOtlpRequest } from "./parse";
 import { decodeOtlpProtobuf } from "./otlp-protobuf";
 import {
@@ -16,7 +17,9 @@ import {
   insertSpan,
   getRuns,
   getDrizzleDb,
+  closeDb,
   getRunWithSpans,
+  SpanSearchLimitError,
   getRunsByConvoId,
   clearAll,
   upsertLiveEvent,
@@ -49,6 +52,13 @@ import {
   queryTracesBounded,
 } from "./db";
 import { sliceSpanPayload } from "./payload-slice";
+import { startCodingHookOwner } from "./coding-hooks/owner";
+import { CodingHookController } from "./coding-hooks/service";
+import { ClaudeHookManagement } from "./coding-hooks/management";
+import { executeHookManagement, parseHookManagementCommand } from "./coding-hooks/configuration";
+import { parseBoundedHookJson } from "./coding-hooks/shared";
+import { HookRefusal } from "./coding-hooks/protocol";
+import { capabilityOwnerKey } from "./coding-hooks/capability";
 import { exportTrace, importTrace, InvalidTraceImportError } from "./trace-export";
 import { detectSubAgents } from "./agents";
 import { detectProvider, getProviderBaseURL, getProviderHeaders, isSupportedProvider } from "./provider-options";
@@ -107,6 +117,16 @@ import verificationSdk from "./verification/browser-sdk.js" with { type: "text" 
 import { VERIFICATION_LIMITS } from "./verification/protocol";
 import { createEvaluationService } from "./evaluations/service";
 import { createEvaluationRouter } from "./evaluations/router";
+import { createReviewQueueRouter } from "./review-queues/router";
+import { EvidenceImportService } from "./evaluations/evidence-import";
+import { EvidenceSupervisor } from "./evaluations/evidence-supervisor";
+import { createLocalEvidenceOwner } from "./evaluations/evidence-inventory";
+import { createLocalPromptRegistry } from "./prompts/registry";
+import { createPromptRouter } from "./prompts/router";
+import { createComparisonRuntime, initializeComparisonScope, type ComparisonRuntime, type ComparisonRuntimeOptions } from "./prompts/comparison-runtime";
+import { createComparisonRouter } from "./prompts/comparison-router";
+import { EvidenceError } from "./evaluations/evidence-protocol";
+import { evidenceBinaryHandler, evidenceJsonBody } from "./evaluations/evidence-router";
 import { EVALUATION_LIMITS } from "./evaluations/protocol";
 import { parseJsonEvidence, LossyJsonNumberError } from "./evaluations/json-evidence";
 import {
@@ -373,6 +393,8 @@ function demoChatHtml(): string {
       --border: #9C8870;
       --accent: #B83C24;
       --mark-accent: #C7462D;
+      --mark-shield: #EEE7DE;
+      --mark-shield-edge: #D8D0C7;
       --accent-strong: #9F301D;
       --focus: #9F301D;
       --info: #275EA8;
@@ -407,19 +429,10 @@ function demoChatHtml(): string {
     header { padding: 24px 24px 18px; border-bottom: 1px solid var(--border); }
     .brand { display: flex; gap: 16px; align-items: flex-start; }
     .mark {
-      position: relative;
       flex: 0 0 auto;
       width: 52px;
       height: 52px;
-      border-radius: 16px;
-      border: 1px solid var(--border);
-      background: var(--canvas);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.86);
-      padding: 8px;
-      color: var(--ink);
     }
-    .mark path { stroke: currentColor; }
-    .mark circle { fill: var(--mark-accent); }
     .eyebrow {
       margin: 1px 0 7px;
       color: var(--muted);
@@ -558,7 +571,7 @@ function demoChatHtml(): string {
       .shell { height: min(760px, calc(100svh - 24px)); border-radius: 22px; }
       header { padding: 20px 18px 16px; }
       .brand { gap: 12px; }
-      .mark { width: 46px; height: 46px; border-radius: 14px; }
+      .mark { width: 46px; height: 46px; }
       main { padding: 14px; }
       form { padding: 12px; }
       .actions { flex-direction: column; align-items: stretch; }
@@ -574,10 +587,14 @@ function demoChatHtml(): string {
   <div class="shell">
     <header>
       <div class="brand">
-        <svg class="mark" viewBox="0 0 64 64" fill="none" role="img" aria-label="Run Phantom">
-          <path d="M12 26V12H26M38 52H52V38" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"></path>
-          <path d="M12 42C20 42 20 22 30 22C40 22 39 42 52 42" stroke-width="4.5" stroke-linecap="round"></path>
-          <circle cx="30" cy="22" r="5"></circle>
+        <svg class="mark" viewBox="0 0 32 32" fill="none" role="img" aria-label="Run Phantom">
+          <path d="M15.05 1.95Q16 1.6 16.95 1.95L26.75 6.2Q27.85 6.65 27.85 7.85V19.2Q27.85 22.6 17.1 29.9Q16 30.6 14.9 29.9Q4.15 22.6 4.15 19.2V7.85Q4.15 6.65 5.25 6.2Z" fill="var(--mark-shield)" stroke="var(--mark-shield-edge)" stroke-width="0.5" stroke-linejoin="round"></path>
+          <path d="M10.42 19.66A6.9 6.9 0 0 1 20.96 10.81" stroke="var(--mark-accent)" stroke-width="2.6" stroke-linecap="round"></path>
+          <path d="M22.87 8.97L22.8 14.4L19.06 12.65Z" fill="var(--mark-accent)" stroke="var(--mark-accent)" stroke-width="0.6" stroke-linejoin="round"></path>
+          <rect x="12.1" y="20.75" width="2.4" height="2.4" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.8"></rect>
+          <rect x="15.62" y="21.36" width="2.2" height="2.2" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.62"></rect>
+          <rect x="18.96" y="20.25" width="2" height="2" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.46"></rect>
+          <rect x="21.3" y="17.72" width="1.8" height="1.8" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.34"></rect>
         </svg>
         <div>
           <p class="eyebrow">Run Phantom demo</p>
@@ -688,9 +705,14 @@ function demoChatHtml(): string {
 </html>`;
 }
 
-export async function createServer(port: number) {
+export async function createServer(port: number, options: { comparisons?: ComparisonRuntimeOptions } = {}) {
   const app = express();
   const server = http.createServer(app);
+  const hookOwner = await startCodingHookOwner(getDrizzleDb().$client, undefined, { contextTransport: true });
+  let hookController: CodingHookController;
+  let clearingHooks = false;
+  const hookManagementWork = new Set<Promise<void>>();
+  try {
 
   const currentServerPort = (): number | null => {
     const address = server.address();
@@ -750,9 +772,26 @@ export async function createServer(port: number) {
     const msg = JSON.stringify({ event, data });
     for (const ws of clients) { if (ws.readyState === WebSocket.OPEN) ws.send(msg); }
   }
+  hookController = new CodingHookController(hookOwner.store, runId => broadcast("spans", { runIds: [runId] }));
 
   const verification = createVerificationService({ broadcast, allowedSourceIps, allowedHosts });
   const evaluations = createEvaluationService();
+  const evidenceDatabase = getDrizzleDb().$client;
+  evidenceDatabase.transaction(() => {
+    evidenceDatabase.query("INSERT OR IGNORE INTO evaluation_evidence_scopes(scope_key,generation,active) VALUES('local:local',1,1)").run();
+    evidenceDatabase.query("INSERT INTO prompt_scope_controls(scope_key,generation) SELECT scope_key,1 FROM evaluation_evidence_scopes WHERE scope_key='local:local' ON CONFLICT(scope_key) DO NOTHING").run();
+  }).immediate();
+  const evidenceOwner = createLocalEvidenceOwner(evidenceDatabase);
+  const prompts = createLocalPromptRegistry(evidenceDatabase);
+  prompts.capture("read");
+  let comparisons: ComparisonRuntime | null = null;
+  try {
+    comparisons = await createComparisonRuntime(evidenceDatabase, options.comparisons);
+    initializeComparisonScope({ database: evidenceDatabase, scope: { kind: "local", id: "local" }, authorize: () => {} });
+  } catch { await comparisons?.close(); comparisons = null; }
+  const comparisonStore = comparisons?.scope({ database: evidenceDatabase, scope: { kind: "local", id: "local" }, authorize: () => {} }) ?? null;
+  const evidenceImports = new EvidenceImportService(new EvidenceSupervisor());
+  evidenceImports.initialize(evidenceOwner);
   server.on("upgrade", (req, socket, head) => {
     let pathname: string;
     try { pathname = new URL(req.url ?? "", "http://localhost").pathname; } catch { socket.destroy(); return; }
@@ -775,19 +814,26 @@ export async function createServer(port: number) {
     acpTransitioning = true;
     acpWorkspaceEpoch++;
     acpProviderEpoch++;
+    // Fence hook publication synchronously alongside the ACP authority transition.
+    let revocationError: Error | undefined;
+    try { hookOwner.store.rotateOwner(); } catch (error) { revocationError = error instanceof Error ? error : new Error("Hook revocation unavailable"); } finally { hookOwner.revoke(); }
     const nativeClosed = acpSessions.close();
-    // Stop accepting HTTP synchronously, then join native work before closing its peers.
+    // Stop accepting HTTP synchronously, then join all owned work before its shared peers.
     const httpClosed = new Promise<Error | undefined>((resolve) => closeHttp((error) => resolve(error)));
     shutdownTask = (async () => {
-      await nativeClosed;
-      await acpGrants.close();
-      askUserQuestions.closeAll();
-      verification.close();
-      evaluations.close();
-      for (const client of clients) client.terminate();
-      server.closeAllConnections();
-      const error = await httpClosed;
-      if (error) throw error;
+      try {
+        await Promise.all([nativeClosed, hookController.close(), evidenceImports.shutdown(), comparisons?.close(), ...hookManagementWork]);
+        await acpGrants.close();
+        askUserQuestions.closeAll();
+        verification.close();
+        evaluations.close();
+        for (const client of clients) client.terminate();
+        wss.close();
+        server.closeAllConnections();
+        const error = await httpClosed;
+        if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") throw error;
+      } finally { closeDb(); await hookOwner.close(); }
+      if (revocationError) throw revocationError;
     })();
     return shutdownTask;
   }
@@ -1035,6 +1081,33 @@ export async function createServer(port: number) {
     next();
   });
 
+  // This one identity binary transport remains behind every local-access guard.
+  app.post("/api/evaluations/evidence/imports", evidenceBinaryHandler(evidenceImports, evidenceOwner));
+  app.use("/api/prompts/comparisons", createComparisonRouter(comparisonStore, comparisons?.coordinator ?? null));
+  app.use("/api/prompts", createPromptRouter(prompts));
+
+  // Keep the bounded review parser behind local access guards and ahead of the global JSON parser.
+  app.use("/api/review-queues", createReviewQueueRouter());
+  app.post(["/api/coding-hooks/claude/admission", "/api/coding-hooks/claude/publication", "/api/coding-hooks/claude/transport"], (req, res) => { void hookController.handle(req, res); });
+  app.post("/api/coding-hooks/claude/manage", express.raw({ type: "application/json", limit: 16384 }), (req, res) => {
+    if (clearingHooks || !hookOwner.store.isOwnerActive() || hookManagementWork.size >= 2) { res.status(503).json({ status: "unavailable", reason: "unavailable" }); return; }
+    const work = (async () => {
+      try {
+        if (req.headers["x-runphantom-hook-owner"] !== capabilityOwnerKey(hookOwner.store.db.filename)) throw new HookRefusal("unauthorized", 403);
+        if (!Buffer.isBuffer(req.body)) throw new HookRefusal("malformed", 400);
+        const parsed = parseBoundedHookJson(new TextDecoder("utf-8", { fatal: true }).decode(req.body), 16384);
+        if (parsed.status !== "accepted") throw new HookRefusal("malformed", 400);
+        const currentPort = currentServerPort(); if (!currentPort) throw new HookRefusal("inactive", 503);
+        const manager = new ClaudeHookManagement(hookOwner.store, `http://127.0.0.1:${currentPort}`, true);
+        if (parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value) && parsed.value.action === "activate-context-v2") {
+          // The trusted owner action is distinct from hook bodies and never promotes capture policy.
+          res.json(await manager.transitionContextV2(new TextDecoder("utf-8", { fatal: true }).decode(req.body), hookController));
+        } else res.json(await executeHookManagement(manager, parseHookManagementCommand(parsed.value)));
+      } catch (error) { res.status(error instanceof HookRefusal ? error.status : 503).json({ status: "unavailable", reason: error instanceof HookRefusal ? error.reason : "unavailable" }); }
+    })();
+    hookManagementWork.add(work); void work.finally(() => hookManagementWork.delete(work));
+  });
+
   app.use(["/api/verification", "/api/evaluations"], (req, res, next) => {
     const hasBody = req.headers["transfer-encoding"] !== undefined || Number(req.headers["content-length"] ?? 0) > 0;
     if (hasBody && !req.is("application/json")) {
@@ -1054,6 +1127,7 @@ export async function createServer(port: number) {
       if (!res.destroyed) res.status(error instanceof AcpMcpError && error.reason === "busy" ? 409 : 400).json({ error: "Verification MCP unavailable or invalid." });
     }
   });
+  app.use(["/api/evaluations/evidence", "/api/evaluations/findings", "/api/evaluations/claims"], evidenceJsonBody());
   app.use("/api/verification", express.json({ limit: VERIFICATION_LIMITS.MAX_FRAME_BYTES }));
   app.use("/api/evaluations", express.json({
     limit: EVALUATION_LIMITS.MAX_REQUEST,
@@ -1089,7 +1163,7 @@ export async function createServer(port: number) {
   // The owned close promise above joins ACP before disposing these shared services.
 
   app.use("/api/verification", createVerificationRouter(verification));
-  app.use("/api/evaluations", createEvaluationRouter(evaluations));
+  app.use("/api/evaluations", createEvaluationRouter(evaluations, { service: evidenceImports, owner: evidenceOwner }));
 
   // Health check endpoint — used by SDKs to auto-detect a running debugger
   app.get("/health", (_req, res) => {
@@ -1117,6 +1191,7 @@ export async function createServer(port: number) {
       const result = replayDefaultDemoTraces({ broadcast });
       res.json({ ok: true, ...result });
     } catch (err) {
+      if (err instanceof EvidenceError) { res.status(err.status).json({ error: err.message }); return; }
       console.error("[runphantom] demo trace replay failed:", err);
       res.status(500).json({ error: (err as Error).message || "Failed to replay demo traces." });
     }
@@ -1233,6 +1308,7 @@ export async function createServer(port: number) {
             model: s.model, provider: s.provider,
             input_tokens: s.inputTokens, output_tokens: s.outputTokens,
             attributes: JSON.stringify(s.attributes),
+            otlp_evidence: JSON.stringify(s.otlpEvidence),
           });
         }
 
@@ -1484,7 +1560,7 @@ export async function createServer(port: number) {
     if (!row) { res.status(404).json({ error: "Span not found" }); return; }
     const { input_head, output_head, input_chars, output_chars, ...rest } = row;
     res.json({
-      ...rest,
+      ...withholdAgentDefinitionCapture(rest),
       input_chars,
       output_chars,
       input_preview: input_chars > 80 ? input_head.slice(0, 80) + "…" : input_head,
@@ -1552,6 +1628,7 @@ export async function createServer(port: number) {
   // through get_span_payload.
   const MAX_DETAIL_ATTR_CHARS = 2_000;
   function compactSpanForDetail(span: any): any {
+    span = withholdAgentDefinitionCapture(span);
     if (typeof span?.attributes !== "string" || span.attributes.length <= MAX_DETAIL_ATTR_CHARS) return span;
     let parsed: Record<string, unknown>;
     try {
@@ -1578,7 +1655,7 @@ export async function createServer(port: number) {
       // Fall back to saved run cache
       const cached = getCachedRun(id);
       if (cached) {
-        try { const data = JSON.parse(cached); if (data.run) { res.json(data); return; } } catch {}
+        try { const data = JSON.parse(cached); if (data.run) { res.json({ ...data, spans: Array.isArray(data.spans) ? data.spans.map(withholdAgentDefinitionCapture) : data.spans }); return; } } catch {}
       }
       if (!run) { res.status(404).json({ error: "Not found" }); return; }
     }
@@ -1665,7 +1742,7 @@ export async function createServer(port: number) {
       opts.max_matches = n;
     }
     try { res.json(searchRun(req.params.id, opts)); }
-    catch (err: any) { res.status(400).json({ error: err.message }); }
+    catch (err: any) { res.status(err instanceof SpanSearchLimitError ? err.status : 400).json({ error: err.message }); }
   });
   app.get("/api/runs/:id/events", (req, res) => {
     const opts: any = {};
@@ -1689,9 +1766,14 @@ export async function createServer(port: number) {
     res.json(tailLiveEvents(req.params.id, opts));
   });
   app.post("/api/clear", (_req, res) => {
-    evaluations.reset();
-    for (const id of verification.bridge.sessions.keys()) verification.bridge.remove(id);
-    clearAll(); broadcast("clear", {}); res.json({ ok: true });
+    hookOwner.store.rotateOwner();
+    clearingHooks = true;
+    const draining = hookController.close();
+    void Promise.all([draining, evidenceImports.clear(evidenceOwner), ...hookManagementWork]).then(() => {
+      evaluations.reset();
+      for (const id of verification.bridge.sessions.keys()) verification.bridge.remove(id);
+      clearAll(); hookController = new CodingHookController(hookOwner.store, runId => broadcast("spans", { runIds: [runId] })); clearingHooks = false; broadcast("clear", {}); res.json({ ok: true });
+    }).catch(() => res.status(500).json({ error: "Workspace clear failed" }));
   });
 
   app.get("/api/workspace/active", (_req, res) => {
@@ -2369,13 +2451,12 @@ export async function createServer(port: number) {
   });
 
   app.delete("/api/runs/:id", (req, res) => {
-    try {
+    const checks = evidenceDatabase.query("SELECT id FROM verification_reports WHERE run_id=?").all(req.params.id) as { id: string }[];
+    void evidenceImports.invalidateAttachments(evidenceOwner, [{ kind: "run", id: req.params.id }, { kind: "inspection", id: req.params.id }, ...checks.map(check => ({ kind: "check" as const, id: check.id }))]).then(() => {
       deleteRun(req.params.id);
       broadcast("spans", { runIds: [req.params.id] });
       res.json({ ok: true });
-    } catch (err) {
-      res.status(500).json({ error: String(err) });
-    }
+    }).catch(() => res.status(500).json({ error: "Run deletion failed" }));
   });
 
   app.patch("/api/runs/:id", (req, res) => {
@@ -2917,10 +2998,12 @@ export async function createServer(port: number) {
     app,
     server,
     close: closeServer,
+    codingHooks: { store: hookOwner.store, get controller() { return hookController; }, management: () => new ClaudeHookManagement(hookOwner.store, server.listening && currentServerPort() ? `http://127.0.0.1:${currentServerPort()}` : null, server.listening) },
     get port() {
       return currentServerPort() ?? port;
     },
   };
+  } catch (error) { closeDb(); await hookOwner.close(); throw error; }
 }
 
 export const _serverInternal = { createReplayAbortLifecycle, extractAgentAskContinuation };
