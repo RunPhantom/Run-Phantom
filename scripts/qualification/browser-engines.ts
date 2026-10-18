@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 export const ENGINES = ["chromium", "firefox", "webkit"] as const;
 export type Engine = typeof ENGINES[number];
 export const PLATFORMS = ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64", "win32-x64"] as const;
-export const JOURNEYS = ["capture-navigation", "trusted-outcome", "request-lifecycle", "selected-tab"] as const;
+export const JOURNEYS = ["capture-navigation", "trusted-outcome", "request-lifecycle", "selected-tab", "saved-flow"] as const;
 export const PENDING = ["F37-recordings", "F41-44-integrated-ui", "F46-enabled-execution"] as const;
 export interface EngineIdentity { engine: Engine; executable: string; executableSha256: string | null; nativeBinary: string; nativeSha256: string | null; available: boolean; reason: string | null }
 export interface Outcome { collected: number; passed: number; failed: number; skipped: number; retries: number; exitCode: number | null; nativeAudit?: boolean }

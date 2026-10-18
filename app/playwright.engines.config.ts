@@ -1,4 +1,5 @@
 import { defineConfig } from "@playwright/test";
+if (!process.env.RUNPHANTOM_F47_LOCK_PID || !process.env.RUNPHANTOM_F47_MODULE || !process.env.RUNPHANTOM_F47_OUTPUT || !process.env.RUNPHANTOM_F47_UI_EXECUTABLE) throw new Error("BLOCKED: dedicated owned browser runner and explicit installed engine required");
 export default defineConfig({
   testDir: "./tests-e2e/browser-engine-qualification",
   testMatch: "**/*.journey.ts",

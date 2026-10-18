@@ -47,7 +47,7 @@ export const test = base.extend<{ backend: Backend; attached: boolean }>({
       if (route === "/events") { let bytes = ""; request.on("data", chunk => { if (bytes.length < 8192) bytes += String(chunk); }); request.on("end", () => { events.push(JSON.parse(bytes) as NativeEvent); response.end("recorded"); }); return; }
       if (route === "/accepted") { response.writeHead(202); response.end("accepted"); return; }
       if (route === "/duplicate") { const current = ++duplicate; setTimeout(() => { const status = current === 1 ? 201 : 202; completions.push(status); response.writeHead(status); response.end("recorded fact"); }, current === 1 ? 200 : 10); return; }
-      response.setHeader("Content-Type", "text/html; charset=utf-8"); response.end(TRUSTED_BROWSER_FIXTURE_HTML.replace("</body>", '<section id="audit-invalid"><button id="unnamed"></button></section><button id="fix-audit">Fix audit</button><script>document.querySelector("#fix-audit").onclick=()=>document.querySelector("#unnamed").setAttribute("aria-label","Named control")</script></body>'));
+      response.setHeader("Content-Type", "text/html; charset=utf-8"); response.end(TRUSTED_BROWSER_FIXTURE_HTML.replace("</body>", '<button id="remove-marker" onclick="document.querySelector(\'#always\').remove()">Remove marker</button><section id="audit-invalid"><button id="unnamed"></button></section><button id="fix-audit">Fix audit</button><script>document.querySelector("#fix-audit").onclick=()=>document.querySelector("#unnamed").setAttribute("aria-label","Named control")</script></body>'));
     }); target.listen(0, "127.0.0.1"); await once(target, "listening"); const targetUrl = `http://127.0.0.1:${(target.address() as { port: number }).port}`;
     let external: External | null = null, daemon: ChildProcess | undefined, sentinelTarget: Server | undefined;
     const sampled = new Map<number, ProcessRow>(); let logs = "", teardownError: unknown;
@@ -85,6 +85,7 @@ export const test = base.extend<{ backend: Backend; attached: boolean }>({
       writeFileSync(info.outputPath("teardown.json"), JSON.stringify(proof, null, 2)); writeFileSync(info.outputPath("daemon.log"), logs);
       const clean = proof.daemonReaped && proof.externalReaped && proof.processes.every(row => row.reaped) && !teardownError;
       if (clean) rmSync(profile, { recursive: true, force: true });
+      writeFileSync(info.outputPath("teardown.json"), JSON.stringify({ ...proof, profileRemoved: !existsSync(profile) }, null, 2));
       expect(clean, "Owned processes must be reaped before profile removal and lease release").toBe(true);
     }
   },

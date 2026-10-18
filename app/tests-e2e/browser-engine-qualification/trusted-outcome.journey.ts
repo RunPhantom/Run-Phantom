@@ -29,6 +29,8 @@ test("trusted-outcome: normal UI dispatch, real private-input primitives, masked
   await act({ type: "select", target: { kind: "css", selector: "#plan" }, value: "a" });
   await act({ type: "drag", target: { kind: "css", selector: "#from" }, to: { kind: "css", selector: "#to" } });
   await expect.poll(() => new Set(backend.events.filter(event => event.trusted).map(event => event.type)).has("drag-end")).toBe(true);
+  for (const type of ["key", "hover", "select", "drag-start", "drag-end"]) await expect.poll(() => backend.events.some(event => event.type === type && event.trusted)).toBe(true);
+  expect(backend.events.filter(event => event.type === "select").at(-1)?.value).toBe("a");
   expect(backend.events.filter(event => ["key", "hover", "select", "drag-start", "drag-end"].includes(event.type)).every(event => event.trusted)).toBe(true);
   const observation = await backend.observe(session.id); expect(JSON.stringify(observation)).not.toContain(secret);
   await panel.getByRole("button", { name: "Capture masked screenshot", exact: true }).click(); await expect(panel.getByRole("img")).toBeVisible();
