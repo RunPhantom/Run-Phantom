@@ -3,77 +3,18 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
-import type { EventEmitter } from "node:events";
-import type { Readable } from "node:stream";
+import {
+  observeOwnedChild, ownedClock, OwnedChildCloseError, StreamDigest, count, errorCode, safeNumber,
+  type OwnedChild as PortableChild, type OwnedClock as PortableClock, type OwnedChildEvent, type OwnedChildSnapshot,
+  type SafeCode, type Signal,
+} from "../../tests/helpers/owned-child";
+export type { OwnedChild as PortableChild, OwnedClock as PortableClock } from "../../tests/helpers/owned-child";
 
-export interface PortableChild extends EventEmitter {
-  pid?: number;
-  exitCode: number | null;
-  signalCode: NodeJS.Signals | null;
-  stdout: Readable | null;
-  stderr: Readable | null;
-  kill(signal?: NodeJS.Signals): boolean;
-}
-
-export interface PortableClock {
-  now(): number;
-  setTimeout(run: () => void, ms: number): unknown;
-  clearTimeout(timer: unknown): void;
-  sleep(ms: number): Promise<void>;
-}
-
-export const portableClock: PortableClock = {
-  now: () => performance.now(),
-  setTimeout: (run, ms) => setTimeout(run, ms),
-  clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
-  sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
-};
+export const portableClock: PortableClock = ownedClock;
 
 type Failure = "NONE" | "RESERVATION_FAILED" | "SETUP_FAILED" | "SPAWN_FAILED" | "EXITED_BEFORE_READY" | "HEALTH_NOT_READY" | "PRODUCT_FAILURE" | "CLEANUP_FAILED" | "CLEANUP_UNCONFIRMED" | "PROFILE_REMOVE_FAILED" | "DIAGNOSTIC_OVERFLOW";
 type Phase = "RESERVE" | "SETUP" | "SPAWN" | "HEALTH" | "READY" | "PRODUCT" | "TERM" | "KILL" | "CONFIRM" | "REAPED" | "RETAINED" | "FAILED";
 type Event = "RESERVATION_OPENED" | "RESERVATION_RELEASED" | "SPAWN_REQUESTED" | "SPAWNED" | "SPAWN_FAILED" | "CHILD_ERROR" | "EXIT_OBSERVED" | "CLOSE_OBSERVED" | "HEALTH_OK" | "HEALTH_NON_OK" | "HEALTH_TRANSPORT" | "TERM_SENT" | "TERM_FAILED" | "KILL_SENT" | "KILL_FAILED" | "REAP_CONFIRMED" | "REAP_UNCONFIRMED" | "PROFILE_REMOVED" | "PROFILE_RETAINED" | "SETUP_FAILED";
-const errorCodes = ["NONE", "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EADDRINUSE", "EACCES", "EPERM", "ENOENT", "EPIPE", "ECONNABORTED", "ENOTFOUND", "EAI_AGAIN", "ABORT_ERR", "ERR_INVALID_ARG_TYPE", "ERR_INVALID_ARG_VALUE", "OTHER"] as const;
-type SafeCode = typeof errorCodes[number];
-const signals = ["NONE", "SIGTERM", "SIGKILL", "SIGINT", "SIGQUIT", "SIGHUP", "SIGABRT", "SIGSEGV", "SIGBREAK", "OTHER"] as const;
-type Signal = typeof signals[number];
-const safeNumber = (value: number) => Number.isFinite(value) && value >= 0 ? Math.min(value, Number.MAX_SAFE_INTEGER) : 0;
-const count = (value: number) => Math.floor(safeNumber(value));
-function dataProperty(value: unknown, key: string): unknown {
-  if ((typeof value !== "object" || value === null) && typeof value !== "function") return undefined;
-  try { const property = Object.getOwnPropertyDescriptor(value, key); return property && "value" in property ? property.value : undefined; }
-  catch { return undefined; }
-}
-function errorCode(error: unknown): SafeCode {
-  const direct = dataProperty(error, "code");
-  const code = direct === undefined ? dataProperty(dataProperty(error, "cause"), "code") : direct;
-  return errorCodes.find(allowed => allowed === code) ?? "OTHER";
-}
-function signalCode(signal: unknown): Signal { return signals.find(allowed => allowed === signal) ?? "OTHER"; }
-
-class StreamDigest {
-  private hash = createHash("sha256");
-  private bytes = 0;
-  private ended = false;
-  private stop = () => {};
-  constructor(stream: Readable | null) {
-    if (!stream) { this.ended = true; return; }
-    const data = (chunk: Buffer | string) => {
-      this.bytes = count(this.bytes + Buffer.byteLength(chunk));
-      this.hash.update(chunk);
-    };
-    const ended = () => { this.ended = true; };
-    const error = () => {};
-    this.stop = () => {
-      this.ended = true;
-      stream.off("data", data); stream.off("end", ended); stream.off("close", ended); stream.off("error", error);
-    };
-    stream.on("data", data); stream.once("end", ended); stream.once("close", ended); stream.on("error", error);
-  }
-  close() { this.stop(); }
-  snapshot() { return { bytes: this.bytes, sha256: this.hash.copy().digest("hex"), phase: this.ended ? "ENDED" as const : "ACTIVE" as const }; }
-}
-
 class Diagnostics {
   primaryFailure: Failure = "NONE";
   secondaryCleanupFailure: Failure = "NONE";
@@ -95,8 +36,14 @@ class Diagnostics {
   private events: { event: Event; phase: Phase; elapsedMs: number; code: SafeCode }[] = [];
   private droppedEvents = 0;
   constructor(private clock: PortableClock) { this.started = safeNumber(clock.now()); }
-  attach(child: PortableChild) { this.stdout = new StreamDigest(child.stdout); this.stderr = new StreamDigest(child.stderr); }
-  detachStreams() { this.stdout.close(); this.stderr.close(); }
+  private owned: ReturnType<typeof observeOwnedChild> | undefined;
+  attach(owned: ReturnType<typeof observeOwnedChild>) { this.owned = owned; }
+  observe(owned: OwnedChildSnapshot) {
+    this.spawn = owned.lifecycle.spawn; this.terminal = owned.lifecycle.terminal; this.cleanup = owned.lifecycle.cleanup;
+    this.signal = owned.lifecycle.signal; this.exitClass = owned.lifecycle.exitClass;
+    this.termAttempts = owned.metrics.termAttempts; this.killAttempts = owned.metrics.killAttempts;
+    this.secondaryCleanupFailure = owned.cleanupFailure;
+  }
   fail(code: Failure) { if (this.primaryFailure === "NONE") this.primaryFailure = code; }
   cleanupFailure(code: Failure) { this.secondaryCleanupFailure = code; }
   elapsed() { return safeNumber(this.clock.now() - this.started); }
@@ -112,7 +59,7 @@ class Diagnostics {
       lifecycle: { spawn: this.spawn, terminal: this.terminal, cleanup: this.cleanup, signal: this.signal, exitClass: this.exitClass },
       health: { observation: this.health, status: this.status, code: this.healthCode },
       metrics: { attempts: Math.min(200, count(this.attempts)), termAttempts: Math.min(1, count(this.termAttempts)), killAttempts: Math.min(1, count(this.killAttempts)), elapsedMs: this.elapsed() },
-      streams: { stdout: this.stdout.snapshot(), stderr: this.stderr.snapshot() },
+      streams: this.owned?.snapshot().streams ?? { stdout: this.stdout.snapshot(), stderr: this.stderr.snapshot() },
       events: this.events.map(event => ({ event: event.event, phase: event.phase, elapsedMs: event.elapsedMs, code: event.code })),
       truncation: this.droppedEvents ? "EVENTS_DROPPED" : "NONE", droppedEvents: this.droppedEvents,
     };
@@ -143,94 +90,40 @@ export class PortableDestinationError extends Error {
 }
 
 export function observePortableProcess(child: PortableChild, removeProfile: () => void, clock: PortableClock = portableClock, diagnostic = new Diagnostics(clock)) {
-  let spawned = child.pid !== undefined;
-  if (spawned) diagnostic.spawn = "SPAWNED";
-  let failedSpawn = false;
-  let terminal = false;
-  let closed = false;
-  let settled = false;
-  let escalated = false;
-  let termSent = false;
-  let killSent = false;
-  let closing: Promise<void> | undefined;
-  let resolveClose: () => void;
-  let rejectClose: (error: Error) => void;
-  let termTimer: unknown;
-  let confirmTimer: unknown;
-
-  const checkTerminal = () => {
-    if (!terminal) {
-      if (child.exitCode !== null) { terminal = true; diagnostic.terminal = "EXIT_CODE"; }
-      else if (child.signalCode !== null) { terminal = true; diagnostic.terminal = "SIGNAL_CODE"; }
-      else if (failedSpawn) { terminal = true; diagnostic.terminal = "NO_CHILD_CREATED"; }
+  let closeFailure: PortableDestinationError | undefined;
+  const onEvent = (event: OwnedChildEvent) => {
+    diagnostic.observe(event.snapshot);
+    switch (event.kind) {
+      case "SPAWNED": diagnostic.event(event.kind, "SPAWN", event.code); break;
+      case "SPAWN_FAILED": diagnostic.event(event.kind, "FAILED", event.code); break;
+      case "TERM_SENT": case "TERM_FAILED": diagnostic.event(event.kind, "TERM", event.code); break;
+      case "KILL_SENT": case "KILL_FAILED": diagnostic.event(event.kind, "KILL", event.code); break;
+      case "REAP_CONFIRMED": case "PROFILE_REMOVED": diagnostic.event(event.kind, "REAPED", event.code); break;
+      case "REAP_UNCONFIRMED": diagnostic.event(event.kind, "RETAINED", event.code); break;
+      case "PROFILE_RETAINED":
+        diagnostic.event(event.kind, "RETAINED", event.code);
+        closeFailure = new PortableDestinationError("CLEANUP_UNCONFIRMED", diagnostic);
+        break;
+      case "PROFILE_REMOVE_FAILED": closeFailure = new PortableDestinationError("PROFILE_REMOVE_FAILED", diagnostic); break;
+      default: diagnostic.event(event.kind, diagnostic.phase, event.code);
     }
-    if (child.exitCode !== null) diagnostic.exitClass = Number.isFinite(child.exitCode) ? child.exitCode === 0 ? "ZERO" : "NONZERO" : "OTHER";
-    if (child.signalCode !== null) diagnostic.signal = signalCode(child.signalCode);
-    return terminal;
   };
-  const clearTimers = () => {
-    if (termTimer !== undefined) clock.clearTimeout(termTimer);
-    if (confirmTimer !== undefined) clock.clearTimeout(confirmTimer);
-    termTimer = confirmTimer = undefined;
-  };
-  const detachCompletion = () => { child.off("spawn", onSpawn); child.off("exit", onExit); };
-  const detach = () => {
-    detachCompletion(); child.off("close", onClose); child.off("error", onError); diagnostic.detachStreams();
-  };
-  const finish = () => {
-    if (!closing || settled || !checkTerminal()) return;
-    settled = true; clearTimers(); detachCompletion();
-    diagnostic.cleanup = "REAPED"; diagnostic.event("REAP_CONFIRMED", "REAPED");
-    try { removeProfile(); diagnostic.event("PROFILE_REMOVED", "REAPED"); resolveClose(); }
-    catch { diagnostic.cleanup = "FAILED"; diagnostic.cleanupFailure("PROFILE_REMOVE_FAILED"); rejectClose(new PortableDestinationError("PROFILE_REMOVE_FAILED", diagnostic)); }
-    if (closed || failedSpawn) detach();
-  };
-  const signal = () => {
-    if (!spawned || checkTerminal() || settled) { finish(); return; }
-    if (escalated ? killSent : termSent) return;
-    if (escalated) killSent = true; else termSent = true;
-    if (escalated) diagnostic.killAttempts = 1; else diagnostic.termAttempts = 1;
-    try {
-      const delivered = child.kill(escalated ? "SIGKILL" : "SIGTERM");
-      diagnostic.event(escalated ? delivered ? "KILL_SENT" : "KILL_FAILED" : delivered ? "TERM_SENT" : "TERM_FAILED", escalated ? "KILL" : "TERM");
-    } catch (error) { diagnostic.event(escalated ? "KILL_FAILED" : "TERM_FAILED", escalated ? "KILL" : "TERM", errorCode(error)); }
-    finish();
-  };
-  function onSpawn() { spawned = true; diagnostic.spawn = "SPAWNED"; diagnostic.event("SPAWNED", "SPAWN"); if (closing) signal(); }
-  function onError(error: unknown) {
-    if (!spawned && child.pid === undefined) { failedSpawn = true; diagnostic.spawn = "FAILED"; diagnostic.event("SPAWN_FAILED", "FAILED", errorCode(error)); }
-    else diagnostic.event("CHILD_ERROR", diagnostic.phase, errorCode(error));
-    finish();
-  }
-  function onExit() { terminal = true; diagnostic.terminal = "EXIT_EVENT"; checkTerminal(); diagnostic.event("EXIT_OBSERVED", diagnostic.phase); finish(); }
-  function onClose() { terminal = true; closed = true; diagnostic.terminal = "CLOSE_EVENT"; checkTerminal(); diagnostic.event("CLOSE_OBSERVED", diagnostic.phase); finish(); if (settled) detach(); }
-  child.on("spawn", onSpawn); child.on("error", onError); child.on("exit", onExit); child.on("close", onClose);
-  diagnostic.attach(child);
-  checkTerminal();
-
+  const owned = observeOwnedChild(child, removeProfile, { clock, termGraceMs: 2500, confirmationMs: 2500, onEvent });
+  diagnostic.attach(owned); diagnostic.observe(owned.snapshot());
+  let closing: Promise<void> | undefined;
   return {
     snapshot: () => diagnostic.snapshot(),
     serialize: () => diagnostic.serialize(),
-    terminal: () => checkTerminal(),
-    failedSpawn: () => failedSpawn,
+    terminal: () => { const terminal = owned.terminal(); diagnostic.observe(owned.snapshot()); return terminal; },
+    failedSpawn: () => owned.failedSpawn(),
     close: () => {
       if (closing) return closing;
+      let resolveClose: () => void;
+      let rejectClose: (error: Error) => void;
       closing = new Promise<void>((resolve, reject) => { resolveClose = resolve; rejectClose = reject; });
-      if (checkTerminal()) finish();
-      else {
-        termTimer = clock.setTimeout(() => {
-          if (checkTerminal()) { finish(); return; }
-          escalated = true;
-          confirmTimer = clock.setTimeout(() => {
-            if (checkTerminal()) { finish(); return; }
-            settled = true; clearTimers(); detachCompletion(); diagnostic.cleanup = "RETAINED_UNCONFIRMED";
-            diagnostic.cleanupFailure("CLEANUP_UNCONFIRMED"); diagnostic.event("REAP_UNCONFIRMED", "RETAINED"); diagnostic.event("PROFILE_RETAINED", "RETAINED");
-            rejectClose(new PortableDestinationError("CLEANUP_UNCONFIRMED", diagnostic));
-          }, 2500);
-          signal();
-        }, 2500);
-        signal();
-      }
+      void owned.close().then(() => resolveClose(), error => {
+        rejectClose(closeFailure ?? new PortableDestinationError(error instanceof OwnedChildCloseError ? error.code : "CLEANUP_FAILED", diagnostic));
+      });
       return closing;
     },
   };

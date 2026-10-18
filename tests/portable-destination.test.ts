@@ -204,7 +204,6 @@ function fixture() {
   return { child, clock, calls, deps };
 }
 function throwAdversarial(value: unknown): never {
-  // eslint-disable-next-line @typescript-eslint/only-throw-error -- Exercise intentional non-Error rejection values.
   throw value;
 }
 function exposed(error: any) {
