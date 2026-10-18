@@ -1,21 +1,23 @@
-import { lstat, open, realpath, unlink } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { readClaudeHookStdin, CALLBACK_LIMITS } from "./callback";
 import { CODEX_EVENTS, CODEX_LIMITS, codexDigest, codexSnapshotOtlp, decodeCodexRollout, parseCodexHookInput } from "./codex";
 import { canonicalPath, decodeRegistration, mergeSettings, privateDirectory, readRegular, stateRoot } from "./codex-registration";
+import { acquireCodexLock } from "./codex-lock";
 
 /** A callback is silent, finite, local-only and cannot initialize a database or affect the producer exit. */
 export async function runCodexHookCallback(args: string[], input: Readable = process.stdin): Promise<0> {
-  let lock: Awaited<ReturnType<typeof open>> | undefined, lockPath: string | undefined;
-  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), CALLBACK_LIMITS.lifetimeMs);
+  let releaseLock: (() => void) | undefined;
+  // Reserve cleanup time inside the CLI's unchanged absolute exit deadline.
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), CALLBACK_LIMITS.lifetimeMs - 500);
   try {
     if (args.length !== 4 || args[0] !== "--registration-file" || args[2] !== "--installation-id" || !/^[a-f0-9]{32}$/.test(args[3])) return 0;
     const home = await realpath(os.homedir()), root = stateRoot(home), file = args[1];
     if (file !== path.join(root, args[3] + ".json")) return 0;
     await privateDirectory(path.join(home, ".runphantom")); await privateDirectory(root);
-    lockPath = file + ".lock"; lock = await open(lockPath, "wx", 0o600);
+    releaseLock = acquireCodexLock(file + ".lock");
     const registration = await readRegular(file, 16384, true), reg = decodeRegistration(registration);
     if (!reg.enabled || reg.id !== args[3] || reg.id !== codexDigest(JSON.stringify([home, reg.workspace])).slice(0, 32)) return 0;
     const raw = await readClaudeHookStdin(input, controller.signal);
@@ -38,7 +40,7 @@ export async function runCodexHookCallback(args: string[], input: Readable = pro
   } catch { /* Observation failure never steers the host. */ }
   finally {
     clearTimeout(timer); input.pause();
-    if (lock) { await lock.close().catch(() => {}); await unlink(lockPath!).catch(() => {}); }
+    releaseLock?.();
   }
   return 0;
 }

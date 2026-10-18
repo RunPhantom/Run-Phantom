@@ -7,6 +7,7 @@ import { CODEX_EVENTS, codexDigest } from "./codex";
 import { canonicalPath, decodeRegistration, fail, mergeSettings, missing, privateDirectory, readRegular, stateRoot, type CodexRegistration } from "./codex-registration";
 import { IS_PACKAGED_RUNTIME } from "../version";
 import { SOURCE_ENTRY } from "../source-paths";
+import { acquireCodexLock } from "./codex-lock";
 
 export interface CodexInstallOptions { workspace: string; home?: string; codexHome?: string; executable?: string[]; port?: number; fullConsent?: boolean; }
 const quote = (s: string): string => "'" + s.replace(/'/g, "'\\''") + "'";
@@ -34,7 +35,7 @@ export async function manageCodexHooks(action: "install" | "uninstall" | "doctor
   await privateDirectory(path.join(home, ".runphantom"));
   if (action === "install") await mkdir(stateRoot(home), { recursive: true, mode: 0o700 });
   await privateDirectory(stateRoot(home));
-  const lock = await open(file + ".lock", "wx", 0o600);
+  const releaseLock = acquireCodexLock(file + ".lock");
   try {
     let original: string | null = null;
     try { original = await readRegular(file, 16384, true); } catch (e) { if (!missing(e)) throw e; }
@@ -68,7 +69,7 @@ export async function manageCodexHooks(action: "install" | "uninstall" | "doctor
       if (text !== original) await replace(file, text, original);
     }
     return { configuration: action === "install" ? "installed" : "removed", changed: result.changed, captureVerified: false, vendorTrust: "review_in_codex_hooks", installationId: id };
-  } finally { await lock.close(); await unlink(file + ".lock"); }
+  } finally { releaseLock(); }
 }
 
 export async function removeConfiguredCodexHooks(home = os.homedir()): Promise<number> {

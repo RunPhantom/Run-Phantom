@@ -83,7 +83,7 @@ describe("team runtime authority boundary", () => {
 
   test("Codex callback has an exact read-only acquisition graph without installers or database authority", () => {
     const allowed = new Set([
-      "src/coding-hooks/codex-callback.ts", "src/coding-hooks/codex-registration.ts", "src/coding-hooks/codex.ts",
+      "src/coding-hooks/codex-callback.ts", "src/coding-hooks/codex-registration.ts", "src/coding-hooks/codex-lock.ts", "src/coding-hooks/codex.ts",
       "src/coding-hooks/acquisition.ts", "src/coding-hooks/callback.ts", "src/coding-hooks/capability.ts", "src/coding-hooks/claude.ts", "src/coding-hooks/client.ts", "src/coding-hooks/context-client.ts", "src/coding-hooks/context-v2.ts", "src/coding-hooks/projection.ts", "src/coding-hooks/protocol.ts", "src/coding-hooks/retained-version.ts", "src/coding-hooks/shared.ts",
       "src/evaluations/json-evidence.ts", "src/json-keys.ts", "src/verification/protocol.ts", "src/verification/redaction.ts", "src/verification/serialization.ts",
     ]);
@@ -98,7 +98,8 @@ describe("team runtime authority boundary", () => {
         const dependency = resolveImport(source, file);
         if (dependency) pending.push(dependency);
         else {
-          const filesystem = ["src/coding-hooks/codex-callback.ts", "src/coding-hooks/codex-registration.ts", "src/coding-hooks/capability.ts", "src/coding-hooks/claude.ts"].includes(relative) && ["node:fs", "node:fs/promises"].includes(source);
+          const filesystem = (["src/coding-hooks/codex-callback.ts", "src/coding-hooks/codex-registration.ts", "src/coding-hooks/capability.ts", "src/coding-hooks/claude.ts"].includes(relative) && ["node:fs", "node:fs/promises"].includes(source))
+            || relative === "src/coding-hooks/codex-lock.ts" && source === "node:fs";
           const utility = ["src/coding-hooks/protocol.ts", "src/coding-hooks/retained-version.ts"].includes(relative) && source === "node:util";
           if (!["node:os", "node:path", "node:crypto"].includes(source) && !filesystem && !utility
             && !(relative === "src/coding-hooks/client.ts" && source === "node:http")) violations.push(`${relative} imports ${source}`);

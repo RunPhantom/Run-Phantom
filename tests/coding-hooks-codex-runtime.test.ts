@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { createServer as httpServer } from "node:http";
 import { manageCodexHooks, removeConfiguredCodexHooks } from "../src/coding-hooks/codex-install";
 import { closeDb, getDrizzleDb } from "../src/db";
 import { createServer } from "../src/server";
@@ -34,6 +35,7 @@ async function refused(promise: Promise<unknown>, reason: string) {
 }
 function command(): string { return JSON.parse(readFileSync(settings, "utf8")).hooks.Stop.find((g: { hooks: { command: string }[] }) => g.hooks[0].command.includes("--registration-file")).hooks[0].command; }
 async function native(payload = codexHook(workspace, source), vector = command()) {
+  const started = performance.now();
   const child = spawn("/bin/sh", ["-c", "exec " + vector], { cwd: workspace, env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home, TMPDIR: dir, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", RUNPHANTOM_DB_PATH: path.join(home, "MUST_NOT_CREATE.sqlite"), RUNPHANTOM_URL: "http://127.0.0.1:1" }, stdio: "pipe" });
   let stdout = "", stderr = ""; child.stdout.on("data", b => stdout += b); child.stderr.on("data", b => stderr += b); child.stdin.on("error", () => {});
   const timer = setTimeout(() => child.kill("SIGKILL"), 2500);
@@ -43,10 +45,11 @@ async function native(payload = codexHook(workspace, source), vector = command()
   try { result = await ended; } finally { clearTimeout(timer); }
   expect(result).toEqual({ code: 0, signal: null }); expect(stdout).toBe(""); expect(stderr).toBe("");
   expect(existsSync(path.join(home, "MUST_NOT_CREATE.sqlite"))).toBe(false);
+  return performance.now() - started;
 }
-async function start() {
-  runtime = await createServer(0);
-  await new Promise<void>(resolve => runtime!.server.listen(0, "127.0.0.1", resolve));
+async function start(port = 0) {
+  runtime = await createServer(port);
+  await new Promise<void>(resolve => runtime!.server.listen(port, "127.0.0.1", resolve));
   return (runtime.server.address() as { port: number }).port;
 }
 const rows = () => getDrizzleDb().$client.query("SELECT * FROM spans ORDER BY id").all() as { id: string; run_id: string; input_tokens: number | null; output_tokens: number | null; input_payload: string | null; output_payload: string | null; attributes: string }[];
@@ -104,4 +107,34 @@ filesystemTest("foreign cwd, linked/public sources and public registration do no
   chmodSync(source, 0o644); await native(); expect(rows()).toHaveLength(0); chmodSync(source, 0o600);
   const linked = source + ".linked.jsonl"; symlinkSync(source, linked); await native(codexHook(workspace, linked)); expect(rows()).toHaveLength(0);
   const registration = command().match(/'([^']+\.json)' '--installation-id'/)![1]; chmodSync(registration, 0o644); await native(); expect(rows()).toHaveLength(0);
+});
+
+filesystemTest("a real stalled export deadline cannot poison later capture or management", async () => {
+  let requests = 0, bodyComplete = false, closed = false;
+  const stalled = httpServer((req) => { expect(req.url).toBe("/v1/traces"); requests++; req.resume(); req.once("end", () => { bodyComplete = true; }); });
+  await new Promise<void>(resolve => stalled.listen(0, "127.0.0.1", resolve));
+  const port = (stalled.address() as { port: number }).port;
+  try {
+    await manageCodexHooks("install", options(port));
+    const elapsed = await native();
+    expect(requests).toBe(1); expect(bodyComplete).toBe(true); expect(elapsed).toBeLessThan(1500);
+    expect(readdirSync(path.join(home, ".runphantom/codex-hooks")).filter(n => n.endsWith(".lock"))).toEqual([]);
+    expect(await manageCodexHooks("doctor", options(port))).toMatchObject({ configuration: "installed", enabled: true });
+    await new Promise<void>((resolve, reject) => stalled.close(e => e ? reject(e) : resolve())); closed = true;
+    await start(port); await native(); expect(rows()).toHaveLength(4);
+    expect(await manageCodexHooks("uninstall", options(port))).toMatchObject({ configuration: "removed" });
+    expect(readdirSync(path.join(home, ".runphantom/codex-hooks"))).toEqual([]);
+  } finally {
+    if (!closed) await new Promise<void>(resolve => stalled.close(() => resolve()));
+  }
+});
+
+filesystemTest("actual process exit releases only its own lock inode and preserves a replacement", () => {
+  const module = path.resolve(import.meta.dir, "../src/coding-hooks/codex-lock.ts"), lock = path.join(home, "exit-control.lock");
+  for (const replacement of [false, true]) {
+    const script = `import { acquireCodexLock } from ${JSON.stringify(module)}; import { unlinkSync, writeFileSync } from "node:fs"; acquireCodexLock(${JSON.stringify(lock)}); ${replacement ? `unlinkSync(${JSON.stringify(lock)}); writeFileSync(${JSON.stringify(lock)}, "replacement-owner");` : ""} process.exit(0);`;
+    const result = spawnSync(process.execPath, ["--no-env-file", "-e", script], { cwd: workspace, env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }, timeout: 2000, encoding: "utf8" });
+    expect(result.error).toBeUndefined(); expect(result.status).toBe(0); expect(result.signal).toBeNull(); expect(result.stdout).toBe(""); expect(result.stderr).toBe("");
+    if (replacement) expect(readFileSync(lock, "utf8")).toBe("replacement-owner"); else expect(existsSync(lock)).toBe(false);
+  }
 });
