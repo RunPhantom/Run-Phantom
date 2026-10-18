@@ -6,7 +6,7 @@
   "build": { "frontendDist": "../ui" },
   "app": {
     "withGlobalTauri": true,
-    "windows": [{ "label": "verification-fixture", "title": "Run Phantom cooperating Tauri fixture", "width": 640, "height": 400, "resizable": false }],
+    "windows": [{ "label": "verification-fixture", "title": "Run Phantom cooperating Tauri fixture", "width": 640, "height": 400, "resizable": false, "incognito": true }],
     "security": { "csp": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self'; base-uri 'none'; form-action 'none'" }
   },
   "bundle": { "active": true, "targets": ["app"] }
