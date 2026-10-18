@@ -6,7 +6,7 @@ import { redactForPersistence, sanitizeWithReport } from "./serialization";
 import { decodeFlowDocument } from "./flow-anchors";
 import { VERIFICATION_LIMITS as L, type VerificationFlow, type VerificationReport, type RuntimeEvent } from "./protocol";
 import { VerificationHttpError, parseAppOrigin } from "./bridge";
-import { boundReportContext, reopenExecutionContext } from "./report-context";
+import { boundReportContext, reopenExecutionContext, revalidatePerformanceContext } from "./report-context";
 
 export function boundedEvidence(events: RuntimeEvent[]): RuntimeEvent[] {
   const out: RuntimeEvent[] = [];
@@ -45,7 +45,7 @@ export function listReports(runId?: string): VerificationReport[] {
   return rows.map((row) => ({ id: row.id, sessionId: row.session_id, runId: row.run_id, flowId: row.flow_id,
     name: row.name, status: row.status as VerificationReport["status"], reason: row.reason,
     evidence: JSON.parse(row.evidence) as RuntimeEvent[], createdAt: row.created_at,
-    ...(row.context ? { context: reopenExecutionContext(JSON.parse(row.context) as NonNullable<VerificationReport["context"]>) } : {}) }));
+    ...(row.context ? { context: reopenExecutionContext(revalidatePerformanceContext(JSON.parse(row.context) as NonNullable<VerificationReport["context"]>)) } : {}) }));
 }
 
 export function saveFlow(name: string, origin: unknown, steps: unknown): VerificationFlow {

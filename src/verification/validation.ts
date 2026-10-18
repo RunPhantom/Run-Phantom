@@ -6,6 +6,8 @@ import { parseFlowAnchor } from "./flow-anchors";
 import { isSensitiveKey } from "./redaction";
 import { sanitizeWithReport } from "./serialization";
 import { parseControlSourceObservation } from "./build/source";
+import { parsePerformancePredicate } from "./performance";
+import { PERFORMANCE_PROTOCOL_VERSION, PERFORMANCE_CAPABILITY } from "./protocol";
 
 export class VerificationInputError extends Error {
   readonly status = 400;
@@ -91,6 +93,10 @@ export function validateOrigin(value: unknown): string {
 export function parseCommand(value: unknown): AppCommand {
   const obj = record(value, "command");
   switch (obj.type) {
+    case "performance":
+      keys(obj, ["type", "phase"], "performance command");
+      if (obj.phase !== "begin" && obj.phase !== "capture") invalid("performance phase must be begin or capture");
+      return { type: "performance", phase: obj.phase };
     case "snapshot": {
       keys(obj, ["type", "selector"], "snapshot command");
       const selector = optionalString(obj, "selector", L.MAX_SELECTOR_LENGTH);
@@ -190,6 +196,8 @@ export function parsePredicate(value: unknown): Predicate {
     if (depth > L.MAX_PREDICATE_DEPTH || ++nodes > L.MAX_PREDICATE_NODES) invalid("predicate exceeds its complexity limit");
     const obj = record(raw, "predicate");
     switch (obj.kind) {
+      case "performance":
+        try { return parsePerformancePredicate(obj); } catch { return invalid("unsupported or invalid numeric performance lab predicate"); }
       case "relative": {
         keys(obj, ["kind", "target", "relation", "equals"], "relative predicate");
         const target = parseRelativeTarget(obj.target);
@@ -369,6 +377,12 @@ export function parseBrowserMessage(value: unknown): BrowserMessage {
         if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 4 || !obj.capabilities.includes(TREE_CAPABILITY)
           || new Set(obj.capabilities).size !== obj.capabilities.length || obj.capabilities.some(entry => ![CAUSAL_CAPABILITY, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, TREE_CAPABILITY].includes(entry))) invalid("unsupported or duplicate tree capabilities");
         return { type: "hello", version: TREE_PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
+      }
+      if (obj.version === PERFORMANCE_PROTOCOL_VERSION) {
+        keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello");
+        if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 5 || !obj.capabilities.includes(PERFORMANCE_CAPABILITY)
+          || new Set(obj.capabilities).size !== obj.capabilities.length || obj.capabilities.some(entry => ![CAUSAL_CAPABILITY, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, TREE_CAPABILITY, PERFORMANCE_CAPABILITY].includes(entry))) invalid("unsupported or duplicate performance capabilities");
+        return { type: "hello", version: PERFORMANCE_PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
       }
       if (obj.version === SOURCE_PROTOCOL_VERSION) {
         keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello");

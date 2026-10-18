@@ -1,4 +1,5 @@
 import type { VerificationReportContext } from "../../api/verification";
+import { PerformanceReadings } from "./PerformanceEvidence";
 
 const sourceReasons = {
   "not-react": "Control has no accessible React metadata.",
@@ -14,6 +15,7 @@ function expectedOutcome(value: unknown, depth = 0): string {
   const predicate = value as Record<string, unknown>;
   const text = (value: unknown, fallback = "omitted") => typeof value === "string" || typeof value === "number" ? String(value) : fallback;
   switch (predicate.kind) {
+    case "performance": return `Native lab ${text(predicate.metric)} ${predicate.op === "lte" ? "at most" : "at least"} ${text(predicate.value)}`;
     case "network": return `${text(predicate.method, "Any method")} ${text(predicate.urlContains)}${predicate.status === undefined ? " returns a response" : ` returns ${text(predicate.status)}`}`;
     case "console": return `${predicate.absent === true ? "No" : "At least one"} console ${text(predicate.level)} observed`;
     case "signal": return `Signal “${text(predicate.name)}” is observed`;
@@ -54,6 +56,8 @@ export function ReportContext({ context }: { context?: VerificationReportContext
       <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium text-[color:var(--rp-ink-strong)]">Expected outcome {check.step}</span><span className="text-[11px] font-medium" style={{ color: check.status === "pass" ? "var(--rp-success)" : check.status === "fail" ? "var(--rp-danger)" : "var(--rp-warning)" }}>{check.status === "pass" ? "Passed" : check.status === "fail" ? "Failed" : "Inconclusive"}</span></div>
       <p className="break-words leading-relaxed">{expectedOutcome(check.predicate)}</p>
       <p className="break-words text-[11px] leading-relaxed text-[color:var(--rp-ink-soft)]">{check.reason}</p>
+      {check.performance && <PerformanceReadings snapshot={check.performance.snapshot} retained />}
+      {check.performanceOmitted && <p className="text-xs text-[color:var(--rp-warning)]">Native performance evidence unavailable: {check.performanceOmitted === "context-limit" ? "optional snapshot omitted to preserve the report’s outcome budget" : "stored snapshot failed validation"}. The evaluated outcome and reason remain retained.</p>}
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-[color:var(--rp-ink-soft)]"><span>{check.complete ? "Complete capture" : "Incomplete capture"}</span><span>{check.dropped} events dropped</span><span>{check.settled ? `Settled: ${context.quietMs} ms quiet` : "Did not settle"}</span></div>
       {(check.controlSource || check.controlSourceOmitted) && <div className="space-y-2 rounded-md border border-[color:var(--rp-border)] p-3 text-[11px]" aria-label="Control source context">
         <p className="font-medium">SDK-reported React source{check.controlSource && " · Before dispatch"}</p>

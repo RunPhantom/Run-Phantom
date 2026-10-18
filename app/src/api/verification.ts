@@ -7,6 +7,7 @@ export type CreatedSession = SessionSummary & { token: string; sdkUrl: string; w
 export type CommandResult = { ok: boolean; cursor: number; result?: unknown; error?: string; truncated?: boolean };
 import type { FlowRepairProposal } from "../../../src/verification/protocol";
 
+export type { PerformanceSnapshot, PerformancePredicate, RetainedPerformanceEvidence } from "../../../src/verification/performance";
 const root = "/api/verification";
 const sessionPath = (id: string) => `${root}/sessions/${encodeURIComponent(id)}`;
 

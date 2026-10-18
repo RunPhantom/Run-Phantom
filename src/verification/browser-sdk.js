@@ -8,6 +8,8 @@ var SOURCE_PROTOCOL_VERSION = 4;
 var SOURCE_CAPABILITY = "control-source";
 var TREE_PROTOCOL_VERSION = 5;
 var TREE_CAPABILITY = "semantic-tree";
+var PERFORMANCE_PROTOCOL_VERSION = 6;
+var PERFORMANCE_CAPABILITY = "performance-evidence";
 var SEMANTIC_REF_PATTERN = /^rpref_[0-9a-f]{32}$/;
 function normalizeSemanticText(text) {
   return text.normalize("NFC").replace(/\s+/gu, " ").trim();
@@ -499,6 +501,143 @@ function sanitizeControlSource(raw, scrub) {
   }
 }
 
+// src/verification/performance.ts
+var PERFORMANCE_LIMITS = { BYTES: 16 * 1024, CALLBACK_ENTRIES: 1000, LIFETIME_WORK: 50000, DIAGNOSTICS: 8, SCRIPT_INSPECTIONS: 32, URL_INPUT: 2048, URL_PART: 256 };
+var PERFORMANCE_OBSERVERS = ["paint", "largest-contentful-paint", "navigation", "layout-shift", "event", "long-animation-frame", "resource"];
+var PERFORMANCE_METRICS = ["fcpMs", "lcpMs", "navigationTtfbMs", "navigationDomContentLoadedMs", "navigationLoadMs", "clsMaxSessionScore", "qualifyingInteractionMaxMs", "longFrameBlockingMaxMs", "resourceCount", "resourceTransferBytes"];
+function hasPerformanceControlCharacters(text) {
+  for (let i = 0;i < text.length; i++)
+    if (text.charCodeAt(i) < 32 || text.charCodeAt(i) === 127)
+      return true;
+  return false;
+}
+function refuse() {
+  throw new Error("Invalid or oversized native performance evidence");
+}
+function object(value, fields, optional = []) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return refuse();
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== null && proto !== Object.prototype)
+    return refuse();
+  const names = Reflect.ownKeys(value);
+  if (names.length > fields.length + optional.length)
+    return refuse();
+  for (const key of names) {
+    if (typeof key !== "string" || !fields.includes(key) && !optional.includes(key))
+      return refuse();
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !("value" in descriptor))
+      return refuse();
+  }
+  if (fields.some((key) => !Object.prototype.hasOwnProperty.call(value, key)))
+    return refuse();
+  return value;
+}
+function numeric(value, integer = false, nullable = false) {
+  if (value === null && nullable)
+    return null;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || integer && !Number.isSafeInteger(value))
+    return refuse();
+  return value;
+}
+function boolean(value) {
+  if (typeof value !== "boolean")
+    return refuse();
+  return value;
+}
+function list(value) {
+  if (!Array.isArray(value) || value.length > PERFORMANCE_LIMITS.DIAGNOSTICS)
+    return refuse();
+  if (Reflect.ownKeys(value).some((key) => key !== "length" && (typeof key !== "string" || !/^(?:0|[1-9]\d*)$/.test(key) || Number(key) >= value.length)))
+    return refuse();
+  for (let i = 0;i < value.length; i++) {
+    const d = Object.getOwnPropertyDescriptor(value, String(i));
+    if (!d || !("value" in d))
+      return refuse();
+  }
+  return value;
+}
+function url(value) {
+  const obj = object(value, ["origin", "path"]);
+  for (const part of [obj.origin, obj.path])
+    if (typeof part !== "string" || part.length > PERFORMANCE_LIMITS.URL_PART || hasPerformanceControlCharacters(part))
+      return refuse();
+  const { origin, path } = obj;
+  if (!/^https?:\/\//.test(origin) || /[@?#]/.test(origin) || !path.startsWith("/") || /[?#]/.test(path))
+    return refuse();
+  try {
+    if (new URL(origin).origin !== origin)
+      return refuse();
+  } catch {
+    return refuse();
+  }
+  return { origin, path };
+}
+function parsePerformanceSnapshot(value) {
+  const obj = object(value, ["version", "source", "phase", "documentId", "windowId", "clock", "metadata", "coverage", "metrics", "diagnostics", "lifetimeWork", "lifetimeExhausted"]);
+  if (obj.version !== 1 || obj.source !== "sdk-native-observers" || obj.phase !== "begin" && obj.phase !== "capture" || obj.metadata !== "none" && obj.metadata !== "redacted-origin-path")
+    return refuse();
+  for (const id of [obj.documentId, obj.windowId])
+    if (typeof id !== "string" || !/^[0-9a-f]{32}$/.test(id))
+      return refuse();
+  const clock = object(obj.clock, ["timeOriginMs", "installedAtMs", "sinceMs", "capturedAtMs"]);
+  for (const key of Object.keys(clock))
+    numeric(clock[key], false, true);
+  const coverage = object(obj.coverage, PERFORMANCE_OBSERVERS);
+  for (const name of PERFORMANCE_OBSERVERS) {
+    const item = object(coverage[name], ["state", "observed", "invalid", "omitted", "nativeDropped", "overflow"]);
+    if (!["unsupported", "failed", "observing", "disconnected"].includes(item.state))
+      return refuse();
+    for (const key of ["observed", "invalid", "omitted"])
+      numeric(item[key], true);
+    if (item.observed > PERFORMANCE_LIMITS.LIFETIME_WORK)
+      return refuse();
+    numeric(item.nativeDropped, true, true);
+    boolean(item.overflow);
+  }
+  const metrics = object(obj.metrics, PERFORMANCE_METRICS);
+  for (const metric of PERFORMANCE_METRICS)
+    numeric(metrics[metric], metric === "resourceCount" || metric === "resourceTransferBytes", true);
+  const diagnostics = object(obj.diagnostics, ["resources", "frames", "resourceOmitted", "frameOmitted", "scriptOmitted", "metadataOmitted"]);
+  for (const key of ["resourceOmitted", "frameOmitted", "scriptOmitted", "metadataOmitted"])
+    numeric(diagnostics[key], true);
+  for (const resource of list(diagnostics.resources)) {
+    const item = object(resource, ["startMs", "durationMs", "transferBytes"], ["url"]);
+    numeric(item.startMs);
+    numeric(item.durationMs);
+    numeric(item.transferBytes, true);
+    if (Object.prototype.hasOwnProperty.call(item, "url")) {
+      if (obj.metadata === "none")
+        return refuse();
+      url(item.url);
+    }
+  }
+  for (const frame of list(diagnostics.frames)) {
+    const item = object(frame, ["startMs", "durationMs", "blockingMs", "scripts"]);
+    numeric(item.startMs);
+    numeric(item.durationMs);
+    numeric(item.blockingMs);
+    for (const script of list(item.scripts)) {
+      const entry = object(script, ["durationMs", "forcedLayoutMs"], ["source"]);
+      numeric(entry.durationMs);
+      numeric(entry.forcedLayoutMs);
+      if (Object.prototype.hasOwnProperty.call(entry, "source")) {
+        if (obj.metadata === "none")
+          return refuse();
+        url(entry.source);
+      }
+    }
+  }
+  numeric(obj.lifetimeWork, true);
+  if (obj.lifetimeWork > PERFORMANCE_LIMITS.LIFETIME_WORK)
+    return refuse();
+  boolean(obj.lifetimeExhausted);
+  if (new TextEncoder().encode(JSON.stringify(value)).byteLength > PERFORMANCE_LIMITS.BYTES)
+    return refuse();
+  return JSON.parse(JSON.stringify(value));
+}
+
 // src/verification/validation.ts
 class VerificationInputError extends Error {
   status = 400;
@@ -547,20 +686,25 @@ function optionalString(obj, key, max) {
 }
 function validateOrigin(value) {
   const raw = text(value, "origin", VERIFICATION_LIMITS.MAX_TEXT_LENGTH);
-  let url;
+  let url2;
   try {
-    url = new URL(raw);
+    url2 = new URL(raw);
   } catch {
     return invalid("origin must be a loopback HTTP(S) origin");
   }
-  if (!["http:", "https:"].includes(url.protocol) || !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+  if (!["http:", "https:"].includes(url2.protocol) || !["localhost", "127.0.0.1", "[::1]"].includes(url2.hostname) || url2.username || url2.password || url2.pathname !== "/" || url2.search || url2.hash) {
     return invalid("origin must be a loopback HTTP(S) origin without credentials, path, query or fragment");
   }
-  return url.origin;
+  return url2.origin;
 }
 function parseCommand(value) {
   const obj = record(value, "command");
   switch (obj.type) {
+    case "performance":
+      keys(obj, ["type", "phase"], "performance command");
+      if (obj.phase !== "begin" && obj.phase !== "capture")
+        invalid("performance phase must be begin or capture");
+      return { type: "performance", phase: obj.phase };
     case "snapshot": {
       keys(obj, ["type", "selector"], "snapshot command");
       const selector = optionalString(obj, "selector", VERIFICATION_LIMITS.MAX_SELECTOR_LENGTH);
@@ -798,10 +942,10 @@ function installNetwork(emit, getActionId) {
   let active = true;
   let sequence = 0;
   const failure = observerFailure(emit, "network");
-  const makeMeta = (url, method) => ({
+  const makeMeta = (url2, method) => ({
     requestId: `n${++sequence}`,
     method,
-    url: redactUrl(new URL(url, location.href).href),
+    url: redactUrl(new URL(url2, location.href).href),
     start: performance.now(),
     actionId: getActionId()
   });
@@ -860,11 +1004,11 @@ function installNetwork(emit, getActionId) {
   };
   const meta = new WeakMap;
   const pending = new Map;
-  const patchedOpen = function(method, url, ...rest) {
-    callOpen.call(this, method, url, ...rest);
+  const patchedOpen = function(method, url2, ...rest) {
+    callOpen.call(this, method, url2, ...rest);
     observeSafely(() => {
       if (active)
-        meta.set(this, { method: method.toUpperCase(), url: String(url) });
+        meta.set(this, { method: method.toUpperCase(), url: String(url2) });
     }, failure);
   };
   const patchedSend = function(body) {
@@ -945,12 +1089,12 @@ function installRoute(emit) {
     lastHref = location.href;
     emit("route", { url: redactUrl(lastHref) });
   }, failure);
-  const patchedPush = (data, unused, url) => {
-    callPush(data, unused, url);
+  const patchedPush = (data, unused, url2) => {
+    callPush(data, unused, url2);
     fire();
   };
-  const patchedReplace = (data, unused, url) => {
-    callReplace(data, unused, url);
+  const patchedReplace = (data, unused, url2) => {
+    callReplace(data, unused, url2);
     fire();
   };
   const teardown = () => {
@@ -1802,13 +1946,13 @@ function selectPath(root, path) {
 }
 
 // src/verification/browser/framework/react.ts
-var object = (value) => value !== null && (typeof value === "object" || typeof value === "function");
+var object2 = (value) => value !== null && (typeof value === "object" || typeof value === "function");
 var LIMIT = new Error("source probe limit");
 function identifyReactControl(el, repoRoot) {
   try {
     let remaining = 512;
     const read = (value, key2) => {
-      if (!object(value))
+      if (!object2(value))
         return;
       if (--remaining < 0)
         throw LIMIT;
@@ -1832,7 +1976,7 @@ function identifyReactControl(el, repoRoot) {
       return stamped ?? sourceUnavailable("probe-limit");
     const key = keys2.find((key2) => key2.startsWith("__reactFiber$") || key2.startsWith("__reactInternalInstance$"));
     let fiber = key ? read(el, key) : undefined;
-    if (!object(fiber))
+    if (!object2(fiber))
       return stamped ?? sourceUnavailable("not-react");
     const rootOf = (start) => {
       let top = start;
@@ -1844,7 +1988,7 @@ function identifyReactControl(el, repoRoot) {
         const parent = read(top, "return");
         if (parent === null)
           return top;
-        if (!object(parent))
+        if (!object2(parent))
           throw new Error("Unresolved React ownership");
         top = parent;
       }
@@ -1854,25 +1998,25 @@ function identifyReactControl(el, repoRoot) {
     const current = read(read(root, "stateNode"), "current");
     if (current !== root) {
       const alternate = read(fiber, "alternate");
-      if (!object(alternate) || rootOf(alternate) !== current)
+      if (!object2(alternate) || rootOf(alternate) !== current)
         return stamped ?? sourceUnavailable("source-unavailable");
       fiber = alternate;
     }
     let component;
     let observed = stamped;
     const seen = new Set;
-    for (let depth = 0;object(fiber) && depth < 40; depth++) {
+    for (let depth = 0;object2(fiber) && depth < 40; depth++) {
       if (seen.has(fiber))
         throw LIMIT;
       seen.add(fiber);
       const type = read(fiber, "elementType") ?? read(fiber, "type");
-      if (!component && object(type)) {
+      if (!component && object2(type)) {
         const name = read(type, "displayName") ?? read(type, "name");
         component = sourceComponent(name);
       }
       if (!observed) {
         const debug = read(fiber, "_debugSource");
-        if (object(debug)) {
+        if (object2(debug)) {
           const file = sourceFile(read(debug, "fileName"), repoRoot);
           if (!file)
             observed = sourceUnavailable("unsafe-source");
@@ -1890,7 +2034,7 @@ function identifyReactControl(el, repoRoot) {
       if (fiber === null)
         break;
     }
-    if (object(fiber))
+    if (object2(fiber))
       throw LIMIT;
     return observed?.status === "captured" && component ? { ...observed, component } : observed ?? sourceUnavailable("source-unavailable");
   } catch (error) {
@@ -2216,6 +2360,333 @@ function snapshotSemanticTree(document2, documentGeneration, sanitize2) {
   return { result: result2, ...result2.availability === "partial" ? { truncated: true } : {} };
 }
 
+// src/verification/browser/observers/performance.ts
+var number = (value, integer = false) => {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || integer && !Number.isSafeInteger(value))
+    throw new Error("Invalid native timing");
+  return value;
+};
+var id = () => [...crypto.getRandomValues(new Uint8Array(16))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+function installPerformance(metadata, scrub) {
+  let active = true, windowId = null, since = null, work = 0, exhausted = false;
+  const documentId = id();
+  const safeClock = (read) => {
+    try {
+      return number(read());
+    } catch {
+      return null;
+    }
+  };
+  const timeOrigin = safeClock(() => performance.timeOrigin), installedAt = safeClock(() => performance.now());
+  const coverage2 = Object.fromEntries(PERFORMANCE_OBSERVERS.map((name) => [name, { state: "unsupported", observed: 0, invalid: 0, omitted: 0, nativeDropped: null, overflow: false }]));
+  const metrics = Object.fromEntries(PERFORMANCE_METRICS.map((name) => [name, null]));
+  let diagnostics = { resources: [], frames: [], resourceOmitted: 0, frameOmitted: 0, scriptOmitted: 0, metadataOmitted: 0 };
+  let metadataBytes = 0;
+  let clsStart = 0, clsLast = 0, clsScore = 0, clsSeen = false, lcpStart = -1;
+  const observers = new Map;
+  const spend = () => {
+    if (work >= PERFORMANCE_LIMITS.LIFETIME_WORK) {
+      if (!exhausted)
+        for (const [name, observer] of observers) {
+          try {
+            observer.disconnect();
+          } catch {}
+          coverage2[name].state = "disconnected";
+        }
+      exhausted = true;
+      return false;
+    }
+    work++;
+    return true;
+  };
+  const metadataUrl = (raw) => {
+    if (typeof raw !== "string" || raw.length > PERFORMANCE_LIMITS.URL_INPUT) {
+      diagnostics.metadataOmitted++;
+      return;
+    }
+    try {
+      const parsed = new URL(raw);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        diagnostics.metadataOmitted++;
+        return;
+      }
+      const redacted = redactUrl(`${parsed.origin}${parsed.pathname}`);
+      const split = new URL(redacted);
+      const origin = scrub(split.origin), path = scrub(split.pathname);
+      if (origin.length > PERFORMANCE_LIMITS.URL_PART || path.length > PERFORMANCE_LIMITS.URL_PART || hasPerformanceControlCharacters(origin + path) || !/^https?:\/\//.test(origin) || !path.startsWith("/") || /[@?#]/.test(origin) || /[?#]/.test(path) || new URL(origin).origin !== origin) {
+        diagnostics.metadataOmitted++;
+        return;
+      }
+      const bytes = new TextEncoder().encode(JSON.stringify({ origin, path })).byteLength;
+      if (metadataBytes + bytes > 4096) {
+        diagnostics.metadataOmitted++;
+        return;
+      }
+      metadataBytes += bytes;
+      return { origin, path };
+    } catch {
+      diagnostics.metadataOmitted++;
+      return;
+    }
+  };
+  const top = (items, item, rank) => {
+    items.push(item);
+    items.sort((a, b) => rank(b) - rank(a));
+    if (items.length > PERFORMANCE_LIMITS.DIAGNOSTICS) {
+      items.pop();
+      return true;
+    }
+    return false;
+  };
+  const entry = (name, e) => {
+    const start = number(e.startTime), duration = number(e.duration);
+    if (name === "paint") {
+      if (e.name === "first-contentful-paint")
+        metrics.fcpMs = start;
+      return;
+    }
+    if (name === "largest-contentful-paint") {
+      if (start >= lcpStart) {
+        lcpStart = start;
+        metrics.lcpMs = start;
+      }
+      return;
+    }
+    if (name === "navigation") {
+      const response = number(e.responseStart), request = number(e.requestStart);
+      metrics.navigationTtfbMs = response > 0 && response >= request ? response - request : null;
+      const dom = number(e.domContentLoadedEventEnd), load = number(e.loadEventEnd);
+      metrics.navigationDomContentLoadedMs = dom > 0 ? dom : null;
+      metrics.navigationLoadMs = load > 0 ? load : null;
+      return;
+    }
+    if (since === null || start < since)
+      return;
+    if (name === "layout-shift") {
+      if (typeof e.hadRecentInput !== "boolean")
+        throw new Error("Invalid shift eligibility");
+      if (e.hadRecentInput)
+        return;
+      const value = number(e.value);
+      if (clsSeen && start < clsLast)
+        throw new Error("Unordered native shift population");
+      if (!clsSeen || start - clsLast >= 1000 || start - clsStart >= 5000) {
+        clsStart = start;
+        clsScore = value;
+      } else
+        clsScore += value;
+      clsLast = start;
+      clsSeen = true;
+      if (!Number.isFinite(clsScore)) {
+        coverage2[name].overflow = true;
+        metrics.clsMaxSessionScore = null;
+        return;
+      }
+      metrics.clsMaxSessionScore = Math.max(metrics.clsMaxSessionScore ?? 0, clsScore);
+      return;
+    }
+    if (name === "event") {
+      const interaction = number(e.interactionId, true);
+      if (interaction > 0)
+        metrics.qualifyingInteractionMaxMs = Math.max(metrics.qualifyingInteractionMaxMs ?? 0, duration);
+      return;
+    }
+    if (name === "resource") {
+      const bytes = number(e.transferSize, true), count = (metrics.resourceCount ?? 0) + 1, total = (metrics.resourceTransferBytes ?? 0) + bytes;
+      if (!Number.isSafeInteger(count) || !Number.isSafeInteger(total)) {
+        coverage2[name].overflow = true;
+        metrics.resourceCount = metrics.resourceTransferBytes = null;
+        return;
+      }
+      metrics.resourceCount = count;
+      metrics.resourceTransferBytes = total;
+      const resource = { startMs: start, durationMs: duration, transferBytes: bytes };
+      if (metadata === "origin-path") {
+        const url2 = metadataUrl(e.name);
+        if (url2)
+          resource.url = url2;
+      }
+      if (top(diagnostics.resources, resource, (item) => item.durationMs))
+        diagnostics.resourceOmitted++;
+      return;
+    }
+    const blocking = number(e.blockingDuration);
+    metrics.longFrameBlockingMaxMs = Math.max(metrics.longFrameBlockingMaxMs ?? 0, blocking);
+    const frame = { startMs: start, durationMs: duration, blockingMs: blocking, scripts: [] };
+    if (metadata === "origin-path") {
+      const scripts = e.scripts;
+      if (!Array.isArray(scripts))
+        diagnostics.scriptOmitted++;
+      else {
+        diagnostics.scriptOmitted += Math.max(0, scripts.length - PERFORMANCE_LIMITS.SCRIPT_INSPECTIONS);
+        for (let i = 0;i < Math.min(scripts.length, PERFORMANCE_LIMITS.SCRIPT_INSPECTIONS); i++) {
+          if (!spend()) {
+            diagnostics.scriptOmitted += Math.min(scripts.length, PERFORMANCE_LIMITS.SCRIPT_INSPECTIONS) - i;
+            break;
+          }
+          try {
+            const script = scripts[i];
+            const item = { durationMs: number(script.duration), forcedLayoutMs: number(script.forcedStyleAndLayoutDuration), source: metadataUrl(script.sourceURL) };
+            if (top(frame.scripts, { durationMs: item.durationMs, forcedLayoutMs: item.forcedLayoutMs, ...item.source ? { source: item.source } : {} }, (x) => x.durationMs))
+              diagnostics.scriptOmitted++;
+          } catch {
+            diagnostics.scriptOmitted++;
+          }
+        }
+      }
+    }
+    if (top(diagnostics.frames, frame, (item) => item.blockingMs))
+      diagnostics.frameOmitted++;
+  };
+  const process = (name, entries, dropped) => {
+    if (!active || exhausted)
+      return;
+    const state = coverage2[name];
+    if (!spend())
+      return;
+    if (!Array.isArray(entries)) {
+      state.invalid++;
+      return;
+    }
+    if (entries.length > 0) {
+      if (typeof dropped === "number" && Number.isSafeInteger(dropped) && dropped >= 0)
+        state.nativeDropped = Math.max(state.nativeDropped ?? 0, dropped);
+      else if (!state.nativeDropped)
+        state.nativeDropped = null;
+    }
+    state.omitted += Math.max(0, entries.length - PERFORMANCE_LIMITS.CALLBACK_ENTRIES);
+    for (let i = 0;i < Math.min(entries.length, PERFORMANCE_LIMITS.CALLBACK_ENTRIES); i++) {
+      if (!spend()) {
+        state.omitted += Math.min(entries.length, PERFORMANCE_LIMITS.CALLBACK_ENTRIES) - i;
+        break;
+      }
+      state.observed++;
+      try {
+        entry(name, entries[i]);
+      } catch {
+        state.invalid++;
+      }
+    }
+  };
+  let supported = null;
+  try {
+    supported = PerformanceObserver.supportedEntryTypes;
+    if (!Array.isArray(supported))
+      supported = null;
+  } catch {}
+  for (const name of PERFORMANCE_OBSERVERS) {
+    if (supported === null) {
+      coverage2[name].state = "failed";
+      continue;
+    }
+    if (!supported.includes(name))
+      continue;
+    try {
+      const observer = new PerformanceObserver((list2, _observer, options) => {
+        if (!active)
+          return;
+        try {
+          process(name, list2.getEntries(), options?.droppedEntriesCount);
+        } catch {
+          coverage2[name].state = "failed";
+        }
+      });
+      observers.set(name, observer);
+      observer.observe({ type: name, buffered: true, ...name === "event" ? { durationThreshold: 16 } : {} });
+      coverage2[name].state = "observing";
+    } catch {
+      coverage2[name].state = "failed";
+    }
+  }
+  const bufferFull = () => {
+    if (active)
+      coverage2.resource.omitted++;
+  };
+  try {
+    performance.addEventListener("resourcetimingbufferfull", bufferFull);
+  } catch {
+    coverage2.resource.state = "failed";
+  }
+  const drain = () => {
+    for (const [name, observer] of observers) {
+      try {
+        const pending = observer.takeRecords();
+        if (pending.length)
+          process(name, pending, undefined);
+      } catch {
+        coverage2[name].state = "failed";
+      }
+    }
+  };
+  const disconnect = () => {
+    if (!active)
+      return;
+    active = false;
+    for (const [name, observer] of observers) {
+      try {
+        observer.disconnect();
+      } catch {}
+      coverage2[name].state = "disconnected";
+    }
+    try {
+      performance.removeEventListener("resourcetimingbufferfull", bufferFull);
+      window.removeEventListener("pagehide", disconnect);
+    } catch {}
+  };
+  try {
+    window.addEventListener("pagehide", disconnect);
+  } catch {
+    for (const name of PERFORMANCE_OBSERVERS)
+      coverage2[name].state = "failed";
+  }
+  return {
+    disconnect,
+    read(phase) {
+      if (!active)
+        throw new Error("Native performance document is disconnected");
+      if (phase === "begin") {
+        drain();
+        if (!spend())
+          throw new Error("Native performance lifetime work limit reached; reconnect");
+        windowId = id();
+        since = safeClock(() => performance.now());
+        clsStart = clsLast = clsScore = 0;
+        clsSeen = false;
+        for (const name of PERFORMANCE_OBSERVERS) {
+          const c = coverage2[name];
+          c.observed = c.invalid = c.omitted = 0;
+          c.overflow = false;
+          if (c.nativeDropped === 0)
+            c.nativeDropped = null;
+        }
+        metrics.clsMaxSessionScore = coverage2["layout-shift"].state === "observing" ? 0 : null;
+        metrics.resourceCount = metrics.resourceTransferBytes = coverage2.resource.state === "observing" ? 0 : null;
+        metrics.qualifyingInteractionMaxMs = metrics.longFrameBlockingMaxMs = null;
+        diagnostics = { resources: [], frames: [], resourceOmitted: 0, frameOmitted: 0, scriptOmitted: 0, metadataOmitted: 0 };
+        metadataBytes = 0;
+      } else {
+        if (windowId === null)
+          throw new Error("Begin a native performance lab window first");
+        drain();
+      }
+      return parsePerformanceSnapshot({
+        version: 1,
+        source: "sdk-native-observers",
+        phase,
+        documentId,
+        windowId,
+        clock: { timeOriginMs: timeOrigin, installedAtMs: installedAt, sinceMs: since, capturedAtMs: safeClock(() => performance.now()) },
+        metadata: metadata === "none" ? "none" : "redacted-origin-path",
+        coverage: coverage2,
+        metrics,
+        diagnostics,
+        lifetimeWork: work,
+        lifetimeExhausted: exhausted
+      });
+    }
+  };
+}
+
 // src/verification/browser/index.ts
 var ACTIVE_RUNTIME = Symbol.for("runphantom.verification.active");
 var encoder3 = new TextEncoder;
@@ -2226,6 +2697,10 @@ function connect(options) {
   validateOrigin(location.origin);
   const origin = validateOrigin(options.url);
   const sourceEnabled = options.sourceProvenance?.enabled === true;
+  const performanceEnabled = options.performanceEvidence?.enabled === true;
+  if (performanceEnabled && options.performanceEvidence?.metadata !== undefined && !["none", "origin-path"].includes(options.performanceEvidence.metadata))
+    throw new Error("Invalid performance metadata mode");
+  let performanceCollector;
   const sourceRoot = sourceEnabled ? options.sourceProvenance?.repoRoot : undefined;
   if (sourceRoot !== undefined && (typeof sourceRoot !== "string" || sourceRoot.length > 4096))
     throw new Error("Invalid browser-local source root");
@@ -2379,15 +2854,21 @@ function connect(options) {
     install("console", () => installConsole(emit, prepare));
     install("network", () => installNetwork(emit, () => currentActionId));
     install("route", () => installRoute(emit));
+    if (performanceEnabled) {
+      try {
+        performanceCollector = installPerformance(options.performanceEvidence?.metadata ?? "none", (value) => String(prepare(value).value));
+        teardown.push(() => performanceCollector?.disconnect());
+      } catch {}
+    }
     observeSafely(() => send({
       type: "hello",
-      version: options.semanticSnapshots !== false ? TREE_PROTOCOL_VERSION : sourceEnabled ? SOURCE_PROTOCOL_VERSION : SEMANTIC_PROTOCOL_VERSION,
+      version: performanceEnabled ? PERFORMANCE_PROTOCOL_VERSION : options.semanticSnapshots !== false ? TREE_PROTOCOL_VERSION : sourceEnabled ? SOURCE_PROTOCOL_VERSION : SEMANTIC_PROTOCOL_VERSION,
       token: options.token,
       coverage: coverage2,
-      capabilities: [...options.causalReadings === false ? [] : [CAUSAL_CAPABILITY], ...options.semanticRefs === false ? [] : [SEMANTIC_CAPABILITY], ...sourceEnabled ? [SOURCE_CAPABILITY] : [], ...options.semanticSnapshots === false ? [] : [TREE_CAPABILITY]]
+      capabilities: [...options.causalReadings === false ? [] : [CAUSAL_CAPABILITY], ...options.semanticRefs === false ? [] : [SEMANTIC_CAPABILITY], ...sourceEnabled ? [SOURCE_CAPABILITY] : [], ...options.semanticSnapshots === false ? [] : [TREE_CAPABILITY], ...performanceEnabled ? [PERFORMANCE_CAPABILITY] : []]
     }), disconnect);
   };
-  const actionReading = (id, phase, target) => {
+  const actionReading = (id2, phase, target) => {
     let available = false;
     let value;
     let truncated = false;
@@ -2411,20 +2892,20 @@ function connect(options) {
     } catch {
       available = false;
     }
-    emit("action.reading", { phase, target, available, ...available ? { value } : {} }, id, truncated);
+    emit("action.reading", { phase, target, available, ...available ? { value } : {} }, id2, truncated);
   };
-  const act = (id, command) => {
+  const act = (id2, command) => {
     try {
       const boundary = (element) => {
         if (sourceEnabled) {
           const observation = sanitizeControlSource(identifyReactControl(element, sourceRoot), (value) => String(prepare(value).value));
           if ((command.type === "ref-click" || command.type === "ref-fill") && refs.resolve(command.ref) !== element)
             throw new Error("Reference changed during source capture");
-          if (!send({ type: "event", event: { type: "action.source", data: { observation }, actionId: id } }))
+          if (!send({ type: "event", event: { type: "action.source", data: { observation }, actionId: id2 } }))
             disconnect();
         }
-        currentActionId = id;
-        emit("action.boundary", {}, id);
+        currentActionId = id2;
+        emit("action.boundary", {}, id2);
         if (!active || !ready)
           throw new Error("Verification disconnected before action dispatch");
       };
@@ -2440,16 +2921,20 @@ function connect(options) {
         if (options.causalReadings === false)
           throw new Error("Causal readings are not enabled for this runtime");
         for (const target of command.targets)
-          actionReading(id, "before", target);
+          actionReading(id2, "before", target);
       }
       if (!sourceEnabled && (command.type === "click" || command.type === "fill" || command.type === "causal-click")) {
-        currentActionId = id;
-        emit("action.boundary", {}, id);
+        currentActionId = id2;
+        emit("action.boundary", {}, id2);
         if (!active || !ready)
           throw new Error("Verification disconnected before action dispatch");
       }
       let output;
-      if (command.type === "state") {
+      if (command.type === "performance") {
+        if (!performanceCollector)
+          throw new Error("Native performance evidence is not enabled or could not be installed");
+        output = { result: performanceCollector.read(command.phase) };
+      } else if (command.type === "state") {
         const read = stores.get(command.store);
         if (!read)
           throw new Error("Requested store is not registered");
@@ -2459,7 +2944,7 @@ function connect(options) {
       } else if (command.type === "causal-click") {
         output = runDomCommand({ type: "click", selector: command.selector }, prepare, sourceEnabled ? boundary : undefined);
         for (const target of command.targets)
-          actionReading(id, "after", target);
+          actionReading(id2, "after", target);
       } else if (command.type === "semantic-tree") {
         if (options.semanticSnapshots === false)
           throw new Error("Semantic tree snapshots are not enabled for this runtime");
@@ -2470,12 +2955,12 @@ function connect(options) {
         output = runSemanticDomCommand(command, refs, prepare, boundary, sourceEnabled ? (element) => sanitizeControlSource(identifyReactControl(element, sourceRoot), (value) => String(prepare(value).value)) : undefined);
       } else
         output = runDomCommand(command, prepare, sourceEnabled ? boundary : undefined);
-      const safe = command.type === "state" ? { value: output.result } : sanitizeWithReport(output.result);
-      if (!send({ type: "result", id, ok: true, result: safe.value, ...output.truncated || safe.truncation || safe.redacted ? { truncated: true } : {} }))
+      const safe = command.type === "state" || command.type === "performance" ? { value: output.result } : sanitizeWithReport(output.result);
+      if (!send({ type: "result", id: id2, ok: true, result: safe.value, ...output.truncated || safe.truncation || safe.redacted ? { truncated: true } : {} }))
         disconnect();
     } catch (error) {
       const safe = prepare(error instanceof Error ? error.message : "Runtime command failed");
-      send({ type: "result", id, ok: false, error: String(safe.value).slice(0, 1000) });
+      send({ type: "result", id: id2, ok: false, error: String(safe.value).slice(0, 1000) });
     }
   };
   const onMessage = (event) => {

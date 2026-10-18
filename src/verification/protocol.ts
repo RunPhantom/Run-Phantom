@@ -8,8 +8,11 @@ export const SOURCE_PROTOCOL_VERSION = 4 as const;
 export const SOURCE_CAPABILITY = "control-source" as const;
 export const TREE_PROTOCOL_VERSION = 5 as const;
 export const TREE_CAPABILITY = "semantic-tree" as const;
+export const PERFORMANCE_PROTOCOL_VERSION = 6 as const;
+export const PERFORMANCE_CAPABILITY = "performance-evidence" as const;
+import type { PerformancePredicate, RetainedPerformanceEvidence } from "./performance";
 export const SEMANTIC_REF_PATTERN = /^rpref_[0-9a-f]{32}$/;
-export type VerificationCapability = typeof CAUSAL_CAPABILITY | typeof SEMANTIC_CAPABILITY | typeof SOURCE_CAPABILITY | typeof TREE_CAPABILITY;
+export type VerificationCapability = typeof CAUSAL_CAPABILITY | typeof SEMANTIC_CAPABILITY | typeof SOURCE_CAPABILITY | typeof TREE_CAPABILITY | typeof PERFORMANCE_CAPABILITY;
 
 export type ControlSourceObservation = {
   source: "sdk-reported"; framework: "react"; status: "captured";
@@ -133,6 +136,7 @@ export type AppCommand =
   | { type: "fill"; selector: string; value: string }
   | { type: "state"; store: string }
   | { type: "causal-click"; selector: string; targets: RelativeTarget[] }
+  | { type: "performance"; phase: "begin" | "capture" }
   | SemanticCommand;
 export type Predicate =
   | { kind: "network"; urlContains: string; method?: string; status?: number }
@@ -141,6 +145,7 @@ export type Predicate =
   | { kind: "state"; store: string; path: string; equals: unknown }
   | { kind: "element"; selector: string; state: "present" | "absent" }
   | { kind: "allOf" | "anyOf"; predicates: Predicate[] }
+  | PerformancePredicate
   | RelativePredicate;
 export type FlowAnchor = { kind: "css"; selector: string } | {
   kind: "semantic"; query: SemanticQuery;
@@ -184,6 +189,8 @@ export interface VerificationCheckContext {
   causal?: RetainedCausalContext;
   controlSource?: RetainedControlSource;
   controlSourceOmitted?: "context-limit";
+  performance?: RetainedPerformanceEvidence;
+  performanceOmitted?: "context-limit" | "invalid-stored-evidence";
 }
 export interface RetainedReading { cursor: number; availability: "complete" | "partial" | "unavailable"; value: unknown }
 export interface RetainedCausalContext {
@@ -235,6 +242,7 @@ export type BrowserMessage =
   | { type: "hello"; version: typeof SEMANTIC_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
   | { type: "hello"; version: typeof SOURCE_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
   | { type: "hello"; version: typeof TREE_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
+  | { type: "hello"; version: typeof PERFORMANCE_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
   | { type: "event"; event: Omit<RuntimeEvent, "t"> }
   | { type: "result"; id: string; ok: boolean; result?: unknown; error?: string; truncated?: boolean };
 export type DaemonMessage =

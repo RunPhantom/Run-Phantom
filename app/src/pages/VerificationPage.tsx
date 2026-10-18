@@ -10,6 +10,7 @@ import { SemanticInspector } from "../components/verification/SemanticInspector"
 import { TrustedBrowser } from "../components/verification/TrustedBrowser";
 import { SnapshotDiff } from "../components/verification/SnapshotDiff";
 import { ReportContext } from "../components/verification/ReportContext";
+import { PerformanceEvidence } from "../components/verification/PerformanceEvidence";
 import { buildPredicate, describePredicate, emptyCheck, Field, PredicateEditor, Select, type CheckDraft } from "../components/verification/PredicateEditor";
 import { verificationApi, type AppCommand, type CommandResult, type CreatedSession, type FlowStep, type Predicate, type RuntimeEvent, type VerificationReport, type VerificationStatus } from "../api/verification";
 import { useRuns } from "../hooks/use-runs";
@@ -60,11 +61,11 @@ function Report({ report }: { report: VerificationReport }) {
   </article>;
 }
 
-function snippet(session: CreatedSession): string {
+function snippet(session: CreatedSession, performance = false): string {
   const sdkUrl = new URL(session.sdkUrl, window.location.origin).href;
   const daemon = new URL(session.wsUrl, window.location.origin);
   daemon.protocol = daemon.protocol === "wss:" || daemon.protocol === "https:" ? "https:" : "http:";
-  return `import { connect } from ${JSON.stringify(sdkUrl)};\n\nconst verification = connect({\n  url: ${JSON.stringify(daemon.origin)},\n  sessionId: ${JSON.stringify(session.id)},\n  token: ${JSON.stringify(session.token)},\n});\n\n// Optional application outcomes:\n// verification.signal("checkout.complete");\n// verification.registerStore("cart", () => cartState);\n// verification.disconnect();`;
+  return `import { connect } from ${JSON.stringify(sdkUrl)};\n\nconst verification = connect({\n  url: ${JSON.stringify(daemon.origin)},\n  sessionId: ${JSON.stringify(session.id)},\n  token: ${JSON.stringify(session.token)},\n${performance ? '  performanceEvidence: { enabled: true, metadata: "none" },\n' : ""}});\n\n// Optional application outcomes:\n// verification.signal("checkout.complete");\n// verification.registerStore("cart", () => cartState);\n// verification.disconnect();`;
 }
 
 export function VerificationPage() {
@@ -79,6 +80,7 @@ export function VerificationPage() {
   const [runId, setRunId] = useState(linkedRunId);
   const [selectedId, setSelectedId] = useState("");
   const [setup, setSetup] = useState<CreatedSession | null>(null);
+  const [performanceOptIn, setPerformanceOptIn] = useState(false);
   const session = sessions.data?.find(item => item.id === selectedId) ?? sessions.data?.[0];
   const observation = useQuery({ queryKey: ["verification", "events", session?.id], queryFn: () => verificationApi.observe(session!.id), enabled: !!session, refetchInterval: 1000 });
   const [action, setAction] = useState<"snapshot" | "click" | "fill" | "state">("snapshot");
@@ -206,11 +208,12 @@ export function VerificationPage() {
         <div className="min-w-[200px] flex-1"><Field label="Link to run (optional)" hint="Checks appear beside this captured run."><Select value={runId} onChange={event => setRunId(event.target.value)}><option value="">No linked run</option>{runId && !runs.data?.some(run => run.id === runId) && <option value={runId}>Run from link</option>}{runs.data?.map(run => <option key={run.id} value={run.id}>{runDisplayName(run)}</option>)}</Select></Field></div>
         <Button type="submit" disabled={!!busy || !origin.trim()} className="mb-5">Pair app</Button>
       </form>
+      <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={performanceOptIn} onChange={event => setPerformanceOptIn(event.target.checked)} disabled={!!busy} />Include native performance capture in setup (no location metadata)</label>
       {runs.isError && <p className="text-xs" style={{ color: C.orange }}>Run choices could not load. You can still pair an app without a linked run.</p>}
       {setup && <div className="space-y-3 rounded-md border p-4" style={{ background: C.surface, borderColor: C.border }}>
-        <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-sm font-semibold">Connect in {setup.origin}</h3><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => void perform("Copying connection setup…", async () => { await navigator.clipboard.writeText(snippet(setup)); setNotice("Connection setup copied."); })}><Copy aria-hidden="true" />Copy setup</Button><Button variant="ghost" size="sm" onClick={() => setSetup(null)}>Dismiss setup</Button></div></div>
+        <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-sm font-semibold">Connect in {setup.origin}</h3><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => void perform("Copying connection setup…", async () => { await navigator.clipboard.writeText(snippet(setup, performanceOptIn)); setNotice("Connection setup copied."); })}><Copy aria-hidden="true" />Copy setup</Button><Button variant="ghost" size="sm" onClick={() => setSetup(null)}>Dismiss setup</Button></div></div>
         <p className="max-w-2xl text-xs leading-relaxed" style={{ color: C.fg1 }}>Run this module in your app's development entry point. The connection credential is shown only here; keep it out of committed source. Reloading the app requires reconnecting.</p>
-        <pre aria-label="Application connection snippet" className="max-h-72 overflow-auto rounded-md p-3 text-[11px] leading-relaxed" style={{ background: C.bg }}>{snippet(setup)}</pre>
+        <pre aria-label="Application connection snippet" className="max-h-72 overflow-auto rounded-md p-3 text-[11px] leading-relaxed" style={{ background: C.bg }}>{snippet(setup, performanceOptIn)}</pre>
       </div>}
     </section>
 
@@ -226,6 +229,7 @@ export function VerificationPage() {
     {session && <div className="flex flex-wrap items-start gap-8">
       <div className="min-w-0 flex-[2_1_360px] space-y-7">
         <SemanticInspector sessionId={session.id} connected={connected} capable={(observation.data?.session.capabilities ?? session.capabilities)?.includes("semantic-refs") ?? false} disabled={!!busy} onAction={cursor => { setSince(cursor); setInspection(null); }} />
+        <PerformanceEvidence key={session.id} sessionId={session.id} connected={connected} capable={(observation.data?.session.capabilities ?? session.capabilities)?.includes("performance-evidence") ?? false} disabled={!!busy} perform={perform} onReport={async () => { await refresh(); setNotice("Native lab report saved. Review its window and coverage below."); }} />
         <section aria-labelledby="action-heading" className="space-y-4">
           <h2 id="action-heading" className="text-sm font-semibold" style={{ color: C.fg3 }}>1. Exercise the app</h2>
           <fieldset disabled={!!busy || !connected} className="space-y-3">
