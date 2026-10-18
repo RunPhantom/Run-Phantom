@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -176,4 +177,19 @@ test("oversized sparse qualification input is refused before JSON allocation", a
   const f = await fixture(), file = path.join(f.root, "oversized.json");
   await writeFile(file, ""); await truncate(file, 256 * 1024 * 1024);
   await rejects(readQualificationBytes(file), "assembly_json_limit");
+});
+
+test("aggregation final uncached rehash refuses an artifact mutated after its first verification", async () => {
+  const f = await fixture(), m = completeManifest();
+  const submissions = await Promise.all(m.cells.map(c => f.submit(f.receipt(c))));
+  let scopeReads = 0;
+  Object.defineProperty(submissions[0].receipt, "scope", { enumerable: true, get: () => {
+    if (++scopeReads === 2) writeFileSync(path.join(f.root, f.output.path), "changed-after-first-verified-use");
+    return "product";
+  } });
+  const result = await aggregateAssembly(m, manifestHash, submissions, f.root, new Set(m.features.map(f => f.head!)));
+  expect(scopeReads).toBe(2); expect(result.verdict).toBe("BLOCKED"); expect(result.checksComplete).toBe(false);
+  expect(result.releaseQualified).toBe(false);
+  expect(result.blockers).toContainEqual({ cellId: "artifact-set", code: "assembly_artifact_changed_during_validation" });
+  expect(Object.values(result.stages).every(s => s.accepted === 0 && s.valid === 0)).toBe(true);
 });

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -116,12 +117,30 @@ function artifactShape(value: unknown): asserts value is Artifact {
   if (path.isAbsolute(a.path) || a.path.includes("\\") || a.path.split("/").some(s => s === ".." || s === "." || !s) || !digest.test(a.sha256)
     || !Number.isSafeInteger(a.bytes) || a.bytes < 0 || a.bytes > 512 * 1024 * 1024) refuse("assembly_artifact_shape");
 }
+type VerificationCache = {
+  entries: Map<string, Buffer | null>; bindings: Map<string, { root: string; artifact: Artifact }>; retainedBytes: number;
+};
+const artifactVerification = new AsyncLocalStorage<VerificationCache>();
 export async function verifyArtifact(root: string, value: unknown): Promise<Buffer | null> {
+  artifactShape(value);
+  const cache = artifactVerification.getStore(), key = canonical([root, value.path, value.sha256, value.bytes]);
+  if (cache) {
+    if (cache.bindings.size >= 65536 && !cache.bindings.has(key)) refuse("assembly_artifact_population_limit");
+    cache.bindings.set(key, { root, artifact: { ...value } });
+    if (cache.entries.has(key)) return cache.entries.get(key)!;
+  }
+  const body = await verifyArtifactUncached(root, value);
+  if (cache && cache.entries.size < 4096 && cache.retainedBytes + (body?.length ?? 0) <= 16 * 1024 * 1024) {
+    cache.entries.set(key, body); cache.retainedBytes += body?.length ?? 0;
+  }
+  return body;
+}
+async function verifyArtifactUncached(root: string, value: unknown, readBody = true): Promise<Buffer | null> {
   artifactShape(value); const base = await realpath(root), file = await realpath(path.join(base, value.path)), relative = path.relative(base, file);
   if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) refuse("assembly_artifact_path");
   const meta = await stat(file);
   if (!meta.isFile() || meta.size !== value.bytes || await fileSha256(file) !== value.sha256) refuse("assembly_artifact_tampered");
-  return value.bytes <= 8 * 1024 * 1024 ? await readFile(file) : null;
+  return readBody && value.bytes <= 8 * 1024 * 1024 ? await readFile(file) : null;
 }
 function receiptShape(value: unknown): asserts value is Receipt {
   keys(value, ["schema", "cellId", "stage", "scope", "source", "host", "manifestSha256", "execution", "expectedTests", "tests", "invariants", "outputs", "runtime", "provider", "cleanup"]);
@@ -202,7 +221,7 @@ export async function validateReceipt(root: string, submitted: SubmittedReceipt,
   if (!r.cleanup.allOwnedClosed || !r.cleanup.profilesRemoved) refuse("assembly_cleanup_unconfirmed");
   await verifyRuntime(root, r, cell, manifest);
 }
-export async function aggregateAssembly(manifest: Manifest, manifestSha256: string, submissions: SubmittedReceipt[], root: string,
+async function aggregateVerifiedAssembly(manifest: Manifest, manifestSha256: string, submissions: SubmittedReceipt[], root: string,
   reachableFeatureHeads: ReadonlySet<string>, reviews: IndependentReview[] = []): Promise<AssemblyResult> {
   validateManifest(manifest); if (!digest.test(manifestSha256)) refuse("assembly_manifest_digest");
   const stages = Object.fromEntries(STAGES.map(stage => [stage, { expected: manifest.cells.filter(c => c.stage === stage).length, valid: 0, accepted: 0 }])) as AssemblyResult["stages"];
@@ -229,4 +248,21 @@ export async function aggregateAssembly(manifest: Manifest, manifestSha256: stri
 export async function loadSubmittedReceipt(root: string, artifact: Artifact): Promise<SubmittedReceipt> {
   const body = await verifyArtifact(root, artifact); if (!body) refuse("assembly_receipt_size");
   const receipt = parseQualificationJson(body); receiptShape(receipt); return { receipt, artifact };
+}
+
+export async function aggregateAssembly(manifest: Manifest, manifestSha256: string, submissions: SubmittedReceipt[], root: string,
+  reachableFeatureHeads: ReadonlySet<string>, reviews: IndependentReview[] = []): Promise<AssemblyResult> {
+  const cache: VerificationCache = { entries: new Map(), bindings: new Map(), retainedBytes: 0 };
+  const result = await artifactVerification.run(cache, () => aggregateVerifiedAssembly(manifest, manifestSha256, submissions, root, reachableFeatureHeads, reviews));
+  // Cached content is never the final authority for a mutable filesystem bundle.
+  for (const { root, artifact } of cache.bindings.values()) {
+    try { await verifyArtifactUncached(root, artifact, false); }
+    catch {
+      result.blockers.push({ cellId: "artifact-set", code: "assembly_artifact_changed_during_validation" });
+      result.checksComplete = false; result.releaseQualified = false; result.verdict = "BLOCKED";
+      for (const stage of Object.values(result.stages)) { stage.valid = 0; stage.accepted = 0; }
+      break;
+    }
+  }
+  return result;
 }
