@@ -1468,15 +1468,21 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   // below is gated on the request still being the current one.
   const detailRequestRef = useRef(0);
   const detailAbortRef = useRef<AbortController | null>(null);
+  const detailInFlightRef = useRef(false);
+  const detailPendingRefreshRef = useRef(false);
 
   const connectionStatus = useRunPhantomConnectionStatus();
   const previousConnectionStatus = useRef(connectionStatus);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (): Promise<void> => {
     if (initialData || isRunDeleting(runId)) return; // Keep the visible trace during deletion.
-    detailAbortRef.current?.abort();
+    // Handshake/broadcast refreshes need a newer snapshot, not cancellation of
+    // the same run's current read. Retain one trailing refresh until it settles.
+    if (detailInFlightRef.current) { detailPendingRefreshRef.current = true; return; }
     const controller = new AbortController();
     detailAbortRef.current = controller;
+    detailInFlightRef.current = true;
+    detailPendingRefreshRef.current = false;
     const requestId = ++detailRequestRef.current;
     const isCurrent = () => detailRequestRef.current === requestId && !controller.signal.aborted;
     try {
@@ -1498,7 +1504,16 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
       setData(null);
       setNotFound(true);
     }
-    finally { if (isCurrent()) setLoading(false); }
+    finally {
+      if (isCurrent()) {
+        setLoading(false);
+        detailInFlightRef.current = false;
+        detailAbortRef.current = null;
+        const refresh = detailPendingRefreshRef.current;
+        detailPendingRefreshRef.current = false;
+        if (refresh) void fetchData();
+      }
+    }
   }, [runId, initialData]);
 
   useEffect(() => {
@@ -1522,11 +1537,17 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
 
   useEffect(() => {
     let wasDeleting = isRunDeleting(runId);
+    const cancelDetail = () => {
+      ++detailRequestRef.current;
+      detailPendingRefreshRef.current = false;
+      detailInFlightRef.current = false;
+      detailAbortRef.current?.abort();
+      detailAbortRef.current = null;
+    };
     const unsubscribe = subscribeRunDeletions(() => {
       const deleting = isRunDeleting(runId);
       if (deleting) {
-        ++detailRequestRef.current;
-        detailAbortRef.current?.abort();
+        cancelDetail();
       } else if (wasDeleting) {
         void fetchData(); // A failed delete leaves the trace selected and live.
       }
@@ -1534,7 +1555,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
     });
     return () => {
       unsubscribe();
-      detailAbortRef.current?.abort();
+      cancelDetail();
     };
   }, [runId, fetchData]);
 

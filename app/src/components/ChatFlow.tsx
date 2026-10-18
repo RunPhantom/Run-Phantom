@@ -1,3 +1,4 @@
+import { CaptureVisibilityDetails } from "./CaptureVisibilityDetails";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Pencil } from "lucide-react";
 import { C, spanColor } from "../utils/colors";
@@ -19,6 +20,7 @@ type LiveToolItem =
   | { type: "live_tool_result"; name: string; time: number };
 
 type ChatItem =
+  | { type: "capture"; span: Span; time: number }
   | { type: "tool"; span: Span; time: number }
   | { type: "tool_group"; items: ToolGroupItem[]; time: number; liveTools?: LiveToolItem[] }
   | { type: "sub_agent"; agent: SubAgent; time: number }
@@ -504,6 +506,9 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
         all.push({ type: "tool", span, time: span.start_time_ms });
       } else if (span.span_type?.includes("LLM")) {
         llmSpans.push(span);
+        if (span.captureVisibility?.stream) all.push({ type: "capture", span, time: span.start_time_ms });
+      } else if (span.span_type === "RETRIEVAL" || span.span_type === "EMBEDDING") {
+        all.push({ type: "capture", span, time: span.start_time_ms });
       }
     }
 
@@ -725,6 +730,8 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
             </div>
           );
         }
+
+        if (item.type === "capture") return <div key={`cap-${item.span.id}`} className="px-4 py-1"><CaptureVisibilityDetails span={item.span} /></div>;
 
         if (item.type === "system_msg") {
           return (
