@@ -96,7 +96,12 @@ describe("persisted workspace API projections", () => {
     expect((await json(route)).value).toEqual(history.value);
   });
   test("history budgets only matched heads before set JSON, guards candidate job bytes and verifies stored request digests", async () => {
-    for (let i = 0; i < 52; i++) expect((await terminal((await upload(draft(`budget-history-${i}`))).value.job.id)).status).toBe("completed");
+    // Seed at most two actual imports at once; terminal retains its per-job deadline.
+    for (let i = 0; i < 52; i += 2) {
+      await Promise.all([i, i + 1].map(async index => {
+        expect((await terminal((await upload(draft(`budget-history-${index}`))).value.job.id)).status).toBe("completed");
+      }));
+    }
     upsertRun({ id: "unrelated-run", started_at: 2, last_updated_at: 2 });
     const unrelatedRequest = draft("unrelated-history"); unrelatedRequest.attachment.id = "unrelated-run";
     const unrelated = await terminal((await upload(unrelatedRequest)).value.job.id);
