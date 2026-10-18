@@ -34,7 +34,7 @@ function fixture(name: string, change: (cache: string) => void, run: (invoke: (a
   change(cache);
   const invoke = (action = "read") => {
     const result = Bun.spawnSync([executable, action], { cwd: path.dirname(executable), timeout: 10_000,
-      env: { ...process.env, HOME: home, RUNPHANTOM_DB_PATH: path.join(home, "workspace.db"), ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "" } });
+      env: { ...process.env, HOME: home, USERPROFILE: home, RUNPHANTOM_DB_PATH: path.join(home, "workspace.db"), ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "" } });
     const output = new TextDecoder().decode(result.stdout).trim();
     return { result, body: output ? JSON.parse(output) : {} };
   };
