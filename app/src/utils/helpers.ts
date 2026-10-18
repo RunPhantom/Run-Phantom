@@ -50,7 +50,9 @@ export function isActive(run: {
   last_updated_at: number;
   finished?: number | null;
   live_event_count?: number | null;
+  capture_completion?: "unavailable" | null;
 }): boolean {
+  if (run.capture_completion === "unavailable") return false;
   const recencyMs = Date.now() - run.last_updated_at;
   if (recencyMs < AFTERGLOW_MS) return true;
   if ((run.live_event_count ?? 0) > 0) return recencyMs < INACTIVE_MS;

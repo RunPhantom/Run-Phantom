@@ -14,6 +14,7 @@ export interface Run {
   finished?: number | null; // 1 if root span has OK/ERROR status
   error_count?: number | null; // spans with ERROR status; drives the "Run failed" list label
   live_event_count?: number | null;
+  capture_completion?: "unavailable" | null;
 }
 
 export interface ReplayMetadata {

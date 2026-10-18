@@ -2,6 +2,11 @@ import type { ClaudeHookCaptureView } from "./adapters/claude-hook";
 import type { CodexHookCaptureView } from "./adapters/codex-hook";
 export type HookCaptureView = ClaudeHookCaptureView | CodexHookCaptureView;
 
+/** Producer observations can withhold completion authority, never establish it. */
+export function captureCompletion(capture: HookCaptureView | undefined): "unavailable" | null {
+  return capture?.coverage === "partial" && capture.runtimeVerified === false ? "unavailable" : null;
+}
+
 /**
  * Canonical, SDK-agnostic view of a parsed span.
  *

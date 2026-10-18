@@ -24,6 +24,7 @@ import { RotateCcw, Bookmark, Download, Pencil, ChevronDown, ArrowDown, ChevronR
 import { LocalAgentSetupCTA, SetupReplayModal } from "./LocalAgentSetupCTA";
 import { C } from "../utils/colors";
 import { fmt, isActive, plural, runDisplayName, isoTimestamp, safeDecodeParam } from "../utils/helpers";
+import { captureCompletion } from "../../../src/spans/normalized";
 import { useQueryClient } from "@tanstack/react-query";
 import { parseReplayMetadata } from "../utils/types";
 import { deleteRun, renameRun } from "../api/runs";
@@ -252,12 +253,13 @@ function Badge({ label, copyValue }: { label: string; copyValue?: string }) {
   );
 }
 
-function StatsLine({ stats, model, spans, active, startedAt }: {
+function StatsLine({ stats, model, spans, active, startedAt, completionUnavailable }: {
   stats: { spans: number; tools: number; llms: number; errors: number; dur: number; agents?: number; inTokens?: number; outTokens?: number };
   model?: string | null;
   spans?: Span[];
   active?: boolean;
   startedAt?: number;
+  completionUnavailable?: boolean;
 }) {
   const [showCost, setShowCost] = useState(false);
   const costRef = useRef<HTMLSpanElement>(null);
@@ -266,10 +268,10 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
 
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    if (!active) return;
+    if (!active || completionUnavailable) return;
     const i = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(i);
-  }, [active]);
+  }, [active, completionUnavailable]);
 
   const breakdown = useMemo(() => {
     if (!spans) return [];
@@ -297,8 +299,10 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
           but rounds a 420ms run to "0s" while the span tree shows "420ms" for the
           same trace — and it has no hour unit, so a 3h run read as "205m". Keep
           the animation for the range it suits and defer to fmt() outside it. */}
-      <Badge label="duration" /><span>{
-        !durValid
+      <Badge label="duration" /><span data-run-duration>{
+        completionUnavailable
+          ? "Unavailable"
+          : !durValid
           ? "—"
           : liveDur < 1000 || liveDur >= 3_600_000
             ? fmt(liveDur)
@@ -680,8 +684,9 @@ function ViewHeader({
     };
   }, [optionsOpen]);
   const displayTitle = cleanTitle(title);
-  const statusLabel = active ? "Run live" : stats.errors > 0 ? "Run failed" : "Run complete";
-  const statusColor = active ? C.green : stats.errors > 0 ? C.red : C.fg1;
+  const completionUnavailable = run?.capture_completion === "unavailable" || allSpans?.some(span => captureCompletion(span.normalized?.capture) === "unavailable") === true;
+  const statusLabel = completionUnavailable ? "Completion unavailable" : active ? "Run live" : stats.errors > 0 ? "Run failed" : "Run complete";
+  const statusColor = completionUnavailable ? C.fg1 : active ? C.green : stats.errors > 0 ? C.red : C.fg1;
   return (
     <div className="flex-shrink-0" style={{ padding: isReplay ? "8px 16px" : "10px 16px", borderBottom: `1px solid ${C.border}` }}>
       {parentName && onBack ? (
@@ -708,7 +713,7 @@ function ViewHeader({
                   {statusLabel}
                 </span>
               </div>
-              <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
+              <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
             </div>
           </div>
         </>
@@ -718,7 +723,7 @@ function ViewHeader({
             <span className="text-[12px] font-medium" style={{ color: C.fg3 }}>{displayTitle}</span>
             {model && <span className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: "var(--rp-ink-a04)", color: C.fg0 }}>{model}</span>}
             <span style={{ color: C.fg0, opacity: 0.4 }}>|</span>
-            <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
+            <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
           </div>
           <MoreMenu runId={run?.id} />
         </div>
@@ -979,7 +984,7 @@ function ViewHeader({
             )}
           </div>
           <div className="flex items-center gap-1.5 text-[11px] flex-wrap">
-            <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
+            <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
             {run && (run.id || run.user_id || run.convo_id) && (
               <>
                 <Dot />

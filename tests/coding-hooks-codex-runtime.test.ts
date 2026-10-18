@@ -80,7 +80,10 @@ filesystemTest("actual callback reaches Runs/detail, upserts deterministic roots
   const port = await start(); await manageCodexHooks("install", options(port)); await native(); const initial = rows();
   expect(initial).toHaveLength(4); await native(); expect(rows()).toEqual(initial);
   const runId = initial[0].run_id, detail = await fetch(`http://127.0.0.1:${port}/api/runs/detail/${runId}`); expect(detail.status).toBe(200);
-  const body = await detail.json() as { spans: { normalized: { capture?: { runtimeVerified: boolean; coverage: string; assistantText: string } } }[] };
+  const listed = await (await fetch(`http://127.0.0.1:${port}/api/runs`)).json() as { id: string; capture_completion: string | null }[];
+  expect(listed.find(run => run.id === runId)?.capture_completion).toBe("unavailable");
+  const body = await detail.json() as { run: { capture_completion: string | null }; spans: { normalized: { capture?: { runtimeVerified: boolean; coverage: string; assistantText: string } } }[] };
+  expect(body.run.capture_completion).toBe("unavailable");
   expect(body.spans.some(s => s.normalized.capture?.assistantText === "Found the café result")).toBe(true);
   expect(body.spans.every(s => s.normalized.capture?.runtimeVerified === false && s.normalized.capture?.coverage === "partial")).toBe(true);
   expect(initial.every(s => (s as unknown as { status: string; end_time_ms: number }).status === "UNSET" && (s as unknown as { end_time_ms: number }).end_time_ms === 0)).toBe(true);
