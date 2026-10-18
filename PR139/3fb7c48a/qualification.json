@@ -1,0 +1,47 @@
+{
+  "pr": 139,
+  "source": "3fb7c48a87378810c28b8b5d1c8adcb09d974296",
+  "feature": "F47",
+  "state": "OPEN DRAFT; no merge authorized",
+  "actual_journeys": {
+    "total": 15,
+    "passed": 15,
+    "failed": 0,
+    "skipped": 0,
+    "retries": 0,
+    "engines": [
+      "Chromium151.0.7922.34",
+      "Firefox153.0",
+      "WebKit26.5"
+    ]
+  },
+  "matrix": {
+    "passed": 16,
+    "blocked": 119,
+    "failed": 0,
+    "accepted": false,
+    "runner_exit": 2,
+    "blocked_reasons": {
+      "integrated_candidate_not_qualified": 45,
+      "native_host_unavailable": 72,
+      "product_audit_engine_unsupported": 2
+    }
+  },
+  "scope": "Two exact actual attempt3 captures; other hosts, assembled features and unsupported accessibility engines remain unqualified",
+  "screenshots": [
+    {
+      "file": "captured-run-mobile.png",
+      "sha256": "f7e7cbe4023c7cec3cce4c0839231e0db64768411ac41c5912f2cdc1bf5b1230",
+      "bytes": 33301,
+      "platform": "Darwin arm64",
+      "profile": "Actual Chromium mobile captured Unicode payload,390px;passedcase"
+    },
+    {
+      "file": "webkit-trusted-outcome.png",
+      "sha256": "b9f6906590264579d2c51990200d6a233982a3ca75a1725b428be85acc3f89d4",
+      "bytes": 144080,
+      "platform": "Darwin arm64",
+      "profile": "Actual WebKit retained native-input/business-outcome report afterreload;passedcase"
+    }
+  ]
+}
