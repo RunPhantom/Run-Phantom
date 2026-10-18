@@ -1,0 +1,27 @@
+{
+  "pr": 127,
+  "feature": "F32",
+  "source": "c7ad876e6fdf603419e42f724d49a4f5cacfa635",
+  "tree": "be569ed6de82952c87bb14072156f00311ab7ae5",
+  "base": "656c971de0f2e8eb725ea95211c3a28ccfd4e872",
+  "draft": true,
+  "scope": "Exact-head copied macOS change-aware QA handoff viewports; scoped synthetic retained failure and native workspace metadata.",
+  "remaining_qualification": "See PR body; no merge or full-product/platform/paid acceptance claimed.",
+  "root_viewed_at": "2026-10-18T10:08:31.506050+00:00",
+  "screenshots": [
+    {
+      "file": "native-default-1440.png",
+      "sha256": "898a77da20bcd162a02f0819c5984539994ebed090a1b160a70dadf978815718",
+      "bytes": 150116,
+      "platform": "macOS arm64",
+      "profile": "Exact-head copied macOS change-aware QA handoff viewports; scoped synthetic retained failure and native workspace metadata."
+    },
+    {
+      "file": "native-default-360.png",
+      "sha256": "2cece1c621e847a0742b46019ceda70ff20b9d3fffd96da6e2188f3171d7d0a6",
+      "bytes": 85697,
+      "platform": "macOS arm64",
+      "profile": "Exact-head copied macOS change-aware QA handoff viewports; scoped synthetic retained failure and native workspace metadata."
+    }
+  ]
+}
