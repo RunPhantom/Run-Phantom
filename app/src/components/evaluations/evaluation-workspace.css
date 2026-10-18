@@ -27,16 +27,18 @@
 .evaluation-local-label { display: inline-flex; align-items: center; min-height: 30px; padding: 5px 9px; color: var(--rp-accent); background: var(--rp-accent-soft); border-radius: 4px; font-size: 11px; }
 .evaluation-panel { border: 1px solid var(--rp-border); border-radius: 7px; background: var(--rp-surface); padding: 24px; }
 .evaluation-panel > h2 { margin-bottom: 16px; }
-.evaluation-editor-grid { display: grid; gap: 24px; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+.evaluation-editor-grid { display: grid; gap: 24px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); align-items: start; }
 .evaluation-editor-grid > * { min-width: 0; }
 .evaluation-editor-grid > div > section { border-top: 0; padding-top: 0; }
 .evaluation-revision-context { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--rp-border); font-size: 12px; }
 .evaluation-revision-context strong { overflow-wrap: anywhere; }
 .evaluation-meta { color: var(--rp-ink-muted); font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }
-.evaluation-index-filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, .45fr) auto; gap: 12px; align-items: end; }
+.evaluation-index-filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+.evaluation-index-filters > :first-child { flex: 1 1 240px; min-width: 0; }
+.evaluation-index-filters > :nth-child(2) { flex: 1 1 180px; min-width: 0; }
 .evaluation-experiment-index { display: grid; gap: 16px; }
 .evaluation-table-scroll { overflow-x: auto; border: 1px solid var(--rp-border); border-radius: 5px; }
-.evaluation-experiment-table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
+.evaluation-experiment-table { width: 100%; min-width: 540px; border-collapse: collapse; font-size: 12px; text-align: left; }
 .evaluation-experiment-table :is(th, td) { padding: 14px 16px; vertical-align: top; }
 .evaluation-experiment-table thead th { background: var(--rp-canvas); color: var(--rp-ink-muted); font-size: 11px; font-weight: 500; white-space: nowrap; }
 .evaluation-experiment-table tbody tr { border-top: 1px solid var(--rp-border); }
@@ -69,8 +71,6 @@
   .evaluation-workspace > * + * { margin-top: 24px; }
   .evaluation-panel { padding: 16px; }
   .evaluation-workspace :is(button, select, input:not([type="checkbox"]), summary) { min-height: 44px; }
-  .evaluation-index-filters { grid-template-columns: minmax(0, 1fr); }
-  .evaluation-experiment-table { min-width: 540px; }
   .evaluation-upstream-error { margin-inline: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { .evaluation-navigation :is(a, button) { transition: none; } }
