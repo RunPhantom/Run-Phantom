@@ -1,0 +1,143 @@
+{
+  "pr": 51,
+  "source": "68167c7adfc5356c76d743199b32cc131d9cc522",
+  "receiving_main": "1539c2d83590e81fa719c204112f69ef3133218f",
+  "receiving_branch": "main",
+  "tested_pr_merge": "51a1a1c58c7bdd3d3c5b1b0166e50f110a8f4525",
+  "source_tree": "62e0cf339574dcd08f035ac96c24f0612d9f786a",
+  "scope": "Singular/plural evaluation case labels and actual mixed-outcome repeated-trial count summaries. No changes to selection, denominators, execution, export or storage. Source-specific screenshots are not complete product, installed-feature, provider or design acceptance.",
+  "native_macos": {
+    "focused_backend_tests": 24,
+    "focused_assertions": 129,
+    "target_browser_passed": 3,
+    "final_capture_browser_passed": 2,
+    "browser_retries": 0,
+    "types_lint_build": "passed",
+    "unchanged_feature_and_build_graph_after_actual_main_refresh": true
+  },
+  "runs": [
+    {
+      "id": 39096537433,
+      "event": "push",
+      "platform": "Windows",
+      "attempt": 1,
+      "conclusion": "success",
+      "backend": {
+        "pass": 689,
+        "fail": 0,
+        "skip": 33
+      },
+      "source_browser": {
+        "passed": 137,
+        "skipped": 10,
+        "failed": 0,
+        "flaky": 0,
+        "retry_attempts": 0
+      },
+      "target_journeys": {
+        "passed": 3,
+        "retries": 0
+      },
+      "native_compile": "passed",
+      "copied_executable": {
+        "passed": 3,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39096537537,
+      "event": "push",
+      "platform": "Linux",
+      "attempt": 1,
+      "conclusion": "success",
+      "backend": {
+        "pass": 721,
+        "fail": 0,
+        "skip": 1
+      }
+    },
+    {
+      "id": 39096540735,
+      "event": "pull_request",
+      "platform": "Windows",
+      "attempt": 1,
+      "conclusion": "success",
+      "backend": {
+        "pass": 689,
+        "fail": 0,
+        "skip": 33
+      },
+      "source_browser": {
+        "passed": 137,
+        "skipped": 10,
+        "failed": 0,
+        "flaky": 0,
+        "retry_attempts": 0
+      },
+      "target_journeys": {
+        "passed": 3,
+        "retries": 0
+      },
+      "native_compile": "passed",
+      "copied_executable": {
+        "passed": 3,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39096540748,
+      "event": "pull_request",
+      "platform": "Linux",
+      "attempt": 1,
+      "conclusion": "success",
+      "backend": {
+        "pass": 721,
+        "fail": 0,
+        "skip": 1
+      }
+    }
+  ],
+  "artifact_qualification": {
+    "chosen_push_browser_archive": "API size and SHA256 plus all35 ZIP entry CRCs verified before extracting exactly4 PNGs",
+    "other_pr_browser_archive": "Metadata retained; not downloaded or claimed as verified. Full raw official logs for all four CI contexts separately verified."
+  },
+  "receiving_main_browser_note": "Main1539 source suite passed with one disclosed portable destination-daemon startup flake before its product journey; retry passed. Cause unknown. All PR51 source cases passed initially in both Windows contexts.",
+  "screenshots": [
+    {
+      "file": "repeated-trial-results-1-cases.png",
+      "sha256": "3977521a3a2d04c41bf3a7a3d2c3c2f17b46d27f8ca42a3d60c2b5b3d8f88ff8",
+      "bytes": 43771,
+      "platform": "Windows x64",
+      "run_id": 39096537433,
+      "artifact_id": 12125191610,
+      "profile": "Actual source Chromium push, synthetic evaluation fixture. Narrow behavior capture only; exact case count label and unchanged mixed-outcome denominator visible."
+    },
+    {
+      "file": "repeated-trial-results-2-cases.png",
+      "sha256": "a916f4eceb5ae1fb6e1d703f33fd49edc69ce0e27d58366d1a884fd74a6931b7",
+      "bytes": 53197,
+      "platform": "Windows x64",
+      "run_id": 39096537433,
+      "artifact_id": 12125191610,
+      "profile": "Actual source Chromium push, synthetic evaluation fixture. Narrow behavior capture only; exact case count label and unchanged mixed-outcome denominator visible."
+    },
+    {
+      "file": "experiment-summary-1-cases.png",
+      "sha256": "0b53290803f721ded17155f0245abb220ac9edcb0f5690d63dd0508615010409",
+      "bytes": 6241,
+      "platform": "Windows x64",
+      "run_id": 39096537433,
+      "artifact_id": 12125191610,
+      "profile": "Actual source Chromium push, synthetic evaluation fixture. Narrow behavior capture only; exact case count label and unchanged mixed-outcome denominator visible."
+    },
+    {
+      "file": "experiment-summary-2-cases.png",
+      "sha256": "9f49e0971b3a193cd1922aae8cd24b7675fa3930d369149774057f8a8bb89702",
+      "bytes": 6742,
+      "platform": "Windows x64",
+      "run_id": 39096537433,
+      "artifact_id": 12125191610,
+      "profile": "Actual source Chromium push, synthetic evaluation fixture. Narrow behavior capture only; exact case count label and unchanged mixed-outcome denominator visible."
+    }
+  ]
+}
