@@ -1,0 +1,38 @@
+{
+  "pr": 136,
+  "source": "c0a18699803452455e0e6a305d3b68a6373993ca",
+  "feature": "F43",
+  "state": "DRAFT; root must assign actual PR number and visually review before publication",
+  "base": "1d9fd30e944cb164d29e1f4dbad988cb065029e5",
+  "browser_qualification": "First full cohort51passed4failed3skipped atf08193d; changed-case followup3passed1unchangedFirefoxfailed atc0a1869. No all-browser-green claim.",
+  "open_gates": [
+    "Actual Firefox open returned503 after~9.3s; engine/policy failure causeUNKNOWN and unresolved.",
+    "Three compiled-artifact opt-in cases not executed without a separately installed-stage daemon."
+  ],
+  "root_review_recorded_at": "2026-10-18T11:03:56.951225+00:00",
+  "tree": "5e47cdd6b85870f82d1a8a9e45026348bc5a3375",
+  "scope": "Three current-source real local UI screenshots; native Firefox503 and three installed opt-ins remain unqualified.",
+  "screenshots": [
+    {
+      "file": "workspace-desktop.png",
+      "sha256": "b4e4d943a79891b68ea4cdc1f8b0c62b4422c4f785105dcfc088a4029c6612dc",
+      "bytes": 121435,
+      "platform": "Darwin arm64",
+      "profile": "Actual isolated daemon, paired app disconnected after fail/pass/inconclusive checks;1440x900"
+    },
+    {
+      "file": "workspace-mobile.png",
+      "sha256": "adc9242ec249adcb02d1c136a0e53343d169e33fdc533ee50aa13a1513da9d26",
+      "bytes": 55406,
+      "platform": "Darwin arm64",
+      "profile": "Actual same workspace;390x844"
+    },
+    {
+      "file": "reports-desktop.png",
+      "sha256": "de20f6532c5832ea81915c9e4f3e983877653bc244fa4831ba91aa7286ec6d44",
+      "bytes": 119994,
+      "platform": "Darwin arm64",
+      "profile": "Three actual persisted outcomes with filter/reset/keyboard/reload assertions;1440x900"
+    }
+  ]
+}
