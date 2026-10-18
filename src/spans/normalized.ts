@@ -76,7 +76,9 @@ export interface NormalizedOtherSpan {
   kind: "other";
 }
 
-export type NormalizedSpan = NormalizedLLMSpan | NormalizedToolSpan | NormalizedOtherSpan;
+import type { RetrievalCapture, EmbeddingCapture } from "./adapters/capture-visibility-types";
+
+export type NormalizedSpan = RetrievalCapture | EmbeddingCapture | NormalizedLLMSpan | NormalizedToolSpan | NormalizedOtherSpan;
 
 export function emptyNormalized(): NormalizedOtherSpan {
   return { kind: "other" };

@@ -1,3 +1,5 @@
+import type { CaptureVisibilityV1 } from "./capture-visibility-types";
+import type { OtlpEvidence } from "../otlp-evidence";
 import type { NormalizedSpan } from "../normalized";
 
 /**
@@ -10,6 +12,9 @@ export interface AdapterInput {
   attributesUnavailable?: true;
   /** OTLP span name (e.g. `"ai.streamText"`, `"ai.toolCall"`). */
   spanName: string;
+  traceId?: string;
+  spanId?: string;
+  otlpEvidence?: OtlpEvidence;
   /** Flat attribute record. String / number / boolean values; nested JSON is left as a string. */
   attrs: Record<string, string | number | boolean>;
   /**
@@ -20,7 +25,7 @@ export interface AdapterInput {
    * spans are aggregators, the canonical per-call payloads live on their
    * LLM_GENERATION children.
    */
-  spanType: "LLM_GENERATION" | "TOOL_CALL" | "AGENT_ROOT" | "TRACE" | "INTERNAL";
+  spanType: "LLM_GENERATION" | "TOOL_CALL" | "AGENT_ROOT" | "TRACE" | "INTERNAL" | "RETRIEVAL" | "EMBEDDING";
   /** The pre-coalesced raw payload, if any (used by adapters as a fallback). */
   inputPayload?: string;
   outputPayload?: string;
@@ -34,6 +39,7 @@ export interface AdapterInput {
 export interface AdapterMatch {
   /** The typed view consumers read from. */
   normalized: NormalizedSpan;
+  captureVisibility?: CaptureVisibilityV1;
   /**
    * What to store as the canonical raw input string in the DB. The adapter
    * picks because it knows which attribute is the "real" payload for its

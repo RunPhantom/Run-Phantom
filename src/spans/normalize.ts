@@ -32,6 +32,8 @@ import { traceloopLlmAdapter, traceloopToolAdapter } from "./adapters/traceloop"
 import { openInferenceLlmAdapter, openInferenceToolAdapter } from "./adapters/openinference";
 import { genAiMetadataAdapter, genAiToolAdapter } from "./adapters/gen-ai";
 
+import { captureKindAdapter, captureVisibility, readCaptureReceipt } from "./adapters/capture-visibility";
+
 import { parseBoundedHookJson } from "../coding-hooks/shared";
 import { cursorHookAdapter } from "./adapters/cursor-hook";
 import { claudeHookAdapter } from "./adapters/claude-hook";
@@ -39,6 +41,7 @@ import { claudeHookAdapter } from "./adapters/claude-hook";
 const ADAPTERS: SpanAdapter[] = [
   cursorHookAdapter,
   claudeHookAdapter,
+  captureKindAdapter,
   aiSdkLlmAdapter,
   livekitLlmAdapter,
   traceloopLlmAdapter,
@@ -56,9 +59,10 @@ export function normalizeSpan(input: AdapterInput): AdapterMatch {
   if (input.attributesUnavailable) return { normalized: emptyNormalized() };
   for (const a of ADAPTERS) {
     const result = a.apply(input);
-    if (result) return result;
+    if (result) { const capture = captureVisibility(input); return { ...result, ...(capture ? { captureVisibility: capture } : {}) }; }
   }
-  return { normalized: emptyNormalized() };
+  const capture = captureVisibility(input);
+  return { normalized: emptyNormalized(), ...(capture ? { captureVisibility: capture } : {}) };
 }
 
 /**
@@ -67,6 +71,7 @@ export function normalizeSpan(input: AdapterInput): AdapterMatch {
  */
 export function adapterInputFromStoredSpan(row: {
   name: string;
+  id?: string; run_id?: string; otlp_evidence?: string | null;
   span_type: string | null;
   input_payload: string | null;
   output_payload: string | null;
@@ -75,7 +80,8 @@ export function adapterInputFromStoredSpan(row: {
   let attrs: Record<string, string | number | boolean> = {};
   if (row.attributes) {
     try {
-      attrs = JSON.parse(row.attributes);
+      const parsed = JSON.parse(row.attributes);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) attrs = parsed;
       if (hasDuplicateJsonKeys(row.attributes)) return { spanName: row.name, spanType: "INTERNAL", attrs: {}, attributesUnavailable: true };
     } catch { /* leave empty */ }
     if (typeof attrs?.captureContract === "string" && (attrs.captureContract.startsWith("runphantom.claude-hook.observation/") || attrs.captureContract.startsWith("runphantom.cursor-hook.observation/")) && parseBoundedHookJson(row.attributes, 16384).status !== "accepted") {
@@ -86,11 +92,13 @@ export function adapterInputFromStoredSpan(row: {
     row.span_type === "LLM_GENERATION" ||
     row.span_type === "TOOL_CALL" ||
     row.span_type === "AGENT_ROOT" ||
+    row.span_type === "RETRIEVAL" || row.span_type === "EMBEDDING" ||
     row.span_type === "TRACE"
       ? row.span_type
       : "INTERNAL";
   return {
     spanName: row.name,
+    traceId: row.run_id, spanId: row.id, otlpEvidence: readCaptureReceipt(row.otlp_evidence),
     attrs,
     spanType,
     inputPayload: row.input_payload ?? undefined,
@@ -106,6 +114,7 @@ export function adapterInputFromStoredSpan(row: {
  */
 export function normalizeStoredSpan(row: {
   name: string;
+  id?: string; run_id?: string; otlp_evidence?: string | null;
   span_type: string | null;
   input_payload: string | null;
   output_payload: string | null;

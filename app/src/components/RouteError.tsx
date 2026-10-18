@@ -18,13 +18,13 @@ function describe(error: unknown): { title: string; detail: string; raw: string 
   }
   if (error instanceof Error) {
     return {
-      title: "This trace could not be rendered",
+      title: "This view could not be rendered",
       detail: error.message || "An unexpected error occurred while rendering this view.",
       raw: `${error.name}: ${error.message}\n${error.stack ?? ""}`,
     };
   }
   return {
-    title: "This trace could not be rendered",
+    title: "This view could not be rendered",
     detail: "An unexpected error occurred while rendering this view.",
     raw: String(error),
   };
@@ -45,7 +45,7 @@ export function RouteError() {
       >
         <div className="mb-3 flex items-center gap-2">
           <AlertTriangle className="size-4 shrink-0" style={{ color: C.red }} aria-hidden="true" />
-          <h2 className="text-[15px] font-medium" style={{ color: C.fg4 }}>{title}</h2>
+          <h2 className="font-display text-[20px] font-semibold leading-7" style={{ color: C.fg4 }}>{title}</h2>
         </div>
 
         <p className="mb-5 text-[12px] leading-relaxed" style={{ color: C.fg1 }}>
@@ -56,7 +56,7 @@ export function RouteError() {
           <button
             type="button"
             onClick={() => navigate("/runs", { replace: true })}
-            className="inline-flex min-h-[32px] items-center gap-1.5 rounded-md border px-3 text-[12px] font-medium transition-colors"
+            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border px-3 text-[12px] font-medium transition-colors"
             style={{ borderColor: C.borderLight, color: C.fg4, background: C.elevated }}
           >
             <ArrowLeft className="size-3.5" aria-hidden="true" />
@@ -65,7 +65,7 @@ export function RouteError() {
           <button
             type="button"
             onClick={() => window.location.reload()}
-            className="inline-flex min-h-[32px] items-center gap-1.5 rounded-md border px-3 text-[12px] font-medium transition-colors"
+            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border px-3 text-[12px] font-medium transition-colors"
             style={{ borderColor: C.border, color: C.fg2, background: C.surface }}
           >
             <RotateCcw className="size-3.5" aria-hidden="true" />
@@ -75,7 +75,7 @@ export function RouteError() {
             type="button"
             aria-expanded={open}
             onClick={() => setOpen((v) => !v)}
-            className="inline-flex min-h-[32px] items-center gap-1.5 rounded-md px-2 text-[12px] transition-colors"
+            className="inline-flex min-h-[44px] items-center gap-1.5 min-h-[44px] rounded-md px-2 text-[12px] transition-colors"
             style={{ color: C.fg1 }}
           >
             <ChevronDown

@@ -4,8 +4,8 @@ import path from "path";
 import { SOURCE_ENTRY } from "./source-paths";
 import { IS_PACKAGED_RUNTIME } from "./version";
 
-export type AgentProviderId = "claude" | "codex";
-export type AgentAnnotationSource = "claude-code" | "codex";
+export type AgentProviderId = "claude" | "codex" | "opencode";
+export type AgentAnnotationSource = "claude-code" | "codex" | "opencode";
 
 export interface AgentLoadout {
   tools: string[];
@@ -88,10 +88,11 @@ export function setAgentProvider(provider: AgentProviderId): AgentProviderId {
 }
 
 export function parseAgentProvider(value: unknown): AgentProviderId | null {
-  return value === "claude" || value === "codex" ? value : null;
+  return value === "claude" || value === "codex" || value === "opencode" ? value : null;
 }
 
 export function defaultAgentLoadout(provider: AgentProviderId): AgentLoadout {
+  if (provider === "opencode") return { tools: [], mcps: [], skills: [], plugins: [], slash_commands: [] };
   return {
     tools: RUN_PHANTOM_MCP_TOOLS.map((tool) => `runphantom.${tool.name}`),
     mcps: ["runphantom"],
@@ -102,11 +103,11 @@ export function defaultAgentLoadout(provider: AgentProviderId): AgentLoadout {
 }
 
 export function agentProviderLabel(provider: AgentProviderId): string {
-  return provider === "codex" ? "Codex" : "Claude Code";
+  return provider === "opencode" ? "OpenCode" : provider === "codex" ? "Codex" : "Claude Code";
 }
 
 export function agentAnnotationSource(provider: AgentProviderId): AgentAnnotationSource {
-  return provider === "codex" ? "codex" : "claude-code";
+  return provider === "opencode" ? "opencode" : provider === "codex" ? "codex" : "claude-code";
 }
 
 export interface RunPhantomSidepanelPromptInput {
@@ -116,6 +117,7 @@ export interface RunPhantomSidepanelPromptInput {
 }
 
 export function runPhantomSidepanelPrompt(input: RunPhantomSidepanelPromptInput): string {
+  if (input.provider === "opencode") return "You are replying inside the Run Phantom coding sidepanel. No Run Phantom MCP server is attached to this ACP session. Do not claim access to captured traces or tools that have not been provided.";
   return [
     ...baseSidepanelInstructions(input.localMcpName),
     ...prioritizationInstructions(input.provider),
