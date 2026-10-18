@@ -1,0 +1,120 @@
+{
+  "pr": 47,
+  "source": "3a2cdfcd01e02c8733584cc4840f99a9a1c15e43",
+  "receiving_main": "c64c451e5015ab2ee63b4f2275b2d290d4755e83",
+  "receiving_branch": "fix/run-id-display (PR44)",
+  "tested_pr_merge": "82b316830e21a708efa37417b88ebb8076730718",
+  "source_tree": "54f1483e18e849773cfdb35ce7d00e1cb798f658",
+  "runs": [
+    {
+      "id": 39088183450,
+      "platform": "Linux",
+      "event": "push",
+      "attempt": 2,
+      "backend": {
+        "passed": 713,
+        "skipped": 1,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39088185535,
+      "platform": "Linux",
+      "event": "pull_request",
+      "attempt": 1,
+      "backend": {
+        "passed": 713,
+        "skipped": 1,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39088183404,
+      "platform": "Windows",
+      "event": "push",
+      "attempt": 1,
+      "backend": {
+        "passed": 681,
+        "skipped": 33,
+        "failed": 0
+      },
+      "browser": {
+        "passed": 129,
+        "skipped": 10,
+        "failed": 0
+      },
+      "compiled_browser": {
+        "passed": 3,
+        "failed": 0
+      }
+    },
+    {
+      "id": 39088185693,
+      "platform": "Windows",
+      "event": "pull_request",
+      "attempt": 1,
+      "backend": {
+        "passed": 681,
+        "skipped": 33,
+        "failed": 0
+      },
+      "browser": {
+        "passed": 129,
+        "skipped": 10,
+        "failed": 0
+      },
+      "compiled_browser": {
+        "passed": 3,
+        "failed": 0
+      }
+    }
+  ],
+  "prior_linux_attempt": {
+    "run_id": 39088183450,
+    "attempt": 1,
+    "passed": 677,
+    "skipped": 1,
+    "failed": 36,
+    "errors": 1,
+    "observation": "One5000ms portability-test timeout followed by shared-daemon connection cascade; initial stall unexplained. One identical-source controlled repeat passed. No timeout or assertion changed."
+  },
+  "native_macos": {
+    "source": "3a2cdfcd01e02c8733584cc4840f99a9a1c15e43",
+    "app_types": "passed",
+    "browser_types": "passed",
+    "lint": "passed",
+    "prefix_units": "passed",
+    "build": "passed",
+    "browser": "Incomplete: one pass and one visibility assertion failure observed before overall480s deadline; remaining journeys unqualified. Heavy host load and memory pressure observed, causation not proven."
+  },
+  "scope": "Paired PR47 into PR44 only; PR44 still requires composed qualification against current main before landing. Screenshots show synthetic failed replay and demo fixtures. No paid provider calls; conditional skips and full-product/native macOS qualification remain open.",
+  "screenshots": [
+    {
+      "file": "replay-row-layout-1024.png",
+      "sha256": "0cc69c8f023b2eaf4b30c2c823f570a68aabdc302c7edf5272816f7406a7b5f2",
+      "bytes": 42157,
+      "platform": "Windows x64",
+      "run_id": 39088185693,
+      "artifact_id": 12122315235,
+      "profile": "Actual source Chromium, synthetic fixtures, reviewed connected UI; intentional503replay refusal is expected"
+    },
+    {
+      "file": "replay-row-layout-1280.png",
+      "sha256": "4cb34bdd618702db59a6e6f1a18cdfc3aa1199083c87e6f42421245296d9d788",
+      "bytes": 43973,
+      "platform": "Windows x64",
+      "run_id": 39088185693,
+      "artifact_id": 12122315235,
+      "profile": "Actual source Chromium, synthetic fixtures, reviewed connected UI; intentional503replay refusal is expected"
+    },
+    {
+      "file": "distinct-run-identifiers-and-complete-header.png",
+      "sha256": "6073cc6ff749b72c460c8c6547ce36a99aad59936c208ecc34924f895f14b541",
+      "bytes": 90023,
+      "platform": "Windows x64",
+      "run_id": 39088185693,
+      "artifact_id": 12122315235,
+      "profile": "Actual source Chromium, synthetic fixtures, reviewed connected UI; intentional503replay refusal is expected"
+    }
+  ]
+}
