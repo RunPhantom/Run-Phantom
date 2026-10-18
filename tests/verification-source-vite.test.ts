@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { pathToFileURL } from "node:url";
 import path from "node:path";
 
 const repo = path.resolve(import.meta.dir, "..");
@@ -34,9 +35,9 @@ async function runVite(mode: "dev" | "multi" | "single-disabled" | "single-enabl
     const adapter = path.join(helperDir, "adapter.mjs");
     await new Promise<void>((resolve, reject) => execFile("bun", ["build", path.join(repo, "src/verification/build/vite.ts"), "--target=node", "--format=esm", "--external=typescript", `--outfile=${adapter}`], { cwd: repo, timeout: 25_000 }, (error, _stdout, stderr) => error ? reject(new Error(`${error.message}\n${stderr}`)) : resolve()));
     const script = `import path from "node:path";
-import * as vite from ${JSON.stringify(viteEntry)};
-import react from ${JSON.stringify(reactEntry)};
-import { runPhantomSourceProvenance } from ${JSON.stringify(adapter)};
+import * as vite from ${JSON.stringify(pathToFileURL(viteEntry).href)};
+import react from ${JSON.stringify(pathToFileURL(reactEntry).href)};
+import { runPhantomSourceProvenance } from ${JSON.stringify(pathToFileURL(adapter).href)};
 const root = ${JSON.stringify(root)};
 const config = { root, configFile: false, logLevel: "silent", plugins: [runPhantomSourceProvenance({ enabled: ${mode !== "single-disabled"}, renderer: "react-dom" }), react()],
  resolve: { alias: ${JSON.stringify({ "react-dom": path.dirname(appRequire.resolve("react-dom/package.json")), react: path.dirname(appRequire.resolve("react/package.json")) })} }, optimizeDeps: { noDiscovery: true } };
