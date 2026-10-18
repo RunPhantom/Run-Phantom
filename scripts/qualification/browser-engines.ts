@@ -21,6 +21,15 @@ export function fileSha256(file: string): string {
 export function accepted(outcome: Outcome, expected: number): boolean {
   return expected > 0 && outcome.collected === expected && outcome.passed === expected && outcome.failed === 0 && outcome.skipped === 0 && outcome.retries === 0 && outcome.exitCode === 0;
 }
+export function runEngineSeries(identities: readonly EngineIdentity[], execute: (identity: EngineIdentity) => Outcome, expected: number): Partial<Record<Engine, Outcome>> {
+  const outcomes: Partial<Record<Engine, Outcome>> = {};
+  for (const identity of identities) {
+    if (!identity.available) continue;
+    const outcome = execute(identity); outcomes[identity.engine] = outcome;
+    if (!accepted(outcome, expected)) break;
+  }
+  return outcomes;
+}
 export function matrix(host: string, identities: readonly EngineIdentity[], outcomes: Partial<Record<Engine, Outcome>>, expected: number): Cell[] {
   return PLATFORMS.flatMap(platform => ENGINES.flatMap(engine => {
     const identity = identities.find(item => item.engine === engine), outcome = outcomes[engine];
@@ -122,7 +131,7 @@ function main() {
     process.exitCode = result.status ?? 1; return;
   }
   if (process.env.RUNPHANTOM_F47_LOCK_PID !== String(process.ppid)) throw new Error("Owned canonical browser lock supervisor required");
-  const inventory = engineInventory(repo), chromiumIdentity = inventory.identities.find(identity => identity.engine === "chromium")!, outcomes: Partial<Record<Engine, Outcome>> = {};
+  const inventory = engineInventory(repo), chromiumIdentity = inventory.identities.find(identity => identity.engine === "chromium")!;
   const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" });
   const binary = args.find(arg => arg.startsWith("--binary="))?.slice(9);
   if (binary && (!path.isAbsolute(binary) || !existsSync(binary))) throw new Error("Copied artifact unavailable");
@@ -130,18 +139,19 @@ function main() {
   const appRequire = createRequire(path.join(repo, "app/package.json"));
   const require = createRequire(appRequire.resolve("@playwright/test/package.json"));
   const cli = path.join(path.dirname(require.resolve("playwright/package.json")), "cli.js");
-  for (const identity of inventory.identities) {
-    if (!identity.available) continue;
+  const outcomes = runEngineSeries(inventory.identities, identity => {
     const report = path.join(output, `${identity.engine}-playwright.json`), artifacts = path.join(output, identity.engine);
     const env = { ...process.env, RUNPHANTOM_F47_MODULE: inventory.moduleEntry, RUNPHANTOM_F47_BUN: process.execPath, RUNPHANTOM_F47_HEAD: head.stdout.trim(), RUNPHANTOM_F47_OUTPUT: output, RUNPHANTOM_F47_UI_EXECUTABLE: identity.executable, RUNPHANTOM_F47_CHROMIUM_EXECUTABLE: chromiumIdentity.executable, RUNPHANTOM_F47_CHROMIUM_SHA256: chromiumIdentity.executableSha256 ?? "", PLAYWRIGHT_JSON_OUTPUT_NAME: report, ...(binary ? { RUNPHANTOM_F47_BINARY: binary } : {}) };
     const result = spawnSync(process.execPath, ["--no-env-file", cli, "test", "--config", path.join(repo, "app/playwright.engines.config.ts"), `--project=${identity.engine}`, `--output=${artifacts}`], { cwd: repo, env, encoding: "utf8", timeout: 180_000, maxBuffer: 16 * 1024 * 1024 });
     writeFileSync(path.join(output, `${identity.engine}-stdout.log`), result.stdout ?? ""); writeFileSync(path.join(output, `${identity.engine}-stderr.log`), result.stderr ?? "");
-    outcomes[identity.engine] = existsSync(report) ? reportOutcome(JSON.parse(readFileSync(report, "utf8")) as JsonSuite, result.status) : { collected: 0, passed: 0, failed: 1, skipped: 0, retries: 0, exitCode: result.status };
+    const outcome: Outcome = existsSync(report) ? reportOutcome(JSON.parse(readFileSync(report, "utf8")) as JsonSuite, result.status) : { collected: 0, passed: 0, failed: 1, skipped: 0, retries: 0, exitCode: result.status };
     const audit = path.join(output, `${identity.engine}-audit.json`);
-    outcomes[identity.engine]!.nativeAudit = existsSync(audit) && (JSON.parse(readFileSync(audit, "utf8")) as { asserted: boolean }).asserted === true;
-  }
+    outcome.nativeAudit = existsSync(audit) && (JSON.parse(readFileSync(audit, "utf8")) as { asserted: boolean }).asserted === true;
+    return outcome;
+  }, JOURNEYS.length);
+  const execution = inventory.identities.map(identity => ({ engine: identity.engine, state: outcomes[identity.engine] ? "EXECUTED" : "NOT_EXECUTED", reason: !identity.available ? identity.reason : outcomes[identity.engine] ? null : "earlier-engine-did-not-satisfy-exact-case-oracle", remainingObligations: outcomes[identity.engine] ? [] : [...JOURNEYS] }));
   const cells = matrix(`${process.platform}-${process.arch}`, inventory.identities, outcomes, JOURNEYS.length), summary = summarize(cells);
-  writeFileSync(path.join(output, "matrix.json"), JSON.stringify({ scope: "base-candidate-only", cells, outcomes, summary, installProposalOnly: inventory.identities.filter(item => !item.available).map(item => ({ engine: item.engine, expectedExecutable: item.executable, command: `bun x playwright install ${item.engine}`, executed: false, requiresSeparateAuthorization: true })), fullIntegrationAcceptance: false }, null, 2));
-  console.log(JSON.stringify({ output, outcomes, summary })); process.exitCode = summary.exitCode;
+  writeFileSync(path.join(output, "matrix.json"), JSON.stringify({ scope: "base-candidate-only", execution, cells, outcomes, summary, installProposalOnly: inventory.identities.filter(item => !item.available).map(item => ({ engine: item.engine, expectedExecutable: item.executable, command: `bun x playwright install ${item.engine}`, executed: false, requiresSeparateAuthorization: true })), fullIntegrationAcceptance: false }, null, 2));
+  console.log(JSON.stringify({ output, execution, outcomes, summary })); process.exitCode = summary.exitCode;
 }
 if ((import.meta as ImportMeta & { main?: boolean }).main) main();

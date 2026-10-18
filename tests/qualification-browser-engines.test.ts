@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
-import { accepted, ENGINES, matrix, reportOutcome, summarize, privateEnvironment, type EngineIdentity } from "../scripts/qualification/browser-engines";
+import { accepted, ENGINES, matrix, reportOutcome, summarize, privateEnvironment, runEngineSeries, type EngineIdentity } from "../scripts/qualification/browser-engines";
 const identities: EngineIdentity[] = ENGINES.map(engine => ({ engine, executable: `/installed/${engine}`, executableSha256: "a".repeat(64), nativeBinary: `/installed/${engine}`, nativeSha256: "a".repeat(64), available: true, reason: null }));
 const passed = { collected: 5, passed: 5, failed: 0, skipped: 0, retries: 0, exitCode: 0 };
 test("an absent engine cannot qualify even with copied green test counts", () => {
@@ -103,4 +103,23 @@ test("unobserved HTTP acquisition cannot manufacture a successful close receipt"
   let failure: unknown; try { await closeOwnedHttpServer(owned); } catch (error) { failure = error; }
   expect(failure).toBeInstanceOf(Error); expect((failure as Error).message).toContain("HTTP listener acquisition was not observed");
   expect(httpServerProof(owned)).toMatchObject({ listeningObserved: false, closeObserved: false, closeCallbackObserved: false, liveSockets: 0 });
+});
+
+test("a terminal failed engine child fences the next admission without fabricated results", () => {
+  for (const failedEngine of ["chromium", "firefox"]) {
+    const admitted: string[] = [], reaped: number[] = [];
+    const outcomes = runEngineSeries(identities, identity => {
+      admitted.push(identity.engine);
+      const failed = identity.engine === failedEngine;
+      const report = { specs: Array.from({ length: 5 }, (_unused, index) => ({ tests: [{ expectedStatus: "passed", results: [{ status: failed && index === 4 ? "failed" : "passed", retry: 0 }] }] })) };
+      const child = spawnSync(process.execPath, ["--no-env-file", "-e", `process.stdout.write(${JSON.stringify(JSON.stringify(report))});process.exit(${failed ? 1 : 0});`], { encoding: "utf8", timeout: 2000 });
+      expect(child.signal).toBeNull(); expect(() => process.kill(child.pid, 0)).toThrow(); reaped.push(child.pid);
+      return reportOutcome(JSON.parse(child.stdout) as Parameters<typeof reportOutcome>[0], child.status);
+    }, 5);
+    expect(admitted).toEqual(failedEngine === "chromium" ? ["chromium"] : ["chromium", "firefox"]); expect(reaped).toHaveLength(admitted.length);
+    expect(outcomes[failedEngine as "chromium" | "firefox"]).toMatchObject({ collected: 5, passed: 4, failed: 1, skipped: 0, retries: 0, exitCode: 1 });
+    expect(outcomes.webkit).toBeUndefined();
+    const pending = matrix("darwin-arm64", identities, outcomes, 5).filter(cell => cell.platform === "darwin-arm64" && cell.engine === "webkit");
+    expect(pending.every(cell => cell.status === "BLOCKED")).toBe(true); expect(summarize(matrix("darwin-arm64", identities, outcomes, 5)).exitCode).toBe(1);
+  }
 });
