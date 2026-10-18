@@ -7,8 +7,8 @@ import {createServer as httpServer} from "node:http";
 import type {VerificationReport} from "../../src/verification/protocol";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
-import { compileNativeAcpFixture } from "../../tests/fixtures/acp-native-launcher";
-let nativeDirectory:string,nativeExecutable:string;
+import { createNativeAcpFixture } from "../../tests/fixtures/acp-native-launcher";
+let nativeDirectory:string,nativeExecutable:string,nativeCompiler:ReturnType<typeof createNativeAcpFixture>|undefined;
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"../..");
 async function port(){return new Promise<number>((resolve,reject)=>{const server=createServer();server.on("error",reject);server.listen(0,"127.0.0.1",()=>{const address=server.address() as {port:number};server.close(error=>error?reject(error):resolve(address.port));});});}
 async function stop(child:ChildProcess){if(child.exitCode!==null||child.signalCode!==null)return;await new Promise<void>(resolve=>{child.once("exit",()=>{clearTimeout(timer);resolve();});const timer=setTimeout(()=>child.kill("SIGKILL"),3_000);child.kill("SIGTERM");});}
@@ -30,8 +30,8 @@ const test=base.extend<{app:{url:string;profile:string};mode:string}>({
   }
  },
 });
-test.beforeAll(async()=>{nativeDirectory=mkdtempSync(path.join(realpathSync(tmpdir()),"runphantom-acp native-ui-"));nativeExecutable=await compileNativeAcpFixture(nativeDirectory,"bun");});
-test.afterAll(()=>{if(nativeDirectory)rmSync(nativeDirectory,{recursive:true,force:true});});
+test.beforeAll(async()=>{nativeDirectory=mkdtempSync(path.join(realpathSync(tmpdir()),"runphantom-acp native-ui-"));nativeCompiler=createNativeAcpFixture(nativeDirectory);nativeExecutable=await nativeCompiler.compile("bun");});
+test.afterAll(()=>{if(nativeCompiler){if(!nativeCompiler.cleanup().removed)throw new Error("Controlled ACP compiler ownership unconfirmed; private directory retained");}else if(nativeDirectory)throw new Error("Controlled ACP compiler setup unconfirmed; private directory retained");});
 async function selectOpenCode(page:import("@playwright/test").Page,url:string){
  await page.goto(url);await page.getByRole("button",{name:"Ask Claude Code",exact:true}).click();
  await page.getByRole("button",{name:"OpenCode",exact:true}).click();await page.getByRole("button",{name:"Connect OpenCode",exact:true}).click();

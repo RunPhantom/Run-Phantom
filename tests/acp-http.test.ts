@@ -3,10 +3,10 @@ import { mkdtempSync,realpathSync,rmSync,mkdirSync,writeFileSync,readFileSync,ex
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { OpenCodeAcpSessions } from "../src/acp-sessions";
-import { compileNativeAcpFixture } from "./fixtures/acp-native-launcher";
-let nativeDirectory:string,nativeExecutable:string;
-beforeAll(async()=>{nativeDirectory=mkdtempSync(path.join(realpathSync(tmpdir()),"runphantom-acp native-"));nativeExecutable=await compileNativeAcpFixture(nativeDirectory,process.execPath);},20_000);
-afterAll(()=>{if(nativeDirectory)rmSync(nativeDirectory,{recursive:true,force:true});});
+import { createNativeAcpFixture } from "./fixtures/acp-native-launcher";
+let nativeDirectory:string,nativeExecutable:string,nativeCompiler:ReturnType<typeof createNativeAcpFixture>|undefined;
+beforeAll(async()=>{nativeDirectory=mkdtempSync(path.join(realpathSync(tmpdir()),"runphantom-acp native-"));nativeCompiler=createNativeAcpFixture(nativeDirectory);nativeExecutable=await nativeCompiler.compile(process.execPath);},20_000);
+afterAll(()=>{if(nativeCompiler){if(!nativeCompiler.cleanup().removed)throw new Error("Controlled ACP compiler ownership unconfirmed; private directory retained");}else if(nativeDirectory)throw new Error("Controlled ACP compiler setup unconfirmed; private directory retained");});
 
 test("actual isolated native ACP HTTP authority, transitions, portable identity and joined shutdown",async()=>{
  const profile=mkdtempSync(path.join(realpathSync(tmpdir()),"runphantom-acp-http-"));
