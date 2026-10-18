@@ -37,7 +37,7 @@ export function EmptyState({ onSeeDemoTraces }: EmptyStateProps) {
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-[color:var(--rp-border)]" />
       <div className="relative mx-auto flex min-h-full max-w-2xl flex-col items-center justify-center text-center">
         <div className="mb-5 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--rp-ink-muted)]">
-          <RunPhantomMark decorative size={19} className="text-[color:var(--rp-ink-strong)]" />
+          <RunPhantomMark decorative size={26} />
           <span>Run Phantom</span>
         </div>
 

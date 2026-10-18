@@ -40,14 +40,22 @@ function loadEnvFile(filePath: string, initialKeys: Set<string>): void {
   }
 }
 
-function ancestorDirs(start: string): string[] {
+// The search stops at the repository root, the parent of examples/. A .env
+// above the checkout (say ~/Downloads/.env) belongs to something else and can
+// hold unrelated credentials.
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+function ancestorDirsWithinRepo(start: string): string[] {
   const dirs: string[] = [];
   let current = path.resolve(start);
   while (true) {
     dirs.push(current);
+    if (current === REPO_ROOT) {
+      return dirs.reverse();
+    }
     const parent = path.dirname(current);
     if (parent === current) {
-      return dirs.reverse();
+      return [];
     }
     current = parent;
   }
@@ -57,8 +65,8 @@ export function loadWorkspaceEnv(moduleUrl: string): void {
   const initialKeys = new Set(Object.keys(process.env));
   const moduleDir = path.dirname(fileURLToPath(moduleUrl));
   const searchDirs = new Set<string>([
-    ...ancestorDirs(process.cwd()),
-    ...ancestorDirs(moduleDir),
+    ...ancestorDirsWithinRepo(process.cwd()),
+    ...ancestorDirsWithinRepo(moduleDir),
   ]);
 
   for (const dir of searchDirs) {

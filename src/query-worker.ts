@@ -29,6 +29,7 @@ interface QueryRequest {
 self.onmessage = (event: MessageEvent<QueryRequest>) => {
   const { dbPath, sql, limit } = event.data;
   let db: Database | null = null;
+  let response: { ok: true; rows: Record<string, unknown>[] } | { ok: false; error: string };
   try {
     // Not `{ readonly: true }`: the database runs in WAL mode, and a read-only
     // connection cannot create the -shm file WAL requires, so it fails outright
@@ -38,15 +39,22 @@ self.onmessage = (event: MessageEvent<QueryRequest>) => {
     // readonly database".
     db = new Database(dbPath);
     db.exec("PRAGMA query_only = ON");
-    const rows = db.query(`SELECT * FROM (${sql}) LIMIT ${limit}`).all() as Record<string, unknown>[];
-    self.postMessage({ ok: true, rows });
+    const statement = db.query(`SELECT * FROM (${sql}) LIMIT ${limit}`);
+    try {
+      const rows = statement.all() as Record<string, unknown>[];
+      response = { ok: true, rows };
+    } finally {
+      statement.finalize();
+    }
   } catch (err) {
-    self.postMessage({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    response = { ok: false, error: err instanceof Error ? err.message : String(err) };
   } finally {
     try {
-      db?.close();
-    } catch {
-      /* closing a read-only handle cannot lose data */
+      db?.close(true);
+    } catch (err) {
+      response = { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   }
+  // The parent may terminate us as soon as it receives this terminal response.
+  self.postMessage(response);
 };
