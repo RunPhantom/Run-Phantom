@@ -88,7 +88,7 @@ test.describe("actual touch definition navigation", () => {
       const geometry = () => {
         const box = element.getBoundingClientRect(), link = source.getBoundingClientRect();
         const x = (Math.max(0, box.left) + Math.min(innerWidth, box.right)) / 2, startY = Math.min(innerHeight, box.bottom) - 24;
-        // Chromium extends touch motion by native slop; reserve extra interior space.
+        // Reserve extra interior space for the whole native touch contact.
         const distance = Math.min(1000 / 3, startY - Math.max(0, box.top) - 48), cx = link.x + link.width / 2, cy = link.y + link.height / 2;
         return { x, startY, distance, scrollTop: element.scrollTop, maximum: element.scrollHeight - element.clientHeight,
           startInside: element.contains(document.elementFromPoint(x, startY)), endInside: element.contains(document.elementFromPoint(x, startY - distance)),
@@ -98,11 +98,103 @@ test.describe("actual touch definition navigation", () => {
       type Input = { sequence: number; at: number; type: string; trusted: boolean; defaultPrevented: boolean; x: number | null; y: number | null;
         inside: boolean; targetInsideAnchor: boolean; hitInsideAnchor: boolean; userActivation: { isActive: boolean; hasBeenActive: boolean } };
       type Scroll = { sequence: number; at: number; type: string; trusted: boolean; scrollTop: number };
-      type Contact = { generation: number; armedAt: number; geometry: ReturnType<typeof geometry>; touch: Input[]; scroll: Scroll[]; gestureAcknowledgedAt: number | null };
+      type Frame = { generation: number; at: number; phase: "hold" | "quiet"; scrollTop: number; scrollSequence: number; moveSequence: number };
+      type Contact = { generation: number; armedAt: number; geometry: ReturnType<typeof geometry>; touch: Input[]; scroll: Scroll[];
+        movesAcknowledgedAt: number | null; holdOrigin: number | null; hold: { startedAt: number; completedAt: number; moveSequence: number } | null;
+        releasePreparedAt: number | null; releaseAcknowledgedAt: number | null; releaseGeneration: number | null;
+        frames: Frame[]; quiet: Frame[]; failure: string | null };
+      function panReadiness(contact: Contact | undefined, generation: number, liveScrollTop: number | null): string[] {
+        if (!contact) return ["contact"];
+        const missing: string[] = [], start = contact.touch[0], terminal = contact.touch.at(-1), moves = contact.touch.slice(1, -1);
+        const lastMove = contact.touch.filter(event => event.type === "touchmove").at(-1);
+        const lastScroll = contact.scroll.filter(event => event.type === "scroll").at(-1)?.sequence ?? 0;
+        if (!Number.isInteger(generation) || contact.generation !== generation || generation < 1) missing.push("generation");
+        if (!start || start.type !== "touchstart" || !terminal || !["touchend", "touchcancel"].includes(terminal.type)
+          || !moves.every(event => event.type === "touchmove") || contact.touch.some((event, index) => !Number.isFinite(event.at) || !Number.isFinite(event.sequence)
+            || (index > 0 && (event.sequence <= contact.touch[index - 1].sequence || event.at < contact.touch[index - 1].at)))) missing.push("contact-order");
+        if (!moves.some(event => event.type === "touchmove")) missing.push("actual-moves");
+        if (!contact.touch.every(event => event.trusted)) missing.push("trusted-contact");
+        if (!contact.touch.every(event => !event.defaultPrevented)) missing.push("unprevented-contact");
+        if (!contact.touch.every(event => event.inside)) missing.push("inside-contact");
+        if (!start || !contact.scroll.some(event => event.type === "scroll" && event.trusted && event.sequence > start.sequence)) missing.push("trusted-scroll");
+        if (liveScrollTop === null || !Number.isFinite(liveScrollTop) || !Number.isFinite(contact.geometry.scrollTop) || !(liveScrollTop > contact.geometry.scrollTop)) missing.push("offset-progress");
+        const hold = contact.hold;
+        if (!hold || contact.movesAcknowledgedAt === null || !Number.isFinite(contact.movesAcknowledgedAt) || !lastMove
+          || !Number.isFinite(hold.startedAt) || !Number.isFinite(hold.completedAt) || hold.startedAt !== contact.holdOrigin || hold.startedAt < contact.movesAcknowledgedAt
+          || hold.startedAt < lastMove.at || hold.completedAt - hold.startedAt < 100 || hold.moveSequence !== lastMove.sequence
+          || contact.releasePreparedAt === null || contact.releasePreparedAt < hold.completedAt
+          || !contact.frames.some(frame => frame.phase === "hold" && frame.generation === generation && frame.at === hold.completedAt
+            && frame.moveSequence === hold.moveSequence)) missing.push("stationary-hold");
+        if (contact.releaseAcknowledgedAt === null || !Number.isFinite(contact.releaseAcknowledgedAt) || contact.releaseGeneration !== generation
+          || contact.releasePreparedAt === null || !Number.isFinite(contact.releasePreparedAt)
+          || contact.releaseAcknowledgedAt < contact.releasePreparedAt) missing.push("release-acknowledgment");
+        const quiet = contact.quiet, first = quiet[0], last = quiet.at(-1);
+        if (!first || !last || quiet.length < 3 || last.at - first.at < 100 || contact.releaseAcknowledgedAt === null || !terminal
+          || !quiet.every((frame, index) => frame.phase === "quiet" && frame.generation === generation && Number.isFinite(frame.at)
+            && frame.at >= contact.releaseAcknowledgedAt! && frame.at >= terminal.at && (index === 0 || frame.at > quiet[index - 1].at)
+            && frame.scrollTop === liveScrollTop && frame.scrollSequence === lastScroll && frame.moveSequence === (lastMove?.sequence ?? 0))) missing.push("observed-quiet");
+        if (!Number.isFinite(contact.armedAt) || (last && last.at - contact.armedAt >= 5000)) missing.push("completion-budget");
+        if (contact.failure !== null) missing.push("observer-failure");
+        return missing;
+      }
       const contacts: Contact[] = [], activation: Input[] = [], activationScroll: Scroll[] = [], unassignedScroll: Scroll[] = [];
       let sequence = 0, activationArmedAt: number | null = null, activationGeometry: ReturnType<typeof geometry> | null = null;
+      let disposed = false, frameHandle: number | null = null, deadlineHandle: number | null = null;
+      type Waiter = { generation: number; phase: Frame["phase"]; resolve: () => void; reject: (error: Error) => void };
+      let waiter: Waiter | null = null;
+      const settle = (error?: Error, complete = false) => {
+        if (frameHandle !== null) cancelAnimationFrame(frameHandle); frameHandle = null;
+        if ((error || complete) && deadlineHandle !== null) { clearTimeout(deadlineHandle); deadlineHandle = null; }
+        const pending = waiter; waiter = null;
+        if (error) pending?.reject(error); else pending?.resolve();
+      };
+      const fail = (message: string) => { if (contacts.at(-1)) contacts.at(-1)!.failure = message; settle(new Error(message)); };
+      const current = (generation: number) => {
+        const contact = contacts.at(-1);
+        if (disposed || !contact || contact.generation !== generation) throw new Error("Unexpected native contact generation");
+        if (contact.failure) throw new Error(contact.failure);
+        if (deadlineHandle !== null && performance.now() - contact.armedAt >= 5000) {
+          fail("Current native comparison pan exceeded its completion budget"); throw new Error(contact.failure!);
+        }
+        return contact;
+      };
+      const sampleFrame = (pending: Waiter) => {
+        if (disposed || waiter !== pending) return;
+        frameHandle = null;
+        const contact = contacts.at(-1);
+        if (!contact || contact.generation !== pending.generation) { fail("Stale native contact frame"); return; }
+        if (performance.now() - contact.armedAt >= 5000) { fail("Current native comparison pan exceeded its completion budget"); return; }
+        const frame: Frame = { generation: contact.generation, at: performance.now(), phase: pending.phase, scrollTop: element.scrollTop,
+          scrollSequence: contact.scroll.filter(event => event.type === "scroll").at(-1)?.sequence ?? 0,
+          moveSequence: contact.touch.filter(event => event.type === "touchmove").at(-1)?.sequence ?? 0 };
+        contact.frames.push(frame);
+        if (pending.phase === "hold") {
+          if (contact.holdOrigin !== null && frame.at - contact.holdOrigin >= 100) {
+            contact.hold = { startedAt: contact.holdOrigin, completedAt: frame.at, moveSequence: frame.moveSequence }; settle(); return;
+          }
+        } else {
+          const terminal = contact.touch.at(-1), previous = contact.quiet.at(-1);
+          if (!terminal || !["touchend", "touchcancel"].includes(terminal.type)) contact.quiet = [];
+          else {
+            if (previous && (previous.scrollTop !== frame.scrollTop || previous.scrollSequence !== frame.scrollSequence
+              || previous.moveSequence !== frame.moveSequence)) contact.quiet = [];
+            contact.quiet.push(frame);
+            if (panReadiness(contact, pending.generation, element.scrollTop).length === 0) { settle(undefined, true); return; }
+          }
+        }
+        if (!disposed && waiter === pending) frameHandle = requestAnimationFrame(() => sampleFrame(pending));
+      };
+      const waitFor = (generation: number, phase: Frame["phase"]) => {
+        const contact = current(generation);
+        if (waiter || (phase === "hold" ? contact.movesAcknowledgedAt === null : contact.releaseAcknowledgedAt === null)) throw new Error("Unexpected native contact phase");
+        return new Promise<void>((resolve, reject) => {
+          const pending: Waiter = { generation, phase, resolve, reject }; waiter = pending;
+          frameHandle = requestAnimationFrame(() => sampleFrame(pending));
+        });
+      };
       const types = ["touchstart", "touchmove", "touchend", "touchcancel", "pointerdown", "pointerup", "pointercancel", "click"] as const;
       const input = (event: Event) => {
+        if (disposed) return;
         const target = event.target as Node | null;
         if (!target || !element.contains(target) || (activationArmedAt !== null && !source.contains(target))) return;
         const point = event instanceof TouchEvent ? event.changedTouches[0] ?? event.touches[0] : event instanceof MouseEvent ? event : null;
@@ -111,43 +203,75 @@ test.describe("actual touch definition navigation", () => {
           targetInsideAnchor: source.contains(target), hitInsideAnchor: !!point && source.contains(document.elementFromPoint(point.clientX, point.clientY)),
           userActivation: { isActive: navigator.userActivation.isActive, hasBeenActive: navigator.userActivation.hasBeenActive } };
         if (activationArmedAt !== null) activation.push(sample);
-        else if (event instanceof TouchEvent) contacts.at(-1)?.touch.push(sample);
+        else if (event instanceof TouchEvent) {
+          const contact = contacts.at(-1); contact?.touch.push(sample);
+          if (contact && event.type === "touchmove") {
+            contact.hold = null; contact.quiet = [];
+            if (contact.releasePreparedAt !== null) fail("Native touchmove invalidated the prepared stationary release");
+            else if (contact.movesAcknowledgedAt !== null) contact.holdOrigin = sample.at;
+          }
+        }
       };
       const scroll = (event: Event) => {
-        if (event.target !== element) return;
+        if (disposed || event.target !== element) return;
         const sample: Scroll = { sequence: ++sequence, at: performance.now(), type: event.type, trusted: event.isTrusted, scrollTop: element.scrollTop };
         if (activationArmedAt !== null) activationScroll.push(sample);
-        else (contacts.at(-1)?.scroll ?? unassignedScroll).push(sample);
+        else {
+          const contact = contacts.at(-1); (contact?.scroll ?? unassignedScroll).push(sample);
+          if (contact && event.type === "scroll") contact.quiet = [];
+        }
       };
       for (const type of types) window.addEventListener(type, input, { passive: true });
       element.addEventListener("scroll", scroll, { passive: true }); element.addEventListener("scrollend", scroll, { passive: true });
       return { geometry,
-        begin: () => { const contact: Contact = { generation: contacts.length + 1, armedAt: performance.now(), geometry: geometry(), touch: [], scroll: [], gestureAcknowledgedAt: null }; contacts.push(contact); return { generation: contact.generation, ...contact.geometry }; },
-        acknowledged: (generation: number) => {
-          const contact = contacts.at(-1);
-          if (!contact || contact.generation !== generation || contact.gestureAcknowledgedAt !== null) throw new Error("Unexpected native gesture acknowledgment");
-          contact.gestureAcknowledgedAt = performance.now();
+        begin: () => {
+          if (disposed || waiter || (contacts.length > 0 && panReadiness(contacts.at(-1), contacts.length, element.scrollTop).length > 0)) throw new Error("Previous native pan is not ready");
+          const contact: Contact = { generation: contacts.length + 1, armedAt: performance.now(), geometry: geometry(), touch: [], scroll: [],
+            movesAcknowledgedAt: null, holdOrigin: null, hold: null, releasePreparedAt: null, releaseAcknowledgedAt: null, releaseGeneration: null,
+            frames: [], quiet: [], failure: null };
+          contacts.push(contact);
+          // One existing 5s completion budget covers motion, stationary contact and observed quietness.
+          deadlineHandle = window.setTimeout(() => {
+            if (!disposed && contacts.at(-1) === contact && deadlineHandle !== null) fail("Current native comparison pan exceeded its completion budget");
+          }, 5000);
+          return { generation: contact.generation, ...contact.geometry };
         },
-        completed: () => {
-          const contact = contacts.at(-1), start = contact?.touch[0], terminal = contact?.touch.at(-1);
-          if (!contact || contact.gestureAcknowledgedAt === null || !start || start.type !== "touchstart" || !terminal
-            || (terminal.type !== "touchend" && terminal.type !== "touchcancel") || terminal.sequence <= start.sequence) return false;
-          // A whole-gesture acknowledgment still requires actual native contact and pane progress.
-          const moves = contact.touch.slice(1, -1);
-          const update = contact.scroll.filter(event => event.type === "scroll" && event.trusted && event.sequence > start.sequence).at(-1);
-          return moves.length > 0 && moves.every(event => event.type === "touchmove") && contact.touch.every(event => event.trusted && event.inside && !event.defaultPrevented)
-            && !!update && element.scrollTop > contact.geometry.scrollTop;
+        moved: (generation: number) => {
+          const contact = current(generation);
+          if (contact.movesAcknowledgedAt !== null) throw new Error("Duplicate native movement acknowledgment");
+          contact.movesAcknowledgedAt = performance.now(); contact.holdOrigin = contact.movesAcknowledgedAt;
         },
+        stationary: (generation: number) => waitFor(generation, "hold"),
+        prepareRelease: (generation: number) => {
+          const contact = current(generation), move = contact.touch.filter(event => event.type === "touchmove").at(-1);
+          if (!contact.hold || !move || contact.hold.moveSequence !== move.sequence || contact.releasePreparedAt !== null) throw new Error("Native stationary hold lacks actual movement or was invalidated");
+          contact.releasePreparedAt = performance.now();
+        },
+        released: (generation: number) => {
+          const contact = current(generation);
+          if (contact.releasePreparedAt === null || contact.releaseAcknowledgedAt !== null) throw new Error("Unexpected native release acknowledgment");
+          contact.releaseAcknowledgedAt = performance.now(); contact.releaseGeneration = generation;
+        },
+        waitForCompletion: (generation: number) => waitFor(generation, "quiet"),
+        completed: () => panReadiness(contacts.at(-1), contacts.length, element.scrollTop).length === 0,
         current: () => ({ contact: contacts.at(-1)!, scrollTop: element.scrollTop }),
-        activate: () => { activationGeometry = geometry(); activationArmedAt = performance.now(); return activationGeometry; },
+        activate: () => {
+          activationGeometry = geometry();
+          if (panReadiness(contacts.at(-1), contacts.length, element.scrollTop).length > 0 || !activationGeometry.linkUsable) throw new Error("Native pan readiness or source hit target changed before activation");
+          activationArmedAt = performance.now(); return activationGeometry;
+        },
         activation: () => ({ events: activation, scroll: activationScroll }),
         finish: () => {
+          disposed = true; settle(new Error("Native touch observation disposed"));
           for (const type of types) window.removeEventListener(type, input);
           element.removeEventListener("scroll", scroll); element.removeEventListener("scrollend", scroll);
-          return { contacts, unassignedScroll, activation: { armedAt: activationArmedAt, geometry: activationGeometry, events: activation, scroll: activationScroll } };
+          return { contacts, unassignedScroll, finalScrollTop: element.scrollTop,
+            readiness: { generation: contacts.length, missing: panReadiness(contacts.at(-1), contacts.length, element.scrollTop) },
+            sampler: { disposed, framePending: frameHandle !== null, deadlinePending: deadlineHandle !== null, waiterPending: waiter !== null },
+            activation: { armedAt: activationArmedAt, geometry: activationGeometry, events: activation, scroll: activationScroll } };
         } };
     });
-    let touch: CDPSession | undefined, failed = false;
+    let touch: CDPSession | undefined, failed = false, touchContactActive = false;
     const cleanupErrors: unknown[] = [];
     try {
       touch = await page.context().newCDPSession(page);
@@ -158,10 +282,17 @@ test.describe("actual touch definition navigation", () => {
         const gesture = await observation.evaluate(value => value.begin());
         expect(gesture.linkUsable).toBe(false); expect(gesture.maximum).toBeGreaterThan(gesture.scrollTop);
         expect(gesture.distance).toBeGreaterThan(0); expect(gesture.startInside).toBe(true); expect(gesture.endInside).toBe(true);
-        await touch.send("Input.synthesizeScrollGesture", { x: gesture.x, y: gesture.startY, yDistance: -gesture.distance,
-          gestureSourceType: "touch", preventFling: true, speed: 800, repeatCount: 0 });
-        await observation.evaluate((value, generation) => value.acknowledged(generation), gesture.generation);
-        await expect.poll(() => observation.evaluate(value => value.completed()), { message: "Current native comparison pan must complete" }).toBe(true);
+        touchContactActive = true;
+        await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: gesture.x, y: gesture.startY, id: 0 }] });
+        for (let step = 1; step <= 12; step++) await touch.send("Input.dispatchTouchEvent", { type: "touchMove",
+          touchPoints: [{ x: gesture.x, y: gesture.startY - gesture.distance * step / 12, id: 0 }] });
+        await observation.evaluate((value, generation) => value.moved(generation), gesture.generation);
+        await observation.evaluate((value, generation) => value.stationary(generation), gesture.generation);
+        await observation.evaluate((value, generation) => value.prepareRelease(generation), gesture.generation);
+        await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] }); touchContactActive = false;
+        await observation.evaluate((value, generation) => value.released(generation), gesture.generation);
+        await observation.evaluate((value, generation) => value.waitForCompletion(generation), gesture.generation);
+        expect(await observation.evaluate(value => value.completed()), "Current native comparison pan must complete").toBe(true);
         const completed = await observation.evaluate(value => value.current()), delivered = completed.contact.touch;
         expect(delivered.filter(event => event.type === "touchstart")).toHaveLength(1); expect(delivered.filter(event => event.type === "touchmove").length).toBeGreaterThan(0);
         expect(delivered.filter(event => event.type !== "touchmove").map(event => event.type === "touchstart" ? "start" : "terminal")).toEqual(["start", "terminal"]);
@@ -190,6 +321,7 @@ test.describe("actual touch definition navigation", () => {
       try { const receipt = await observation.evaluate(value => value.finish());
         await testInfo.attach("actual-touch-gesture-receipt.json", { body: JSON.stringify({ beforeScroll: before, ...receipt }, null, 2), contentType: "application/json" });
       } catch (error) { cleanupErrors.push(error); }
+      try { if (touchContactActive) await touch?.send("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] }); } catch (error) { cleanupErrors.push(error); }
       try { await touch?.detach(); } catch (error) { cleanupErrors.push(error); }
       try { await observation.dispose(); } catch (error) { cleanupErrors.push(error); }
       if (cleanupErrors.length) {
