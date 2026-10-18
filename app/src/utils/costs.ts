@@ -99,3 +99,11 @@ export function fmtCost(cost: number): string {
   if (cost < 1) return `$${cost.toFixed(3)}`;
   return `$${cost.toFixed(2)}`;
 }
+
+// Four significant digits absorb float noise from per-token scaling (0.0000004 * 1e6 = 0.39999999999999997)
+// while keeping sub-cent rates exact; Intl avoids the exponent notation String() uses below 1e-6.
+const rateFormat = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 4 });
+
+export function fmtRate(rate: number): string {
+  return `$${rateFormat.format(rate)}`;
+}
