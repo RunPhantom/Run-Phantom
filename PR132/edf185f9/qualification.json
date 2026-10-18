@@ -1,0 +1,27 @@
+{
+  "pr": 132,
+  "feature": "F49",
+  "source": "edf185f9501d6a57b62f889f7c0ea553537c2611",
+  "tree": "eca9694b4c9cc39f6a57e31f18268e1a31fc973c",
+  "base": "68259e270a69a78065b8813b95f0780cfbcfed3a",
+  "draft": true,
+  "scope": "Exact-head copied native synthetic captured-output viewports; zero provider calls, not paid output.",
+  "remaining_qualification": "See PR body; no merge or full-product/platform/paid acceptance claimed.",
+  "root_viewed_at": "2026-10-18T10:08:31.509121+00:00",
+  "screenshots": [
+    {
+      "file": "captured-output-320.png",
+      "sha256": "02098a32c0b32392d78ae588be081c465a16c201c5f028396fba13d1ead8b2ee",
+      "bytes": 46679,
+      "platform": "macOS arm64",
+      "profile": "Exact-head copied native synthetic captured-output viewports; zero provider calls, not paid output."
+    },
+    {
+      "file": "captured-output-1440.png",
+      "sha256": "e74320cfcd6011609bd1dd9590175feeb87a888cafabb36626dc1714236e5f74",
+      "bytes": 133568,
+      "platform": "macOS arm64",
+      "profile": "Exact-head copied native synthetic captured-output viewports; zero provider calls, not paid output."
+    }
+  ]
+}
