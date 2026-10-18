@@ -403,8 +403,8 @@ function sanitizeWithReport(value, options = {}) {
     }
   };
 }
-function redactText(text) {
-  return scrubKnownSecrets(text).replace(/\bauthorization["']?\s*[:=]\s*["']?(?:bearer|basic)\s+[^\s"'&,;}]+/gi, `authorization: ${REDACTED_VALUE}`).replace(/\b(Bearer|Basic)\s+(?=[A-Za-z0-9._~+/=-]{16,})(?=[A-Za-z0-9._~+/=-]*[\d._~+/=-])[A-Za-z0-9._~+/=-]+/gi, (_match, scheme) => `${scheme} ${REDACTED_VALUE}`).replace(/https?:\/\/[^\s<>"']+/gi, (url) => redactUrl(url)).replace(/(^|[\s?&#,;{"'])([A-Za-z][A-Za-z0-9_.-]{0,127})(\s*[=:]\s*["']?)([^&\s,;"'}]+)/g, (match, prefix, key, separator) => isSensitiveKey(key) ? `${prefix}${key}${separator}${REDACTED_VALUE}` : match);
+function redactText(text, isSensitive = isSensitiveKey) {
+  return scrubKnownSecrets(text).replace(/\bauthorization["']?\s*[:=]\s*["']?(?:bearer|basic)\s+[^\s"'&,;}]+/gi, `authorization: ${REDACTED_VALUE}`).replace(/\b(Bearer|Basic)\s+(?=[A-Za-z0-9._~+/=-]{16,})(?=[A-Za-z0-9._~+/=-]*[\d._~+/=-])[A-Za-z0-9._~+/=-]+/gi, (_match, scheme) => `${scheme} ${REDACTED_VALUE}`).replace(/https?:\/\/[^\s<>"']+/gi, (url) => redactUrl(url, isSensitive)).replace(/(^|[\s?&#,;{"'])([A-Za-z][A-Za-z0-9_.-]{0,127})(\s*[=:]\s*["']?)([^&\s,;"'}]+)/g, (match, prefix, key, separator) => isSensitive(key) ? `${prefix}${key}${separator}${REDACTED_VALUE}` : match);
 }
 
 // src/verification/build/source.ts
