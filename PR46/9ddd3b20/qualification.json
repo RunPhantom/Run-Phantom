@@ -1,0 +1,138 @@
+{
+  "pr": 46,
+  "source": "9ddd3b2010b2a035d70ff0f25669457ae73bf5be",
+  "receiving_main": "890f9f632162c05cff605d0de94562051f58632c",
+  "receiving_branch": "main",
+  "tested_pr_merge": "450e2f8875d11c3a068ed643582ea86c17e3722c",
+  "source_tree": "39c7bc5cfa17aa8eff78a5d0d95be47f93c085b6",
+  "scope": "Configuration file lookup stays inside the checkout. Three actual loader subprocess probes per context; synthetic fixtures only, no provider calls. PNG documents unchanged connected UI smoke, not environment isolation. Broader product/platform acceptance remains open.",
+  "native_macos": {
+    "probes_passed": 3,
+    "probes_failed": 0,
+    "assertions": 7,
+    "scoped_lint_exit": 0,
+    "scoped_lint_warning": "examples/loadEnv.ts ignored by existing lint pattern; not warning-free coverage for both requested files."
+  },
+  "runs": [
+    {
+      "label": "linux-push",
+      "runId": 39090510945,
+      "workflowAttempt": 1,
+      "conclusion": "success",
+      "backendCounts": {
+        "pass": 716,
+        "skip": 1,
+        "fail": 0,
+        "error": 0,
+        "total": 717,
+        "files": 70
+      },
+      "browserCounts": [],
+      "allThreeEnvProbesPassed": true
+    },
+    {
+      "label": "linux-pr",
+      "runId": 39090513349,
+      "workflowAttempt": 1,
+      "conclusion": "success",
+      "backendCounts": {
+        "pass": 716,
+        "skip": 1,
+        "fail": 0,
+        "error": 0,
+        "total": 717,
+        "files": 70
+      },
+      "browserCounts": [],
+      "allThreeEnvProbesPassed": true
+    },
+    {
+      "label": "windows-push",
+      "runId": 39090510904,
+      "workflowAttempt": 1,
+      "conclusion": "success",
+      "backendCounts": {
+        "pass": 684,
+        "skip": 33,
+        "fail": 0,
+        "error": 0,
+        "total": 717,
+        "files": 70
+      },
+      "browserCounts": [
+        {
+          "step": "Real browser end-to-end journeys against isolated local daemons",
+          "passed": [
+            128
+          ],
+          "skipped": [
+            10
+          ],
+          "flaky": [
+            1
+          ],
+          "failed": []
+        },
+        {
+          "step": "Exercise the executable outside the source checkout",
+          "passed": [
+            3
+          ],
+          "skipped": [],
+          "flaky": [],
+          "failed": []
+        }
+      ],
+      "allThreeEnvProbesPassed": true
+    },
+    {
+      "label": "windows-pr",
+      "runId": 39090513342,
+      "workflowAttempt": 1,
+      "conclusion": "success",
+      "backendCounts": {
+        "pass": 684,
+        "skip": 33,
+        "fail": 0,
+        "error": 0,
+        "total": 717,
+        "files": 70
+      },
+      "browserCounts": [
+        {
+          "step": "Real browser end-to-end journeys against isolated local daemons",
+          "passed": [
+            129
+          ],
+          "skipped": [
+            10
+          ],
+          "flaky": [],
+          "failed": []
+        },
+        {
+          "step": "Exercise the executable outside the source checkout",
+          "passed": [
+            3
+          ],
+          "skipped": [],
+          "flaky": [],
+          "failed": []
+        }
+      ],
+      "allThreeEnvProbesPassed": true
+    }
+  ],
+  "retained_windows_push_flake": "Seeded span outline fetch first attempt ECONNRESET, existing automatic retry1 passed4.1s. PR counterpart passed. Root cause unproved; no manual workflow rerun.",
+  "screenshots": [
+    {
+      "file": "distinct-run-identifiers-and-complete-header.png",
+      "sha256": "f9ffdaa995376e624a94b33b9ae1c6922be609d635256683115e4c3738bfd684",
+      "bytes": 80181,
+      "platform": "Windows x64",
+      "run_id": 39090513342,
+      "artifact_id": 12122362435,
+      "profile": "Source Chromium; connected synthetic UI smoke at1280x720; environment isolation proven separately by actual loader subprocesses."
+    }
+  ]
+}
