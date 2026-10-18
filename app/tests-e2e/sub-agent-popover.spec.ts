@@ -76,7 +76,7 @@ test.beforeEach(async ({ runPhantom }) => {
   await clearRunPhantom(runPhantom.url);
 });
 
-test("sub-agent popover: a failed tool is marked as an error, not with a success check", async ({ page, runPhantom }) => {
+test("sub-agent popover: a failed tool is marked as an error, not with a success check", async ({ page, runPhantom }, testInfo) => {
   await seedSubAgentWithFailedTool(runPhantom.url);
   const popover = await openSubAgentPopover(page, runPhantom.url);
 
@@ -105,9 +105,10 @@ test("sub-agent popover: a failed tool is marked as an error, not with a success
 
   expect(await chip("read_changelog")).toEqual({ alert: true, check: false, stroke: "var(--rp-danger)", danger: true });
   expect(await chip("list_files")).toEqual({ alert: false, check: true, stroke: "var(--rp-success)", danger: false });
+  await popover.screenshot({ path: testInfo.outputPath("sub-agent-tool-statuses.png") });
 });
 
-test("sub-agent popover: the open button keeps its label on one line at 1280x720", async ({ page, runPhantom }) => {
+test("sub-agent popover: the open button keeps its label on one line at 1280x720", async ({ page, runPhantom }, testInfo) => {
   await seedSubAgentWithFailedTool(runPhantom.url);
   const popover = await openSubAgentPopover(page, runPhantom.url);
 
@@ -121,4 +122,5 @@ test("sub-agent popover: the open button keeps its label on one line at 1280x720
     return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
   });
   expect(lines, "lines in the Open Sub-Agent label").toBe(1);
+  await popover.screenshot({ path: testInfo.outputPath("sub-agent-complete-footer-1280.png") });
 });
