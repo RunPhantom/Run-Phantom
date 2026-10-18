@@ -23,7 +23,8 @@ import { SavePopover } from "./SavePopover";
 import { RotateCcw, Bookmark, Download, Pencil, ChevronDown, ArrowDown, ChevronRight, MessageCircle, SearchX } from "lucide-react";
 import { LocalAgentSetupCTA, SetupReplayModal } from "./LocalAgentSetupCTA";
 import { C } from "../utils/colors";
-import { fmt, isActive, plural, runDisplayName, isoTimestamp, safeDecodeParam } from "../utils/helpers";
+import { fmt, isActive, plural, replayOutcome, runDisplayName, isoTimestamp, safeDecodeParam, spanErrorReason } from "../utils/helpers";
+import type { RunStatus } from "../utils/helpers";
 import { useQueryClient } from "@tanstack/react-query";
 import { parseReplayMetadata } from "../utils/types";
 import { deleteRun, renameRun } from "../api/runs";
@@ -43,7 +44,7 @@ import { useAnnotations } from "../hooks/use-annotations";
 import type { Annotation, AnnotationKind } from "../hooks/use-annotations";
 import { useAgentForEvent } from "../hooks/use-agents";
 import { useRunPhantomEvent } from "../hooks/use-runphantom-ws";
-import { getCostBreakdown, fmtCost } from "../utils/costs";
+import { getCostBreakdown, fmtCost, fmtRate } from "../utils/costs";
 import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
 import { useDialogFocus } from "../hooks/use-dialog-focus";
 
@@ -152,60 +153,126 @@ function getTokensByModel(spans: Span[]): Map<string, { inTok: number; outTok: n
 }
 
 function ErrorMessage({ span }: { span: Span }) {
-  let msg = span.output_payload;
-  if (!msg && span.attributes) {
-    try {
-      const attrs = JSON.parse(span.attributes);
-      msg = String(attrs["error.message"] ?? attrs["ai.response.error"] ?? attrs["exception.message"] ?? "");
-    } catch {}
-  }
+  const msg = spanErrorReason(span);
   if (!msg) return null;
   return (
-    <div className="text-[10px] font-mono mt-1 whitespace-pre-wrap break-words" style={{ color: C.red, maxHeight: 80, overflow: "hidden" }}>
+    <div className="text-[10px] font-mono mt-1 whitespace-pre-wrap break-words" style={{ color: C.red }}>
       {String(msg).length > 200 ? String(msg).slice(0, 200) + "\u2026" : String(msg)}
     </div>
   );
 }
 
+const ERRORS_TOOLTIP_VIEWPORT_GAP = 12;
+const ERRORS_TOOLTIP_MIN_HEIGHT = 96;
+
 function ErrorsTooltip({ spans }: { spans: Span[] }) {
   const [show, setShow] = useState(false);
+  const [maxHeight, setMaxHeight] = useState<number>();
+  const [scrollable, setScrollable] = useState(false);
+  const [moreBelow, setMoreBelow] = useState(false);
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  // Escape returns focus to the trigger, whose focus handler would otherwise
+  // reopen the tooltip that was just dismissed.
+  const dismissedRef = useRef(false);
   const errorSpans = useMemo(() => spans.filter(s => s.status === "ERROR"), [spans]);
+
+  // A fixed 300px list cut its last line through the glyphs, and overlay
+  // scrollbars gave no sign the rest existed. Size to the viewport instead,
+  // and only scroll (with a visible hint) when the viewport is genuinely short.
+  useLayoutEffect(() => {
+    if (!show) return;
+    const place = () => {
+      const bottom = triggerRef.current?.getBoundingClientRect().bottom ?? 0;
+      setMaxHeight(Math.max(ERRORS_TOOLTIP_MIN_HEIGHT, window.innerHeight - bottom - ERRORS_TOOLTIP_VIEWPORT_GAP));
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [show]);
+
+  const measure = useCallback(() => {
+    const list = listRef.current;
+    if (!list) return;
+    setScrollable(list.scrollHeight > list.clientHeight + 1);
+    setMoreBelow(list.scrollTop + list.clientHeight < list.scrollHeight - 1);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (show) measure();
+  }, [show, maxHeight, errorSpans, measure]);
+
   if (errorSpans.length === 0) return null;
 
   return (
-    <span className="relative cursor-help" tabIndex={0} aria-label={`${plural(errorSpans.length, "run error")}. Focus for details.`}
-      onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)} onFocus={() => setShow(true)} onBlur={() => setShow(false)}>
+    <span ref={triggerRef} className="relative cursor-help" tabIndex={0} aria-label={`${plural(errorSpans.length, "run error")}. Focus for details.`}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={(event) => {
+        if (!event.currentTarget.contains(document.activeElement)) setShow(false);
+      }}
+      onFocus={() => {
+        if (dismissedRef.current) dismissedRef.current = false;
+        else setShow(true);
+      }}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setShow(false);
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || !show) return;
+        event.stopPropagation();
+        setShow(false);
+        if (document.activeElement !== triggerRef.current) {
+          dismissedRef.current = true;
+          triggerRef.current?.focus();
+        }
+      }}>
       <span style={{ color: C.red }}><NumberFlow value={errorSpans.length} /> error{errorSpans.length !== 1 ? "s" : ""}</span>
       {show && (
-        <div className="absolute left-0 top-full mt-1 z-50 rounded-xl shadow-2xl overflow-hidden"
-          style={{
-            width: "min(380px, calc(100vw - 32px))", maxHeight: 350,
-            background: "var(--rp-surface)",
-            border: "1px solid color-mix(in srgb, var(--rp-danger) 28%, white 72%)",
-            boxShadow: "var(--rp-e3)",
-          }}>
-          <div className="px-3 py-2 flex items-center gap-2" style={{ borderBottom: "1px solid color-mix(in srgb, var(--rp-danger) 20%, white 80%)" }}>
-            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke={C.red} strokeWidth={2.5} strokeLinecap="round">
-              <circle cx={12} cy={12} r={10} /><line x1={12} y1={8} x2={12} y2={12} /><line x1={12} y1={16} x2={12.01} y2={16} />
-            </svg>
-            <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: C.red }}>
-              {errorSpans.length} Error{errorSpans.length !== 1 ? "s" : ""}
-            </span>
-          </div>
-          <div className="overflow-auto" style={{ maxHeight: 300 }}>
-            {errorSpans.map((s, idx) => (
-              <div key={s.id} className="px-3 py-2" style={{ borderBottom: idx < errorSpans.length - 1 ? "1px solid color-mix(in srgb, var(--rp-danger) 14%, white 86%)" : "none" }}>
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-[10px] font-mono font-bold px-1 py-0.5 rounded"
-                    style={{ color: s.span_type === "TOOL_CALL" ? C.orange : s.span_type?.includes("LLM") ? C.cyan : C.fg0, background: "var(--rp-ink-wash)" }}>
-                    {s.span_type === "TOOL_CALL" ? "TOOL" : s.span_type?.includes("LLM") ? "LLM" : "SPAN"}
-                  </span>
-                  <span className="text-[11px] font-mono truncate" style={{ color: C.red }}>{s.name}</span>
-                  <span className="text-[9px] font-mono ml-auto flex-shrink-0" style={{ color: C.fg0 }}>{fmt(s.duration_ms)}</span>
-                </div>
-                <ErrorMessage span={s} />
+        // Padding rather than margin bridges the gap, so moving the pointer
+        // onto the tooltip to scroll it does not fire mouseleave on the way.
+        <div className="absolute left-0 top-full z-50 pt-1">
+          <div className="flex flex-col rounded-xl shadow-2xl overflow-hidden"
+            style={{
+              width: "min(380px, calc(100vw - 32px))", maxHeight,
+              background: "var(--rp-surface)",
+              border: "1px solid color-mix(in srgb, var(--rp-danger) 28%, white 72%)",
+              boxShadow: "var(--rp-e3)",
+            }}>
+            <div className="px-3 py-2 flex flex-shrink-0 items-center gap-2" style={{ borderBottom: "1px solid color-mix(in srgb, var(--rp-danger) 20%, white 80%)" }}>
+              <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke={C.red} strokeWidth={2.5} strokeLinecap="round">
+                <circle cx={12} cy={12} r={10} /><line x1={12} y1={8} x2={12} y2={12} /><line x1={12} y1={16} x2={12.01} y2={16} />
+              </svg>
+              <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: C.red }}>
+                {errorSpans.length} Error{errorSpans.length !== 1 ? "s" : ""}
+              </span>
+            </div>
+            <div className="relative flex min-h-0 flex-col">
+              <div ref={listRef} role="region" aria-label="Error details" tabIndex={scrollable ? 0 : undefined}
+                className="min-h-0 overflow-auto" onScroll={measure}>
+                {errorSpans.map((s, idx) => (
+                  <div key={s.id} className="px-3 py-2" style={{ borderBottom: idx < errorSpans.length - 1 ? "1px solid color-mix(in srgb, var(--rp-danger) 14%, white 86%)" : "none" }}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-[10px] font-mono font-bold px-1 py-0.5 rounded"
+                        style={{ color: s.span_type === "TOOL_CALL" ? C.orange : s.span_type?.includes("LLM") ? C.cyan : C.fg0, background: "var(--rp-ink-wash)" }}>
+                        {s.span_type === "TOOL_CALL" ? "TOOL" : s.span_type?.includes("LLM") ? "LLM" : "SPAN"}
+                      </span>
+                      <span className="text-[11px] font-mono truncate" style={{ color: C.red }}>{s.name}</span>
+                      <span className="text-[9px] font-mono ml-auto flex-shrink-0" style={{ color: C.fg0 }}>{fmt(s.duration_ms)}</span>
+                    </div>
+                    <ErrorMessage span={s} />
+                  </div>
+                ))}
               </div>
-            ))}
+              {moreBelow && (
+                <div data-errors-overflow-hint aria-hidden="true"
+                  className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-center pb-1.5"
+                  style={{ height: 44, background: "linear-gradient(to bottom, color-mix(in srgb, var(--rp-surface) 0%, transparent), var(--rp-surface) 72%)" }}>
+                  <span className="flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider" style={{ color: C.fg2 }}>
+                    <ArrowDown size={10} strokeWidth={2.5} />Scroll for more
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -280,6 +347,7 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
     }));
   }, [spans]);
 
+  const ticking = !!(active && startedAt);
   const liveDur = active && startedAt ? now - startedAt : stats.dur;
   const durValid = Number.isFinite(liveDur) && liveDur >= 0;
   const durSec = Math.round(liveDur / 1000);
@@ -293,14 +361,15 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
       {(stats.agents ?? 0) > 0 && <><span><NumberFlow value={stats.agents!} /> sub-agent{stats.agents !== 1 ? "s" : ""}</span><Dot /></>}
       {stats.errors > 0 && spans && <><ErrorsTooltip spans={spans} /><Dot /></>}
       {stats.errors > 0 && !spans && <><span style={{ color: C.red }}><NumberFlow value={stats.errors} /> error{stats.errors !== 1 ? "s" : ""}</span><Dot /></>}
-      {/* NumberFlow animates whole seconds, which reads well for a run in flight
-          but rounds a 420ms run to "0s" while the span tree shows "420ms" for the
-          same trace — and it has no hour unit, so a 3h run read as "205m". Keep
-          the animation for the range it suits and defer to fmt() outside it. */}
+      {/* NumberFlow animates whole seconds, which reads well for a clock ticking
+          on a run in flight. A settled duration is a measurement, though: rounded
+          to whole seconds it read "6s" beside a span tree root of "6.2s", "0s"
+          beside "420ms", and "205m" for a 3h run. Only the live tick animates;
+          everything else goes through fmt(), exactly like the span tree. */}
       <Badge label="duration" /><span>{
         !durValid
           ? "—"
-          : liveDur < 1000 || liveDur >= 3_600_000
+          : !ticking || liveDur < 1000 || liveDur >= 3_600_000
             ? fmt(liveDur)
             : durMin > 0
               ? <><NumberFlow value={durMin} />m <NumberFlow value={durRemSec} />s</>
@@ -326,11 +395,11 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
                     {b.breakdown && (
                       <div className="text-[9px] space-y-0.5" style={{ color: C.fg0 }}>
                         <div className="flex justify-between gap-4">
-                          <span>{b.inTok.toLocaleString()} input @ ${b.breakdown.inRate}/M</span>
+                          <span>{b.inTok.toLocaleString()} input @ {fmtRate(b.breakdown.inRate)}/M</span>
                           <span style={{ color: C.fg1 }}>{fmtCost(b.breakdown.inCost)}</span>
                         </div>
                         <div className="flex justify-between gap-4">
-                          <span>{b.outTok.toLocaleString()} output @ ${b.breakdown.outRate}/M</span>
+                          <span>{b.outTok.toLocaleString()} output @ {fmtRate(b.breakdown.outRate)}/M</span>
                           <span style={{ color: C.fg1 }}>{fmtCost(b.breakdown.outCost)}</span>
                         </div>
                         <div className="flex justify-between gap-4 pt-0.5" style={{ borderTop: `1px solid ${C.border}` }}>
@@ -680,8 +749,14 @@ function ViewHeader({
     };
   }, [optionsOpen]);
   const displayTitle = cleanTitle(title);
-  const statusLabel = active ? "Run live" : stats.errors > 0 ? "Run failed" : "Run complete";
-  const statusColor = active ? C.green : stats.errors > 0 ? C.red : C.fg1;
+  const status: RunStatus = (run && replayOutcome(run)) || (active ? "live" : stats.errors > 0 ? "failed" : "complete");
+  const statusLabel = { live: "Run live", failed: "Run failed", cancelled: "Run cancelled", complete: "Run complete" }[status];
+  const statusColor = status === "live" ? C.green : status === "failed" ? C.red : C.fg1;
+  const statusBackground = status === "live"
+    ? "color-mix(in oklch, var(--rp-success) 12%, transparent)"
+    : status === "failed"
+      ? "color-mix(in oklch, var(--rp-danger) 10%, transparent)"
+      : "var(--rp-ink-wash)";
   return (
     <div className="flex-shrink-0" style={{ padding: isReplay ? "8px 16px" : "10px 16px", borderBottom: `1px solid ${C.border}` }}>
       {parentName && onBack ? (
@@ -697,14 +772,7 @@ function ViewHeader({
                 <h2 style={{ fontSize: "18px", fontWeight: 600, color: C.fg5 }}>{displayTitle}</h2>
                 {model && <span className="text-[10px] px-2 py-0.5 rounded font-mono" style={{ background: "var(--rp-ink-a04)", color: C.fg1 }}>{model}</span>}
                 <span className="text-[10px] px-2 py-0.5 rounded-full font-medium"
-                  style={{
-                    background: active
-                      ? "color-mix(in oklch, var(--rp-success) 12%, transparent)"
-                      : stats.errors > 0
-                        ? "color-mix(in oklch, var(--rp-danger) 10%, transparent)"
-                        : "var(--rp-ink-wash)",
-                    color: statusColor,
-                  }}>
+                  style={{ background: statusBackground, color: statusColor }}>
                   {statusLabel}
                 </span>
               </div>
@@ -742,7 +810,7 @@ function ViewHeader({
               <span
                 data-run-status
                 className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium"
-                style={{ color: statusColor, background: active ? "color-mix(in oklch, var(--rp-success) 12%, transparent)" : stats.errors > 0 ? "color-mix(in oklch, var(--rp-danger) 10%, transparent)" : "var(--rp-ink-wash)" }}
+                style={{ color: statusColor, background: statusBackground }}
               >
                 {statusLabel}
               </span>
@@ -983,10 +1051,10 @@ function ViewHeader({
             {run && (run.id || run.user_id || run.convo_id) && (
               <>
                 <Dot />
-                <span className="rp-meta-ids flex items-center gap-1.5" style={{ color: C.fg0 }}>
+                <span className="rp-meta-ids flex min-w-0 max-w-full items-center gap-1.5" style={{ color: C.fg0 }}>
                   {run.user_id && <span className="inline-flex items-center gap-1" title={run.user_id}><Badge label="user" copyValue={run.user_id} />{run.user_id.length > 12 ? run.user_id.slice(0, 12) + "…" : run.user_id}</span>}
                   {run.convo_id && <span className="inline-flex items-center gap-1" title={run.convo_id}><Badge label="conversation" copyValue={run.convo_id} />{run.convo_id.length > 12 ? run.convo_id.slice(0, 12) + "…" : run.convo_id}</span>}
-                  <span className="inline-flex items-center gap-1" title={run.id}><Badge label="trace" copyValue={run.id} />{run.id.slice(0, 8)}</span>
+                  <span className="inline-flex min-w-0 items-center gap-1"><Badge label="trace" copyValue={run.id} /><span className="min-w-0 truncate" title={run.id}>{run.id}</span></span>
                 </span>
               </>
             )}
@@ -1435,6 +1503,9 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
     };
   }, [data?.run.id]);
 
+  // The handshake also covers updates persisted before this socket connected.
+  useRunPhantomEvent("agent_provider", () => { void fetchData(); });
+
   useRunPhantomEvent<SpansBroadcast | undefined>("spans", (data) => {
     if (initialData) return; // No WebSocket updates for pre-loaded data
     if (data?.runIds?.includes(runId)) fetchData();
@@ -1614,7 +1685,10 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
         title={runDisplayName(run)}
         model={model}
         active={active}
-        startedAt={run.started_at}
+        // A run stays "active" for 30s after its last live event, and the
+        // header clock kept counting wall time past the run's own end ("12s"
+        // for a 6.2s run). Once finished, the header shows the recorded span.
+        startedAt={run.finished ? undefined : run.started_at}
         anthropicModels={anthropicModels}
         stats={{
           spans: spans.length, tools: tools.length, llms: llms.length, errors: errs.length, dur,
