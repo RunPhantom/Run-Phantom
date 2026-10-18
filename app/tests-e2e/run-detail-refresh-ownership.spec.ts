@@ -4,7 +4,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { APIResponse, Page, Request, WebSocketRoute } from "@playwright/test";
+import type { APIResponse, Page, Request, Route, WebSocketRoute } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { FIXTURE_PRIMARY_RUN_ID as A, FIXTURE_SAVED_SIBLING_RUN_ID as B } from "./helpers";
 
@@ -114,28 +114,57 @@ type Held = {
 async function detailGate(page: Page, url: string, protocol: Protocol = "native") {
   const requests: Request[] = [];
   const held: Held[] = [];
+  const active = new Set<Promise<void>>();
   let enabled = false;
-  await page.route(url, async route => {
-    const request = route.request();
-    const n = requests.push(request);
-    const response = await route.fetch();
-    const headers = { ...response.headers() };
-    if (protocol === "legacy") delete headers[coverage];
-    if (protocol === "invalid" || protocol === "unclassified") headers[coverage] = "unknown-producer";
-    if (!enabled) return route.fulfill({ response, headers });
-    const release = gate(), delivered = gate();
-    const item: Held = { request, response, body: await response.json() as Detail, n,
-      release: release.release, delivered: delivered.promise };
-    held.push(item);
-    await release.promise;
-    try { await route.fulfill({ response, headers }); }
-    catch (error) { item.deliveryError = String(error); }
-    finally { delivered.release(); }
-  });
+  let closing = false;
+  let disposal: Promise<void> | undefined;
+  const handler = (route: Route): Promise<void> => {
+    // Register the original callback promise before any fetch or body await can run.
+    const invocation = Promise.resolve().then(async () => {
+      const request = route.request();
+      const n = requests.push(request);
+      const response = await route.fetch();
+      const headers = { ...response.headers() };
+      if (protocol === "legacy") delete headers[coverage];
+      if (protocol === "invalid" || protocol === "unclassified") headers[coverage] = "unknown-producer";
+      if (!enabled) return route.fulfill({ response, headers });
+      const release = gate(), delivered = gate();
+      const item: Held = { request, response, body: await response.json() as Detail, n,
+        release: release.release, delivered: delivered.promise };
+      held.push(item);
+      // Disposal can start while the genuine response body is being read.
+      if (closing) item.release();
+      await release.promise;
+      try { await route.fulfill({ response, headers }); }
+      catch (error) { item.deliveryError = String(error); }
+      finally { delivered.release(); }
+    });
+    active.add(invocation);
+    void invocation.then(() => { active.delete(invocation); }, () => { active.delete(invocation); });
+    return invocation;
+  };
+  await page.route(url, handler);
+  const dispose = (): Promise<void> => {
+    if (!disposal) {
+      closing = true;
+      enabled = false;
+      for (const item of held) item.release();
+      disposal = Promise.resolve().then(async () => {
+        let unrouteFailed = false;
+        try { await page.unroute(url, handler); }
+        catch { unrouteFailed = true; }
+        // Joining observes settlement; the original promise still reports rejection to Playwright.
+        await Promise.allSettled([...active]);
+        // A cleanup failure must fail the test without replacing an in-flight body exception.
+        expect.soft(unrouteFailed, "owned detail route must unregister before disposal completes").toBe(false);
+      });
+    }
+    return disposal;
+  };
   return {
-    requests, held, enable: () => { enabled = true; },
+    requests, held, enable: () => { if (!closing) enabled = true; },
     next: async (index: number) => { await expect.poll(() => held.length).toBeGreaterThan(index); return held[index]; },
-    dispose: () => { enabled = false; for (const item of held) item.release(); },
+    dispose,
   };
 }
 
@@ -205,7 +234,7 @@ test("same-run completed reads publish progress during three ongoing refresh rou
     current.release(); await current.delivered; await finished(current.request);
     await expect(page.getByRole("button", { name: "Rename snapshot-4", exact: true })).toBeVisible();
     expect(failures).toEqual([]);
-  } finally { reads.dispose(); }
+  } finally { await reads.dispose(); }
 });
 
 test("a held pre-selection snapshot cannot redirect the newer span route or reset Debug", async ({ page, runPhantom }) => {
@@ -235,7 +264,7 @@ test("a held pre-selection snapshot cannot redirect the newer span route or rese
     fresh.release(); await fresh.delivered; await finished(fresh.request);
     await expect(page).toHaveURL(new RegExp("/span/0000000000000002$"));
     await expect(page.getByRole("tab", { name: "Span Tree", exact: true })).toHaveAttribute("aria-selected", "true");
-  } finally { reads.dispose(); }
+  } finally { await reads.dispose(); }
 });
 
 test("A1 retires immediately through B and A2 and its old finally cannot own A2", async ({ page, runPhantom }) => {
@@ -267,7 +296,7 @@ test("A1 retires immediately through B and A2 and its old finally cannot own A2"
     a2.release(); await a2.delivered; await finished(a2.request);
     await expect(page.getByRole("button", { name: "Rename snapshot-0", exact: true })).toBeVisible();
     expect(failures).toEqual([a1.request]);
-  } finally { reads.dispose(); }
+  } finally { await reads.dispose(); }
 });
 
 for (const fault of ["403", "404", "503", "json", "transport"] as const) {
@@ -294,7 +323,7 @@ for (const fault of ["403", "404", "503", "json", "transport"] as const) {
       await expect(page.getByText("Loading", { exact: true })).toHaveCount(0);
       recovered.release(); await recovered.delivered; await finished(recovered.request);
       await expect(page.getByRole("button", { name: "Rename snapshot-0", exact: true })).toBeVisible();
-    } finally { releaseError.release(); reads.dispose(); }
+    } finally { releaseError.release(); await reads.dispose(); }
   });
 }
 
@@ -419,7 +448,7 @@ test("saved history and a genuine other-database native suffix retain their coll
     await expect.poll(() => overviewOccurrences(page, "historical collision|")).toBe(0);
     await expect.poll(() => overviewOccurrences(page, "native collision|")).toBe(1);
     expect(await (await fetch(`${runPhantom.url}/api/saved-runs/cache/${A}`)).json()).toEqual(historical);
-  } finally { reads.dispose(); }
+  } finally { await reads.dispose(); }
 });
 
 for (const protocol of ["legacy", "invalid", "unclassified"] as const) {
@@ -458,7 +487,7 @@ for (const protocol of ["legacy", "invalid", "unclassified"] as const) {
       await page.locator(`[data-run-id="${B}"]`).click(); await finished(await b);
       await expect.poll(() => overviewOccurrences(page, "legacy immediate|")).toBe(0);
       await expect.poll(() => overviewOccurrences(page, "HTTP-only progress|")).toBe(0);
-    } finally { reads.dispose(); }
+    } finally { await reads.dispose(); }
   });
 }
 
@@ -477,7 +506,7 @@ for (const view of ["span/0000000000000009", "convo"] as const) {
       await expect(page).toHaveURL(runPhantom.url + `/runs/${A}${view === "convo" ? "" : "/spans"}`);
       expect(reads.held).toHaveLength(1);
       await expect(page.getByRole("button", { name: "Rename snapshot-0", exact: true })).toBeVisible();
-    } finally { reads.dispose(); }
+    } finally { await reads.dispose(); }
   });
 }
 
@@ -542,7 +571,7 @@ test("actual pending React work preserves interleaved native frames through comm
     expect(await page.evaluate(() => (window as unknown as SchedulingWindow).detailScheduling.released)).toBeGreaterThan(0);
   } finally {
     await page.evaluate(() => (window as unknown as SchedulingWindow).detailScheduling.release()).catch(() => {});
-    reads.dispose();
+    await reads.dispose();
   }
 });
 
@@ -586,7 +615,7 @@ test("a stale no-conversation response cannot erase the newly selected genuine c
     await expect(page.getByRole("tab", { name: "Conversation", exact: true })).toHaveAttribute("aria-selected", "true");
     // ConvoDetail has its own same-URL query. Drain the earlier phase instead
     // of mistaking a pre-removal ordinal for the coordinator's covering read.
-    reads.dispose();
+    await reads.dispose();
     const removal = await detailGate(page, runPhantom.url + `/api/runs/detail/${A}`);
     missingPhase = removal;
     removal.enable();
@@ -619,7 +648,7 @@ test("a stale no-conversation response cannot erase the newly selected genuine c
     await expect(page).toHaveURL(runPhantom.url + `/runs/${A}`);
     await expect(page.getByRole("tab", { name: "Conversation", exact: true })).toHaveCount(0);
   } finally {
-    missingPhase?.dispose(); reads.dispose();
+    await Promise.all([missingPhase?.dispose(), reads.dispose()]);
     await info.attach("genuine-native-removal-phase-reads", { contentType: "application/json", body: JSON.stringify(phaseWitnesses) });
   }
 });
@@ -649,7 +678,7 @@ test("a stale no-agent response keeps a newer selected real sub-agent until its 
     missing.release(); await missing.delivered; await finished(missing.request);
     await expect(page.getByRole("tablist", { name: "Sub-agent views" })).toHaveCount(0);
     await expect(page.getByRole("tablist", { name: "Run views" })).toBeVisible();
-  } finally { reads.dispose(); }
+  } finally { await reads.dispose(); }
 });
 
 test("failed-delete retirement keeps its committed prefix until a held resumed read replaces it and retains the newer frame", async ({ page, runPhantom }) => {
@@ -727,5 +756,5 @@ test("failed-delete retirement keeps its committed prefix until a held resumed r
       await expect.poll(() => overviewOccurrences(page, content)).toBe(1);
     }
     expect(failures).toEqual([retired.request]);
-  } finally { releaseDelete.release(); reads.dispose(); }
+  } finally { releaseDelete.release(); await reads.dispose(); }
 });
