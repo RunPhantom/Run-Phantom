@@ -1,0 +1,27 @@
+{
+  "pr": 124,
+  "source": "f0fd4dad379be3ead283f8a550e6d07ebda4434c",
+  "receiving_main": "cef568a586e8d93096be878d60ad7a3777af5ee4",
+  "receiving_branch": "main",
+  "source_tree": "4bc6b730e4a917ed6cd3a5c416bf6241c61da6d3",
+  "scope": "Test-only MCP fixture ownership and failure reporting. Actual unchanged evaluation UI is shown as a retained user-flow witness; a screenshot does not establish backend handle ownership or fix the earlier unknown Windows EBUSY.",
+  "native_macos": {
+    "tests_passed": 13,
+    "assertions": 171,
+    "browser_passed": 3,
+    "browser_retries": 0,
+    "types_lint_build": "passed"
+  },
+  "remote_ci": "Pending at publication; no Linux/Windows qualification claim.",
+  "earlier_windows_ebusy_owner": "unknown",
+  "production_dependencies_workflows_release_unchanged": true,
+  "screenshots": [
+    {
+      "file": "evaluations-desktop-results.png",
+      "sha256": "eeca2631f21a2914d3f38ca60ce0609ecb4188b2a2b7d1bcc11ad495497b0ff9",
+      "bytes": 82348,
+      "platform": "macOS arm64",
+      "profile": "Actual original complete evaluation UI journey, freshly built UI, private synthetic checkout fixture; results and pass denominator visible. Native source input tree maps exactly to committed source. Browser retries0."
+    }
+  ]
+}
