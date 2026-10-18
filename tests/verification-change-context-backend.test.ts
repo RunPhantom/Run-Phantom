@@ -12,6 +12,7 @@ import { createVerificationService } from "../src/verification/service";
 import { createVerificationRouter, verifyVerificationChangeRequest } from "../src/verification/router";
 import { ChangeContextReader } from "../src/verification/change-context";
 import { listReports } from "../src/verification/store";
+import { emitWindowsChangeRootDiagnostic } from "./fixtures/change-context-git";
 
 let directory: string;
 let previousDb: string | undefined;
@@ -103,6 +104,7 @@ describe("explicit change context preserves measured report authority", () => {
       const offered = await f.api("/change-workspace"); expect(offered.status).toBe(200);
       expect(offered.body.workspaceId).toBeString(); expect(JSON.stringify(offered.body)).not.toContain(repo.cwd);
       const captured = await f.api(`/reports/${f.report.id}/change-context`, { workspaceId: offered.body.workspaceId });
+      emitWindowsChangeRootDiagnostic(repo.cwd, captured.body);
       expect(captured.status).toBe(200); expect(captured.body.head).toBe(repo.head);
       if (!captured.body.changes.some((row: { path: string }) => row.path === "src/pixel.bin")) console.log("Bounded same-size binary diagnostic", JSON.stringify(captured.body));
       expect(captured.body.testedRevision).toBeNull(); expect(captured.body.fingerprintCoverage).toBe("metadata-only");
@@ -126,6 +128,7 @@ describe("explicit change context preserves measured report authority", () => {
     try {
       const offered = await f.api("/change-workspace"); expect(offered.status).toBe(200);
       const captured = await f.api(`/reports/${f.report.id}/change-context`, { workspaceId: offered.body.workspaceId });
+      emitWindowsChangeRootDiagnostic(repo.cwd, captured.body);
       expect(captured.status).toBe(200); expect(captured.body.changes).toEqual([]); expect(captured.body.complete).toBe(true);
       expect(captured.body.handoff.status).toBe("fail"); expect(captured.body.testedRevision).toBeNull();
       expect(captured.body.relatedTests.every((hint: { advisory: boolean }) => hint.advisory)).toBe(true);
@@ -156,6 +159,7 @@ describe("change-context original HTTP bytes cover every accepted route form", (
       try {
         const offered = await f.api("/change-workspace"); expect(offered.status).toBe(200);
         const captured = await f.raw(route.path(f.report.id), ` { "workspaceId" : "${offered.body.workspaceId}" } `);
+        emitWindowsChangeRootDiagnostic(repo.cwd, captured.body);
         expect(captured.status).toBe(200); expect(captured.body.head).toBe(repo.head);
         expect(captured.body.handoff.reportId).toBe(f.report.id); expect(captured.body.handoff.status).toBe("fail");
         expect(JSON.stringify(listReports().find(item => item.id === f.report.id))).toBe(f.stored);

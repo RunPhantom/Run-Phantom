@@ -1,10 +1,16 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { ChangeContextReader, verifyChangeContextJson } from "../src/verification/change-context";
 import type { VerificationReport } from "../src/verification/protocol";
+import { compileChangeGitFixture } from "./fixtures/change-context-git";
+
+let native: ReturnType<typeof compileChangeGitFixture>;
+beforeAll(() => { native = compileChangeGitFixture(); }, 30_000);
+afterEach(() => { native.assertClosed(); });
+afterAll(() => { native.close(); });
 
 const report: VerificationReport = { id: "00000000-0000-4000-8000-000000000001", sessionId: "fixture", runId: null, flowId: null,
   name: "Synthetic measured-handoff shape fixture", createdAt: 1, status: "fail", reason: "Retained failing outcome", evidence: [] };
@@ -18,21 +24,27 @@ test("closed finite wire rejects duplicate, unknown, malformed UTF-8 and control
 function git(cwd: string, ...args: string[]) {
   const result = spawnSync("git", ["-c", "user.name=Divyam Talwar", "-c", "user.email=divyamtalwar15@gmail.com", ...args], { cwd, encoding: "utf8", timeout: 1000 });
   if (result.status !== 0) throw new Error(`Fixture git ${args[0]} failed: ${result.stderr}`);
+  return result.stdout.trim();
 }
 
 describe("native change metadata has no repository command authority", () => {
   test("repository clean filters cannot execute while reading status or numstat", async () => {
     const cwd = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-git-policy-")));
-    const marker = path.join(cwd, "filter-executed"); const helper = path.join(cwd, "filter-fixture.sh");
+    const marker = path.join(cwd, "filter-executed");
     const reader = new ChangeContextReader({ workspace: () => ({ cwd, revision: "native-fixture" }),
       authority: () => ({ id: "local", role: "owner", generation: 1 }), report: () => report });
     try {
       git(cwd, "init", "-q"); writeFileSync(path.join(cwd, "data.txt"), "original\n"); git(cwd, "add", "--", "data.txt"); git(cwd, "commit", "-qm", "Establish owned git filter safety fixture");
-      writeFileSync(helper, `#!/bin/sh\n/usr/bin/touch '${marker.replace(/'/g, "'\\''")}'\n/bin/cat\n`, { mode: 0o700 });
+      const head = git(cwd, "rev-parse", "HEAD");
+      const helper = `'${native.executable("filter").replace(/\\/g, "/").replace(/'/g, "'\\''")}'`;
       git(cwd, "config", "filter.qa.clean", helper); git(cwd, "config", "filter.qa.process", helper);
       writeFileSync(path.join(cwd, ".gitattributes"), "data.txt filter=qa\n");
       writeFileSync(path.join(cwd, "data.txt"), "changed\n");
+      const control = spawnSync("git", ["hash-object", "--path=data.txt", "data.txt"], { cwd, timeout: 1000 });
+      expect(control.error).toBeUndefined(); expect(control.status).not.toBeNull(); expect(existsSync(marker)).toBe(true);
+      rmSync(marker);
       const result = await reader.capture(reader.offer().workspaceId, report.id);
+      expect(result.head).toBe(head);
       expect(result.handoff.status).toBe("fail"); expect(existsSync(marker)).toBe(false);
     } finally { reader.close(); rmSync(cwd, { recursive: true, force: true }); }
   });
@@ -46,7 +58,7 @@ function heldProject() {
   const cwd = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-held-git-")));
   git(cwd, "init", "-q"); writeFileSync(path.join(cwd, "tracked.txt"), "original\n"); git(cwd, "add", "--", "tracked.txt"); git(cwd, "commit", "-qm", "Retain real git process race fixture");
   const marker = path.join(cwd, "held"); const release = path.join(cwd, "release");
-  const executable = path.join(import.meta.dir, "fixtures", "held-git.sh");
+  const executable = native.executable("held");
   return { cwd, marker, release, executable };
 }
 
@@ -104,7 +116,7 @@ describe("unsupported and finite native workspaces stay explicitly incomplete", 
       if (kind === "alternates") writeFileSync(path.join(cwd, ".git/objects/info/alternates"), "/unavailable/objects\n");
       if (kind === "promisor") git(cwd, "config", "remote.fixture.promisor", "true");
       let executable: string | undefined;
-      if (kind === "deadline") { executable = path.join(cwd, "slow-git.sh"); writeFileSync(executable, '#!/bin/sh\n/bin/sleep 0.3\nexec /usr/bin/git "$@"\n', { mode: 0o700 }); }
+      if (kind === "deadline") executable = native.executable("slow");
       const reader = new ChangeContextReader({ workspace: () => ({ cwd, revision: kind }), authority: () => ({ id: "local", role: "owner", generation: 1 }), report: () => report, gitExecutable: executable });
       try {
         const started = performance.now(); const result = await reader.capture(reader.offer().workspaceId, report.id);
@@ -153,11 +165,8 @@ describe("finite native git process bounds retain unavailable evidence", () => {
   test("fatal encoding and stdout limits cannot appear as a clean empty workspace", async () => {
     const cwd = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-git-bounds-")));
     try {
-      for (const [name, script, reason] of [
-        ["encoding", "#!/bin/sh\nprintf '\\377'\n", "invalid-utf8"],
-        ["bytes", "#!/bin/sh\n/usr/bin/head -c 65537 /dev/zero\n", "git-output-limit"],
-      ]) {
-        const executable = path.join(cwd, name); writeFileSync(executable, script, { mode: 0o700 });
+      for (const [name, reason] of [["encoding", "invalid-utf8"], ["bytes", "git-output-limit"]] as const) {
+        const executable = native.executable(name);
         const reader = new ChangeContextReader({ workspace: () => ({ cwd, revision: "bounded-native" }),
           authority: () => ({ id: "local", role: "owner", generation: 1 }), report: () => report, gitExecutable: executable });
         try {
