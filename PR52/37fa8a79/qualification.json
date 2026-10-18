@@ -1,0 +1,68 @@
+{
+  "pr": 52,
+  "source": "37fa8a796531e8b9f7353dd42a6a70e3d47d46e3",
+  "receiving_main": "d63dce5a9903519689243c4f9c86e95c9b068241",
+  "receiving_branch": "main",
+  "source_tree": "ed0a5f0182b355db535da1acc960784d9541a629",
+  "scope": "Unconfigured provider description and its320px/desktop wrapping; unchanged settings operations and original journey assertions retained. Entire mobile UI/theme/product acceptance is not established.",
+  "ci": {
+    "linux_push": 39100717577,
+    "linux_pr": 39100720872,
+    "windows_push": 39100717558,
+    "windows_pr": 39100720873,
+    "all_four_success_attempt1": true,
+    "linux_each_backend": {
+      "pass": 727,
+      "skip": 1,
+      "fail": 0
+    },
+    "windows_each_backend": {
+      "pass": 695,
+      "skip": 33,
+      "fail": 0
+    },
+    "windows_each_source_UI": {
+      "pass": 137,
+      "skip": 10,
+      "flaky": 0,
+      "retry": 0,
+      "fail": 0
+    },
+    "windows_each_copied_native": {
+      "pass": 3,
+      "retry": 0
+    },
+    "all13MCP_cases_once_each": true
+  },
+  "native_macos": "Prior completed settings journey/types/lint/build, bridged by exact feature/UI/build input preservation; no fresh local rerun for accepted root MCP test changes.",
+  "artifact": {
+    "id": 12125799301,
+    "bytes": 2325149,
+    "sha256": "24796fc35e0c001c0e3ab4a1a9a5ed7ffda705aaf559eb2246b7db1559ec4e48",
+    "all37_zip_entries_crc_verified": true
+  },
+  "prior_failed_source": "45f1bdff2647b149825e016ff99b1cf72afbe5e8",
+  "prior_failed_windows_push": 39097325636,
+  "prior_EBUSY_owner": "unknown; current source passes do not identify the earlier owner",
+  "provider_calls": 0,
+  "screenshots": [
+    {
+      "file": "settings-openai-unconfigured-320px.png",
+      "sha256": "7c8f6a2601061ad5583507d604a131e7b3ac8560db12a5b51d75d2f0df561bed",
+      "bytes": 34700,
+      "platform": "native Windows x64 Chromium",
+      "run_id": 39100720873,
+      "artifact_id": 12125799301,
+      "profile": "Actual strict settings journey; synthetic empty provider fields with placeholder hints only; retry0; 320x720"
+    },
+    {
+      "file": "settings-openai-unconfigured-desktop.png",
+      "sha256": "7a36bd6f014a8d681a33a30132378459de739a22fb9d7cc2cbbad2ee56fa5cc1",
+      "bytes": 75503,
+      "platform": "native Windows x64 Chromium",
+      "run_id": 39100720873,
+      "artifact_id": 12125799301,
+      "profile": "Actual strict settings journey; synthetic empty provider fields with placeholder hints only; retry0; 1440x1000"
+    }
+  ]
+}
