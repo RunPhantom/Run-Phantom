@@ -15,6 +15,11 @@ describe("Cursor native observation contract (synthetic vendor fixtures)", () =>
     expect(hook.event).toBe(event); expect(batch.runtimeVerified).toBe(false); expect(batch.producerVerified).toBe(false); expect(batch.coverage).toBe("partial");
     expect(batch.entities[0].name).toBe("Cursor session"); expect(validateClaudeBatch(JSON.stringify(batch), source, "full")).toEqual(batch);
   });
+  test("raw observations cannot assert authenticated producer attribution", () => {
+    const hook = parsed("sessionStart");
+    const batch = normalizeCursorHook(hook, source, "full");
+    expect(() => validateClaudeBatch(JSON.stringify({ ...batch, producer: "cursor" }), source, "full")).toThrow();
+  });
   test("native and compatibility spelling deduplicate the exact same tool identity", () => {
     const native = normalizeCursorHook(parsed("postToolUse"), source, "full");
     const shim = normalizeCursorHook(parsed("postToolUse", { hook_event_name: "PostToolUse" }), source, "full");

@@ -6,7 +6,7 @@ import { CATALOG_VERSION, CATALOG_CONTEXT_VERSION, encodeInstallationCatalog, re
 import type { HookSourceClaims } from "./protocol";
 import { parseBoundedHookJson } from "./shared";
 import { claudeEntityProjection } from "./projection";
-import { hookVendorForSettings } from "./vendor";
+import { hookVendorForSettings } from "./shared";
 import { validateLegacySource } from "./retained-version";
 import { assertHookCanonicalQuota } from "./context-integrity";
 import { HookRefusal, hookDigest, isHex, refuse, validateClaudeBatch, validateClaudeRetainedEntity } from "./protocol";
@@ -266,7 +266,7 @@ export class CodingHookStore {
         this.db.query(`INSERT INTO spans(${columns.join(",")}) VALUES(${columns.map(() => "?").join(",")}) ON CONFLICT(run_id,id) DO UPDATE SET ${columns.filter(column => !["id", "run_id"].includes(column)).map(column => `${column}=excluded.${column}`).join(",")}`).run(...values);
         this.db.query("INSERT INTO coding_hook_entities VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_key,entity_key) DO UPDATE SET phase=excluded.phase,incarnation_key=excluded.incarnation_key,source_offset=excluded.source_offset,observation_sha256=excluded.observation_sha256,projection_sha256=excluded.projection_sha256,data=excluded.data,updated_at=excluded.updated_at").run(session.source_key, next.entityKey, spanId, next.kind, next.phase, next.incarnationKey, next.sourceOffset, hookDigest(JSON.stringify(observed)), hookDigest(JSON.stringify(projection)), retained, now);
       }
-      const encodeSession = () => JSON.stringify({ coverage: "partial", reasons: batch.coverageReasons, unlinkedAssertions: batch.unlinkedAssertions });
+      const encodeSession = () => JSON.stringify({ coverage: "partial", reasons: batch.coverageReasons, unlinkedAssertions: batch.unlinkedAssertions, ...(vendor === "cursor" ? { producer: "cursor" } : {}) });
       let sessionData = encodeSession();
       if (Buffer.byteLength(sessionData) > 16384) { batch.unlinkedAssertions = null; batch.coverageReasons = [...new Set([...batch.coverageReasons, "body_partial"])]; sessionData = encodeSession(); }
       this.db.query("UPDATE coding_hook_sessions SET state=?,incarnation_key=COALESCE(?,incarnation_key),prefix_sha256=CASE WHEN ? IS NULL THEN prefix_sha256 ELSE ? END,prefix_bytes=COALESCE(?,prefix_bytes),source_cursor=COALESCE(?,source_cursor),observed_file_bytes=COALESCE(?,observed_file_bytes),data=?,updated_at=? WHERE source_key=?").run(batch.sessionClosureClaim || session.state === "closed" ? "closed" : "open", batch.incarnationKey, batch.incarnationKey, batch.prefixSha256, batch.prefixBytes, batch.transcriptCursor, batch.observedFileBytes, sessionData, now, session.source_key);

@@ -1,7 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { Database } from "bun:sqlite";
 import { sanitizeClaudeRetention } from "./claude";
-import { hookVendorForSource } from "./vendor";
 import { claudeEntityProjection } from "./projection";
 import { hookDigest, isHex, refuse, validateClaudeRetainedEntity, validCoverageReasons } from "./protocol";
 import { parseBoundedHookJson } from "./shared";
@@ -48,7 +47,8 @@ export function validateLegacySource(db: Database, key: string, registration: st
   if (row.data !== '{"coverage":"partial","producerVerified":false}' || row.state !== "open" || row.incarnation_key !== null || row.prefix_sha256 !== null || row.source_cursor !== 0 || row.prefix_bytes !== 0 || row.observed_file_bytes !== 0) refuse("corrupt",503);
   assertAbsentAnchors(db,key); return "legacy-main-v1";
  }
- if (Object.keys(data).join(",") !== "coverage,reasons,unlinkedAssertions" || data.coverage !== "partial" || !validCoverageReasons(data.reasons) || new Set(data.reasons).size !== data.reasons.length) refuse("corrupt",503);
+ const cursor = Object.keys(data).join(",") === "coverage,reasons,unlinkedAssertions,producer" && data.producer === "cursor";
+ if ((!cursor && Object.keys(data).join(",") !== "coverage,reasons,unlinkedAssertions") || data.coverage !== "partial" || !validCoverageReasons(data.reasons) || new Set(data.reasons).size !== data.reasons.length) refuse("corrupt",503);
  const assertions = data.unlinkedAssertions;
  if (assertions !== null && (!assertions || typeof assertions !== "object" || Array.isArray(assertions) || Object.keys(assertions).join(",") !== "prompt,assistant,error" || Object.values(assertions).some(value => value !== null && (typeof value !== "string" || value.length > 4096)))) refuse("corrupt",503);
  if (JSON.stringify(data) !== row.data || !isDeepStrictEqual(JSON.parse(JSON.stringify(sanitizeClaudeRetention({ bodies: [], assertions }).value)), { bodies: [], assertions })) refuse("corrupt",503);
@@ -63,17 +63,17 @@ export function validateLegacySource(db: Database, key: string, registration: st
   const canonical = readCanonical(db,row.run_id,spanId); if (!canonical || hookDigest(JSON.stringify(canonical)) !== entry.projection_sha256) refuse("corrupt",503);
   const attrs = parseBoundedHookJson(canonical.attributes,16384);
   if (attrs.status !== "accepted" || !attrs.value || typeof attrs.value !== "object" || Array.isArray(attrs.value) || (attrs.value.currentCapturePolicy !== "full" && attrs.value.currentCapturePolicy !== "metadata")) refuse("corrupt",503);
-  const projection = claudeEntityProjection(entity,{runId:row.run_id,rootSpanId:row.root_span_id},attrs.value.currentCapturePolicy,entry.data,hookVendorForSource(db,registration));
-  // The existing witness-bound publisher also supports this exact older projection.
+  const projection = claudeEntityProjection(entity,{runId:row.run_id,rootSpanId:row.root_span_id},attrs.value.currentCapturePolicy,entry.data,cursor ? "cursor" : "claude");
+  // Only the existing Claude witness-bound publisher supports this exact older projection.
   const legacyAttributes = JSON.parse(projection.attributes);
   delete legacyAttributes.captureContract; delete legacyAttributes.entityKind; delete legacyAttributes.sourceKind; delete legacyAttributes.captureModel;
   const legacy = { ...projection, span_type: entity.kind === "tool" ? "tool" : entity.kind === "assistant" ? "llm" : "agent", attributes: JSON.stringify(legacyAttributes) };
-  if (JSON.stringify(projection) !== JSON.stringify(canonical) && JSON.stringify(legacy) !== JSON.stringify(canonical)) refuse("corrupt",503);
+  if (JSON.stringify(projection) !== JSON.stringify(canonical) && (cursor || JSON.stringify(legacy) !== JSON.stringify(canonical))) refuse("corrupt",503);
   if (entity.kind === "session") { roots++; if (entity.sourceKind !== "hook" || entity.model !== null || entity.body !== null || entity.usage !== null || entity.phase !== (row.state === "closed" ? "complete" : "pending")) refuse("corrupt",503); }
   ids.add(spanId);
  }
  if (roots !== 1) refuse("corrupt",503);
- const spans = db.query("SELECT id,CASE WHEN length(CAST(attributes AS BLOB))<=16384 THEN attributes END attributes FROM spans WHERE run_id=? AND CASE WHEN json_valid(attributes) THEN json_extract(attributes,'$.source')='claude_hook' OR json_extract(attributes,'$.captureContract') LIKE 'runphantom.claude-hook.observation/%' ELSE attributes LIKE '%runphantom.claude-hook.observation/%' END LIMIT 1001").all(row.run_id) as {id:string;attributes:string|null}[];
+ const spans = db.query("SELECT id,CASE WHEN length(CAST(attributes AS BLOB))<=16384 THEN attributes END attributes FROM spans WHERE run_id=? AND CASE WHEN json_valid(attributes) THEN json_extract(attributes,'$.source') IN ('claude_hook','cursor_hook') OR json_extract(attributes,'$.captureContract') LIKE 'runphantom.claude-hook.observation/%' OR json_extract(attributes,'$.captureContract') LIKE 'runphantom.cursor-hook.observation/%' ELSE attributes LIKE '%runphantom.claude-hook.observation/%' OR attributes LIKE '%runphantom.cursor-hook.observation/%' END LIMIT 1001").all(row.run_id) as {id:string;attributes:string|null}[];
  if (spans.length > 1000) refuse("quota",507);
  for (const span of spans) { deadline(); if (!ids.has(span.id)) refuse("corrupt",503); }
  deadline(); return "legacy-main-v1";

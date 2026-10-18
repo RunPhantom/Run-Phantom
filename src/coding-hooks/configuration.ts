@@ -8,10 +8,11 @@ import { ClaudeHookManagement, installationIdForSettings } from "./management";
 import { refuse } from "./protocol";
 import type { InstallationBinding } from "./store";
 
-export interface HookManagementCommand { action: "install" | "uninstall" | "doctor" | "unregister"; scope: "global" | "local"; workspace: string; captureMode: "metadata" | "full"; fullConsent: boolean; }
+export interface HookManagementCommand { action: "install" | "uninstall" | "doctor" | "unregister"; scope: "global" | "local"; workspace: string; captureMode: "metadata" | "full"; fullConsent: boolean; vendor?: "cursor"; }
 export function parseHookManagementCommand(value: unknown): HookManagementCommand {
-  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join() !== "action,captureMode,fullConsent,scope,workspace") refuse("malformed", 400);
+  if (!value || typeof value !== "object" || Array.isArray(value) || !["action,captureMode,fullConsent,scope,workspace", "action,captureMode,fullConsent,scope,vendor,workspace"].includes(Object.keys(value).sort().join())) refuse("malformed", 400);
   const input = value as Record<string, unknown>;
+  if (Object.hasOwn(input, "vendor") && input.vendor !== "cursor") refuse("malformed", 400);
   if (!["install", "uninstall", "doctor", "unregister"].includes(input.action as string) || !["global", "local"].includes(input.scope as string) || !["metadata", "full"].includes(input.captureMode as string) || typeof input.fullConsent !== "boolean"
     || typeof input.workspace !== "string" || !path.isAbsolute(input.workspace) || path.normalize(input.workspace) !== input.workspace || input.workspace.includes("\0") || Buffer.byteLength(input.workspace) > 4096
     || input.scope === "global" && input.captureMode !== "metadata" || input.captureMode === "full" && input.fullConsent !== true || input.action === "unregister" && input.scope !== "global" || input.action !== "install" && (input.captureMode !== "metadata" || input.fullConsent)) refuse("malformed", 400);
@@ -43,13 +44,15 @@ export async function configuredHookBinding(command: HookManagementCommand, crea
   return { installationId: installationIdForSettings(command.scope, settingsPath), scope: command.scope, captureMode: command.captureMode, workspace: command.scope === "global" ? null : workspace, registeredWorkspace: workspace, transcriptRoot: root, projectDirectory, homeDirectory: home, settingsPath, executable };
 }
 export async function executeHookManagement(manager: ClaudeHookManagement, command: HookManagementCommand): Promise<unknown> {
+  let cursor: typeof import("./cursor-install") | undefined;
+  if (command.vendor === "cursor") { cursor = await import("./cursor-install"); manager = manager.forPlatform(cursor.CURSOR_PLATFORM); }
   if (command.action === "unregister") {
     const home = await realpath(os.homedir()), config = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(home, ".claude"));
-    const id = installationIdForSettings("global", path.join(config, "settings.json")), prior = manager.store.readInstallation(id);
+    const id = cursor ? cursor.cursorInstallationId("global", path.join(home, ".cursor/hooks.json")) : installationIdForSettings("global", path.join(config, "settings.json")), prior = manager.store.readInstallation(id);
     const registration = prior?.registrations.find(value => value.registeredWorkspace === command.workspace);
     if (!registration) refuse("unknown_scope", 409); return manager.unregister(id, registration.registrationId);
   }
-  const binding = await configuredHookBinding(command, command.action === "install");
+  const binding = cursor ? await cursor.configuredCursorBinding(command, manager.store.db.filename, command.action === "install") : await configuredHookBinding(command, command.action === "install");
   if (command.action === "doctor") return manager.doctor(binding.installationId, binding);
   if (command.action === "uninstall") return manager.uninstall(binding.installationId, binding);
   const prior = manager.store.readInstallation(binding.installationId);

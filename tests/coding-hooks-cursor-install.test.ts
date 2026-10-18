@@ -24,6 +24,11 @@ describe.skipIf(process.platform === "win32")("exact-owned POSIX Cursor hook con
     expect(cursorCommand(authority)).toStartWith("'/private/Run Phantom '\\'' $fixture`/runphantom'");
     expect(cursorCommand(authority)).not.toContain("--full"); expect(cursorCommand(authority)).not.toContain("Bearer");
   });
+  test("handler quota counts newly installed events as well as unrelated handlers", () => {
+    const settings = (count: number) => JSON.stringify({ version: 1, hooks: { futureEvent: Array.from({ length: count }, () => ({ command: "ordinary" })) } });
+    expect(mergeCursorSettings(settings(256 - CURSOR_HOOK_EVENTS.length), "install", authority).status).toBe("accepted");
+    expect(mergeCursorSettings(settings(257 - CURSOR_HOOK_EVENTS.length), "install", authority)).toEqual({ status: "unavailable", reason: "handler_limit" });
+  });
   test("an edited owned handler is preserved rather than overwritten", () => {
     const first = install(null), value = JSON.parse(first.text!); value.hooks.stop[0].failClosed = true;
     const raw = JSON.stringify(value); expect(mergeCursorSettings(raw, "install", authority)).toEqual({ status: "unavailable", reason: "ownership_uncertain" });

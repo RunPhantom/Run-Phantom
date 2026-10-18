@@ -1,6 +1,6 @@
 import type { Readable } from "node:stream";
 import path from "node:path";
-import { HOOK_LIMITS, parseClaudeHookInput } from "./shared";
+import { HOOK_LIMITS, parseBoundedHookJson, parseClaudeHookInput } from "./shared";
 
 export const CALLBACK_LIMITS = Object.freeze({ stdinEOFMs: 250, lifetimeMs: 1500 });
 export type StdinResult = { status: "accepted"; text: string } | { status: "unavailable"; reason: "stdin_limit" | "stdin_deadline" | "stdin_unavailable" | "invalid_utf8" | "aborted" };
@@ -52,6 +52,10 @@ export async function runClaudeHookCallback(args: string[], input: Readable = pr
   try {
     const acquired = await readClaudeHookStdin(input, controller.signal);
     if (acquired.status !== "accepted" || controller.signal.aborted) return 0;
+    const producer = parseBoundedHookJson(acquired.text);
+    // Cursor may import Claude settings; its native observer owns these producer events.
+    if (producer.status === "accepted" && producer.value && typeof producer.value === "object" && !Array.isArray(producer.value)
+      && typeof producer.value.cursor_version === "string") return 0;
     const admitted = parseClaudeHookInput(acquired.text);
     if (admitted.status !== "accepted") return 0;
     const { captureInstalledClaudeHook } = await import("./client");

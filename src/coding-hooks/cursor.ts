@@ -72,7 +72,7 @@ export function normalizeCursorHook(hook: CursorHookInput, sourceKey: string, mo
   });
   const entities = [make("session", "root", hook.event === "sessionEnd" ? "complete" : "pending", "Cursor session", null)];
   const identity = (id: string) => hookDigest(JSON.stringify(["runphantom.cursor.entity/v1", hook.generationId, id]));
-  if (hook.toolId) {
+  if (hook.toolId && ["postToolUse", "postToolUseFailure"].includes(hook.event)) {
     const tool = make("tool", identity(hook.toolId), hook.event === "postToolUseFailure" ? hook.interrupted ? "interrupted" : "failure" : "success", hook.toolName ?? "Tool", { input: hook.toolInput, output: hook.toolOutput, error: hook.error });
     tool.reportedDurationMs = hook.durationMs; entities.push(tool);
     if (hook.toolOutput === null && hook.event === "postToolUse") reasons.push("tool_output_absent");
@@ -108,7 +108,7 @@ export async function captureCursorHook(hook: CursorHookInput, file: string, id:
   await postClaudeHook(capability, "publication", { version: HOOK_PROTOCOL, ownerGeneration: admission.ownerGeneration, installationGeneration: admission.installationGeneration, sourceKey: admission.sourceKey, batch }, signal);
 }
 export async function runCursorHookCallback(args: string[], input: Readable = process.stdin): Promise<0> {
-  if (args.length !== 4 || args[0] !== "--installation-id" || !isHex(args[1], 32) || args[2] !== "--capability-file" || !path.isAbsolute(args[3]) || path.normalize(args[3]) !== args[3] || args[3].includes("\0") || Buffer.byteLength(args[3]) > 4096) return 0;
+  if (args.length !== 4 || args[0] !== "--installation-id" || !isHex(args[1], 32) || args[2] !== "--capability-file" || typeof args[3] !== "string" || !path.isAbsolute(args[3]) || path.normalize(args[3]) !== args[3] || args[3].includes("\0") || Buffer.byteLength(args[3]) > 4096) return 0;
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), CALLBACK_LIMITS.lifetimeMs);
   try { const raw = await readClaudeHookStdin(input, controller.signal); if (raw.status !== "accepted" || controller.signal.aborted) return 0; const parsed = parseCursorHookInput(raw.text); if (parsed.status === "accepted") await captureCursorHook(parsed.value, args[3], args[1], controller.signal); }
   catch { /* Observation failure never changes the host result or writes a policy response. */ }

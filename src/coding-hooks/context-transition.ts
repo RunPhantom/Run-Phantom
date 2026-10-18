@@ -1,4 +1,4 @@
-import { hookVendorForSettings } from "./vendor";
+import { hookVendorForSettings } from "./shared";
 import { randomBytes } from "node:crypto";
 import { CATALOG_CONTEXT_VERSION, encodeInstallationCatalog } from "./catalog";
 import { ContextHookStore } from "./context-store";

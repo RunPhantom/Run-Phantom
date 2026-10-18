@@ -182,6 +182,12 @@ async function finishSetup(args: ParsedArgs, result: Awaited<ReturnType<typeof a
       const result = await manageClaudeHooks({ action: "install", scope: args.scope ?? "global", workspace: fs.realpathSync(args.cwd), captureMode: args.hookCaptureMode, fullConsent: args.hookFullConsent });
       console.log("Claude hooks:", JSON.stringify(result));
     } catch (error) { console.error("setup: Claude hook configuration failed:", error instanceof Error ? error.message : "unavailable"); return 1; }
+    if (result.items.some(item => item.agent === "cursor")) {
+      try {
+        const cursor = await manageClaudeHooks({ action: "install", vendor: "cursor", scope: args.scope ?? "global", workspace: fs.realpathSync(args.cwd), captureMode: args.hookCaptureMode, fullConsent: args.hookFullConsent });
+        console.log("Cursor hooks:", JSON.stringify(cursor));
+      } catch (error) { console.error("setup: Cursor hook configuration failed:", error instanceof Error ? error.message : "unavailable"); return 1; }
+    }
   }
   process.stdout.write(summarizeInstall());
   return success ? 0 : 1;

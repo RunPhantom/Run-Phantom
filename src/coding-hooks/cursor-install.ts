@@ -51,6 +51,7 @@ export function mergeCursorSettings(input: unknown, operation: "install" | "unin
         changed = true;
       }
     }
+    if (Object.values(hooks).reduce<number>((total, values) => total + (values as HookJson[]).length, 0) > SETTINGS_LIMITS.handlers) return { status: "unavailable", reason: "handler_limit" };
     if (operation === "install") { if (settings.version !== 1) changed = true; settings.version = 1; settings.hooks = hooks; }
     else if (changed) { if (Object.keys(hooks).length) settings.hooks = hooks; else delete settings.hooks; }
     const text = changed ? JSON.stringify(settings, null, 2) + "\n" : input as string;

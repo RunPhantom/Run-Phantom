@@ -1,7 +1,9 @@
+import { tmpdir } from "node:os";
+import path from "node:path";
 export const cursorConversation = "cursor-fixture-conversation";
 export const cursorGeneration = "cursor-fixture-generation";
 export function cursorHook(event: string, fields: Record<string, unknown> = {}): string {
-  return JSON.stringify({ conversation_id: cursorConversation, generation_id: cursorGeneration, hook_event_name: event, cursor_version: "fixture-not-installed", workspace_roots: ["/private/synthetic workspace"],
+  return JSON.stringify({ conversation_id: cursorConversation, generation_id: cursorGeneration, hook_event_name: event, cursor_version: "fixture-not-installed", workspace_roots: [path.join(tmpdir(), "synthetic workspace")],
     ...(event === "sessionEnd" ? { session_id: cursorConversation, reason: "completed" } : {}),
     ...(event === "beforeSubmitPrompt" ? { prompt: "Explain the synthetic result" } : {}),
     ...(event === "afterAgentResponse" ? { text: "Captured synthetic Cursor answer" } : {}),

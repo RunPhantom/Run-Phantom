@@ -4,7 +4,7 @@ import { lstat, mkdir, open, realpath, rename, unlink, type FileHandle } from "n
 import path from "node:path";
 import { inspectClaudeHookSettings, mergeClaudeSettings, readClaudeSettingsText, updateClaudeSettings } from "./install";
 import type { HookInstallAuthority, SettingsResult, ClaudeHookDoctor } from "./install";
-import { hookVendorForSettings } from "./vendor";
+import { hookVendorForSettings } from "./shared";
 import { hookDigest, isHex, refuse } from "./protocol";
 import { encodeInstallationCatalog, registrationForBinding, validateCatalog, type SourceRegistration } from "./catalog";
 import { CodingHookStore, validateInstallationBinding, type InstallationBinding } from "./store";
@@ -19,9 +19,9 @@ export const installationIdForSettings = (scope: "global" | "local", settingsPat
 export interface HookManagementPlatform {
   name: "claude" | "cursor";
   settingsRelative: string;
-  installationId(scope: "global" | "local", file: string): string;
-  merge(input: unknown, operation: "install" | "uninstall", authority: HookInstallAuthority): SettingsResult;
-  inspect(file: string, authority: HookInstallAuthority): Promise<ClaudeHookDoctor>;
+  installationId(this: void, scope: "global" | "local", file: string): string;
+  merge(this: void, input: unknown, operation: "install" | "uninstall", authority: HookInstallAuthority): SettingsResult;
+  inspect(this: void, file: string, authority: HookInstallAuthority): Promise<ClaudeHookDoctor>;
 }
 const CLAUDE_PLATFORM: HookManagementPlatform = { name: "claude", settingsRelative: ".claude/settings.local.json", installationId: installationIdForSettings, merge: mergeClaudeSettings, inspect: inspectClaudeHookSettings };
 async function platformForSettings(file: string): Promise<HookManagementPlatform> {
@@ -95,7 +95,7 @@ export class ClaudeHookManagement {
       }
     };
     if (plan.unchanged) {
-      const directory = await this.directory(), ownerKey = capabilityOwnerKey(await realpath(this.store.db.filename));
+      await this.directory(); const ownerKey = capabilityOwnerKey(await realpath(this.store.db.filename));
       await validateFiles(ownerKey, undefined, true); transitions.plan(request);
       return { status: "configured", unchanged: true, captureVerified: false };
     }
@@ -106,7 +106,7 @@ export class ClaudeHookManagement {
       const directory = await this.directory(), ownerKey = capabilityOwnerKey(await realpath(this.store.db.filename));
       const required = plan.installations.filter(value => request.installationIds.includes(value.row.id) || value.row.state === "active");
       const lock = async (offset: number): Promise<void> => {
-        if (offset < required.length) return this.lease(directory, required[offset].row.id, () => lock(offset + 1));
+        if (offset < required.length) return this.lease(await this.directory(hookVendorForSettings(required[offset].binding.settingsPath)), required[offset].row.id, () => lock(offset + 1));
         for (const before of required) {
           const targetDirectory = await this.directory(hookVendorForSettings(before.binding.settingsPath));
           const file = path.join(targetDirectory, before.row.id + ".json"), prior = await readClaudeCapabilityDescriptor(file, before.row.id, ownerKey), selected = fenced.selected.find(value => value.before.row.id === before.row.id);
