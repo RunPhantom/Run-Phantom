@@ -463,7 +463,7 @@ function KeysSection() {
       <SecretInput
         label="OpenAI"
         placeholder="sk-..."
-        description={sourceText("openai", "Used for Ask Agent and demo chat when those features call OpenAI.")}
+        description={sourceText("openai", "Used for Ask Agent and chat when those features call OpenAI.")}
         value={drafts.openai}
         saved={secretSaved("openai")}
         sourceIsEnv={secretFromEnv("openai")}

@@ -44,7 +44,7 @@ export function NavSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton asChild size="lg" className="!bg-transparent hover:!bg-[color:var(--rp-ink-wash)] active:!bg-[color:var(--rp-ink-wash)]">
               <NavLink to="/runs" aria-label="Run Phantom — trace workspace" replace={isNavPathActive(location.pathname, "/runs")} onClick={closeMobile}>
-                <RunPhantomMark decorative size={22} className="shrink-0 text-[color:var(--rp-ink-strong)]" />
+                <RunPhantomMark decorative size={28} className="!size-7 shrink-0" />
                 <span className="min-w-0 leading-none">
                   <span className="block text-[13px] font-semibold tracking-[-0.01em] text-[color:var(--rp-ink-strong)]" style={{ fontFamily: "var(--font-display)" }}>
                     Run Phantom

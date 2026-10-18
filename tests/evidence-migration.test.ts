@@ -9,6 +9,7 @@ import { closeDb, getDrizzleDb } from "../src/db";
 import { EvidenceStore, EVIDENCE_STORAGE_SQL } from "../src/evaluations/evidence-store";
 import { deriveEvidenceCounts, evidenceDigest } from "../src/evaluations/evidence-validation";
 import type { EvidenceImportRequest, NormalizedEvidenceSource } from "../src/evaluations/evidence-protocol";
+import { createHash } from "node:crypto";
 
 const tables = ["artifacts", "blobs", "interpretations", "inventories", "inventory_heads", "jobs", "payloads", "retention_events", "scopes", "sets"];
 const scope = { kind: "local", id: "local" } as const;
@@ -36,15 +37,54 @@ function tableShape(database: Database) {
   });
 }
 
+const canonicalEvidenceSqlSha256 = "aef0ee70d71c0ba6bd84061cdd07032455e18f688f0aef2938050be29e00b586";
+const canonicalEvidenceWhen = 1791756634149;
+
+function migrationReceipts(database: Database) {
+  return database.query(`SELECT rowid AS receipt_rowid, id, hash, created_at,
+    typeof(rowid) AS rowid_type, typeof(id) AS id_type, typeof(hash) AS hash_type, typeof(created_at) AS created_at_type,
+    hex(CAST(id AS BLOB)) AS id_hex, hex(CAST(hash AS BLOB)) AS hash_hex,
+    hex(CAST(created_at AS BLOB)) AS created_at_hex
+    FROM __drizzle_migrations ORDER BY rowid`).all() as {
+      receipt_rowid: number; id: number | null; hash: string; created_at: number;
+      rowid_type: string; id_type: string; hash_type: string; created_at_type: string;
+      id_hex: string; hash_hex: string; created_at_hex: string;
+    }[];
+}
+
+function evidenceTriggers(database: Database) {
+  return database.query("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND name LIKE 'evaluation_evidence_%' ORDER BY name").all();
+}
+
+function assertEvidenceReceipt(database: Database) {
+  const receipts = migrationReceipts(database);
+  expect(receipts).toHaveLength(8);
+  expect(receipts.map(receipt => receipt.receipt_rowid)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  for (const receipt of receipts) {
+    // This source's SQLite SERIAL PRIMARY KEY is not INTEGER PRIMARY KEY.
+    expect(receipt).toMatchObject({ id: null, rowid_type: "integer", id_type: "null", hash_type: "text", created_at_type: "integer" });
+  }
+  expect(receipts[7]).toMatchObject({ hash: canonicalEvidenceSqlSha256, created_at: canonicalEvidenceWhen });
+  return receipts;
+}
+
 for (const prior of [false, true]) test(`evidence migration: ${prior ? "upgrade from evaluation schema 0006" : "fresh application database"} retains immutable byte identity after reopen`, () => {
   const directory = mkdtempSync(path.join(tmpdir(), "runphantom-evidence-migration-"));
   const dbPath = path.join(directory, "workspace.db"), migrations = path.resolve(import.meta.dir, "../drizzle");
   const journal = JSON.parse(readFileSync(path.join(migrations, "meta/_journal.json"), "utf8"));
   const previous = process.env.RUNPHANTOM_DB_PATH;
   let baseline: Database | undefined;
+  let priorReceipts: ReturnType<typeof migrationReceipts> | undefined;
   const reference = new Database(":memory:");
   closeDb();
   try {
+    const sourceSql = readFileSync(path.join(migrations, "0007_evidence_storage.sql"));
+    const sourceFacts = { bytes: sourceSql.byteLength, sha256: createHash("sha256").update(sourceSql).digest("hex"),
+      crlf: sourceSql.toString("utf8").split("\r\n").length - 1 };
+    expect(sourceFacts).toEqual({ bytes: 6737, sha256: canonicalEvidenceSqlSha256, crlf: 0 });
+    expect(journal.entries).toHaveLength(8);
+    expect(journal.entries.map((entry: { idx: number }) => entry.idx)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(journal.entries[7]).toEqual({ idx: 7, version: "6", when: canonicalEvidenceWhen, tag: "0007_evidence_storage", breakpoints: true });
     reference.exec(EVIDENCE_STORAGE_SQL);
     let originals: { runs: unknown[]; spans: unknown[]; revisions: unknown[]; history: unknown[] } | undefined;
     if (prior) {
@@ -63,6 +103,9 @@ for (const prior of [false, true]) test(`evidence migration: ${prior ? "upgrade 
       baseline.query("INSERT INTO evaluation_revisions(dataset_id,version,hash,cases,created_at) VALUES(?,?,?,?,?)").run("prior-dataset", 1, evidenceDigest("[]"), "[]", 3);
       originals = { runs: baseline.query("SELECT * FROM runs").all(), spans: baseline.query("SELECT * FROM spans").all(),
         revisions: baseline.query("SELECT * FROM evaluation_revisions").all(), history: baseline.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all() };
+      priorReceipts = migrationReceipts(baseline);
+      expect(priorReceipts).toHaveLength(7);
+      console.info("evidence-migration-receipts", JSON.stringify({ version: 1, profile: "upgrade", phase: "prior", receipts: priorReceipts }));
       baseline.close(true); baseline = undefined;
     }
     process.env.RUNPHANTOM_DB_PATH = dbPath;
@@ -75,6 +118,13 @@ for (const prior of [false, true]) test(`evidence migration: ${prior ? "upgrade 
       .toEqual(reference.query("SELECT name FROM sqlite_master WHERE type='trigger' ORDER BY name").all());
     const history = installed.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all();
     expect(history).toHaveLength(journal.entries.length);
+    const installedReceipts = assertEvidenceReceipt(installed);
+    if (priorReceipts) expect(installedReceipts.slice(0, 7)).toEqual(priorReceipts);
+    const triggerBodies = evidenceTriggers(reference);
+    expect(triggerBodies).toHaveLength(7);
+    expect(evidenceTriggers(installed)).toEqual(triggerBodies);
+    console.info("evidence-migration-receipts", JSON.stringify({ version: 1, profile: prior ? "upgrade" : "fresh", phase: "initial",
+      source: sourceFacts, count: installedReceipts.length, preservedPrefix: priorReceipts?.length ?? 0, evidence: installedReceipts[7] }));
     if (originals) {
       expect(installed.query("SELECT * FROM runs").all()).toEqual(originals.runs);
       expect(installed.query("SELECT * FROM spans").all()).toEqual(originals.spans);
@@ -100,6 +150,11 @@ for (const prior of [false, true]) test(`evidence migration: ${prior ? "upgrade 
     const before = store.getSet(set.id, set.revision);
     closeDb();
     const reopened = getDrizzleDb().$client, retained = new EvidenceStore(reopened, scope, authority);
+    const reopenedReceipts = assertEvidenceReceipt(reopened);
+    expect(reopenedReceipts).toEqual(installedReceipts);
+    expect(evidenceTriggers(reopened)).toEqual(triggerBodies);
+    console.info("evidence-migration-receipts", JSON.stringify({ version: 1, profile: prior ? "upgrade" : "fresh", phase: "first-reopen",
+      source: sourceFacts, count: reopenedReceipts.length, preservedPrefix: priorReceipts?.length ?? 0, evidence: reopenedReceipts[7] }));
     expect(retained.getSet(set.id, set.revision)).toEqual(before);
     expect(retained.getInventory(inventory.id, inventory.revision)).toEqual(inventory);
     expect(retained.exportRaw(set.id, set.revision, "unit-1")).toEqual(raw);
@@ -113,6 +168,12 @@ for (const prior of [false, true]) test(`evidence migration: ${prior ? "upgrade 
     expect(() => new EvidenceStore(afterRetention, scope, authority).exportRaw(set.id, set.revision, "unit-1")).toThrow("unavailable");
     expect(afterRetention.query("PRAGMA foreign_key_check").all()).toEqual([]);
     expect(afterRetention.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all()).toEqual(history);
+    const retainedReceipts = assertEvidenceReceipt(afterRetention);
+    expect(retainedReceipts).toEqual(installedReceipts);
+    expect(evidenceTriggers(afterRetention)).toEqual(triggerBodies);
+    expect(afterRetention.query("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
+    console.info("evidence-migration-receipts", JSON.stringify({ version: 1, profile: prior ? "upgrade" : "fresh", phase: "retention-reopen",
+      source: sourceFacts, count: retainedReceipts.length, preservedPrefix: priorReceipts?.length ?? 0, evidence: retainedReceipts[7] }));
   } finally {
     baseline?.close(true); reference.close(true); closeDb();
     if (previous === undefined) delete process.env.RUNPHANTOM_DB_PATH; else process.env.RUNPHANTOM_DB_PATH = previous;
