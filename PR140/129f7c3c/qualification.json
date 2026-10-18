@@ -1,0 +1,32 @@
+{
+  "pr": 140,
+  "source": "129f7c3ccc0529d85c5ed6f5b6851e24239c5593",
+  "feature": "F39",
+  "state": "OPEN DRAFT; no merge authorized",
+  "actual_native_fixture": {
+    "runs": 1,
+    "exit": 0,
+    "seconds": 6.403170875,
+    "electron": "44.9.0",
+    "packaged": true,
+    "native_group_empty": true,
+    "forced_cleanup": false,
+    "private_state_removed": true
+  },
+  "scope": "Original macOS cooperating-window fixture read/click/predicate/capture/retirement assertions passed; one distinct real native image",
+  "open_gates": [
+    "Native nonce/stale-request/other-window/subframe controls",
+    "Central daemon/worker/Team and assembled user-flow integration",
+    "Native Windows packaging",
+    "Distribution signing/notarization"
+  ],
+  "screenshots": [
+    {
+      "file": "desktop-native-confirmed.png",
+      "sha256": "f16f03e7002a32d938181417102dad844b62247af6ee884c1122666c0b205d96",
+      "bytes": 56222,
+      "platform": "Darwin arm64",
+      "profile": "Actual native1280x896 capture after controlled cooperating action; Electron44.9.0"
+    }
+  ]
+}
