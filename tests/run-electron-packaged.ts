@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { waitForElectronTerminal } from "./fixtures/electron/terminal";
-import { copyElectronBundle } from "./fixtures/electron/bundle";
+import { prepareElectronFixtureBundle } from "./fixtures/electron/bundle";
 
 async function run(): Promise<number> {
   const executable = process.env.RUNPHANTOM_ELECTRON_EXECUTABLE;
@@ -22,7 +22,7 @@ async function run(): Promise<number> {
   mkdirSync(output, { recursive: true, mode: 0o700 });
   let cleanupConfirmed = true;
   try {
-    const bundle = path.join(temp, "CooperatingFixture.app"); copyElectronBundle(sourceBundle, bundle);
+    const bundle = path.join(temp, "CooperatingFixture.app"), binary = prepareElectronFixtureBundle(sourceBundle, bundle);
     const resources = path.join(bundle, "Contents/Resources"), fixture = path.join(resources, "app");
     rmSync(path.join(resources, "default_app.asar")); mkdirSync(fixture, { mode: 0o700 });
     writeFileSync(path.join(fixture, "package.json"), JSON.stringify({ name: "runphantom-cooperating-fixture", version: "1.0.0", main: "main.cjs" }));
@@ -33,7 +33,7 @@ async function run(): Promise<number> {
     const renderer = await Bun.build({ entrypoints: [path.join(root, "tests/fixtures/electron/renderer.ts")], target: "browser", naming: "renderer.js", outdir: fixture });
     if (!renderer.success) throw new Error("Electron renderer bundle failed");
     cpSync(path.join(root, "tests/fixtures/electron/index.html"), path.join(fixture, "index.html"));
-    const captures = path.join(temp, "captures"), receipt = path.join(temp, "receipt.json"), binary = path.join(bundle, "Contents/MacOS/Electron");
+    const captures = path.join(temp, "captures"), receipt = path.join(temp, "receipt.json");
     const child = spawn(binary, [], { cwd: temp, detached: true, env: { PATH: process.env.PATH, HOME: temp, TMPDIR: temp,
       RUNPHANTOM_ELECTRON_PROFILE: path.join(temp, "profile"), RUNPHANTOM_ELECTRON_CAPTURES: captures, RUNPHANTOM_ELECTRON_RECEIPT: receipt }, stdio: ["ignore", "pipe", "pipe"] });
     let bytes = 0, stdout = "", stderr = "";

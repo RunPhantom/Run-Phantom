@@ -16,8 +16,9 @@ async function run() {
   await app.whenReady();
   stage = "create-window";
   const authority = createElectronAuthority();
+  const fixture = app.getAppPath();
   const window = new BrowserWindow({ width: 640, height: 480, show: true, title: "Run Phantom cooperating fixture",
-    webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, sandbox: true, nodeIntegration: false,
+    webPreferences: { preload: path.join(fixture, "preload.cjs"), contextIsolation: true, sandbox: true, nodeIntegration: false,
       additionalArguments: [`--runphantom-electron=${authority}`], partition: "f39-private-fixture" } });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   const diagnostic = (event: { sender: unknown; senderFrame: unknown }, value: Record<string, unknown>) => {
@@ -38,7 +39,7 @@ async function run() {
     if (preloadErrors.length < 4) preloadErrors.push({ name: diagnosticText(error.name), message: diagnosticText(error.message) });
   });
   window.webContents.on("will-navigate", (event: { preventDefault(): void }) => event.preventDefault());
-  const url = pathToFileURL(path.join(__dirname, "index.html")).href;
+  const url = pathToFileURL(path.join(fixture, "index.html")).href;
   let owner: CooperatingElectronSession | undefined;
   try {
     stage = "load-document";
