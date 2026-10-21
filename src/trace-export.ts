@@ -1,7 +1,11 @@
 import { getCachedRun, getDrizzleDb, runInTransaction } from "./db";
 import { importAnnotations, parseImportedAnnotations, MAX_IMPORTED_ANNOTATIONS, type Annotation } from "./annotations";
+import { OTLP_EVIDENCE_LIMITS, validateOtlpEvidence } from "./spans/otlp-evidence";
+import { publicCaptureMetadata } from "./spans/adapters/capture-visibility";
+import { withholdAgentDefinitionCapture } from "./agent-definitions";
 
 export const TRACE_FORMAT = "runphantom-trace/v1";
+export const TRACE_EVIDENCE_FORMAT = "runphantom-trace/v2";
 export const TRACE_LIMITS = { bytes: 10 * 1024 * 1024, spans: 10_000, liveEvents: 20_000, annotations: MAX_IMPORTED_ANNOTATIONS } as const;
 
 type Row = Record<string, unknown>;
@@ -9,6 +13,7 @@ const RUN_STRINGS = ["event_id", "name", "event_name", "display_name", "user_id"
 const SPAN_STRINGS = ["parent_span_id", "span_type", "status", "input_payload", "output_payload", "model", "provider", "attributes"] as const;
 const RUN_COLUMNS = ["id", ...RUN_STRINGS, "started_at", "last_updated_at"];
 const SPAN_COLUMNS = ["id", "run_id", "name", ...SPAN_STRINGS, "start_time_ms", "end_time_ms", "duration_ms", "input_tokens", "output_tokens"];
+const SPAN_EVIDENCE_COLUMNS = [...SPAN_COLUMNS, "otlp_evidence"];
 const EVENT_COLUMNS = ["span_id", "type", "content", "timestamp", "metadata"];
 const has = (value: Row, key: string) => Object.prototype.hasOwnProperty.call(value, key);
 
@@ -48,7 +53,7 @@ function boundedJson(value: unknown): string {
 }
 
 export interface PortableTrace {
-  format: typeof TRACE_FORMAT;
+  format: typeof TRACE_FORMAT | typeof TRACE_EVIDENCE_FORMAT;
   run: Row;
   spans: Row[];
   liveEvents: Row[];
@@ -56,6 +61,7 @@ export interface PortableTrace {
 }
 
 interface CachedTrace {
+  format?: typeof TRACE_EVIDENCE_FORMAT;
   run: Row;
   spans: Row[];
   liveEvents: Row[];
@@ -77,7 +83,7 @@ function checkExportRows(runId: string, selections: readonly (readonly [string, 
   }
 }
 
-function exportCachedTrace(runId: string): CachedTrace | null {
+function exportCachedTrace(runId: string, publicProjection: boolean): CachedTrace | null {
   const client = getDrizzleDb().$client;
   const size = client.prepare("SELECT length(CAST(data AS BLOB)) AS bytes FROM saved_run_cache WHERE id = ?").get(runId) as { bytes: number } | null;
   if (!size) return null;
@@ -88,9 +94,11 @@ function exportCachedTrace(runId: string): CachedTrace | null {
   const data = object(JSON.parse(cached), "saved trace");
   const run = object(data.run, "saved trace run");
   if (run.id !== runId) throw new Error("Saved trace identity does not match requested run");
+  const spans = list(data.spans, "spans", TRACE_LIMITS.spans) as Row[];
   const trace: CachedTrace = {
+    ...(spans.some(span => span.otlp_evidence !== undefined && span.otlp_evidence !== null) ? { format: TRACE_EVIDENCE_FORMAT } : {}),
     run,
-    spans: list(data.spans, "spans", TRACE_LIMITS.spans) as Row[],
+    spans: publicProjection ? spans.map(span => publicCaptureMetadata(withholdAgentDefinitionCapture(span))) : spans,
     liveEvents: list(data.liveEvents, "liveEvents", TRACE_LIMITS.liveEvents, true) as Row[],
     annotations: client.prepare("SELECT id, run_id, span_id, kind, note, source, created_at FROM annotations WHERE run_id = ? ORDER BY created_at, id").all(runId) as Annotation[],
     exportSource: "saved-cache",
@@ -100,16 +108,22 @@ function exportCachedTrace(runId: string): CachedTrace | null {
   return trace;
 }
 
-/** Prefer persisted raw evidence; identify saved-cache fallback as a legacy view. */
+/** Prefer persisted raw evidence; identify saved-cache fallback as a cached view. */
 export function exportTrace(runId: string): ExportedTrace | null {
+  return retainedTrace(runId, true);
+}
+
+// Import equality uses the original admitted private fields. Public projection
+// cannot decide whether an identical private import would replace those rows.
+function retainedTrace(runId: string, publicProjection: boolean): ExportedTrace | null {
   return runInTransaction(() => {
     const client = getDrizzleDb().$client;
     const hasRun = client.prepare("SELECT 1 FROM runs WHERE id = ?").get(runId);
     const hasSpans = client.prepare("SELECT 1 FROM spans WHERE run_id = ? LIMIT 1").get(runId);
     // Match saved detail behavior, including a placeholder with no persisted
-    // spans. Cache evidence remains a labelled legacy file, never a raw v1 claim.
+    // spans. Cache evidence remains explicitly labelled even when it includes v2.
     if (!hasRun || !hasSpans) {
-      const cached = exportCachedTrace(runId);
+      const cached = exportCachedTrace(runId, publicProjection);
       if (cached) return cached;
     }
     if (!hasRun) return null;
@@ -117,15 +131,18 @@ export function exportTrace(runId: string): ExportedTrace | null {
     // row. JSON escaping can add bytes, so parseTrace enforces the final cap too.
     checkExportRows(runId, [
       ["runs", "id", 1, ["id", ...RUN_STRINGS]],
-      ["spans", "run_id", TRACE_LIMITS.spans, ["id", "run_id", "name", ...SPAN_STRINGS]],
+      ["spans", "run_id", TRACE_LIMITS.spans, ["id", "run_id", "name", ...SPAN_STRINGS, "otlp_evidence"]],
       ["live_events", "trace_id", TRACE_LIMITS.liveEvents, ["span_id", "type", "content", "metadata"]],
       ["annotations", "run_id", TRACE_LIMITS.annotations, ANNOTATION_TEXT_COLUMNS],
     ]);
     const run = client.prepare(`SELECT ${RUN_COLUMNS.join(", ")} FROM runs WHERE id = ?`).get(runId) as Row;
+    const withEvidence = Boolean(client.prepare("SELECT 1 FROM spans WHERE run_id = ? AND otlp_evidence IS NOT NULL LIMIT 1").get(runId));
+    const spanColumns = withEvidence ? SPAN_EVIDENCE_COLUMNS : SPAN_COLUMNS;
+    const spans = client.prepare(`SELECT ${spanColumns.join(", ")} FROM spans WHERE run_id = ? ORDER BY start_time_ms, id`).all(runId) as Row[];
     const trace: PortableTrace = {
-      format: TRACE_FORMAT,
+      format: withEvidence ? TRACE_EVIDENCE_FORMAT : TRACE_FORMAT,
       run,
-      spans: client.prepare(`SELECT ${SPAN_COLUMNS.join(", ")} FROM spans WHERE run_id = ? ORDER BY start_time_ms, id`).all(runId) as Row[],
+      spans: publicProjection ? spans.map(span => publicCaptureMetadata(withholdAgentDefinitionCapture(span))) : spans,
       // Numeric live-event IDs belong to the exporting database, not the trace.
       liveEvents: client.prepare(`SELECT ${EVENT_COLUMNS.join(", ")} FROM live_events WHERE trace_id = ? ORDER BY timestamp, id`).all(runId) as Row[],
       annotations: client.prepare("SELECT id, run_id, span_id, kind, note, source, created_at FROM annotations WHERE run_id = ? ORDER BY created_at, id").all(runId) as Annotation[],
@@ -139,7 +156,9 @@ function parseTrace(value: unknown) {
   const body = object(value, "trace");
   boundedJson(body);
   const versioned = has(body, "format");
-  if (versioned && body.format !== TRACE_FORMAT) invalid("unsupported trace format; expected runphantom-trace/v1");
+  if (versioned && body.format !== TRACE_FORMAT && body.format !== TRACE_EVIDENCE_FORMAT) invalid("unsupported trace format; expected runphantom-trace/v1 or v2");
+  const withEvidence = body.format === TRACE_EVIDENCE_FORMAT;
+  const spanColumns = withEvidence ? SPAN_EVIDENCE_COLUMNS : SPAN_COLUMNS;
   const storedEvidence = versioned || body.exportSource === "saved-cache";
   const run = object(body.run, "run");
   const runId = id(run.id, "run.id");
@@ -156,7 +175,15 @@ function parseTrace(value: unknown) {
     for (const field of SPAN_STRINGS) optionalString(span[field], `spans[${index}].${field}`);
     for (const field of ["start_time_ms", "end_time_ms", "duration_ms"]) number(span[field], `spans[${index}].${field}`, storedEvidence);
     for (const field of ["input_tokens", "output_tokens"]) number(span[field], `spans[${index}].${field}`, true);
-    return { ...project(span, SPAN_COLUMNS), run_id: runId, status: storedEvidence ? span.status ?? null : span.status ?? "UNSET" };
+    if (withEvidence) {
+      if (!has(span, "otlp_evidence")) invalid(`spans[${index}].otlp_evidence is required in v2`);
+      if (span.otlp_evidence !== null) {
+        if (typeof span.otlp_evidence !== "string" || Buffer.byteLength(span.otlp_evidence) > OTLP_EVIDENCE_LIMITS.bytes) invalid(`spans[${index}].otlp_evidence exceeds bounded evidence limits`);
+        try { validateOtlpEvidence(JSON.parse(span.otlp_evidence as string)); }
+        catch { invalid(`spans[${index}].otlp_evidence is invalid or contains credentials`); }
+      }
+    } else if (span.otlp_evidence !== undefined && span.otlp_evidence !== null) invalid("OTLP evidence requires runphantom-trace/v2");
+    return { ...project(span, spanColumns), run_id: runId, status: storedEvidence ? span.status ?? null : span.status ?? "UNSET" };
   });
   const eventIds = new Set<number>();
   const incomingEvents: Row[] = list(body.liveEvents, "liveEvents", TRACE_LIMITS.liveEvents, !versioned).map((value, index) => {
@@ -179,11 +206,11 @@ function parseTrace(value: unknown) {
   });
   if (versioned && !has(body, "annotations")) invalid("annotations must be an array");
   const incomingAnnotations = parseImportedAnnotations(body.annotations, runId, spanIds);
-  return { run, runId, spanIds, incomingSpans, incomingEvents, incomingAnnotations };
+  return { run, runId, spanIds, spanColumns, withEvidence, incomingSpans, incomingEvents, incomingAnnotations };
 }
 
 export function importTrace(value: unknown): { runId: string; spansImported: number; liveEventsImported: number; annotationsImported: number } {
-  const { run, runId, spanIds, incomingSpans, incomingEvents, incomingAnnotations } = parseTrace(value);
+  const { run, runId, spanIds, spanColumns, withEvidence, incomingSpans, incomingEvents, incomingAnnotations } = parseTrace(value);
 
   runInTransaction(() => {
     const client = getDrizzleDb().$client;
@@ -199,15 +226,15 @@ export function importTrace(value: unknown): { runId: string; spansImported: num
     restoredRun.last_updated_at = run.last_updated_at ?? existing?.last_updated_at ?? restoredRun.started_at;
     if (existing) {
       let captured: ExportedTrace | null = null;
-      try { captured = exportTrace(runId); } catch (error) {
+      try { captured = retainedTrace(runId, false); } catch (error) {
         if (!(error instanceof InvalidTraceImportError)) throw error;
       }
       const same = (left: Row, right: Row, columns: readonly string[]) => columns.every(field => left[field] === right[field]);
       const byId = new Map(incomingSpans.map(span => [span.id, span]));
       const orderedEvents = [...incomingEvents].sort((a, b) => Number(a.timestamp) - Number(b.timestamp));
-      if (captured && "format" in captured && same(captured.run, restoredRun, RUN_COLUMNS)
+      if (captured && "format" in captured && captured.format === (withEvidence ? TRACE_EVIDENCE_FORMAT : TRACE_FORMAT) && same(captured.run, restoredRun, RUN_COLUMNS)
         && captured.spans.length === incomingSpans.length
-        && captured.spans.every(span => byId.has(span.id) && same(span, byId.get(span.id)!, SPAN_COLUMNS))
+        && captured.spans.every(span => byId.has(span.id) && same(span, byId.get(span.id)!, spanColumns))
         && captured.liveEvents.length === orderedEvents.length
         && captured.liveEvents.every((event, index) => same(event, orderedEvents[index], EVENT_COLUMNS))) return;
     }
@@ -216,8 +243,8 @@ export function importTrace(value: unknown): { runId: string; spansImported: num
       .run(...RUN_COLUMNS.map(field => restoredRun[field]) as (string | number | null)[]);
     client.prepare("DELETE FROM spans WHERE run_id = ?").run(runId);
     client.prepare("DELETE FROM live_events WHERE trace_id = ?").run(runId);
-    const insertSpan = client.prepare(`INSERT INTO spans (${SPAN_COLUMNS.join(", ")}) VALUES (${SPAN_COLUMNS.map(() => "?").join(", ")})`);
-    for (const span of incomingSpans) insertSpan.run(...SPAN_COLUMNS.map(field => span[field]) as (string | number | null)[]);
+    const insertSpan = client.prepare(`INSERT INTO spans (${spanColumns.join(", ")}) VALUES (${spanColumns.map(() => "?").join(", ")})`);
+    for (const span of incomingSpans) insertSpan.run(...spanColumns.map(field => span[field]) as (string | number | null)[]);
     const insertEvent = client.prepare(`INSERT INTO live_events (trace_id, ${EVENT_COLUMNS.join(", ")}) VALUES (?, ${EVENT_COLUMNS.map(() => "?").join(", ")})`);
     for (const event of incomingEvents) insertEvent.run(runId, ...EVENT_COLUMNS.map(field => event[field]) as (string | number | null)[]);
   });

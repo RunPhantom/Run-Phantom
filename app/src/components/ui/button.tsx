@@ -8,15 +8,15 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-[color:var(--rp-ink-wash)] text-[color:var(--rp-ink-strong)] shadow hover:bg-[color:var(--rp-ink-wash-strong)]",
+        default: "rp-primary-control border border-transparent bg-[color:var(--rp-accent)] text-white hover:bg-[color:var(--rp-accent-hover)] active:bg-[color:var(--rp-accent-active)]",
         ghost: "text-[color:var(--rp-ink-soft)] hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)]",
-        outline: "border border-[color:var(--rp-border)] bg-transparent text-[color:var(--rp-ink-soft)] hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)]",
+        outline: "border border-[color:var(--rp-border-strong)] bg-[color:var(--rp-surface)] text-[color:var(--rp-ink-soft)] hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)]",
       },
       size: {
-        default: "h-8 px-3 py-1",
-        sm: "h-7 rounded-md px-2 text-xs",
-        lg: "h-9 rounded-md px-4",
-        icon: "size-8",
+        default: "h-9 px-3 py-1",
+        sm: "h-8 rounded-md px-2 text-xs",
+        lg: "h-11 rounded-md px-4",
+        icon: "size-9",
       },
     },
     defaultVariants: {

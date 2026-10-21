@@ -419,7 +419,13 @@ test("Run Phantom UI: download exports the selected trace as JSON", async ({ pag
   const detailResponse = await fetch(`${runPhantom.url}/api/runs/${FIXTURE_PRIMARY_RUN_ID}/export`);
   expect(detailResponse.ok).toBe(true);
   const expectedTrace = await detailResponse.json();
-  expect(expectedTrace.format).toBe("runphantom-trace/v1");
+  expect(expectedTrace.format).toBe("runphantom-trace/v2");
+  for (const span of expectedTrace.spans) {
+    const evidence = JSON.parse(span.otlp_evidence);
+    expect(evidence.schemaVersion).toBe(1);
+    expect(typeof evidence.startTimeUnixNano).toBe("string");
+    expect(Number(BigInt(evidence.startTimeUnixNano) / 1_000_000n)).toBe(span.start_time_ms);
+  }
 
   await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
   const downloadButton = page.getByRole("button", { name: /^download$/i });

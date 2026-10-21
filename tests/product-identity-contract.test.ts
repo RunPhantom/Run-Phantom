@@ -144,7 +144,7 @@ describe("Run Phantom product identity contract", () => {
       expect(forbidden.status).toBe(403);
       expect(forbidden.body).toEqual({ error: "forbidden" });
     } finally {
-      server.close();
+      await new Promise<void>((resolve, reject) => server.close((error?: Error) => error ? reject(error) : resolve()));
     }
   });
 
@@ -174,7 +174,7 @@ describe("Run Phantom product identity contract", () => {
         .set("Origin", `http://localhost:${health.body.port}`);
       expect(daemonOrigin.status).toBe(404);
     } finally {
-      server.close();
+      await new Promise<void>((resolve, reject) => server.close((error?: Error) => error ? reject(error) : resolve()));
     }
   });
 

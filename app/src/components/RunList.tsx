@@ -36,7 +36,7 @@ export function RunListItem({ run, shortRunIds, selected, highlighted, faded, on
   const saved = !!useSavedEvent(run.id);
   const replayMeta = parseReplayMetadata(run);
   const isReplay = !!replayMeta;
-  const statusLabel = { live: "Run live", failed: "Run failed", cancelled: "Run cancelled", complete: "Run finished" }[status];
+  const statusLabel = run.capture_completion === "unavailable" ? "Completion unavailable" : { live: "Run live", failed: "Run failed", cancelled: "Run cancelled", complete: "Run finished" }[status];
 
   const baseName = runDisplayName(run);
   const traceIdShort = shortRunIds.get(run.id) ?? run.id;

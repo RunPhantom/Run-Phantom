@@ -53,6 +53,7 @@ type RunActivity = {
   finished?: number | null;
   live_event_count?: number | null;
   metadata?: string | null;
+  capture_completion?: "unavailable" | null;
 };
 
 // A replay placeholder that failed or was cancelled never gets spans, an ERROR
@@ -71,6 +72,7 @@ export function replayOutcome(run: { metadata?: string | null }): "failed" | "ca
 }
 
 export function isActive(run: RunActivity): boolean {
+  if (run.capture_completion === "unavailable") return false;
   if (replayOutcome(run)) return false;
   const recencyMs = Date.now() - run.last_updated_at;
   if (recencyMs < AFTERGLOW_MS) return true;
