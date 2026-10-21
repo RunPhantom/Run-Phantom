@@ -1,9 +1,9 @@
 import { randomUUID } from "crypto";
 import type { Response as ExpressResponse } from "express";
-import { getRunWithSpans, upsertRun, updateRunMetadata, countReplaysBySource, findRunByEventId, deleteRun, reassignAnnotations } from "./db";
+import { getDrizzleDb, getRunWithSpans, upsertRun, updateRunMetadata, countReplaysBySource, findRunByEventId, deleteRun, reassignAnnotations } from "./db";
 import { getReplayTrace } from "./replay-map";
 import { ensureAgentEndpointDetailed, extractContextFromTrace } from "./agents-config";
-import type { NormalizedSpan } from "./spans/normalized";
+import { observationReplayUnavailable, type NormalizedSpan } from "./spans/normalized";
 
 export type ReplayMode = "local";
 
@@ -245,23 +245,25 @@ export function promoteLocalReplayRun(args: {
   replayMetadata: string;
   replayName: string;
 }): string {
-  const otlpRun = getRunWithSpans(args.otlpRunId).run as any;
-  if (!otlpRun) return args.placeholderRunId;
+  return getDrizzleDb().transaction(() => {
+    const otlpRun = getRunWithSpans(args.otlpRunId).run as any;
+    if (!otlpRun) return args.placeholderRunId;
 
-  updateRunMetadata(args.otlpRunId, args.replayMetadata);
-  upsertRun({
-    id: args.otlpRunId,
-    name: args.replayName,
-    started_at: otlpRun.started_at,
-    last_updated_at: otlpRun.last_updated_at,
+    updateRunMetadata(args.otlpRunId, args.replayMetadata);
+    upsertRun({
+      id: args.otlpRunId,
+      name: args.replayName,
+      started_at: otlpRun.started_at,
+      last_updated_at: otlpRun.last_updated_at,
+    });
+    if (args.placeholderRunId !== args.otlpRunId) {
+      // Ordering matters: deleteRun removes the run's annotations, so anything the
+      // user flagged on the placeholder during the replay has to be moved first.
+      reassignAnnotations(args.placeholderRunId, args.otlpRunId);
+      deleteRun(args.placeholderRunId);
+    }
+    return args.otlpRunId;
   });
-  if (args.placeholderRunId !== args.otlpRunId) {
-    // Ordering matters: deleteRun removes the run's annotations, so anything the
-    // user flagged on the placeholder during the replay has to be moved first.
-    reassignAnnotations(args.placeholderRunId, args.otlpRunId);
-    deleteRun(args.placeholderRunId);
-  }
-  return args.otlpRunId;
 }
 
 async function runLocalAgentReplay(
@@ -273,6 +275,12 @@ async function runLocalAgentReplay(
   const { run: sourceRun, spans: sourceSpans } = getRunWithSpans(config.sourceRunId);
   if (!sourceRun) {
     sendSSE(res, "error", { code: "source_run_not_found", message: "Source run not found" });
+    res.end();
+    return;
+  }
+
+  if (sourceSpans.some(span => observationReplayUnavailable(span.normalized.capture))) {
+    sendSSE(res, "error", { code: "observation_not_replayable", message: "Replay is unavailable for partial, unverified observations." });
     res.end();
     return;
   }

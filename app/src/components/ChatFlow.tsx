@@ -1,3 +1,4 @@
+import { CaptureVisibilityDetails } from "./CaptureVisibilityDetails";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Pencil } from "lucide-react";
 import { C, spanColor } from "../utils/colors";
@@ -19,10 +20,11 @@ type LiveToolItem =
   | { type: "live_tool_result"; name: string; time: number };
 
 type ChatItem =
+  | { type: "capture"; span: Span; time: number }
   | { type: "tool"; span: Span; time: number }
   | { type: "tool_group"; items: ToolGroupItem[]; time: number; liveTools?: LiveToolItem[] }
   | { type: "sub_agent"; agent: SubAgent; time: number }
-  | { type: "user_msg"; content: string; parts?: string[]; images?: string[]; time: number }
+  | { type: "user_msg"; content: string; parts?: string[]; images?: string[]; time: number; independentObservation?: boolean }
   | { type: "system_msg"; content: string; time: number; prevMessages?: { role: string; content: string }[] }
   | { type: "llm_out"; span: Span; time: number }
   | LiveToolItem
@@ -492,6 +494,11 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
         continue;
       }
 
+      const capture = span.normalized?.capture;
+      if (capture?.entityKind === "prompt") {
+        if (capture.userText !== null) all.push({ type: "user_msg", content: capture.userText, time: span.start_time_ms ?? 0, independentObservation: true });
+        continue;
+      }
       if (agentRootIds.has(span.id)) {
         const agent = subAgents.find(a => a.root_span_id === span.id)!;
         all.push({ type: "sub_agent", agent, time: span.start_time_ms });
@@ -499,6 +506,9 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
         all.push({ type: "tool", span, time: span.start_time_ms });
       } else if (span.span_type?.includes("LLM")) {
         llmSpans.push(span);
+        if (span.captureVisibility?.stream) all.push({ type: "capture", span, time: span.start_time_ms });
+      } else if (span.span_type === "RETRIEVAL" || span.span_type === "EMBEDDING") {
+        all.push({ type: "capture", span, time: span.start_time_ms });
       }
     }
 
@@ -510,6 +520,10 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
     let prevMsgCount = 0;
     for (let i = 0; i < visibleLlmSpans.length; i++) {
       const span = visibleLlmSpans[i];
+      if (span.normalized?.capture?.entityKind === "assistant") {
+        all.push({ type: "llm_out", span, time: span.start_time_ms ?? 0 });
+        continue;
+      }
       // Prefer the richest child span's messages — the last doStream/doGenerate
       // child has the full conversation including system prompt, all previous
       // messages, and tool results. Fall back to the parent span if no children.
@@ -651,15 +665,27 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
         </div>
       );
     }
-    // "Waiting for activity" promises something more is coming. On a run that has
-    // already finished nothing ever will, and the copy contradicted the run's own
-    // status — so say what is actually true: the trace holds no conversation.
+    if (spans.some(span => span.normalized?.capture)) {
+      return (
+        <div className="flex flex-col items-center justify-center h-48 gap-1.5 px-6 text-center">
+          <div className="text-sm" style={{ color: C.fg2 }}>No model messages in the captured trace</div>
+          <div role="status" className="text-xs" style={{ color: C.fg1 }}>Producer-reported observations · Partial capture · Runtime unverified</div>
+          <div className="text-xs" style={{ color: C.fg1 }}>Completion unverified. Captured spans are in the Span Tree tab.</div>
+        </div>
+      );
+    }
+    const roots = spans.filter(span => span.parent_span_id === null);
+    const endedRoot = roots.length > 0 && roots.every(span => typeof span.start_time_ms === "number" && Number.isFinite(span.start_time_ms)
+      && typeof span.end_time_ms === "number" && Number.isFinite(span.end_time_ms)
+      && span.end_time_ms >= span.start_time_ms);
     if (!isActive) {
       return (
         <div className="flex flex-col items-center justify-center h-48 gap-1.5 px-6 text-center">
           <div className="text-sm" style={{ color: C.fg2 }}>No conversation in this trace</div>
           <div className="text-xs" style={{ color: C.fg1 }}>
-            This run finished without recording any model messages. Its spans are in the Span Tree tab.
+            {endedRoot
+              ? "This run finished without recording any model messages. Its spans are in the Span Tree tab."
+              : "No model messages were recorded. Completion is unverified. Its spans are in the Span Tree tab."}
           </div>
         </div>
       );
@@ -675,7 +701,8 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
 
   return (
     <div ref={scrollRef} className="space-y-1.5 py-2 pb-24">
-      <div className="px-3"><FlameTimeline spans={spans} subAgents={subAgents} /></div>
+      {spans.some(span => span.normalized?.capture) && <div role="status" className="px-4 text-xs" style={{ color: C.fg1 }}>Producer-reported observations · Partial capture · Runtime unverified</div>}
+      <div className="px-3 min-w-0"><FlameTimeline spans={spans} subAgents={subAgents} onDiveIn={onDiveIn} /></div>
       {(() => { let seenLLM = false; return items.map((item, i) => {
         const isFirstLLM = hasLLMOutput && item.type === "llm_out" && !seenLLM;
         if (item.type === "llm_out") seenLLM = true;
@@ -704,6 +731,8 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
           );
         }
 
+        if (item.type === "capture") return <div key={`cap-${item.span.id}`} className="px-4 py-1"><CaptureVisibilityDetails span={item.span} /></div>;
+
         if (item.type === "system_msg") {
           return (
             <div key={`sys${i}`} className="px-4 space-y-1.5">
@@ -716,12 +745,14 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
         }
 
         if (item.type === "user_msg") {
-          return <UserMessage key={`usr${i}`} content={item.content} parts={item.parts} images={item.images} onEdit={onEditMessage} />;
+          return <UserMessage key={`usr${i}`} content={item.content} parts={item.parts} images={item.images} onEdit={item.independentObservation ? undefined : onEditMessage} />;
         }
 
         if (item.type === "llm_out") {
           const s = item.span;
           const isErr = s.status === "ERROR";
+          const capture = s.normalized?.capture;
+          const content = capture?.entityKind === "assistant" ? capture.assistantText : s.output_payload;
           return (
             <div key={`lo${i}`} className="px-4 py-2">
               {isFirstLLM && (
@@ -729,11 +760,12 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
                   <RenderModeToggle md={md} onChange={handleMdChange} />
                 </div>
               )}
-              {isErr && s.output_payload && (
-                <div className="max-w-[85%]"><LLMErrorBanner content={s.output_payload} /></div>
+              {isErr && content !== null && (
+                <div className="max-w-[85%]"><LLMErrorBanner content={content} /></div>
               )}
-              {!isErr && s.output_payload && (
-                <LLMOutput content={s.output_payload} md={md} />
+              {capture?.entityKind === "assistant" && content === null && <div className="text-xs" style={{ color: C.fg1 }}>Assistant observation · Text unavailable; inspect the captured span payload.</div>}
+              {!isErr && content !== null && (
+                <LLMOutput content={content} md={md} />
               )}
             </div>
           );

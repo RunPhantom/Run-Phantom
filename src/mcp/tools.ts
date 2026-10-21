@@ -2,6 +2,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { callVerificationTool, VERIFICATION_TOOLS } from "./verification-tools";
 import { callEvaluationTool, EVALUATION_TOOLS } from "./evaluation-tools";
 import { callPermissionPromptTool, permissionPromptTools } from "./permission-prompt-tool";
+import { callBrowserTool, BROWSER_TOOLS } from "./browser-tools";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -226,7 +227,7 @@ function textResult(body: unknown) {
 
 function currentAnnotationSource(): AgentAnnotationSource {
   const explicit = process.env.RUNPHANTOM_ANNOTATION_SOURCE;
-  if (explicit === "claude-code" || explicit === "codex") return explicit;
+  if (explicit === "claude-code" || explicit === "codex" || explicit === "opencode") return explicit;
   return agentAnnotationSource(parseAgentProvider(process.env.RUNPHANTOM_AGENT_PROVIDER) ?? getAgentProvider());
 }
 
@@ -322,13 +323,15 @@ export function registerTraceReadTools(
   backendUrl: string,
 ) {
   mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [...TOOLS, ...VERIFICATION_TOOLS, ...EVALUATION_TOOLS, ...permissionPromptTools()].map((t) => ({ ...t })),
+    tools: [...TOOLS, ...VERIFICATION_TOOLS, ...EVALUATION_TOOLS, ...BROWSER_TOOLS, ...permissionPromptTools()].map((t) => ({ ...t })),
   }));
 
   mcp.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
     const { name, arguments: args = {} } = req.params;
     const permissionPromptResult = callPermissionPromptTool(name, args);
     if (permissionPromptResult) return permissionPromptResult;
+    const browserResult = await callBrowserTool(name, args, backendUrl);
+    if (browserResult) return browserResult;
     const verificationResult = await callVerificationTool(name, args, backendUrl);
     if (verificationResult) return verificationResult;
     const evaluationResult = await callEvaluationTool(name, args, backendUrl);

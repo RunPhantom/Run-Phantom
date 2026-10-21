@@ -9,6 +9,7 @@ import { runPath } from "../utils/navigation";
 import { isAgentProvider, providerLabel, type AgentProviderId } from "../utils/agent-provider";
 import { buildSlashItems, type SlashItem } from "./slash-items";
 import { ConnectionIndicator } from "./ConnectionIndicator";
+import { AcpProviderState } from "./AcpProviderState";
 import { Markdown } from "./Markdown";
 import { RunPhantomMark } from "./RunPhantomMark";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -77,6 +78,7 @@ type AgentStreamEvent =
   | { type: "tool_start"; id: string; name: string; input_preview?: string }
   | { type: "tool_finish"; id: string; ok: boolean; output_preview?: string }
   | { type: "thinking_delta"; content: string }
+  | { type: "permission_denied"; tool: string; reason: string }
   | { type: "subagent_start"; parent_id: string; subagent: string }
   | { type: "provider_session"; sessionId: string }
   | { type: "done" };
@@ -705,7 +707,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
   }
 
   const paneWidth = isOverlay
-    ? Math.max(0, Math.min(window.innerWidth - 24, 420))
+    ? "min(420px, calc(100vw - 24px))"
     : width;
 
   return (
@@ -716,7 +718,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
       aria-label="Coding-agent debug chat"
       className={`${isOverlay
         ? "fixed inset-y-3 right-3 z-40 rounded-2xl border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] shadow-[0_24px_64px_var(--rp-ink-a22)]"
-        : "relative h-screen border-l border-[color:var(--rp-border)] bg-[color:var(--rp-surface)]"
+        : "relative h-full border-l border-[color:var(--rp-border)] bg-[color:var(--rp-surface)]"
       } flex origin-right flex-col overflow-hidden`}
       style={{
         width: paneWidth,
@@ -765,11 +767,11 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
                 busy={switchingProvider}
                 onProviderChange={selectProvider}
               />
-              <ConnectionIndicator
+              {provider === "opencode" ? <AcpProviderState cwd={currentCwd} /> : <ConnectionIndicator
                 cwd={currentCwd}
                 provider={provider}
                 onChooseFolder={() => setShowDirectoryPicker(true)}
-              />
+              />}
             </div>
             <div className="flex shrink-0 items-center gap-1">
               <button
@@ -856,6 +858,12 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
         )
       )}
 
+      {provider === "opencode" && !showList && <AcpProviderState cwd={currentCwd} />}
+      {provider === "opencode" && sending && <button type="button" className="mx-3 my-1 min-h-11 rounded-md border border-[color:var(--rp-border)] px-3 text-xs text-[color:var(--rp-ink-strong)]" onClick={() => {
+        const id = activeClientMessageIdRef.current;
+        if (!id) return;
+        void fetch(`/api/agent/messages/${encodeURIComponent(id)}/cancel`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd: detail?.cwd ?? conversationCwd ?? workspaceCwd }) }).then(async (response) => { if (!response.ok) throw new Error("Could not cancel the active ACP turn."); }).catch((error: Error) => setError(error.message));
+      }}>Cancel OpenCode response</button>}
       {showList ? (
         <ChatList
           sessions={sessions}
@@ -1002,7 +1010,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
 
 function FloatingAskButton({ provider, onOpen }: { provider: AgentProviderId; onOpen: () => void }) {
   return (
-    <div className="rp-clipped-ring group fixed bottom-0 right-0 z-40">
+    <div data-debug-launcher className="rp-clipped-ring group fixed bottom-0 right-0 z-40">
       <div className="pointer-events-none absolute -top-14 right-16 grid h-12 w-12 scale-75 place-items-center rounded-full border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] opacity-0 shadow-[0_16px_40px_var(--rp-ink-a18),0_8px_26px_var(--rp-ink-a20)] transition-[opacity,transform] duration-300 motion-reduce:transition-none group-hover:-translate-y-2 group-hover:-rotate-6 group-hover:scale-100 group-hover:opacity-100 [&>img]:brightness-0">
         <ProviderMark provider="claude" open={true} />
       </div>
@@ -1183,7 +1191,7 @@ function ProviderGlyph({ provider, size }: { provider: AgentProviderId; size: "s
   const sizeClass = size === "small" ? "h-5 min-w-5 text-[7px]" : size === "large" ? "h-9 min-w-9 text-[10px]" : "h-8 min-w-8 text-[9px]";
   return (
     <span aria-hidden="true" className={`grid place-items-center rounded-full border border-[color:var(--rp-selected-border)] bg-[color:var(--rp-accent-soft)] px-1 font-mono font-bold tracking-[-0.05em] text-[color:var(--rp-ink-strong)] ${sizeClass}`}>
-      {provider === "claude" ? "CC" : "CX"}
+      {provider === "opencode" ? "OC" : provider === "claude" ? "CC" : "CX"}
     </span>
   );
 }
@@ -1280,7 +1288,7 @@ function ProviderDropdown({
           onKeyDown={handleOptionKeys}
           className="absolute left-0 top-full z-50 mt-1 min-w-44 rounded-lg border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] p-1 text-xs shadow-2xl"
         >
-          {(["claude", "codex"] as AgentProviderId[]).map((option) => (
+          {(["claude", "codex", "opencode"] as AgentProviderId[]).map((option) => (
             <button
               key={option}
               type="button"
@@ -1306,6 +1314,7 @@ function ProviderDropdown({
 }
 
 function ProviderThinking({ provider }: { provider: AgentProviderId }) {
+  if (provider === "opencode") return <div className="text-xs text-[color:var(--rp-ink-muted)]">OpenCode is working...</div>;
   if (provider === "claude") {
     return <div className="text-xs text-[color:var(--rp-ink-muted)]">Claude Code is thinking...</div>;
   }
@@ -1333,6 +1342,8 @@ function applyLiveStreamEvent(blocks: AssistantMessageBlock[], event: AgentStrea
       });
     case "tool_finish":
       return finishLiveToolBlock(blocks, event.id, event.ok, event.output_preview);
+    case "permission_denied":
+      return [...blocks, { type: "error", text: `${event.tool}: ${event.reason}` }];
     case "thinking_delta":
       return appendLiveThinkingBlock(blocks, event.content);
     case "subagent_start":
@@ -1698,8 +1709,8 @@ function AgentConnectCard({
       <p className="mx-auto mt-2 max-w-[300px] text-sm leading-relaxed text-[color:var(--rp-ink-muted)]">
         Ask questions about traces and resume chats from your terminal.
       </p>
-      <div className="mt-5 grid grid-cols-2 gap-1.5 rounded-xl border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] p-1">
-        {(["claude", "codex"] as AgentProviderId[]).map((option) => {
+      <div className="mt-5 grid grid-cols-3 gap-1.5 rounded-xl border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] p-1">
+        {(["claude", "codex", "opencode"] as AgentProviderId[]).map((option) => {
           const active = selectedProvider === option;
           return (
             <button
@@ -1828,7 +1839,7 @@ function apiPathWithCwd(apiPath: string, cwd: string | null): string {
 
 function resumeCommandForSession(session: ClaudeSessionSummary, workspaceCwd: string | null, provider: AgentProviderId = "claude"): string {
   const cwd = session.cwd ?? workspaceCwd;
-  const resume = provider === "codex" ? `codex resume ${session.id}` : `claude --resume ${session.id}`;
+  const resume = provider === "opencode" ? `opencode --session ${shellQuote(session.id)}` : provider === "codex" ? `codex resume ${session.id}` : `claude --resume ${session.id}`;
   return cwd
     ? `cd ${shellQuote(cwd)} && ${resume}`
     : resume;

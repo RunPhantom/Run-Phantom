@@ -1,0 +1,76 @@
+.evaluation-navigation {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 24px;
+  padding: 16px 32px;
+  border-bottom: 1px solid var(--rp-border);
+  background: var(--rp-surface);
+}
+.evaluation-navigation-primary, .evaluation-navigation-curation { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.evaluation-navigation-curation { column-gap: 8px; }
+.evaluation-navigation :is(a, button) { display: inline-flex; align-items: center; min-height: 40px; padding: 8px 12px; border-radius: 5px; font-size: 12px; line-height: 20px; font-weight: 500; color: var(--rp-ink-soft); text-decoration: none; white-space: normal; transition: color 180ms, background-color 180ms; }
+.evaluation-navigation :is(a, button):hover { color: var(--rp-accent); background: var(--rp-ink-wash); }
+.evaluation-navigation [aria-current="page"] { color: var(--rp-accent); background: var(--rp-accent-soft); }
+.evaluation-workspace { max-width: 1200px; margin-inline: auto; padding: 32px 32px 96px; color: var(--rp-ink); }
+.evaluation-workspace > * + * { margin-top: 28px; }
+.evaluation-workspace h1 { font-size: 28px; line-height: 36px; font-weight: 700; }
+.evaluation-workspace h2 { font-size: 18px; line-height: 26px; font-weight: 650; }
+.evaluation-workspace h3 { line-height: 22px; }
+.evaluation-workspace :is(input:not([type="checkbox"]), select, textarea) { max-width: 100%; border-radius: 5px; }
+.evaluation-workspace :is(button, select, input:not([type="checkbox"]), summary) { min-height: 40px; }
+.evaluation-workspace button { white-space: normal; height: auto; }
+.evaluation-intro { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.evaluation-intro h1 { margin-top: 4px; }
+.evaluation-intro-description { max-width: 65ch; margin-top: 8px; color: var(--rp-ink-soft); font-size: 14px; line-height: 22px; }
+.evaluation-eyebrow { color: var(--rp-ink-muted); font-size: 11px; line-height: 18px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.evaluation-local-label { display: inline-flex; align-items: center; min-height: 30px; padding: 5px 9px; color: var(--rp-accent); background: var(--rp-accent-soft); border-radius: 4px; font-size: 11px; }
+.evaluation-panel { border: 1px solid var(--rp-border); border-radius: 7px; background: var(--rp-surface); padding: 24px; }
+.evaluation-panel > h2 { margin-bottom: 16px; }
+.evaluation-editor-grid { display: grid; gap: 24px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); align-items: start; }
+.evaluation-editor-grid > * { min-width: 0; }
+.evaluation-editor-grid > div > section { border-top: 0; padding-top: 0; }
+.evaluation-revision-context { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--rp-border); font-size: 12px; }
+.evaluation-revision-context strong { overflow-wrap: anywhere; }
+.evaluation-meta { color: var(--rp-ink-muted); font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }
+.evaluation-index-filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+.evaluation-index-filters > :first-child { flex: 1 1 240px; min-width: 0; }
+.evaluation-index-filters > :nth-child(2) { flex: 1 1 180px; min-width: 0; }
+.evaluation-experiment-index { display: grid; gap: 16px; }
+.evaluation-table-scroll { overflow-x: auto; border: 1px solid var(--rp-border); border-radius: 5px; }
+.evaluation-experiment-table { width: 100%; min-width: 540px; border-collapse: collapse; font-size: 12px; text-align: left; }
+.evaluation-experiment-table :is(th, td) { padding: 14px 16px; vertical-align: top; }
+.evaluation-experiment-table thead th { background: var(--rp-canvas); color: var(--rp-ink-muted); font-size: 11px; font-weight: 500; white-space: nowrap; }
+.evaluation-experiment-table tbody tr { border-top: 1px solid var(--rp-border); }
+.evaluation-experiment-table tbody tr[data-selected="true"] { background: var(--rp-accent-soft); }
+.evaluation-experiment-table tbody th { width: 34%; font-weight: 500; }
+.evaluation-experiment-name { display: block; text-align: left; color: var(--rp-accent); overflow-wrap: anywhere; padding: 0; }
+.evaluation-experiment-name:hover { text-decoration: underline; text-underline-offset: 3px; }
+.evaluation-execution-state { display: block; text-transform: capitalize; }
+.evaluation-dataset-name { display: block; overflow-wrap: anywhere; }
+.evaluation-outcome { display: inline-block; text-transform: capitalize; font-size: 11px; line-height: 20px; padding: 2px 7px; border: 1px solid var(--rp-border); border-radius: 4px; white-space: nowrap; }
+.evaluation-outcome[data-outcome="pass"] { color: var(--rp-success); }
+.evaluation-outcome[data-outcome="fail"] { color: var(--rp-danger); }
+.evaluation-outcome[data-outcome="inconclusive"] { color: var(--rp-warning); }
+.evaluation-numeric { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.evaluation-numeric > span { display: block; }
+.evaluation-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.evaluation-pagination > div { display: flex; gap: 8px; flex-wrap: wrap; }
+.evaluation-empty { padding: 24px 0; color: var(--rp-ink-soft); font-size: 13px; line-height: 22px; }
+.evaluation-empty > button { margin-top: 12px; }
+.evaluation-analysis-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; }
+.evaluation-analysis-grid > section { min-width: 0; }
+.evaluation-management { padding: 0 4px; font-size: 12px; }
+.evaluation-upstream-error { margin: 20px 32px; border: 1px solid var(--rp-danger); border-radius: 7px; padding: 16px; color: var(--rp-danger); font-size: 13px; overflow-wrap: anywhere; }
+@media (max-width: 900px) { .evaluation-editor-grid, .evaluation-analysis-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 600px) {
+  .evaluation-navigation { padding: 12px 16px; gap: 8px; }
+  .evaluation-navigation-primary { flex: 1 1 100%; }
+  .evaluation-navigation :is(a, button) { padding-inline: 9px; min-height: 44px; }
+  .evaluation-workspace { padding: 24px 16px 96px; }
+  .evaluation-workspace > * + * { margin-top: 24px; }
+  .evaluation-panel { padding: 16px; }
+  .evaluation-workspace :is(button, select, input:not([type="checkbox"]), summary) { min-height: 44px; }
+  .evaluation-upstream-error { margin-inline: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { .evaluation-navigation :is(a, button) { transition: none; } }

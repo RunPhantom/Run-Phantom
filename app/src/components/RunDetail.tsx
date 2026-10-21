@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { flushSync } from "react-dom";
 import { isRunDeleting, setRunDeleting, subscribeRunDeletions, setRunDeletionError, useRunDeletionError, useRunDeletions } from "../hooks/use-runs";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
@@ -25,6 +25,7 @@ import { LocalAgentSetupCTA, SetupReplayModal } from "./LocalAgentSetupCTA";
 import { C } from "../utils/colors";
 import { fmt, isActive, plural, replayOutcome, runDisplayName, isoTimestamp, safeDecodeParam, spanErrorReason } from "../utils/helpers";
 import type { RunStatus } from "../utils/helpers";
+import { captureCompletion, observationReplayUnavailable } from "../../../src/spans/normalized";
 import { useQueryClient } from "@tanstack/react-query";
 import { parseReplayMetadata } from "../utils/types";
 import { deleteRun, renameRun } from "../api/runs";
@@ -43,8 +44,8 @@ import { AnnotationCreatePopover, TraceAnnotations } from "./TraceAnnotations";
 import { useAnnotations } from "../hooks/use-annotations";
 import type { Annotation, AnnotationKind } from "../hooks/use-annotations";
 import { useAgentForEvent } from "../hooks/use-agents";
-import { useRunPhantomEvent } from "../hooks/use-runphantom-ws";
-import { getCostBreakdown, fmtCost, fmtRate } from "../utils/costs";
+import { useRunPhantomConnectionStatus, useRunPhantomEvent } from "../hooks/use-runphantom-ws";
+import { getCostBreakdown, getPricingSnapshot, getPricingUsageByModel, subscribePricing, fmtCost, fmtRate } from "../utils/costs";
 import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
 import { useDialogFocus } from "../hooks/use-dialog-focus";
 
@@ -325,33 +326,63 @@ function Badge({ label, copyValue }: { label: string; copyValue?: string }) {
   );
 }
 
-function StatsLine({ stats, model, spans, active, startedAt }: {
+function StatsLine({ stats, model, spans, active, startedAt, completionUnavailable }: {
   stats: { spans: number; tools: number; llms: number; errors: number; dur: number; agents?: number; inTokens?: number; outTokens?: number };
   model?: string | null;
   spans?: Span[];
   active?: boolean;
   startedAt?: number;
+  completionUnavailable?: boolean;
 }) {
   const [showCost, setShowCost] = useState(false);
   const costRef = useRef<HTMLSpanElement>(null);
+  const costButtonRef = useRef<HTMLButtonElement>(null);
+  const costPanelRef = useRef<HTMLDivElement>(null);
+  const costPanelId = useId();
+  const pricing = useSyncExternalStore(subscribePricing, getPricingSnapshot, getPricingSnapshot);
+  const [costPosition, setCostPosition] = useState<{ left: number; top: number; width: number } | null>(null);
   const inTok = stats.inTokens ?? 0;
   const outTok = stats.outTokens ?? 0;
 
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    if (!active) return;
+    if (!active || completionUnavailable) return;
     const i = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(i);
-  }, [active]);
+  }, [active, completionUnavailable]);
 
   const breakdown = useMemo(() => {
     if (!spans) return [];
-    const byModel = getTokensByModel(spans);
+    const byModel = getPricingUsageByModel(spans);
     return [...byModel.entries()].map(([m, { inTok, outTok }]) => ({
       model: m, inTok, outTok,
-      breakdown: getCostBreakdown(m, inTok, outTok),
+      breakdown: pricing.catalogue ? getCostBreakdown(m, inTok, outTok) : null,
     }));
-  }, [spans]);
+  }, [spans, pricing.catalogue]);
+
+  useLayoutEffect(() => {
+    if (!showCost) return;
+    const position = () => {
+      const rect = costButtonRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = Math.min(352, window.innerWidth - 32);
+      const height = Math.min(costPanelRef.current?.scrollHeight ?? 400, 400, window.innerHeight - 32);
+      setCostPosition({ left: Math.max(16, Math.min(rect.left, window.innerWidth - width - 16)), top: rect.bottom + height + 8 <= window.innerHeight - 16 ? rect.bottom + 8 : Math.max(16, rect.top - height - 8), width });
+    };
+    position();
+    window.addEventListener("resize", position);
+    window.addEventListener("scroll", position, true);
+    return () => { window.removeEventListener("resize", position); window.removeEventListener("scroll", position, true); };
+  }, [showCost, breakdown]);
+
+  useEffect(() => {
+    if (!showCost) return;
+    const dismiss = (event: PointerEvent) => { if (event.target instanceof Node && !costRef.current?.contains(event.target)) setShowCost(false); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { setShowCost(false); costButtonRef.current?.focus(); } };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", escape); };
+  }, [showCost]);
 
   const ticking = !!(active && startedAt);
   const liveDur = active && startedAt ? now - startedAt : stats.dur;
@@ -360,8 +391,12 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
   const durMin = Math.floor(durSec / 60);
   const durRemSec = durSec % 60;
   const hasTokens = inTok > 0 || outTok > 0;
-  const totalCost = breakdown.reduce((sum, b) => sum + (b.breakdown?.totalCost ?? 0), 0);
-  const cost = totalCost > 0 ? fmtCost(totalCost) : null;
+  const hasCost = breakdown.length > 0;
+  const known = breakdown.filter(row => row.breakdown !== null);
+  const unavailableCount = breakdown.length - known.length;
+  const totalCost = known.reduce((sum, row) => sum + row.breakdown!.totalCost, 0);
+  const availableTotal = known.length > 0 && Number.isFinite(totalCost);
+  const costLabel = availableTotal ? `${unavailableCount ? "Known estimates" : "Estimated cost"} ${fmtCost(totalCost)}${unavailableCount ? ` · ${unavailableCount} unavailable` : ""}` : "Estimate unavailable";
 
   // Where the stats wrap, the separator after the last stat on a line has
   // nothing to separate; index.css hides it on the stat marked here.
@@ -396,8 +431,10 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
           to whole seconds it read "6s" beside a span tree root of "6.2s", "0s"
           beside "420ms", and "205m" for a 3h run. Only the live tick animates;
           everything else goes through fmt(), exactly like the span tree. */}
-      <Stat last={!hasTokens && !cost}><Badge label="duration" /><span>{
-        !durValid
+      <Stat last={!hasTokens && !hasCost}><Badge label="duration" /><span data-run-duration>{
+        completionUnavailable
+          ? "Unavailable"
+          : !durValid
           ? "—"
           : !ticking || liveDur < 1000 || liveDur >= 3_600_000
             ? fmt(liveDur)
@@ -405,35 +442,40 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
               ? <><NumberFlow value={durMin} />m <NumberFlow value={durRemSec} />s</>
               : <><NumberFlow value={durSec} />s</>
       }</span></Stat>
-      {hasTokens && <Stat last={!cost}><Badge label="tokens" /><span><NumberFlow value={inTok} {...TOKEN_NUMBER_FLOW_TIMING} /> in / <NumberFlow value={outTok} {...TOKEN_NUMBER_FLOW_TIMING} /> out</span></Stat>}
-      {cost && (
+      {hasTokens && <Stat last={!hasCost}><Badge label="tokens" /><span><NumberFlow value={inTok} {...TOKEN_NUMBER_FLOW_TIMING} /> in / <NumberFlow value={outTok} {...TOKEN_NUMBER_FLOW_TIMING} /> out</span></Stat>}
+      {hasCost && (
         <Stat last>
-          <span ref={costRef} className="relative cursor-help"
-            onMouseEnter={() => setShowCost(true)} onMouseLeave={() => setShowCost(false)}>
-            {cost}
-            {showCost && breakdown.length > 0 && (
-              <div className="absolute left-0 top-full mt-1 z-50 rounded-lg p-2.5 shadow-xl whitespace-nowrap"
-                style={{ background: C.elevated, border: `1px solid ${C.borderLight}` }}>
-                <div className="text-[9px] uppercase tracking-wide mb-2 font-medium" style={{ color: C.fg0 }}>Cost Breakdown</div>
+          <span ref={costRef} className="relative">
+            <button ref={costButtonRef} type="button" className="min-h-11 min-w-11 rounded px-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2" aria-expanded={showCost} aria-controls={costPanelId} onClick={() => setShowCost(open => !open)}>
+              <span aria-live="polite">{costLabel}</span>
+            </button>
+            {showCost && (
+              <div ref={costPanelRef} id={costPanelId} role="region" aria-label="Nominal cost estimates" className="fixed z-50 rounded-lg p-3 shadow-xl overflow-y-auto text-[12px]"
+                style={{ background: C.elevated, border: `1px solid ${C.borderLight}`, ...costPosition, maxHeight: "min(400px, calc(100vh - 32px))", visibility: costPosition ? "visible" : "hidden" }}>
+                <div className="mb-2 font-medium" style={{ color: C.fg2 }}>Nominal input/output estimates</div>
+                <p className="mb-3 whitespace-normal" style={{ color: C.fg1 }}>OpenRouter catalogue quotes; actual provider and tier billing may differ. Cache, audio, discounts, and other fees are excluded. Reported cost stays separate.</p>
                 {breakdown.map(b => (
-                  <div key={b.model} className="mb-2 last:mb-0">
-                    <div className="text-[10px] font-medium mb-0.5" style={{ color: C.fg2 }}>{b.model}</div>
-                    {b.breakdown && (
-                      <div className="text-[9px] space-y-0.5" style={{ color: C.fg0 }}>
+                  <div key={b.model === null ? "missing-model" : `model:${b.model}`} className="mb-3 last:mb-0 whitespace-normal break-words">
+                    <div className="font-medium mb-1" style={{ color: C.fg2 }}>{b.model ?? "Model unavailable"}</div>
+                    {b.breakdown ? (
+                      <div className="space-y-1" style={{ color: C.fg0 }}>
                         <div className="flex justify-between gap-4">
-                          <span>{b.inTok.toLocaleString()} input @ {fmtRate(b.breakdown.inRate)}/M</span>
+                          <span>{b.inTok!.toLocaleString()} input @ {fmtRate(b.breakdown.inRate)}/M</span>
                           <span style={{ color: C.fg1 }}>{fmtCost(b.breakdown.inCost)}</span>
                         </div>
                         <div className="flex justify-between gap-4">
-                          <span>{b.outTok.toLocaleString()} output @ {fmtRate(b.breakdown.outRate)}/M</span>
+                          <span>{b.outTok!.toLocaleString()} output @ {fmtRate(b.breakdown.outRate)}/M</span>
                           <span style={{ color: C.fg1 }}>{fmtCost(b.breakdown.outCost)}</span>
                         </div>
                         <div className="flex justify-between gap-4 pt-0.5" style={{ borderTop: `1px solid ${C.border}` }}>
                           <span style={{ color: C.fg1 }}>total</span>
                           <span style={{ color: C.fg2 }}>{fmtCost(b.breakdown.totalCost)}</span>
                         </div>
+                        <div style={{ color: C.fg1 }}>Catalogue ID: {b.breakdown.catalogueId}</div>
+                        <div style={{ color: C.fg1 }}>Revision: <span className="font-mono">{b.breakdown.rateRevision}</span></div>
+                        <div style={{ color: C.fg1 }}>Fetched: {b.breakdown.source.observedAt}</div>
                       </div>
-                    )}
+                    ) : <p style={{ color: C.fg1 }}>{b.model === null ? "Model identity was not captured." : b.inTok === null || b.outTok === null ? "Input or output token capture is unavailable." : pricing.status === "disabled" ? "Public pricing is disabled. Enable it in Settings." : pricing.status === "loading" || pricing.status === "idle" ? "Public pricing is loading." : pricing.status === "error" ? pricing.error : "No unambiguous exact catalogue price is available."}</p>}
                   </div>
                 ))}
               </div>
@@ -675,6 +717,7 @@ function ViewHeader({
   const parentName = breadcrumb?.parentName;
   const onFork = fork?.onFork;
   const userMessage = fork?.userMessage;
+  const replayUnavailable = allSpans?.some(span => observationReplayUnavailable(span.normalized?.capture)) === true;
   const queryClient = useQueryClient();
   const replayMeta = run ? parseReplayMetadata(run) : null;
   const traceModelFromMetadata = replayMeta?.replay?.model ?? null;
@@ -742,7 +785,7 @@ function ViewHeader({
   }, [queryClient, run]);
 
   useEffect(() => {
-    if (!optionsOpen || !run?.id || !agentConfigured) return;
+    if (replayUnavailable || !optionsOpen || !run?.id || !agentConfigured) return;
     fetch("/api/replay/context", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ runId: run.id, eventName: run.event_name }),
@@ -752,7 +795,7 @@ function ViewHeader({
         setContextEdits(Object.fromEntries(Object.entries(data.context).map(([k, v]) => [k, String(v)])));
       }
     }).catch(() => {});
-  }, [optionsOpen, run?.id, run?.event_name, agentConfigured]);
+  }, [optionsOpen, run?.id, run?.event_name, agentConfigured, replayUnavailable]);
 
   useEffect(() => {
     if (!optionsOpen) return;
@@ -774,10 +817,11 @@ function ViewHeader({
     };
   }, [optionsOpen]);
   const displayTitle = cleanTitle(title);
+  const completionUnavailable = run?.capture_completion === "unavailable" || allSpans?.some(span => captureCompletion(span.normalized?.capture) === "unavailable") === true;
   const status: RunStatus = (run && replayOutcome(run)) || (active ? "live" : stats.errors > 0 ? "failed" : "complete");
-  const statusLabel = { live: "Run live", failed: "Run failed", cancelled: "Run cancelled", complete: "Run complete" }[status];
-  const statusColor = status === "live" ? C.green : status === "failed" ? C.red : C.fg1;
-  const statusBackground = status === "live"
+  const statusLabel = completionUnavailable ? "Completion unavailable" : { live: "Run live", failed: "Run failed", cancelled: "Run cancelled", complete: "Run complete" }[status];
+  const statusColor = completionUnavailable ? C.fg1 : status === "live" ? C.green : status === "failed" ? C.red : C.fg1;
+  const statusBackground = completionUnavailable ? "var(--rp-ink-wash)" : status === "live"
     ? "color-mix(in oklch, var(--rp-success) 12%, transparent)"
     : status === "failed"
       ? "color-mix(in oklch, var(--rp-danger) 10%, transparent)"
@@ -801,7 +845,7 @@ function ViewHeader({
                   {statusLabel}
                 </span>
               </div>
-              <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
+              <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
             </div>
           </div>
         </>
@@ -816,7 +860,7 @@ function ViewHeader({
             </div>
             <MoreMenu runId={run?.id} />
           </div>
-          <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
+          <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
         </div>
       ) : (
         <>
@@ -933,14 +977,14 @@ function ViewHeader({
                   return <>
                   <div className="rp-clipped-ring flex items-stretch rounded-md overflow-hidden" style={{ border: `1px solid var(--rp-ink-a10)` }}>
                     <button
-                      disabled={agentRegistryStatus !== "success"}
+                      disabled={replayUnavailable || agentRegistryStatus !== "success"}
                       className="flex items-center gap-1.5 text-[11px] px-3 py-1 font-medium transition-colors rp-hover-wash disabled:opacity-50"
                       style={{
                         color: C.fg3,
                         background: "var(--rp-ink-a06)",
                       }}
                       onClick={() => {
-                        if (agentRegistryStatus !== "success") return;
+                        if (replayUnavailable || agentRegistryStatus !== "success") return;
                         if (agentConfigured) {
                           onFork(undefined, forkMode, forkModel || undefined);
                         } else {
@@ -958,10 +1002,11 @@ function ViewHeader({
                       aria-expanded={optionsOpen}
                       aria-controls={optionsOpen ? replayOptionsId : undefined}
                       aria-haspopup="dialog"
-                      disabled={agentRegistryStatus !== "success"}
+                      disabled={replayUnavailable || agentRegistryStatus !== "success"}
                       className="flex items-center justify-center px-1.5 transition-colors rp-hover-wash disabled:opacity-50"
                       style={{ color: C.fg1, background: "var(--rp-ink-a06)", borderLeft: "1px solid var(--rp-ink-a10)" }}
                       onClick={() => {
+                        if (replayUnavailable) return;
                         setAnnotationPopoverOpen(false);
                         setOptionsOpen(!optionsOpen);
                       }}
@@ -970,13 +1015,13 @@ function ViewHeader({
                       <ChevronDown className="h-3.5 w-3.5" />
                     </button>
                   </div>
-                  {agentRegistryStatus !== "success" && <ReplayRegistryNotice status={agentRegistryStatus} onRetry={refetchAgents} />}
+                  {!replayUnavailable && agentRegistryStatus !== "success" && <ReplayRegistryNotice status={agentRegistryStatus} onRetry={refetchAgents} />}
                   <SetupReplayModal
-                    open={setupModalOpen}
+                    open={setupModalOpen && !replayUnavailable}
                     onClose={() => setSetupModalOpen(false)}
                     eventName={run?.event_name ?? undefined}
                   />
-                  {optionsOpen && (
+                  {optionsOpen && !replayUnavailable && (
                     <div
                       id={replayOptionsId}
                       data-replay-options
@@ -1043,7 +1088,7 @@ function ViewHeader({
                         </div>
                       )}
                       <button
-                        disabled={agentRegistryStatus !== "success"}
+                        disabled={replayUnavailable || agentRegistryStatus !== "success"}
                         className="w-full py-1.5 rounded text-[11px] font-medium transition-colors hover:brightness-110 disabled:opacity-50"
                         style={{
                           background: "var(--rp-ink-a08)",
@@ -1051,7 +1096,7 @@ function ViewHeader({
                           border: `1px solid var(--rp-ink-a10)`,
                         }}
                         onClick={() => {
-                          if (agentRegistryStatus !== "success") return;
+                          if (replayUnavailable || agentRegistryStatus !== "success") return;
                           if (!agentConfigured) {
                             setOptionsOpen(false);
                             setSetupModalOpen(true);
@@ -1074,10 +1119,11 @@ function ViewHeader({
               </div>
             )}
           </div>
+          {!active && onFork && replayUnavailable && <div role="status" className="basis-full text-[10px]" style={{ color: C.fg1 }}>Replay unavailable for partial, unverified observations.</div>}
           {/* Not on the stats row after a separator: at laptop widths the ids
               wrapped and left the separator dangling at the end of the stats. */}
           <div className="flex flex-col gap-1.5 text-[11px]">
-            <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
+            <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
             {run && (run.id || run.user_id || run.convo_id) && (
               <span className="rp-meta-ids flex min-w-0 max-w-full flex-wrap items-center gap-1.5" style={{ color: C.fg0 }}>
                 {run.user_id && <span className="inline-flex items-center gap-1" title={run.user_id}><Badge label="user" copyValue={run.user_id} />{run.user_id.length > 12 ? run.user_id.slice(0, 12) + "…" : run.user_id}</span>}
@@ -1430,12 +1476,21 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   // below is gated on the request still being the current one.
   const detailRequestRef = useRef(0);
   const detailAbortRef = useRef<AbortController | null>(null);
+  const detailInFlightRef = useRef(false);
+  const detailPendingRefreshRef = useRef(false);
 
-  const fetchData = useCallback(async () => {
+  const connectionStatus = useRunPhantomConnectionStatus();
+  const previousConnectionStatus = useRef(connectionStatus);
+
+  const fetchData = useCallback(async (): Promise<void> => {
     if (initialData || isRunDeleting(runId)) return; // Keep the visible trace during deletion.
-    detailAbortRef.current?.abort();
+    // Handshake/broadcast refreshes need a newer snapshot, not cancellation of
+    // the same run's current read. Retain one trailing refresh until it settles.
+    if (detailInFlightRef.current) { detailPendingRefreshRef.current = true; return; }
     const controller = new AbortController();
     detailAbortRef.current = controller;
+    detailInFlightRef.current = true;
+    detailPendingRefreshRef.current = false;
     const requestId = ++detailRequestRef.current;
     const isCurrent = () => detailRequestRef.current === requestId && !controller.signal.aborted;
     try {
@@ -1457,8 +1512,25 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
       setData(null);
       setNotFound(true);
     }
-    finally { if (isCurrent()) setLoading(false); }
+    finally {
+      if (isCurrent()) {
+        setLoading(false);
+        detailInFlightRef.current = false;
+        detailAbortRef.current = null;
+        const refresh = detailPendingRefreshRef.current;
+        detailPendingRefreshRef.current = false;
+        if (refresh) void fetchData();
+      }
+    }
   }, [runId, initialData]);
+
+  useEffect(() => {
+    const recovered = previousConnectionStatus.current !== "connected" && connectionStatus === "connected";
+    previousConnectionStatus.current = connectionStatus;
+    // Spans committed before the handshake or during an outage have no replayed
+    // notification. Reload the snapshot without resetting the selected view.
+    if (recovered) void fetchData();
+  }, [connectionStatus, fetchData]);
 
   useEffect(() => {
     // The selected view owns navigation: the menu that started deletion may
@@ -1473,11 +1545,17 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
 
   useEffect(() => {
     let wasDeleting = isRunDeleting(runId);
+    const cancelDetail = () => {
+      ++detailRequestRef.current;
+      detailPendingRefreshRef.current = false;
+      detailInFlightRef.current = false;
+      detailAbortRef.current?.abort();
+      detailAbortRef.current = null;
+    };
     const unsubscribe = subscribeRunDeletions(() => {
       const deleting = isRunDeleting(runId);
       if (deleting) {
-        ++detailRequestRef.current;
-        detailAbortRef.current?.abort();
+        cancelDetail();
       } else if (wasDeleting) {
         void fetchData(); // A failed delete leaves the trace selected and live.
       }
@@ -1485,7 +1563,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
     });
     return () => {
       unsubscribe();
-      detailAbortRef.current?.abort();
+      cancelDetail();
     };
   }, [runId, fetchData]);
 
@@ -1597,7 +1675,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   }, []);
 
   const createAnnotationAndSave = useCallback(async (
-    input: { span_id?: string | null; kind: AnnotationKind; note?: string; source?: "user" | "claude-code" | "codex" }
+    input: { span_id?: string | null; kind: AnnotationKind; note?: string; source?: "user" | "claude-code" | "codex" | "opencode" }
   ) => {
     const created = await annotationsApi.create({ ...input, source: input.source ?? "user" });
     if (created) saveAnnotationPreview(created);
@@ -1674,6 +1752,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   }
 
   // Normal run view
+  const replayUnavailable = spans.some(span => observationReplayUnavailable(span.normalized?.capture));
   const active = isActive(run);
   const tools = spans.filter(s => s.span_type === "TOOL_CALL");
   const llms = spans.filter(s => s.span_type?.includes("LLM"));
@@ -1734,6 +1813,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
           userMessage: lastUserMessage,
         } : undefined}
       />
+      {routeBase && <div className="px-4 py-2 text-xs"><Link className="text-[color:var(--rp-focus)] underline underline-offset-2" to={`/evaluations?view=evidence&anchorKind=run&anchorId=${encodeURIComponent(runId)}`}>Reported completion evidence</Link></div>}
       <TraceAnnotations
         annotations={annotationsApi.annotations}
         freshIds={annotationsApi.freshIds}
@@ -1764,13 +1844,13 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
       ) : (
         <StickToBottom id={runPanelId} role="tabpanel" aria-labelledby={activeTab === "convo" ? runConversationTabId : runOverviewTabId} className="flex-1 relative min-h-0" resize={prefersReducedMotion ? "instant" : "smooth"} initial={false} contextRef={stickToBottomContextRef}>
           <StickToBottom.Content className="sb">
-            {activeTab === "chat" && <ChatFlow spans={spans} liveEvents={liveEvents} subAgents={subAgents} onDiveIn={setFocusedAgent} isActive={active} lastUpdatedAt={run.last_updated_at} onEditMessage={onForkStarted && !active ? (msg) => setEditModal({ userMessage: msg }) : undefined} replayError={replayMeta?.replay?.error ?? null} />}
+            {activeTab === "chat" && <ChatFlow spans={spans} liveEvents={liveEvents} subAgents={subAgents} onDiveIn={setFocusedAgent} isActive={active} lastUpdatedAt={run.last_updated_at} onEditMessage={onForkStarted && !active && !replayUnavailable ? (msg) => setEditModal({ userMessage: msg }) : undefined} replayError={replayMeta?.replay?.error ?? null} />}
             {activeTab === "convo" && run.convo_id && <ConvoDetail convoId={run.convo_id} onOpenTurn={openConversationTurn} />}
           </StickToBottom.Content>
           <ScrollToBottomButton />
         </StickToBottom>
       )}
-      {editModal && onForkStarted && (
+      {editModal && onForkStarted && !replayUnavailable && (
         <EditReplayModal
           userMessage={editModal.userMessage}
           model={model}
