@@ -1,6 +1,7 @@
 import { getCachedRun, getDrizzleDb, runInTransaction } from "./db";
 import { importAnnotations, parseImportedAnnotations, MAX_IMPORTED_ANNOTATIONS, type Annotation } from "./annotations";
 import { OTLP_EVIDENCE_LIMITS, validateOtlpEvidence } from "./spans/otlp-evidence";
+import { publicCaptureMetadata } from "./spans/adapters/capture-visibility";
 import { withholdAgentDefinitionCapture } from "./agent-definitions";
 
 export const TRACE_FORMAT = "runphantom-trace/v1";
@@ -97,7 +98,7 @@ function exportCachedTrace(runId: string, publicProjection: boolean): CachedTrac
   const trace: CachedTrace = {
     ...(spans.some(span => span.otlp_evidence !== undefined && span.otlp_evidence !== null) ? { format: TRACE_EVIDENCE_FORMAT } : {}),
     run,
-    spans: publicProjection ? spans.map(withholdAgentDefinitionCapture) : spans,
+    spans: publicProjection ? spans.map(span => publicCaptureMetadata(withholdAgentDefinitionCapture(span))) : spans,
     liveEvents: list(data.liveEvents, "liveEvents", TRACE_LIMITS.liveEvents, true) as Row[],
     annotations: client.prepare("SELECT id, run_id, span_id, kind, note, source, created_at FROM annotations WHERE run_id = ? ORDER BY created_at, id").all(runId) as Annotation[],
     exportSource: "saved-cache",
@@ -141,7 +142,7 @@ function retainedTrace(runId: string, publicProjection: boolean): ExportedTrace 
     const trace: PortableTrace = {
       format: withEvidence ? TRACE_EVIDENCE_FORMAT : TRACE_FORMAT,
       run,
-      spans: publicProjection ? spans.map(withholdAgentDefinitionCapture) : spans,
+      spans: publicProjection ? spans.map(span => publicCaptureMetadata(withholdAgentDefinitionCapture(span))) : spans,
       // Numeric live-event IDs belong to the exporting database, not the trace.
       liveEvents: client.prepare(`SELECT ${EVENT_COLUMNS.join(", ")} FROM live_events WHERE trace_id = ? ORDER BY timestamp, id`).all(runId) as Row[],
       annotations: client.prepare("SELECT id, run_id, span_id, kind, note, source, created_at FROM annotations WHERE run_id = ? ORDER BY created_at, id").all(runId) as Annotation[],

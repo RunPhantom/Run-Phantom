@@ -27,6 +27,8 @@ export function outputCompletionEvidence(attributes: unknown, attributesAvailabl
   if (!attributesAvailable) return "unconfirmed";
   const attrs = typeof attributes === "string" ? decoded(attributes) : attributes;
   if (typeof attributes === "string" && !object(attrs)) return "unconfirmed";
+  // A native hook response is an unverified observation, never a provider/runtime finish witness.
+  if (object(attrs) && typeof attrs.captureContract === "string" && attrs.captureContract.startsWith("runphantom.cursor-hook.observation/")) return "unconfirmed";
   if (!object(attrs) || !Object.hasOwn(attrs, "gen_ai.is_streaming")) return "not-streaming";
   const streaming = attrs["gen_ai.is_streaming"];
   if (streaming === false || streaming === "false") return "not-streaming";

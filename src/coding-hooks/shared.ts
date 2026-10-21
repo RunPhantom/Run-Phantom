@@ -1,6 +1,8 @@
 import { LossyJsonNumberError, parseJsonEvidence } from "../evaluations/json-evidence";
 import { hasDuplicateJsonKeys } from "../json-keys";
 
+const encoder = new TextEncoder();
+
 export const HOOK_LIMITS = Object.freeze({
   stdinBytes: 262144,
   jsonDepth: 16,
@@ -49,7 +51,7 @@ function refusal<T>(reason: HookFailure): HookResult<T> { return { status: "unav
 /** The lexical limit runs before JSON.parse, which would otherwise erase duplicate members. */
 export function parseBoundedHookJson(input: unknown, byteLimit: number = HOOK_LIMITS.stdinBytes): HookResult<HookJson> {
   if (typeof input !== "string") return refusal("invalid_json");
-  if (!Number.isSafeInteger(byteLimit) || byteLimit < 1 || byteLimit > HOOK_LIMITS.stdinBytes || Buffer.byteLength(input, "utf8") > byteLimit) return refusal("byte_limit");
+  if (!Number.isSafeInteger(byteLimit) || byteLimit < 1 || byteLimit > HOOK_LIMITS.stdinBytes || input.length > byteLimit || encoder.encode(input).byteLength > byteLimit) return refusal("byte_limit");
   let depth = 0, quoted = false;
   for (let i = 0; i < input.length; i++) {
     const character = input[i];
@@ -132,4 +134,9 @@ export function parseClaudeHookInput(input: unknown): HookAdmission {
     transcriptPath: text("transcript_path"), cwd: text("cwd"), agentId: text("agent_id"), agentType: text("agent_type"), agentTranscriptPath: text("agent_transcript_path"), stopHookActive: typeof source.stop_hook_active === "boolean" ? source.stop_hook_active : null, model: text("model"), permissionMode: text("permission_mode"), source: text("source"), endReason: text("reason"), prompt: text("prompt"), toolId: text("tool_use_id"), toolName: text("tool_name"),
     toolInput: source.tool_input ?? null, toolResponse: source.tool_response ?? null, error: text("error"), errorType: text("error_type"), interrupted: typeof source.is_interrupt === "boolean" ? source.is_interrupt : null, durationMs: typeof source.duration_ms === "number" ? source.duration_ms : null, lastAssistantMessage: text("last_assistant_message"),
   } };
+}
+
+/** Only management-registered settings choose the observation producer label. */
+export function hookVendorForSettings(file: string): "claude" | "cursor" {
+  return /[\\/]\.cursor[\\/]hooks\.json$/.test(file) ? "cursor" : "claude";
 }

@@ -1,3 +1,4 @@
+import { CaptureVisibilityDetails } from "./CaptureVisibilityDetails";
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { ArrowLeft } from "lucide-react";
 import { setMeridian, clearMeridian } from "../utils/meridian";
@@ -54,10 +55,13 @@ const TYPE_LABEL: Record<string, { color: string; label: string }> = {
   TRACE: { color: C.purple, label: "TRACE" },
   TOOL_CALL: { color: C.orange, label: "TOOL" },
   LLM_GENERATION: { color: C.cyan, label: "LLM" },
+  RETRIEVAL: { color: C.purple, label: "RETRIEVAL" },
+  EMBEDDING: { color: C.accent, label: "EMBEDDING" },
   INTERNAL: { color: C.fg0, label: "SPAN" },
 };
 
 function typeInfo(span: Span) {
+  if (span.span_type === "RETRIEVAL" || span.span_type === "EMBEDDING") return TYPE_LABEL[span.span_type];
   if (span.span_type === "TRACE") return TYPE_LABEL.TRACE;
   if (span.span_type === "TOOL_CALL") return TYPE_LABEL.TOOL_CALL;
   if (span.span_type?.includes("LLM")) return TYPE_LABEL.LLM_GENERATION;
@@ -153,6 +157,37 @@ function SpanRow({ span, depth, minTime, totalDur, selected, flashing, onClick, 
   );
 }
 
+// The last 12 characters turned "demo_review_tool-1" into "eview_tool-1",
+// which reads as a mangled word. Show the whole id and let CSS add the
+// ellipsis when the column is genuinely too narrow.
+function SpanIdCopy({ id }: { id: string }) {
+  const [copied, setCopied] = useState(false);
+  const resetRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (resetRef.current) window.clearTimeout(resetRef.current);
+  }, []);
+
+  return (
+    <button
+      type="button"
+      className="w-full min-w-0 truncate rounded text-left transition-colors"
+      style={{ color: copied ? C.green : C.fg0 }}
+      title={id}
+      aria-label={`Copy span id ${id}`}
+      onClick={() => {
+        void navigator.clipboard.writeText(id).then(() => {
+          setCopied(true);
+          if (resetRef.current) window.clearTimeout(resetRef.current);
+          resetRef.current = window.setTimeout(() => setCopied(false), 1200);
+        }).catch(() => {});
+      }}
+    >
+      {id}
+    </button>
+  );
+}
+
 function SpanDetail({ span }: { span: Span }) {
   const info = typeInfo(span);
   const isErr = span.status === "ERROR";
@@ -190,7 +225,7 @@ function SpanDetail({ span }: { span: Span }) {
         <div style={{ color: C.fg0 }}>end</div>
         <div style={{ color: C.fg2 }}>{isoTimestamp(span.end_time_ms)}</div>
         <div style={{ color: C.fg0 }}>span id</div>
-        <div style={{ color: C.fg0 }}>{span.id.slice(-12)}</div>
+        <SpanIdCopy id={span.id} />
         {span.attributes && (() => { try { const a = JSON.parse(span.attributes); return a["ai.provider.baseURL"] ? <><div style={{ color: C.fg0 }}>base url</div><div style={{ color: C.fg0 }}>{a["ai.provider.baseURL"]}</div></> : null; } catch { return null; } })()}
       </div>
 
@@ -250,6 +285,8 @@ function SpanDetail({ span }: { span: Span }) {
           return <CollapsibleSection title={title} preview={preview} data={configObj} maxExpand={10} />;
         } catch { return null; }
       })()}
+
+      <CaptureVisibilityDetails span={span} />
 
       {span.input_payload && (
         <div>

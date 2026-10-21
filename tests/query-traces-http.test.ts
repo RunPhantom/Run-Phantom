@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { closeDb, getDrizzleDb, upsertRun } from "../src/db";
 import { createServer } from "../src/server";
+import { removeOwnedDirectory } from "../app/tests-e2e/owned-directory";
 
 test("trace-query HTTP boundary preserves literal values and rejects private-table syntax", async () => {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "runphantom-query-http-")));
@@ -44,9 +45,68 @@ test("trace-query HTTP boundary preserves literal values and rejects private-tab
     expect((await traces.json() as { rows: unknown[] }).rows).toEqual([{ id: "fixture-run" }]);
   } finally {
     server?.closeAllConnections();
-    if (server) await new Promise<void>(resolve => server!.close(() => resolve()));
-    closeDb();
-    keys.forEach((key, index) => { if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index]; });
+    try {
+      if (server?.listening) await new Promise<void>((resolve, reject) => server!.close(error => error ? reject(error) : resolve()));
+    } finally {
+      closeDb();
+      keys.forEach((key, index) => { if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index]; });
+    }
+    await removeOwnedDirectory(directory);
+  }
+});
+
+test.each([
+  ["SELECT id FROM runs", { ok: true, rows: [{ id: "fixture-run" }] }],
+  ["SELECT abs(-9223372036854775808) FROM runs", { ok: false, error: "integer overflow" }],
+])("trace-query worker releases its database before responding to %s", async (sql, expected) => {
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "runphantom-query-worker-")));
+  const dbPath = path.join(directory, "traces.db");
+  const db = new Database(dbPath, { create: true });
+  try {
+    db.exec("PRAGMA journal_mode = WAL; CREATE TABLE runs (id TEXT); INSERT INTO runs VALUES ('fixture-run')");
+  } finally {
+    db.close(true);
+  }
+  const worker = new Worker(new URL("../src/query-worker.ts", import.meta.url).href);
+  try {
+    const response = await new Promise<unknown>((resolve, reject) => {
+      worker.onmessage = event => resolve(event.data);
+      worker.onerror = event => reject(new Error(event.message));
+      worker.postMessage({ dbPath, sql, limit: 2 });
+    });
+    // Windows refuses this while a worker still owns a native SQLite handle.
+    fs.rmSync(directory, { recursive: true, force: true });
+    expect(response).toEqual(expected);
+  } finally {
+    worker.terminate();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test.each([
+  ["SELECT id FROM runs", { ok: true, rows: [{ id: "fixture-run" }] }],
+  ["SELECT abs(-9223372036854775808) FROM runs", { ok: false, error: "integer overflow" }],
+])("trace-query worker releases its database before responding to %s", async (sql, expected) => {
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "runphantom-query-worker-")));
+  const dbPath = path.join(directory, "traces.db");
+  const db = new Database(dbPath, { create: true });
+  try {
+    db.exec("PRAGMA journal_mode = WAL; CREATE TABLE runs (id TEXT); INSERT INTO runs VALUES ('fixture-run')");
+  } finally {
+    db.close(true);
+  }
+  const worker = new Worker(new URL("../src/query-worker.ts", import.meta.url).href);
+  try {
+    const response = await new Promise<unknown>((resolve, reject) => {
+      worker.onmessage = event => resolve(event.data);
+      worker.onerror = event => reject(new Error(event.message));
+      worker.postMessage({ dbPath, sql, limit: 2 });
+    });
+    // Windows refuses this while a worker still owns a native SQLite handle.
+    fs.rmSync(directory, { recursive: true, force: true });
+    expect(response).toEqual(expected);
+  } finally {
+    worker.terminate();
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });

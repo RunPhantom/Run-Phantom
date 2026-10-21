@@ -1,13 +1,11 @@
 /**
  * Network observer.
  *
- * Records fetch and XHR as metadata only, emitting `network.start` when a request
- * leaves and `network` when it settles. Request and response bodies are never
- * captured. A request carries the id of the action that started it, so a completion
- * can be matched to the step that caused it rather than guessed at by timing.
- * Response streams sit outside observer coverage and are declared as such instead of
- * being silently omitted.
+ * Always records request metadata. A separately opted-in observer inspects bounded
+ * response copies without delaying the application's fetch chain. Request bodies
+ * and headers remain outside capture. Identity is captured when requests start.
  */
+import { createBodyObserver, type BodyPrepare } from "./network-body.js";
 import { captureMethod } from "../patching/capture-method.js";
 import { redactUrl } from "../../redaction.js";
 import { observeSafely, observerFailure, type Emit, type Teardown } from "./types.js";
@@ -31,7 +29,7 @@ function methodOf(input: RequestInfo | URL, init?: RequestInit): string {
   return "GET";
 }
 
-export function installNetwork(emit: Emit, getActionId: () => string | undefined): Teardown {
+export function installNetwork(emit: Emit, getActionId: () => string | undefined, bodyPrepare?: BodyPrepare): Teardown {
   const origFetch = captureMethod(window, "fetch");
   const callFetch = origFetch.bind(window);
   const proto = XMLHttpRequest.prototype;
@@ -40,6 +38,7 @@ export function installNetwork(emit: Emit, getActionId: () => string | undefined
   const callOpen = origOpen as (this: XMLHttpRequest, ...args: unknown[]) => void;
   let active = true;
   let sequence = 0;
+  const bodies = bodyPrepare ? createBodyObserver(emit, bodyPrepare) : undefined;
   const failure = observerFailure(emit, "network");
   const makeMeta = (url: string, method: string): RequestMeta => ({
     requestId: `n${++sequence}`, method, url: redactUrl(new URL(url, location.href).href),
@@ -65,18 +64,18 @@ export function installNetwork(emit: Emit, getActionId: () => string | undefined
     }, failure);
     let result: Promise<Response>;
     try { result = callFetch(input, init); } catch (error) {
-      observeSafely(() => { if (meta) finish(meta, "fetch", 0); }, failure);
+      observeSafely(() => { if (meta) { finish(meta, "fetch", 0); bodies?.failed(meta); } }, failure);
       throw error;
     }
     // Return the observed chain and rethrow the original rejection. Attaching a rejection
     // side observer while returning the original promise would suppress unhandledrejection.
     return result.then(
       (response) => {
-        observeSafely(() => { if (meta) finish(meta, "fetch", response.status); }, failure);
+        observeSafely(() => { if (meta) { finish(meta, "fetch", response.status); bodies?.fetch(response, meta); } }, failure);
         return response;
       },
       (error: unknown) => {
-        observeSafely(() => { if (meta) finish(meta, "fetch", 0); }, failure);
+        observeSafely(() => { if (meta) { finish(meta, "fetch", 0); bodies?.failed(meta); } }, failure);
         throw error;
       },
     );
@@ -103,7 +102,7 @@ export function installNetwork(emit: Emit, getActionId: () => string | undefined
       const current = request;
       const onLoadEnd = (): void => {
         cleanup?.();
-        observeSafely(() => finish(current, "xhr", this.status), failure);
+        observeSafely(() => { finish(current, "xhr", this.status); bodies?.xhr(this, current); }, failure);
       };
       cleanup = () => {
         this.removeEventListener("loadend", onLoadEnd);
@@ -122,6 +121,7 @@ export function installNetwork(emit: Emit, getActionId: () => string | undefined
     }
   };
   const teardown = (): void => {
+    bodies?.teardown();
     active = false;
     if (window.fetch === patchedFetch) window.fetch = origFetch;
     if (proto.open === patchedOpen) proto.open = origOpen;
