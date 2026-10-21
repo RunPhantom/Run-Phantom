@@ -14,6 +14,7 @@ import { DeepLinkedText } from "../utils/deep-links";
 import { sendRunPhantomMessage } from "../hooks/use-runphantom-ws";
 import { useIsMobile } from "../hooks/use-mobile";
 import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
+import { GuardDecisions } from "./GuardDecisions";
 
 function CollapsibleSection({ title, preview, data, maxExpand = 3 }: { title: string; preview: string; data: unknown; maxExpand?: number }) {
   const [open, setOpen] = useState(false);
@@ -285,6 +286,8 @@ function SpanDetail({ span }: { span: Span }) {
           return <CollapsibleSection title={title} preview={preview} data={configObj} maxExpand={10} />;
         } catch { return null; }
       })()}
+
+      <GuardDecisions evidence={span.guardEvidence} />
 
       <CaptureVisibilityDetails span={span} />
 

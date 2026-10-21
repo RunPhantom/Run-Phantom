@@ -13,6 +13,7 @@ import { getRunComparison, RunComparisonError } from "./run-comparison";
 import { publicCaptureMetadata } from "./spans/adapters/capture-visibility";
 import { normalizeStoredSpan } from "./spans/normalize";
 import { withholdAgentDefinitionCapture } from "./agent-definitions";
+import { guardSpanForPersistence, projectCapturedGuardSpan } from "./guard-evidence";
 import { parseOtlpRequest } from "./parse";
 import { decodeOtlpProtobuf } from "./otlp-protobuf";
 import {
@@ -1569,7 +1570,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
     if (!row) { res.status(404).json({ error: "Span not found" }); return; }
     const { input_head, output_head, input_chars, output_chars, otlp_evidence, ...rest } = row;
     res.json({
-      ...publicCaptureMetadata(withholdAgentDefinitionCapture(rest)),
+      ...publicCaptureMetadata(projectCapturedGuardSpan(withholdAgentDefinitionCapture(rest))),
       captureVisibility: normalizeStoredSpan({ ...rest, otlp_evidence, input_payload: null, output_payload: null }).captureVisibility,
       input_chars,
       output_chars,
@@ -1638,7 +1639,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
   // through get_span_payload.
   const MAX_DETAIL_ATTR_CHARS = 2_000;
   function compactSpanForDetail(span: any): any {
-    span = publicCaptureMetadata(withholdAgentDefinitionCapture(span));
+    span = publicCaptureMetadata(projectCapturedGuardSpan(withholdAgentDefinitionCapture(span)));
     if (typeof span?.attributes !== "string" || span.attributes.length <= MAX_DETAIL_ATTR_CHARS) return span;
     let parsed: Record<string, unknown>;
     try {
@@ -1671,8 +1672,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
             // A live-only run can reuse cached presentation, but its live rows
             // must come from this store. Saved-only history survives clears.
             const body = {
-              ...data,
-              spans: Array.isArray(data.spans) ? data.spans.map((span: any) => publicCaptureMetadata(withholdAgentDefinitionCapture(span))) : data.spans,
+              ...publicCachedRun(data),
               ...(run ? { liveEvents: getLiveEvents(id) } : {}),
             };
             res.setHeader("X-RunPhantom-Live-Events", run ? "current-store" : "saved-cache");
@@ -2505,9 +2505,18 @@ export async function createServer(port: number, options: { comparisons?: Compar
   });
 
   // Saved run cache — persists across clears
+  function publicCachedRun(data: any) {
+    return { run: data.run, spans: Array.isArray(data.spans) ? data.spans.map((span: any) => publicCaptureMetadata(projectCapturedGuardSpan(withholdAgentDefinitionCapture(span)))) : [],
+      liveEvents: Array.isArray(data.liveEvents) ? data.liveEvents : [], subAgents: Array.isArray(data.subAgents) ? data.subAgents : [] };
+  }
   app.put(/^\/api\/saved-runs\/cache\/(.+)$/, (req, res) => {
     const id = (req.params as unknown as string[])[0];
-    cacheSavedRun(id, JSON.stringify(req.body));
+    const data = req.body;
+    if (!data || typeof data !== "object" || !data.run || !Array.isArray(data.spans)) {
+      res.status(400).json({ error: "Cache requires a run and spans" }); return;
+    }
+    cacheSavedRun(id, JSON.stringify({ run: data.run, spans: data.spans.map((span: any) => guardSpanForPersistence(withholdAgentDefinitionCapture(span))),
+      liveEvents: Array.isArray(data.liveEvents) ? data.liveEvents : [], subAgents: Array.isArray(data.subAgents) ? data.subAgents : [] }));
     res.json({ ok: true });
   });
   app.get(/^\/api\/saved-runs\/cache\/(.+)$/, (req, res) => {
@@ -2515,8 +2524,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
     const data = getCachedRun(id);
     if (!data) { res.status(404).json({ error: "Not cached" }); return; }
     const cached = JSON.parse(data);
-    res.json({ ...cached, spans: Array.isArray(cached.spans)
-      ? cached.spans.map((span: any) => publicCaptureMetadata(withholdAgentDefinitionCapture(span))) : cached.spans });
+    res.json(publicCachedRun(cached));
   });
   app.delete(/^\/api\/saved-runs\/cache\/(.+)$/, (req, res) => {
     const id = (req.params as unknown as string[])[0];
