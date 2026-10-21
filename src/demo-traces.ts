@@ -675,9 +675,10 @@ function streamFixture(fixture: DemoFixture, startDelayMs: number, broadcast?: B
           timestamp: startWall + live.atOffsetMs,
           metadata: live.metadata,
         };
-        upsertLiveEvent(event);
+        const persistedId = upsertLiveEvent(event);
         upsertDemoRun(fixture, runId, startWall, startWall + live.atOffsetMs);
         broadcast?.("live", {
+          persistedId,
           traceId: event.traceId,
           spanId: event.spanId,
           type: event.type,

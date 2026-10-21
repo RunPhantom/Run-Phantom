@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { request as httpRequest, type Server } from "node:http";
@@ -10,18 +10,25 @@ import { promoteLocalReplayRun } from "../src/replay";
 import { createLocalEvidenceOwner } from "../src/evaluations/evidence-inventory";
 import { EVIDENCE_IMPORT_CONTENT_TYPE, EVIDENCE_READER_IDENTITY } from "../src/evaluations/evidence-import";
 import { evidenceDigest } from "../src/evaluations/evidence-validation";
+import { EvidenceStore } from "../src/evaluations/evidence-store";
 import type { EvidenceAttachment } from "../src/evaluations/evidence-protocol";
 import { WebSocket } from "ws";
 
 let directory: string, previous: string | undefined, server: Server | undefined, demoDrainUntil = 0;
+let demoStateBeforeTeardown: (() => void) | undefined;
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), "runphantom-f04-delete-")); previous = process.env.RUNPHANTOM_DB_PATH; closeDb(); process.env.RUNPHANTOM_DB_PATH = join(directory, "actual.db");
   getDrizzleDb().$client.exec("INSERT INTO evaluation_evidence_scopes VALUES('local:local',1,1)");
   demoDrainUntil = 0;
+  demoStateBeforeTeardown = undefined;
 });
 afterEach(async () => {
   if (demoDrainUntil) {
     while (performance.now() < demoDrainUntil && (getDrizzleDb().$client.query("SELECT count(*) AS n FROM spans WHERE run_id LIKE 'demo_%' AND span_type='AGENT_ROOT' AND status!='UNSET'").get() as { n: number }).n !== 3) await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  const reportDemoState = demoStateBeforeTeardown; demoStateBeforeTeardown = undefined;
+  try { reportDemoState?.(); } catch {
+    try { console.error('LIVE_DEMO_PHASE_STATE {"boundary":"before-teardown","diagnosticUnavailable":true}'); } catch { /* Observation cannot block owned cleanup. */ }
   }
   if (server) await new Promise<void>(done => server!.close(() => done())); server = undefined; closeDb();
   if (previous === undefined) delete process.env.RUNPHANTOM_DB_PATH; else process.env.RUNPHANTOM_DB_PATH = previous; rmSync(directory, { recursive: true, force: true });
@@ -86,18 +93,64 @@ test("a refused public reset preserves the already streaming demo timers and liv
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`, db = getDrizzleDb().$client;
   const roots = () => db.query("SELECT run_id,status,end_time_ms-start_time_ms AS elapsed FROM spans WHERE run_id LIKE 'demo_%' AND span_type='AGENT_ROOT' ORDER BY run_id").all() as { run_id: string; status: string; elapsed: number }[];
   const finished = [ { run_id: "demo_research", status: "OK", elapsed: 7_600 }, { run_id: "demo_review", status: "OK", elapsed: 6_200 }, { run_id: "demo_triage", status: "OK", elapsed: 5_200 } ];
-  const until = async (condition: () => boolean, ms: number) => {
+  type DemoPhase = "initial" | "original-live" | "control";
+  const observedAt = performance.now(), demoIds = ["demo_research", "demo_review", "demo_triage"];
+  let phase: DemoPhase = "initial", phaseStartedAt = observedAt;
+  const enterPhase = (next: DemoPhase) => { if (phase !== next) { phase = next; phaseStartedAt = performance.now(); } };
+  let lastMessage: { observedSequence: number; receivedElapsedMs: number; event: string; traceId: string | null; sourceTimestampMs: number | null } | null = null;
+  let websocketDiagnosticUnavailable = false;
+  const until = async (condition: () => boolean, ms: number, label: DemoPhase) => {
+    enterPhase(label); const waitStartedAt = performance.now();
     const deadline = performance.now() + ms;
-    while (!condition()) { if (performance.now() > deadline) throw new Error("Original live demo did not reach its unchanged fixture deadline"); await new Promise(resolve => setTimeout(resolve, 20)); }
+    while (!condition()) { if (performance.now() > deadline) { diagnosticState("until-timeout", { budgetMs: ms, elapsedMs: performance.now() - waitStartedAt }); throw new Error("Original live demo did not reach its unchanged fixture deadline"); } await new Promise(resolve => setTimeout(resolve, 20)); }
   };
   const socket = new WebSocket(`${base.replace("http:", "ws:")}/ws`);
   const delivered: { event: string; data: { traceId?: string; content?: string } }[] = [];
+  const diagnosticState = (boundary: "until-timeout" | "before-teardown", wait?: { budgetMs: number; elapsedMs: number }) => {
+    try {
+      const now = performance.now();
+      let state: Record<string, unknown> = { boundary, phase, elapsedSinceObservationMs: now - observedAt, phaseElapsedMs: now - phaseStartedAt,
+        wait, drainRemainingMs: Math.max(0, demoDrainUntil - now), websocket: { eventCount: delivered.length,
+          liveEventCount: delivered.filter(event => event.event === "live").length, spanEventCount: delivered.filter(event => event.event === "spans").length,
+          diagnosticUnavailable: websocketDiagnosticUnavailable, sequenceKind: "client-observed-message-ordinal", lastMessage,
+          lastReceivedAgoMs: lastMessage ? now - observedAt - lastMessage.receivedElapsedMs : null } };
+      try {
+        const rootState = db.query("SELECT id,run_id,status,end_time_ms-start_time_ms AS elapsed FROM spans WHERE run_id IN ('demo_research','demo_review','demo_triage') AND span_type='AGENT_ROOT' ORDER BY run_id,id").all() as { id: string; run_id: string; status: string; elapsed: number | null }[];
+        const runs = db.query("SELECT id,started_at FROM runs WHERE id IN ('demo_research','demo_review','demo_triage') ORDER BY id").all();
+        const traces = demoIds.map(traceId => {
+          const spans = db.query("SELECT count(*) AS n FROM spans WHERE run_id=?").get(traceId) as { n: number };
+          const live = db.query("SELECT count(*) AS n,max(id) AS lastId,max(timestamp) AS lastTimestamp FROM live_events WHERE trace_id=?").get(traceId) as { n: number; lastId: number | null; lastTimestamp: number | null };
+          return { traceId, spanCount: spans.n, liveEventCount: live.n, lastLiveEventId: live.lastId, lastLiveTimestampMs: live.lastTimestamp };
+        });
+        state = { ...state, runs, roots: rootState.map(root => ({ runId: root.run_id, spanId: /^demo_(research|review|triage)_root$/.test(root.id) ? root.id : "<unexpected-root>",
+          status: ["UNSET", "OK", "ERROR"].includes(root.status) ? root.status : "<unexpected-status>", logicalElapsedMs: root.elapsed })), traces };
+      } catch { state = { ...state, diagnosticUnavailable: true, databaseState: "unavailable" }; }
+      console.error("LIVE_DEMO_PHASE_STATE " + JSON.stringify(state));
+      return state;
+    } catch {
+      const unavailable = { boundary, phase, diagnosticUnavailable: true };
+      try { console.error("LIVE_DEMO_PHASE_STATE " + JSON.stringify(unavailable)); } catch { /* Diagnostics must not replace the original failure or cleanup. */ }
+      return unavailable;
+    }
+  };
   socket.on("message", data => delivered.push(JSON.parse(data.toString()))); await once(socket, "open");
+  socket.on("message", () => {
+    try {
+      const event = delivered.at(-1) as { event?: string; data?: { traceId?: string; timestamp?: number } } | undefined;
+      lastMessage = { observedSequence: delivered.length, receivedElapsedMs: performance.now() - observedAt,
+        event: event?.event === "live" || event?.event === "spans" ? event.event : "other",
+        traceId: event?.data?.traceId && demoIds.includes(event.data.traceId) ? event.data.traceId : null,
+        sourceTimestampMs: typeof event?.data?.timestamp === "number" && Number.isFinite(event.data.timestamp) ? event.data.timestamp : null };
+    } catch { websocketDiagnosticUnavailable = true; lastMessage = null; }
+  });
+  demoStateBeforeTeardown = () => diagnosticState("before-teardown");
   let upload: ReturnType<typeof httpRequest> | undefined;
+  let restoreStart: (() => void) | undefined, startTimer: ReturnType<typeof setTimeout> | undefined, holdingUpload = false;
   try {
     demoDrainUntil = performance.now() + 14_000;
     const initial = await fetch(`${base}/api/demo-traces/replay`, { method: "POST" }); expect(initial.status).toBe(200); await initial.json();
-    await until(() => roots().length === 2 && roots().every(root => root.status === "UNSET"), 2_000);
+    await until(() => roots().length === 2 && roots().every(root => root.status === "UNSET"), 2_000, "initial");
+    enterPhase("original-live");
     const originalRuns = db.query("SELECT id,started_at FROM runs WHERE id LIKE 'demo_%' ORDER BY id").all() as { id: string; started_at: number }[];
     const originalLive = db.query("SELECT * FROM live_events WHERE trace_id LIKE 'demo_%' ORDER BY id").all() as { id: number }[];
     expect(originalLive.length).toBeGreaterThan(0);
@@ -105,23 +158,46 @@ test("a refused public reset preserves the already streaming demo timers and liv
     const metadata = Buffer.from(JSON.stringify({ version: 1, request: { ...EVIDENCE_READER_IDENTITY, operationKey: "live-demo-refusal", attachment: { kind: "run", id: "demo_review" },
       target: null, inventory: null, retention: "raw_and_normalized", sources: [{ sourceId: "unit", kind: "junit", dialect: "junit-xml/v1", shardId: "unit", artifactSha256: evidenceDigest(raw), byteLength: raw.length }] } }));
     const prefix = Buffer.alloc(4); prefix.writeUInt32BE(metadata.length);
-    upload = httpRequest(`${base}/api/evaluations/evidence/imports`, { method: "POST", headers: { "Content-Type": EVIDENCE_IMPORT_CONTENT_TYPE } }, response => response.resume()); upload.on("error", () => {});
+    let acknowledgeStart!: (id: string) => void, rejectStart!: (error: unknown) => void, rejectUpload!: (error: unknown) => void;
+    const started = new Promise<string>((resolve, reject) => { acknowledgeStart = resolve; rejectStart = reject; });
+    const uploadFailed = new Promise<never>((_resolve, reject) => { rejectUpload = reject; });
+    const startMethod: unknown = Object.getOwnPropertyDescriptor(EvidenceStore.prototype, "start")?.value;
+    expect(typeof startMethod).toBe("function");
+    const actualStart = startMethod as EvidenceStore["start"];
+    const startObserver = spyOn(EvidenceStore.prototype, "start").mockImplementation(function (this: EvidenceStore, id: string, token: string) {
+      const result = actualStart.call(this, id, token);
+      if (result) {
+        try { if (db.query("SELECT id FROM evaluation_evidence_jobs WHERE id=? AND operation_key='live-demo-refusal'").get(id)) acknowledgeStart(id); }
+        catch (error) { rejectStart(error); }
+      }
+      return result;
+    });
+    restoreStart = () => startObserver.mockRestore();
+    // Bound real admission readiness separately from the unchanged demo completion budgets.
+    startTimer = setTimeout(() => rejectStart(new Error("Partial evidence upload did not acknowledge its real job start within 5000ms")), 5_000);
+    holdingUpload = true;
+    upload = httpRequest(`${base}/api/evaluations/evidence/imports`, { method: "POST", headers: { "Content-Type": EVIDENCE_IMPORT_CONTENT_TYPE } }, response => {
+      response.resume(); if (holdingUpload) rejectUpload(new Error(`Partial evidence upload returned unexpected HTTP ${response.statusCode} before reset refusal`));
+    });
+    upload.on("error", error => { if (holdingUpload) rejectUpload(error); });
     upload.write(Buffer.concat([prefix, metadata, raw.subarray(0, 1)]));
-    await until(() => db.query("SELECT id FROM evaluation_evidence_jobs WHERE operation_key='live-demo-refusal' AND status='running'").get() !== null, 1_000);
-    const deliveredBeforeRefusal = delivered.length, refused = await fetch(`${base}/api/demo-traces/replay`, { method: "POST" });
-    expect(refused.status).toBe(409); expect(await refused.json()).not.toHaveProperty("ok", true);
+    const startedJobId = await Promise.race([started, uploadFailed]); clearTimeout(startTimer); startTimer = undefined; restoreStart(); restoreStart = undefined;
+    expect(db.query("SELECT id,status FROM evaluation_evidence_jobs WHERE id=? AND operation_key='live-demo-refusal'").get(startedJobId)).toEqual({ id: startedJobId, status: "running" });
+    const deliveredBeforeRefusal = delivered.length, refused = await Promise.race([fetch(`${base}/api/demo-traces/replay`, { method: "POST" }), uploadFailed]);
+    expect(refused.status).toBe(409); expect(await Promise.race([refused.json(), uploadFailed])).not.toHaveProperty("ok", true);
     for (const original of originalRuns) expect(db.query("SELECT id,started_at FROM runs WHERE id=?").get(original.id)).toEqual(original);
-    upload.destroy();
-    await until(() => roots().length === 3 && roots().every(root => root.status === "OK"), 14_000);
+    holdingUpload = false; upload.destroy();
+    await until(() => roots().length === 3 && roots().every(root => root.status === "OK"), 14_000, "original-live");
     expect(roots()).toEqual(finished);
     for (const original of originalRuns) expect(db.query("SELECT id,started_at FROM runs WHERE id=?").get(original.id)).toEqual(original);
     for (const original of originalLive) expect(db.query("SELECT * FROM live_events WHERE id=?").get(original.id)).toEqual(original);
     expect(delivered.slice(deliveredBeforeRefusal).some(event => event.event === "live" && event.data.traceId === "demo_research" && Boolean(event.data.content))).toBe(true);
     const counts = db.query("SELECT trace_id,count(*) AS n FROM live_events WHERE trace_id LIKE 'demo_%' GROUP BY trace_id ORDER BY trace_id").all() as { trace_id: string; n: number }[];
     expect(counts.map(row => row.trace_id)).toEqual(["demo_research", "demo_review", "demo_triage"]); expect(counts.every(row => row.n > 10)).toBe(true);
+    enterPhase("control");
     demoDrainUntil = performance.now() + 14_000;
     const control = await fetch(`${base}/api/demo-traces/replay`, { method: "POST" }); expect(control.status).toBe(200); await control.json();
-    await until(() => roots().length === 3 && roots().every(root => root.status === "OK"), 14_000); expect(roots()).toEqual(finished);
+    await until(() => roots().length === 3 && roots().every(root => root.status === "OK"), 14_000, "control"); expect(roots()).toEqual(finished);
     expect(db.query("SELECT status,reserved_raw_bytes,reserved_normalized_bytes FROM evaluation_evidence_jobs WHERE operation_key='live-demo-refusal'").get()).toMatchObject({ status: "failed", reserved_raw_bytes: 0, reserved_normalized_bytes: 0 });
-  } finally { upload?.destroy(); socket.terminate(); }
+  } finally { holdingUpload = false; clearTimeout(startTimer); restoreStart?.(); upload?.destroy(); socket.terminate(); }
 }, 35_000);

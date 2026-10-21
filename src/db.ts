@@ -6,7 +6,7 @@ import os from "os";
 import fs from "fs";
 import { detectSubAgents } from "./agents";
 import { normalizeStoredSpan } from "./spans/normalize";
-import type { NormalizedSpan } from "./spans/normalized";
+import { captureCompletion, type NormalizedSpan } from "./spans/normalized";
 import * as schema from "./db/schema";
 import { embeddedMigrationFiles, embeddedMigrationJournal } from "./db/migration-assets";
 import { SOURCE_MIGRATIONS_DIR } from "./source-paths";
@@ -80,8 +80,11 @@ export function getDrizzleDb(): RunPhantomDb {
   if (_drizzleDb) return _drizzleDb;
   const dbPath = resolveDbPath();
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  _dbPath = dbPath;
-  _sqliteDb = new Database(dbPath, { create: true });
+  // Trusted startup resolves the real parent once so OS aliases such as /var
+  // cannot create a second lifetime-lease identity for the same owner file.
+  const actualDbPath = path.join(fs.realpathSync(path.dirname(dbPath)), path.basename(dbPath));
+  _dbPath = actualDbPath;
+  _sqliteDb = new Database(actualDbPath, { create: true });
   _drizzleDb = drizzle(_sqliteDb, { schema });
   try {
     _sqliteDb.exec("PRAGMA busy_timeout = 1000");
@@ -196,7 +199,8 @@ function tokenizeSql(sql: string): SqlToken[] {
   const tokens: SqlToken[] = [];
   for (let index = 0; index < sql.length;) {
     const char = sql[index];
-    if (/[ \t\n\r\f]/.test(char)) {
+    // SQLite treats a BOM as whitespace at token start, but retains it inside identifiers.
+    if (/[ \t\n\r\f\uFEFF]/.test(char)) {
       index++;
       continue;
     }
@@ -363,10 +367,15 @@ function maskSqlLiterals(sql: string): string {
 }
 
 function assertReadOnlyTraceQuery(sql: string): string {
-  const trimmed = stripSqlComments(sql).trim();
+  // JavaScript trim() also removes characters that SQLite retains in identifiers.
+  const trimmed = stripSqlComments(sql)
+    .replace(/^[ \t\n\r\f\uFEFF]+/, "")
+    .replace(/[ \t\n\r\f]+$/, "");
   if (!trimmed) throw new Error("sql required");
 
-  const withoutTrailingSemicolon = trimmed.replace(/;\s*$/, "").trim();
+  const withoutTrailingSemicolon = trimmed
+    .replace(/;[ \t\n\r\f\uFEFF]*$/, "")
+    .replace(/[ \t\n\r\f]+$/, "");
   // Mask literals for keyword/separator checks; token-based name checks below
   // retain quoted function and table identifiers.
   const code = maskSqlLiterals(withoutTrailingSemicolon);
@@ -758,6 +767,13 @@ export function upsertEventSpan(span: { id: string; run_id: string; name: string
     .run();
 }
 
+function runCaptureCompletion(attributes: string | null) {
+  if (!attributes || Buffer.byteLength(attributes) > 16384) return null;
+  try {
+    return captureCompletion(normalizeStoredSpan({ name: "", span_type: "AGENT_ROOT", input_payload: null, output_payload: null, attributes }).normalized.capture);
+  } catch { return null; }
+}
+
 export function getRuns(limit = 200) {
   // Deliberately not `select()`: runs_with_hints also derives payload_total_chars,
   // which sums LENGTH() over every payload of every run it returns. Measured on
@@ -780,11 +796,14 @@ export function getRuns(limit = 200) {
       finished: schema.runs_with_hints.finished,
       span_count: schema.runs_with_hints.span_count,
       live_event_count: schema.runs_with_hints.live_event_count,
+      // The outer view must be qualified inside the correlated root lookup.
+      capture_attributes: drizzleSql<string | null>`(SELECT CASE WHEN length(CAST(root.attributes AS BLOB)) <= 16384 THEN root.attributes END FROM spans root WHERE root.run_id = runs_with_hints.id AND root.parent_span_id IS NULL AND root.span_type = 'AGENT_ROOT' ORDER BY root.start_time_ms, root.id LIMIT 1)`,
     })
     .from(schema.runs_with_hints)
     .orderBy(desc(schema.runs_with_hints.last_updated_at))
     .limit(limit)
-    .all();
+    .all()
+    .map(({ capture_attributes, ...run }) => ({ ...run, capture_completion: runCaptureCompletion(capture_attributes) }));
   if (rows.length === 0) return rows.map((r) => ({ ...r, error_count: 0 }));
   // The list view needs a failed/complete signal so a run with errors reads
   // "Run failed" in the sidebar, matching the detail header. The runs_with_hints
@@ -821,8 +840,10 @@ function attachNormalized<T extends {
   input_payload: string | null;
   output_payload: string | null;
   attributes: string | null;
+  id?: string; run_id?: string; otlp_evidence?: string | null;
 }>(span: T): T & { normalized: NormalizedSpan } {
-  return { ...span, normalized: normalizeStoredSpan(span).normalized };
+  const match = normalizeStoredSpan(span);
+  return { ...span, normalized: match.normalized, ...(match.captureVisibility ? { captureVisibility: match.captureVisibility } : {}) };
 }
 
 export function getRunWithSpans(runId: string) {
@@ -844,6 +865,9 @@ export function getRunWithSpans(runId: string) {
     .where(eq(schema.spans.run_id, runId))
     .orderBy(asc(schema.spans.start_time_ms))
     .all() as Array<{
+    id: string;
+    parent_span_id: string | null;
+    start_time_ms: number;
     name: string;
     span_type: string | null;
     input_payload: string | null;
@@ -851,7 +875,9 @@ export function getRunWithSpans(runId: string) {
     attributes: string | null;
   }>;
   const spans = rows.map(attachNormalized);
-  return { run: run ?? null, spans };
+  const root = [...spans].filter(span => span.span_type === "AGENT_ROOT" && span.parent_span_id === null)
+    .sort((a, b) => a.start_time_ms - b.start_time_ms || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0];
+  return { run: run ? { ...run, capture_completion: runCaptureCompletion(root?.attributes ?? null) } : null, spans };
 }
 
 /** See getSpanMeta on why an unscoped span id is ambiguous and how it resolves. */
@@ -931,6 +957,7 @@ export function getSpanMeta(spanId: string, runId?: string): SpanMetaRow | null 
       model: schema.spans.model,
       provider: schema.spans.provider,
       attributes: schema.spans.attributes,
+      otlp_evidence: schema.spans.otlp_evidence,
       input_head: drizzleSql<string>`SUBSTR(COALESCE(${schema.spans.input_payload}, ''), 1, 81)`,
       input_chars: drizzleSql<number>`LENGTH(COALESCE(${schema.spans.input_payload}, ''))`,
       output_head: drizzleSql<string>`SUBSTR(COALESCE(${schema.spans.output_payload}, ''), 1, 81)`,
@@ -962,15 +989,17 @@ export function getMostRecentlyTouchedRun() {
     .get() ?? null;
 }
 
-export function upsertLiveEvent(event: { traceId: string; spanId?: string; type: string; content?: string; timestamp: number; metadata?: Record<string, any> }) {
-  getDrizzleDb().insert(schema.live_events).values({
+export function upsertLiveEvent(event: { traceId: string; spanId?: string; type: string; content?: string; timestamp: number; metadata?: Record<string, any> }): number {
+  const inserted = getDrizzleDb().insert(schema.live_events).values({
     trace_id: event.traceId,
     span_id: event.spanId ?? null,
     type: event.type,
     content: event.content ?? null,
     timestamp: event.timestamp,
     metadata: event.metadata ? JSON.stringify(event.metadata) : null,
-  }).run();
+  }).returning({ id: schema.live_events.id }).get();
+  if (!inserted) throw new Error("Live event insert did not return its identity");
+  return inserted.id;
 }
 
 export function getLiveEvents(traceId: string) {
@@ -1023,11 +1052,14 @@ export function getRunsByConvoId(convoId: string) {
 
 export function clearAll() {
   getDrizzleDb().transaction((tx) => {
+    // Keep source epochs and suppression tombstones while fencing every old callback.
+    tx.update(schema.coding_hook_owner).set({ generation: drizzleSql`lower(hex(randomblob(16)))`, updated_at: Date.now() }).where(eq(schema.coding_hook_owner.id, 1)).run();
     tx.delete(schema.review_queues).run();
     tx.delete(schema.evaluation_reviews).run();
     tx.delete(schema.evaluation_experiments).run();
     tx.delete(schema.evaluation_revisions).run();
     tx.delete(schema.evaluation_datasets).run();
+    tx.delete(schema.verification_snapshots).run();
     tx.delete(schema.verification_reports).run();
     tx.delete(schema.verification_flows).run();
     tx.delete(schema.live_events).run();

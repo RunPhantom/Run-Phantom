@@ -24,7 +24,7 @@ const page = `<!doctype html>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Run Phantom · Go OpenAI</title>
   <style>
-    :root{color-scheme:light;font-family:"Avenir Next","Segoe UI",ui-sans-serif,system-ui,sans-serif;--canvas:#F8F4EE;--canvas-bright:#FFFBF6;--surface:#FFFBF6;--surface-raised:#F2EADF;--ink:#302730;--muted:#6C616C;--border:#9C8870;--accent:#B83C24;--mark-accent:#C7462D;--accent-strong:#9F301D;--accent-ink:#FFFBF6;--link:#275EA8;--focus:#9F301D}
+    :root{color-scheme:light;font-family:"Avenir Next","Segoe UI",ui-sans-serif,system-ui,sans-serif;--canvas:#F8F4EE;--canvas-bright:#FFFBF6;--surface:#FFFBF6;--surface-raised:#F2EADF;--ink:#302730;--muted:#6C616C;--border:#9C8870;--accent:#B83C24;--mark-accent:#C7462D;--mark-shield:#EEE7DE;--mark-shield-edge:#D8D0C7;--accent-strong:#9F301D;--accent-ink:#FFFBF6;--link:#275EA8;--focus:#9F301D}
     *{box-sizing:border-box}
     body{margin:0;min-height:100svh;display:grid;place-items:center;padding:24px;background:var(--canvas);color:var(--ink)}
     main{width:min(760px,100%);padding:clamp(24px,4vw,40px);border:1px solid var(--border);border-radius:28px;background:var(--surface);box-shadow:0 24px 60px rgba(48,39,48,.14)}
@@ -56,11 +56,14 @@ const page = `<!doctype html>
   <main>
     <header>
       <div class="brand">
-        <svg class="brand-mark" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
-          <rect width="64" height="64" rx="16" fill="var(--surface-raised)"></rect>
-          <path d="M12 26V12H26M38 52H52V38" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"></path>
-          <path d="M12 42C20 42 20 22 30 22C40 22 39 42 52 42" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"></path>
-          <circle cx="30" cy="22" r="5" fill="var(--mark-accent)"></circle>
+        <svg class="brand-mark" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+          <path d="M15.05 1.95Q16 1.6 16.95 1.95L26.75 6.2Q27.85 6.65 27.85 7.85V19.2Q27.85 22.6 17.1 29.9Q16 30.6 14.9 29.9Q4.15 22.6 4.15 19.2V7.85Q4.15 6.65 5.25 6.2Z" fill="var(--mark-shield)" stroke="var(--mark-shield-edge)" stroke-width="0.5" stroke-linejoin="round"></path>
+          <path d="M10.42 19.66A6.9 6.9 0 0 1 20.96 10.81" stroke="var(--mark-accent)" stroke-width="2.6" stroke-linecap="round"></path>
+          <path d="M22.87 8.97L22.8 14.4L19.06 12.65Z" fill="var(--mark-accent)" stroke="var(--mark-accent)" stroke-width="0.6" stroke-linejoin="round"></path>
+          <rect x="12.1" y="20.75" width="2.4" height="2.4" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.8"></rect>
+          <rect x="15.62" y="21.36" width="2.2" height="2.2" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.62"></rect>
+          <rect x="18.96" y="20.25" width="2" height="2" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.46"></rect>
+          <rect x="21.3" y="17.72" width="1.8" height="1.8" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.34"></rect>
         </svg>
         <div>
           <p class="eyebrow">Run Phantom example</p>

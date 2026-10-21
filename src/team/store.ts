@@ -18,6 +18,9 @@ import { TeamEvidence, teamEvidenceAccess, type TeamEvidenceRead, type TeamEvide
 import { EvidenceStore } from "../evaluations/evidence-store";
 import { PromptRegistry } from "../prompts/registry";
 import type { PromptCapability, PromptFence } from "../prompts/protocol";
+import { createComparisonRuntime, type ComparisonRuntime, type ComparisonRuntimeOptions } from "../prompts/comparison-runtime";
+import type { ComparisonFence, ComparisonStore } from "../prompts/comparison-store";
+import { readTeamComparison, writeTeamComparison, teamComparisonOperation, type TeamComparisonRead, type TeamComparisonWrite, type TeamComparisonResponse } from "./comparisons";
 import { readTeamPrompt, writeTeamPrompt, teamPromptOperation, type TeamPromptRead, type TeamPromptWrite, type TeamPromptResponse } from "./prompts";
 import { EvidenceError, type EvidenceCapability, type EvidenceAttachment } from "../evaluations/evidence-protocol";
 import type { EvidenceOwner, EvidenceInventoryAnchor, EvidenceAnchorIdentity } from "../evaluations/evidence-inventory";
@@ -61,6 +64,8 @@ export class TeamStore {
   readonly #path: string;
   readonly #now: () => number;
   readonly #evidence: TeamEvidence;
+  #comparisons: ComparisonRuntime | null = null;
+  #comparisonStart: Promise<void> | undefined;
   #closed = false;
 
   constructor(path: string, options: { bootstrapHash?: string; now?: () => number } = {}) {
@@ -79,12 +84,26 @@ export class TeamStore {
   }
   close(): void {
     if (!this.#closed) {
+      if (this.#comparisons) throw new TeamError("conflict", "Comparison work must stop before the database closes");
       const state = this.#evidence.state;
       if (state.active || state.queued || state.acquiringMetadata) throw new TeamError("conflict", "Evidence work must stop before the database closes");
       this.#db.close(); this.#closed = true;
     }
   }
   shutdownEvidence(): Promise<void> { return this.#evidence.close(); }
+  /** Trusted server startup only. Native acquisition and recovery happen once before listening. */
+  startComparisons(options: ComparisonRuntimeOptions = {}): Promise<void> {
+    this.#comparisonStart ??= (async () => {
+      if (this.#closed) throw new TeamError("conflict", "The project store is closed");
+      try {
+        const runtime = await createComparisonRuntime(this.#db, options);
+        if (this.#closed) { await runtime.close(); return; }
+        this.#comparisons = runtime;
+      } catch { this.#comparisons = null; }
+    })();
+    return this.#comparisonStart;
+  }
+  async shutdownComparisons(): Promise<void> { await this.#comparisonStart; if (this.#comparisons) { await this.#comparisons.close(); this.#comparisons = null; } }
   #get<T>(sql: string, ...params: SQLQueryBindings[]): T | null { return this.#db.query(sql).get(...params) as T | null; }
   #all<T>(sql: string, ...params: SQLQueryBindings[]): T[] { return this.#db.query(sql).all(...params) as T[]; }
   #run(sql: string, ...params: SQLQueryBindings[]): void { this.#db.query(sql).run(...params); }
@@ -254,6 +273,22 @@ export class TeamStore {
   writePrompt(context: ProjectContext, input: TeamPromptWrite, generation: PromptFence): TeamPromptResponse {
     return writeTeamPrompt(this.#promptRegistry(context), input, generation);
   }
+  #comparisonStore(context: ProjectContext): ComparisonStore {
+    const current = this.#project(context);
+    if (!this.#comparisons) throw new TeamError("conflict", "Model comparisons are unavailable for this native owner");
+    return this.#comparisons.scope({ database: this.#db, scope: { kind: "project", id: current.projectId }, authorize: capability => {
+      this.#project(context, capability === "delete" ? "admin" : capability === "edit" ? "editor" : "viewer");
+    } });
+  }
+  comparisonGeneration(context: ProjectContext, capability: PromptCapability): ComparisonFence {
+    return teamComparisonOperation(() => this.#comparisonStore(context).capture(capability));
+  }
+  readComparison(context: ProjectContext, input: TeamComparisonRead, fence: ComparisonFence): TeamComparisonResponse {
+    return readTeamComparison(this.#comparisonStore(context), input, fence);
+  }
+  writeComparison(context: ProjectContext, input: TeamComparisonWrite, fence: ComparisonFence): TeamComparisonResponse {
+    return writeTeamComparison(this.#comparisonStore(context), this.#comparisons!.coordinator, input, fence);
+  }
   async invalidateEvidenceRun(context: ProjectContext, id: string): Promise<void> {
     this.#db.transaction(() => { this.#project(context, "admin"); this.#evidenceAnchor(context, { kind: "run", id }); }).immediate();
     await this.#evidence.invalidateRun(this.#evidenceOwner(context), id);
@@ -280,6 +315,8 @@ export class TeamStore {
       this.#run("INSERT INTO projects(id,name,created_at) VALUES(?,?,?)", id, name, now);
       this.#run("INSERT INTO prompt_scope_controls(scope_key,generation) SELECT scope_key,1 FROM evaluation_evidence_scopes WHERE scope_key=?", "project:" + id);
       if (!this.#get("SELECT scope_key FROM prompt_scope_controls WHERE scope_key=?", "project:" + id)) throw new TeamError("conflict", "Team prompt scope is unavailable");
+      this.#run("INSERT INTO comparison_scope_controls(scope_key,generation) SELECT p.scope_key,1 FROM prompt_scope_controls p JOIN evaluation_evidence_scopes e USING(scope_key) WHERE p.scope_key=? AND e.active=1", "project:" + id);
+      if (!this.#get("SELECT scope_key FROM comparison_scope_controls WHERE scope_key=?", "project:" + id)) throw new TeamError("conflict", "Team comparison scope is unavailable");
       this.#run("INSERT INTO memberships(project_id,account_id,role,joined_at) VALUES(?,?,'admin',?)", id, current.user.id, now);
       this.#audit({ ...current, projectId: id, role: "admin" }, "project.created", { type: "project", id });
       return { id, name, createdAt: now, role: "admin" };
