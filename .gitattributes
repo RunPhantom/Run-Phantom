@@ -2,4 +2,7 @@
 src/index.ts text eol=lf
 src/evaluations/evidence-worker.ts text eol=lf
 src/evaluations/evidence-worker-environment.ts text eol=lf
+
+# Canonical migration hashes require identical checkout bytes on every platform.
 drizzle/*.sql text eol=lf
+drizzle/meta/*.json text eol=lf

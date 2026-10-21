@@ -89,7 +89,9 @@ test("copied canonical runtime upgrades the actual legacy F07 schema and preserv
     legacyHistory = db.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all(); db.close(true);
   }, invoke => {
     const first = invoke(); expect(first.result.exitCode).toBe(0);
-    expect(first.body.history).toHaveLength(10); expect(first.body.findingRows).toEqual(retainedRows);
+    expect(first.body.history).toHaveLength(journal.entries.length);
+    expect(first.body.history).toEqual(journal.entries.map((entry: { tag: string; when: number }) => ({ hash: createHash("sha256").update(fs.readFileSync(path.join(migrations, entry.tag + ".sql"))).digest("hex"), created_at: entry.when })));
+    expect(first.body.findingRows).toEqual(retainedRows);
     for (const row of legacyHistory) expect(first.body.history).toContainEqual(row);
     expect((first.body.columns as { name: string }[]).some(column => column.name === "otlp_evidence")).toBe(true);
     const second = invoke(); expect(second.result.exitCode).toBe(0);

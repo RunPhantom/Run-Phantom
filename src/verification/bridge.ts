@@ -8,7 +8,13 @@ import { parseBrowserMessage, validateOrigin, parseFlowSteps } from "./validatio
 import { sanitizeWithReport } from "./serialization";
 import { isSensitiveKey } from "./redaction";
 import { RingBuffer } from "./ring-buffer";
-import { VERIFICATION_LIMITS as L, type AppCommand, type Coverage, type RuntimeEvent, type SessionSummary } from "./protocol";
+import { CAUSAL_CAPABILITY, PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, TREE_CAPABILITY, relativeTargetKey, VERIFICATION_LIMITS as L,
+  type AppCommand, type Coverage, type RelativeTarget, type RuntimeEvent, type SessionSummary, type VerificationCapability, type RetainedControlSource } from "./protocol";
+import { sanitizeControlSource } from "./build/source";
+import { baselineScopeForTarget, captureBaselineReading, captureCausalAttribution, type BaselineReading, type CausalAttribution } from "./baseline";
+import { parseSemanticTree, sanitizeSemanticTree, treeIncomplete } from "./snapshot-contract";
+import { PERFORMANCE_CAPABILITY } from "./protocol";
+import { parsePerformanceSnapshot, scrubPerformanceMetadata, type RetainedPerformanceEvidence, type PerformanceSnapshot } from "./performance";
 
 export class VerificationHttpError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -17,7 +23,7 @@ export class VerificationHttpError extends Error {
 export const parseAppOrigin = validateOrigin;
 
 const emptyCoverage = (): Coverage => ({ network: false, console: false, dom: false, state: false, signal: false, route: false });
-type CommandResult = { ok: boolean; cursor: number; result?: unknown; error?: string; truncated?: boolean; unavailable?: boolean };
+type CommandResult = { ok: boolean; cursor: number; result?: unknown; error?: string; truncated?: boolean; unavailable?: boolean; controlSource?: RetainedControlSource };
 interface Pending {
   id: string;
   command: AppCommand;
@@ -25,6 +31,23 @@ interface Pending {
   resolve(result: CommandResult): void;
   timer: ReturnType<typeof setTimeout>;
   boundary: boolean;
+  controlSource?: RetainedControlSource;
+  actionCursor?: number;
+  before?: Map<string, BaselineReading>;
+  after?: Map<string, BaselineReading>;
+}
+export interface CausalReadingPair {
+  readonly target: RelativeTarget;
+  readonly before: BaselineReading;
+  readonly after: BaselineReading;
+  readonly attribution?: CausalAttribution;
+}
+export interface CapturedCausalDispatch {
+  readonly actionId: string;
+  readonly actionCursor: number;
+  readonly startCursor: number;
+  readonly generation: number;
+  readonly pairs: ReadonlyMap<string, CausalReadingPair>;
 }
 export interface VerificationSession {
   id: string;
@@ -36,6 +59,7 @@ export interface VerificationSession {
   ws: WebSocket | null;
   generation: number;
   coverage: Coverage;
+  capabilities: VerificationCapability[];
   cursor: number;
   events: RingBuffer;
   dropped: number;
@@ -46,6 +70,10 @@ export interface VerificationSession {
   pending: Pending | null;
   requests: Map<string, { actionId?: string }>;
   currentActionId?: string;
+  lastCausalResult?: CapturedCausalDispatch;
+  lastControlSource?: RetainedControlSource;
+  lastPerformance?: RetainedPerformanceEvidence;
+  performanceWindow?: PerformanceSnapshot;
   lastCommandCursor: number;
   busy: boolean;
   secrets: string[];
@@ -74,7 +102,8 @@ export class VerificationBridge {
 
   summary(session: VerificationSession): SessionSummary {
     return { id: session.id, origin: session.origin, runId: session.runId, connected: session.ws?.readyState === WebSocket.OPEN,
-      createdAt: session.createdAt, coverage: { ...session.coverage }, cursor: session.cursor, dropped: session.dropped + session.events.bufferHealth().dropped };
+      createdAt: session.createdAt, coverage: { ...session.coverage }, cursor: session.cursor, dropped: session.dropped + session.events.bufferHealth().dropped,
+      ...(session.capabilities.length ? { capabilities: [...session.capabilities] } : {}) };
   }
 
   create(origin: unknown, runId: unknown): SessionSummary & { token: string } {
@@ -88,7 +117,7 @@ export class VerificationBridge {
     expires.unref();
     const session: VerificationSession = { id, origin: appOrigin, runId: runId as string | null ?? null,
       token: randomBytes(32).toString("hex"), createdAt: Date.now(), expires, ws: null, generation: 0,
-      coverage: emptyCoverage(), cursor: 0, events: new RingBuffer(), dropped: 0, lossCursor: 0, captureLost: false, generationCursor: 0,
+      coverage: emptyCoverage(), capabilities: [], cursor: 0, events: new RingBuffer(), dropped: 0, lossCursor: 0, captureLost: false, generationCursor: 0,
       lastActivity: Date.now(), pending: null, requests: new Map(), lastCommandCursor: 0, busy: false, secrets: [] };
     session.secrets.push(session.token);
     this.sessions.set(id, session);
@@ -117,13 +146,18 @@ export class VerificationBridge {
   private invalidate(session: VerificationSession, error: string): void {
     session.generation++;
     session.coverage = emptyCoverage();
+    session.capabilities = [];
     session.requests.clear();
     session.currentActionId = undefined;
+    session.lastCausalResult = undefined;
+    session.lastControlSource = undefined;
+    session.lastPerformance = undefined;
+    session.performanceWindow = undefined;
     if (session.pending) {
       const pending = session.pending;
       session.pending = null;
       clearTimeout(pending.timer);
-      pending.resolve({ ok: false, cursor: pending.cursor, error });
+      pending.resolve({ ok: false, cursor: pending.cursor, error, ...(pending.boundary && pending.controlSource ? { controlSource: pending.controlSource } : {}) });
     }
   }
 
@@ -169,6 +203,7 @@ export class VerificationBridge {
           session.captureLost = false;
           session.lastCommandCursor = session.generationCursor;
           session.coverage = { ...msg.coverage };
+          session.capabilities = msg.version !== PROTOCOL_VERSION ? [...msg.capabilities] : [];
           session.lastActivity = Date.now();
           generation = session.generation;
           authenticated = true;
@@ -181,16 +216,45 @@ export class VerificationBridge {
         else {
           const pending = session.pending;
           if (!pending || msg.id !== pending.id) throw new Error("unexpected command result");
+          let performanceResult: PerformanceSnapshot | undefined;
+          // Validate before resolving: a malformed causal reply must invalidate the owned turn,
+          // not leave its promise detached from the generation being closed.
+          if (pending.command.type === "causal-click" && msg.ok) this.captureDispatch(session, pending, !!msg.truncated);
+          // A malformed typed tree must invalidate the still-owned pending promise.
+          const treeResult = pending.command.type === "semantic-tree" && msg.ok ? this.sanitizeReadResult(session, pending.command, msg.result) : undefined;
+          if (treeResult && msg.truncated) {
+            const tree = parseSemanticTree(treeResult.value); treeIncomplete(tree, "transport-budget-limit");
+            treeResult.value = sanitizeSemanticTree(tree, text => ({ value: text, truncated: false })); treeResult.incomplete = true;
+          }
+          if (pending.command.type === "performance" && msg.ok) {
+            const snapshot = parsePerformanceSnapshot(msg.result);
+            if (msg.truncated || snapshot.phase !== pending.command.phase) throw new Error("Invalid performance phase or partial response");
+            const previous = session.performanceWindow;
+            if (snapshot.phase === "capture" && (!previous || previous.documentId !== snapshot.documentId || previous.windowId !== snapshot.windowId
+              || previous.clock.timeOriginMs !== snapshot.clock.timeOriginMs || previous.clock.sinceMs !== snapshot.clock.sinceMs
+              || previous.clock.installedAtMs !== snapshot.clock.installedAtMs || (previous.clock.capturedAtMs !== null && snapshot.clock.capturedAtMs !== null && previous.clock.capturedAtMs > snapshot.clock.capturedAtMs))) throw new Error("Unmatched native performance window");
+            performanceResult = scrubPerformanceMetadata(snapshot, value => this.sanitize(session, value).value);
+          }
           session.pending = null;
           clearTimeout(pending.timer);
-          const isAction = pending.command.type === "click" || pending.command.type === "fill";
-          if (isAction && !pending.boundary) {
+          const semanticAction = pending.command.type === "ref-click" || pending.command.type === "ref-fill";
+          const isAction = semanticAction || pending.command.type === "click" || pending.command.type === "fill" || pending.command.type === "causal-click";
+          if (isAction && !pending.boundary && (!semanticAction || msg.ok)) {
             pending.resolve({ ok: false, cursor: pending.cursor, error: "Application did not acknowledge the action boundary" });
             return;
           }
-          const cleaned = this.sanitizeReadResult(session, pending.command, msg.result);
+          const cleaned = pending.command.type === "performance" ? { value: performanceResult, incomplete: false }
+            : treeResult ?? (pending.command.type === "semantic-tree" ? { value: undefined, incomplete: false } : this.sanitizeReadResult(session, pending.command, msg.result));
           const result = cleaned.value;
           const truncated = msg.truncated || cleaned.incomplete;
+          if (pending.command.type === "performance") {
+            session.lastPerformance = undefined;
+            if (msg.ok) {
+              const snapshot = result as PerformanceSnapshot;
+              session.performanceWindow = snapshot;
+              session.lastPerformance = { generation: session.generation, cursor: pending.cursor, snapshot };
+            } else session.performanceWindow = undefined;
+          }
           const value = result && typeof result === "object" && !Array.isArray(result) ? result as Record<string, unknown> : {};
           if (pending.command.type === "state") {
             const readable = msg.ok && Object.hasOwn(value, "value");
@@ -202,8 +266,9 @@ export class VerificationBridge {
               truncated: truncated || !readable, actionId: session.currentActionId }, false);
           }
           pending.resolve({ ok: msg.ok, cursor: pending.cursor,
+            ...(pending.boundary && pending.controlSource ? { controlSource: pending.controlSource } : {}),
             // Action responses are acknowledgements; arbitrary page echoes must not persist fill input.
-            result: isAction ? { acknowledged: msg.ok } : result,
+            result: isAction ? { acknowledged: msg.ok, ...(semanticAction ? { source: "sdk-reported" } : {}) } : result,
             ...(msg.error ? { error: String(this.sanitize(session, msg.error).value).slice(0, L.MAX_REASON_LENGTH) } : {}),
             ...(!msg.ok ? { unavailable: true } : {}),
             ...(truncated ? { truncated: true } : {}) });
@@ -230,11 +295,40 @@ export class VerificationBridge {
   }
 
   private acceptEvent(session: VerificationSession, event: Omit<RuntimeEvent, "t">): void {
+    if (event.type === "action.source") {
+      const pending = session.pending;
+      if (!session.capabilities.includes(SOURCE_CAPABILITY) || !pending || pending.id !== event.actionId || pending.boundary || pending.controlSource
+        || !["click", "fill", "causal-click", "ref-click", "ref-fill"].includes(pending.command.type)) throw new Error("source outside its owned pre-dispatch command");
+      const observation = sanitizeControlSource(event.data.observation, value => String(this.sanitize(session, value).value));
+      pending.controlSource = Object.freeze({ actionId: pending.id, commandCursor: pending.cursor, cursor: this.tick(session), generation: session.generation,
+        capture: "before-dispatch", observation: Object.freeze(observation) });
+      return;
+    }
+    if (event.type === "action.reading") {
+      const pending = session.pending;
+      if (!session.capabilities.includes(CAUSAL_CAPABILITY) || !pending || pending.command.type !== "causal-click"
+        || pending.id !== event.actionId) throw new Error("reading outside its owned causal command");
+      const target = event.data.target as RelativeTarget;
+      const key = relativeTargetKey(target);
+      const expected = pending.command.targets.find((entry) => relativeTargetKey(entry) === key);
+      const phase = event.data.phase;
+      const readings = phase === "before" ? pending.before : pending.after;
+      if (!expected || !readings || readings.has(key) || phase === "before" && pending.boundary
+        || phase === "after" && (!pending.boundary || !pending.before?.has(key))) throw new Error("unmatched or unordered causal reading");
+      const captured = this.append(session, event);
+      if (!captured) throw new Error("causal reading exceeded capture capacity");
+      readings.set(key, captureBaselineReading({ scope: baselineScopeForTarget(session.id, session.generation, expected),
+        cursor: captured.t, fresh: true, complete: captured.data.available === true,
+        ...(phase === "after" ? { actionId: pending.id } : {}), truncated: !!captured.truncated }, captured.data.value));
+      return;
+    }
     if (event.type === "action.boundary") {
       const pending = session.pending;
-      if (!pending || pending.id !== event.actionId || !["click", "fill"].includes(pending.command.type) || pending.boundary) throw new Error("invalid action boundary");
+      if (!pending || pending.id !== event.actionId || !["click", "fill", "causal-click", "ref-click", "ref-fill"].includes(pending.command.type) || pending.boundary
+        || pending.command.type === "causal-click" && pending.before?.size !== pending.command.targets.length) throw new Error("invalid action boundary");
       pending.boundary = true;
       session.currentActionId = pending.id;
+      session.lastControlSource = pending.controlSource;
     }
     if (event.type === "network.start") {
       const requestId = event.data.requestId;
@@ -256,7 +350,33 @@ export class VerificationBridge {
     // They cannot opt out of a negative assertion by omitting or changing a page-supplied action id.
     if (!["network", "network.start", "action.boundary"].includes(event.type)) event = { ...event, actionId: session.currentActionId };
     if (event.type === "capture.loss") { session.lossCursor = this.tick(session); session.captureLost = true; }
-    this.append(session, event);
+    const captured = this.append(session, event);
+    if (event.type === "action.boundary" && session.pending) session.pending.actionCursor = captured?.t;
+  }
+
+  private captureDispatch(session: VerificationSession, pending: Pending, truncated: boolean): void {
+    if (pending.command.type !== "causal-click" || !pending.boundary || pending.actionCursor === undefined
+      || pending.before?.size !== pending.command.targets.length || pending.after?.size !== pending.command.targets.length) {
+      throw new Error("causal result did not contain its complete owned turn");
+    }
+    const result = this.append(session, { type: "action.result", actionId: pending.id,
+      data: { source: "sdk-reported", acknowledged: true }, ...(truncated ? { truncated: true } : {}) });
+    if (!result) throw new Error("causal result exceeded capture capacity");
+    const complete = this.observe(session, pending.cursor).complete && !truncated && !result.truncated;
+    const pairs = new Map<string, CausalReadingPair>();
+    for (const target of pending.command.targets) {
+      const key = relativeTargetKey(target);
+      const before = pending.before.get(key)!;
+      const after = pending.after.get(key)!;
+      if (!(before.cursor < pending.actionCursor && pending.actionCursor < after.cursor && after.cursor < result.t)) throw new Error("causal result cursor order mismatch");
+      const attribution = complete && before.availability === "complete" && after.availability === "complete"
+        ? captureCausalAttribution({ t: result.t, type: "action.result", actionId: pending.id,
+          data: { scope: before.scope, baselineCursor: before.cursor, baselineValue: before.value,
+            readingCursor: after.cursor, value: after.value } }) : undefined;
+      pairs.set(key, Object.freeze({ target: Object.freeze({ ...target }), before, after, ...(attribution ? { attribution } : {}) }));
+    }
+    session.lastCausalResult = Object.freeze({ actionId: pending.id, actionCursor: pending.actionCursor,
+      startCursor: pending.cursor, generation: session.generation, pairs });
   }
 
   private loss(session: VerificationSession, reason: string): void {
@@ -266,12 +386,13 @@ export class VerificationBridge {
     this.append(session, { type: "capture.loss", data: { reason } });
   }
 
-  append(session: VerificationSession, raw: Omit<RuntimeEvent, "t">, activity = true): void {
+  append(session: VerificationSession, raw: Omit<RuntimeEvent, "t">, activity = true): RuntimeEvent | null {
     const event: RuntimeEvent = { ...this.sanitizeEvent(session, raw), t: this.tick(session) };
     const size = Buffer.byteLength(JSON.stringify(event));
-    if (size > L.MAX_EVENT_BYTES) { session.lossCursor = event.t; session.captureLost = true; session.dropped++; return; }
+    if (size > L.MAX_EVENT_BYTES) { session.lossCursor = event.t; session.captureLost = true; session.dropped++; return null; }
     session.events.push(event, session.cursor, size);
     if (activity) session.lastActivity = Date.now();
+    return event;
   }
 
   observe(session: VerificationSession, since: number) {
@@ -283,22 +404,35 @@ export class VerificationBridge {
     const cursor = this.tick(session);
     if (!session.ws || session.ws.readyState !== WebSocket.OPEN) return Promise.resolve({ ok: false, cursor, error: "Application is disconnected" });
     if (session.pending) throw new VerificationHttpError(409, "An application command is already pending");
-    if (command.type === "fill" && command.value && !session.secrets.includes(command.value)) {
+    if (command.type === "performance" && !session.capabilities.includes(PERFORMANCE_CAPABILITY)) return Promise.resolve({ ok: false, cursor, unavailable: true, error: "Native performance evidence requires explicit SDK opt-in; no capture was made" });
+    if (["find", "semantic-snapshot", "ref-click", "ref-fill"].includes(command.type) && !session.capabilities.includes(SEMANTIC_CAPABILITY)) {
+      return Promise.resolve({ ok: false, cursor, unavailable: true,
+        error: "Application does not support semantic references; no action was executed" });
+    }
+    if (command.type === "semantic-tree" && !session.capabilities.includes(TREE_CAPABILITY)) return Promise.resolve({ ok: false, cursor, unavailable: true, error: "Application does not support semantic tree snapshots; no observation was captured" });
+    if (["click", "fill", "causal-click", "ref-click", "ref-fill"].includes(command.type)) { session.lastCausalResult = undefined; session.lastControlSource = undefined; }
+    if (command.type === "causal-click" && !session.capabilities.includes(CAUSAL_CAPABILITY)) {
+      return Promise.resolve({ ok: false, cursor, unavailable: true,
+        error: "Application does not support causal readings; no action was executed" });
+    }
+    if ((command.type === "fill" || command.type === "ref-fill") && command.value && !session.secrets.includes(command.value)) {
       if (session.secrets.length >= 65) throw new VerificationHttpError(409, "Fill redaction capacity reached; pair a new session");
       session.secrets.push(command.value);
     }
     const id = randomUUID();
-    if (command.type === "click" || command.type === "fill") session.lastCommandCursor = cursor;
+    if (["click", "fill", "causal-click", "ref-click", "ref-fill"].includes(command.type)) session.lastCommandCursor = cursor;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         if (session.pending?.id !== id) return;
+        const pending = session.pending;
         session.pending = null;
-        resolve({ ok: false, cursor, error: "Application command timed out" });
+        resolve({ ok: false, cursor, error: "Application command timed out", ...(pending.boundary && pending.controlSource ? { controlSource: pending.controlSource } : {}) });
         // A late action may still execute. Terminate its generation rather than allow an ambiguous next action.
         session.ws?.terminate();
       }, Math.min(timeoutMs, this.options.commandTimeoutMs ?? L.COMMAND_TIMEOUT_MS));
       timer.unref();
-      session.pending = { id, command, cursor, resolve, timer, boundary: false };
+      session.pending = { id, command, cursor, resolve, timer, boundary: false,
+        ...(command.type === "causal-click" ? { before: new Map(), after: new Map() } : {}) };
       try { session.ws!.send(JSON.stringify({ type: "command", id, command })); }
       catch { clearTimeout(timer); session.pending = null; resolve({ ok: false, cursor, error: "Application disconnected" }); }
     });
@@ -332,6 +466,7 @@ export class VerificationBridge {
       }
       // These are validated protocol discriminators, not page text. Losing an error level can invert an absence verdict.
       if (raw.type === "console" && key === "level" || raw.type === "observer.error" && key === "observer"
+        || raw.type === "action.reading" && ["phase", "available"].includes(key)
         || ["network", "network.start"].includes(raw.type) && (["initiator", "status", "ok", "durationMs"].includes(key)
           || key === "method" && ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"].includes(String(value).toUpperCase()))) {
         data[key] = value;
@@ -345,6 +480,10 @@ export class VerificationBridge {
   }
 
   private sanitizeReadResult(session: VerificationSession, command: AppCommand, raw: unknown): { value: unknown; incomplete: boolean } {
+    if (command.type === "semantic-tree") {
+      const tree = sanitizeSemanticTree(raw, text => { const safe = this.sanitize(session, text); return { value: safe.value, truncated: safe.incomplete }; });
+      return { value: tree, incomplete: tree.availability === "partial" };
+    }
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return this.sanitize(session, raw);
     let incomplete = false;
     const value: Record<string, unknown> = {};

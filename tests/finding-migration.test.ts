@@ -63,7 +63,7 @@ for (const prior of [null, 5, 7, 8, "legacy"] as const) test(`canonical finding 
   expect(db.query("PRAGMA table_info(spans)").all().some((row: unknown) => (row as { name: string }).name === "otlp_evidence")).toBe(true);
   if (before) expect(retained(db, prior === "legacy")).toEqual(before);
   const history = db.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all();
-  expect(history).toHaveLength(10);
+  expect(history).toHaveLength(journal.entries.length);
   for (const old of oldHistory) expect(history).toContainEqual(old);
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
@@ -120,7 +120,7 @@ test("an independent SQLite writer blocks legacy inspection with a bounded hones
   finally { owner.exec("ROLLBACK"); }
   expect(retained(owner, true)).toEqual(before);
   expect(owner.query("SELECT * FROM __drizzle_migrations ORDER BY created_at").all()).toEqual(history);
-  owner.close(true); expect(getDrizzleDb().$client.query("SELECT count(*) AS n FROM __drizzle_migrations").get()).toEqual({ n: 10 });
+  owner.close(true); expect(getDrizzleDb().$client.query("SELECT count(*) AS n FROM __drizzle_migrations").get()).toEqual({ n: journal.entries.length });
 }));
 
 test("two actual processes serialize legacy inspection and record exactly one OTLP backfill", async () => {
@@ -132,7 +132,7 @@ test("two actual processes serialize legacy inspection and record exactly one OT
     fs.writeFileSync(worker, `import { getDrizzleDb,closeDb } from ${JSON.stringify(path.resolve(import.meta.dir, "../src/db.ts"))}; const db=getDrizzleDb().$client;console.log(JSON.stringify(db.query("SELECT count(*) AS n FROM __drizzle_migrations").get()));closeDb();`);
     const children = [0, 1].map(() => Bun.spawn([process.execPath, worker], { stdout: "pipe", stderr: "pipe", env: { ...process.env, RUNPHANTOM_DB_PATH: filename, ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "" } }));
     const results = await Promise.all(children.map(async child => ({ code: await child.exited, output: await new Response(child.stdout).text(), error: await new Response(child.stderr).text() })));
-    for (const result of results) { expect(result.error).toBe(""); expect(result.code).toBe(0); expect(JSON.parse(result.output)).toEqual({ n: 10 }); }
+    for (const result of results) { expect(result.error).toBe(""); expect(result.code).toBe(0); expect(JSON.parse(result.output)).toEqual({ n: journal.entries.length }); }
     const reopened = new Database(filename);
     expect(retained(reopened, true)).toEqual(before);
     expect(reopened.query("SELECT count(*) AS n FROM __drizzle_migrations WHERE created_at=1791757794360").get()).toEqual({ n: 1 });
