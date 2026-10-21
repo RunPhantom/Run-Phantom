@@ -11,6 +11,13 @@ import migration0005Path from "../../drizzle/0005_sweet_smasher.sql" with { type
 import migration0006Path from "../../drizzle/0006_lying_proemial_gods.sql" with { type: "file" };
 import migration0007Path from "../../drizzle/0007_evidence_storage.sql" with { type: "file" };
 import migration0008Path from "../../drizzle/0008_otlp_evidence.sql" with { type: "file" };
+import migration0009Path from "../../drizzle/0009_finding_comparisons.sql" with { type: "file" };
+import migration0010Path from "../../drizzle/0010_coding_hooks.sql" with { type: "file" };
+import migration0011Path from "../../drizzle/0011_review_queues.sql" with { type: "file" };
+import migration0012Path from "../../drizzle/0012_prompt_registry.sql" with { type: "file" };
+import migration0013Path from "../../drizzle/0013_completion_reports.sql" with { type: "file" };
+import migration0014Path from "../../drizzle/0014_prompt_comparisons.sql" with { type: "file" };
+import migration0015Path from "../../drizzle/0015_semantic_snapshots.sql" with { type: "file" };
 
 export const embeddedMigrationJournal = {
   "version": "7",
@@ -78,6 +85,55 @@ export const embeddedMigrationJournal = {
       "when": 1791757794360,
       "tag": "0008_otlp_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1791766000000,
+      "tag": "0009_finding_comparisons",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1791766000001,
+      "tag": "0010_coding_hooks",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1791766000002,
+      "tag": "0011_review_queues",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1791766000003,
+      "tag": "0012_prompt_registry",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1791766000004,
+      "tag": "0013_completion_reports",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1791766000005,
+      "tag": "0014_prompt_comparisons",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1791773224836,
+      "tag": "0015_semantic_snapshots",
+      "breakpoints": true
     }
   ]
 } as const;
@@ -118,5 +174,33 @@ export const embeddedMigrationFiles = [
   {
     relativePath: "0008_otlp_evidence.sql",
     sourcePath: migration0008Path,
+  },
+  {
+    relativePath: "0009_finding_comparisons.sql",
+    sourcePath: migration0009Path,
+  },
+  {
+    relativePath: "0010_coding_hooks.sql",
+    sourcePath: migration0010Path,
+  },
+  {
+    relativePath: "0011_review_queues.sql",
+    sourcePath: migration0011Path,
+  },
+  {
+    relativePath: "0012_prompt_registry.sql",
+    sourcePath: migration0012Path,
+  },
+  {
+    relativePath: "0013_completion_reports.sql",
+    sourcePath: migration0013Path,
+  },
+  {
+    relativePath: "0014_prompt_comparisons.sql",
+    sourcePath: migration0014Path,
+  },
+  {
+    relativePath: "0015_semantic_snapshots.sql",
+    sourcePath: migration0015Path,
   },
 ] as const;

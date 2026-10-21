@@ -4,7 +4,7 @@ import { isFrame, isInput, isSelect, isTextArea } from "./realm.js";
 
 export const SEMANTIC_LIMITS = { nodes: 10_000, depth: 64, summaries: 100, text: 1024, name: 240, bytes: 32 * 1024 } as const;
 interface TextReading { value: string; truncated: boolean }
-interface CollectedElement { element: Element; depth: number; text: TextReading; visible: boolean }
+interface CollectedElement { element: Element; depth: number; text: TextReading; visible: boolean; parent?: CollectedElement; region: number; boundaryHost: boolean }
 export interface SemanticElement {
   element: Element;
   depth: number;
@@ -15,8 +15,10 @@ export interface SemanticElement {
   nameTruncated: boolean;
   disabled: boolean;
   readonly: boolean;
+  /** Present only for explicit tree capture; never issued as a live reference. */
+  tree?: { region: number; boundaryHost: boolean };
 }
-export interface SemanticCollection { elements: SemanticElement[]; coverage: SemanticCoverage }
+export interface SemanticCollection { elements: SemanticElement[]; coverage: SemanticCoverage; tree?: { ancestry: Map<Element, { parent: Element | null; region: number }>; regions: Array<{ kind: "document" | "open-shadow" | "same-origin-frame"; parentRegion: number | null; host: Element | null }> } }
 
 const contentRoles = new Set(["button", "link", "heading", "checkbox", "radio", "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "option", "treeitem", "switch", "tooltip", "cell", "gridcell", "rowheader", "columnheader", "listitem"]);
 const skipTags = new Set(["script", "style", "template", "noscript"]);
@@ -92,14 +94,15 @@ function unread(coverage: SemanticCoverage, element: Element | null, reason: str
   else coverage.unreadOverflow = true;
 }
 
-interface Frame { node: Node; depth: number; inherited: boolean; entered: boolean; next: ChildNode | null; extras: Node[]; extra: number; parent?: CollectedElement; own?: CollectedElement }
+interface Frame { node: Node; depth: number; region: number; inherited: boolean; entered: boolean; next: ChildNode | null; extras: Array<{ node: Node; region: number }>; extra: number; parent?: CollectedElement; own?: CollectedElement }
 
 /** Bounded native observation. Names below deliberately approximate a subset of ARIA. */
-export function collectSemanticElements(document: Document): SemanticCollection {
+export function collectSemanticElements(document: Document, treeCapture = false): SemanticCollection {
   const coverage: SemanticCoverage = { scope: "visible-observable-dom", complete: true, visitedNodes: 0, openShadowRoots: 0, sameOriginFrames: 0, inaccessibleFrames: 0, closedShadowRoots: "unobservable", hiddenSubtrees: 0, privateSubtrees: 0, truncated: false, reasons: [], unread: [] };
   const collected: CollectedElement[] = [];
   const readings = new Map<Element, TextReading>();
-  const stack: Frame[] = [{ node: document, depth: 0, inherited: true, entered: false, next: null, extras: [], extra: 0 }];
+  const regions: NonNullable<SemanticCollection["tree"]>["regions"] = [{ kind: "document", parentRegion: null, host: null }];
+  const stack: Frame[] = [{ node: document, depth: 0, region: 0, inherited: true, entered: false, next: null, extras: [], extra: 0 }];
   while (stack.length) {
     const frame = stack[stack.length - 1];
     if (!frame.entered) {
@@ -117,14 +120,20 @@ export function collectSemanticElements(document: Document): SemanticCollection 
         let visible = frame.inherited;
         try { visible &&= styleVisible(element); } catch { unread(coverage, element, "visibility-unavailable"); visible = false; }
         if (!visible) { coverage.hiddenSubtrees++; stack.pop(); continue; }
-        const own = { element, depth: frame.depth, visible: true, text: { value: "", truncated: false } };
+        const own: CollectedElement = { element, depth: frame.depth, visible: true, text: { value: "", truncated: false }, parent: frame.parent, region: frame.region, boundaryHost: !!element.shadowRoot || isFrame(element) };
         frame.own = own; collected.push(own); readings.set(element, own.text);
         if (element.localName === "img") { const alt = attribute(element, "alt"); appendText(own.text, alt.value, alt.truncated); }
-        if (element.shadowRoot) { frame.extras.push(element.shadowRoot); coverage.openShadowRoots++; }
+        const extra = (node: Node, kind: "open-shadow" | "same-origin-frame"): void => {
+          if (treeCapture && regions.length >= 32) { unread(coverage, element, "tree-region-limit"); return; }
+          const region = treeCapture ? regions.length : frame.region;
+          if (treeCapture) regions.push({ kind, parentRegion: frame.region, host: element });
+          frame.extras.push({ node, region });
+        };
+        if (element.shadowRoot) { extra(element.shadowRoot, "open-shadow"); coverage.openShadowRoots++; }
         if (isFrame(element)) {
           let child: Document | null = null;
           try { child = element.contentDocument; } catch { /* Inaccessible roots are declared below. */ }
-          if (child?.documentElement && child.defaultView?.frameElement === element) { frame.extras.push(child); coverage.sameOriginFrames++; }
+          if (child?.documentElement && child.defaultView?.frameElement === element) { extra(child, "same-origin-frame"); coverage.sameOriginFrames++; }
           else { coverage.inaccessibleFrames++; unread(coverage, element, "inaccessible-frame"); }
         }
         // Form values and editable document models are private; only their declared labels are read.
@@ -135,11 +144,11 @@ export function collectSemanticElements(document: Document): SemanticCollection 
     const next = frame.next;
     if (next) {
       frame.next = next.nextSibling;
-      stack.push({ node: next, depth: frame.depth + 1, inherited: frame.inherited, entered: false, next: null, extras: [], extra: 0, parent: frame.own ?? frame.parent });
+      stack.push({ node: next, depth: frame.depth + 1, region: frame.region, inherited: frame.inherited, entered: false, next: null, extras: [], extra: 0, parent: frame.own ?? frame.parent });
       continue;
     }
     const extra = frame.extras[frame.extra++];
-    if (extra) { stack.push({ node: extra, depth: frame.depth + 1, inherited: frame.inherited, entered: false, next: null, extras: [], extra: 0, parent: frame.own ?? frame.parent }); continue; }
+    if (extra) { stack.push({ node: extra.node, depth: frame.depth + 1, region: extra.region, inherited: frame.inherited, entered: false, next: null, extras: [], extra: 0, ...(treeCapture ? {} : { parent: frame.own ?? frame.parent }) }); continue; }
     if (frame.own && frame.parent) appendText(frame.parent.text, frame.own.text.value, frame.own.text.truncated);
     stack.pop();
   }
@@ -181,11 +190,12 @@ export function collectSemanticElements(document: Document): SemanticCollection 
     const nameTruncated = name.length > SEMANTIC_LIMITS.text || aria.truncated || linked.truncated || labelText.truncated || title.truncated || placeholder.truncated || alt.truncated
       || contentRoles.has(role) && entry.text.truncated || testIdAttribute.truncated;
     if (nameTruncated) unread(coverage, element, "name-limit");
-    if (!role && !name && !testId) return [];
+    if (!role && !name && !testId && !(treeCapture && entry.boundaryHost)) return [];
     return [{ element, depth: entry.depth, role, name: name.slice(0, SEMANTIC_LIMITS.text), label: label.slice(0, SEMANTIC_LIMITS.text), testId: testId.slice(0, SEMANTIC_LIMITS.text), nameTruncated,
-      disabled: element.matches(":disabled") || element.getAttribute("aria-disabled") === "true", readonly: (isInput(element) || isTextArea(element)) && element.readOnly }];
+      disabled: element.matches(":disabled") || element.getAttribute("aria-disabled") === "true", readonly: (isInput(element) || isTextArea(element)) && element.readOnly,
+      ...(treeCapture ? { tree: { region: entry.region, boundaryHost: entry.boundaryHost } } : {}) }];
   });
-  return { elements, coverage };
+  return { elements, coverage, ...(treeCapture ? { tree: { ancestry: new Map(collected.map(entry => [entry.element, { parent: entry.parent?.element ?? null, region: entry.region }])), regions } } : {}) };
 }
 
 export function matchesSemanticQuery(element: SemanticElement, query: SemanticQuery): boolean {

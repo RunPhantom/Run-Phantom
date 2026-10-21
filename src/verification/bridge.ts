@@ -8,9 +8,13 @@ import { parseBrowserMessage, validateOrigin, parseFlowSteps } from "./validatio
 import { sanitizeWithReport } from "./serialization";
 import { isSensitiveKey } from "./redaction";
 import { RingBuffer } from "./ring-buffer";
-import { CAUSAL_CAPABILITY, BUSINESS_CAPABILITY, PROTOCOL_VERSION, SEMANTIC_CAPABILITY, relativeTargetKey, VERIFICATION_LIMITS as L,
-  type AppCommand, type Coverage, type RelativeTarget, type RuntimeEvent, type SessionSummary, type VerificationCapability } from "./protocol";
+import { CAUSAL_CAPABILITY, BUSINESS_CAPABILITY, PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, TREE_CAPABILITY, relativeTargetKey, VERIFICATION_LIMITS as L,
+  type AppCommand, type Coverage, type RelativeTarget, type RuntimeEvent, type SessionSummary, type VerificationCapability, type RetainedControlSource } from "./protocol";
+import { sanitizeControlSource } from "./build/source";
 import { baselineScopeForTarget, captureBaselineReading, captureCausalAttribution, type BaselineReading, type CausalAttribution } from "./baseline";
+import { parseSemanticTree, sanitizeSemanticTree, treeIncomplete } from "./snapshot-contract";
+import { PERFORMANCE_CAPABILITY } from "./protocol";
+import { parsePerformanceSnapshot, scrubPerformanceMetadata, type RetainedPerformanceEvidence, type PerformanceSnapshot } from "./performance";
 
 export class VerificationHttpError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -19,7 +23,7 @@ export class VerificationHttpError extends Error {
 export const parseAppOrigin = validateOrigin;
 
 const emptyCoverage = (): Coverage => ({ network: false, console: false, dom: false, state: false, signal: false, route: false });
-type CommandResult = { ok: boolean; cursor: number; result?: unknown; error?: string; truncated?: boolean; unavailable?: boolean };
+type CommandResult = { ok: boolean; cursor: number; result?: unknown; error?: string; truncated?: boolean; unavailable?: boolean; controlSource?: RetainedControlSource };
 interface Pending {
   id: string;
   command: AppCommand;
@@ -27,6 +31,7 @@ interface Pending {
   resolve(result: CommandResult): void;
   timer: ReturnType<typeof setTimeout>;
   boundary: boolean;
+  controlSource?: RetainedControlSource;
   actionCursor?: number;
   before?: Map<string, BaselineReading>;
   after?: Map<string, BaselineReading>;
@@ -68,6 +73,9 @@ export interface VerificationSession {
   responseRequestIds: Set<string>;
   currentActionId?: string;
   lastCausalResult?: CapturedCausalDispatch;
+  lastControlSource?: RetainedControlSource;
+  lastPerformance?: RetainedPerformanceEvidence;
+  performanceWindow?: PerformanceSnapshot;
   lastCommandCursor: number;
   busy: boolean;
   secrets: string[];
@@ -146,11 +154,14 @@ export class VerificationBridge {
     session.responseRequestIds.clear();
     session.currentActionId = undefined;
     session.lastCausalResult = undefined;
+    session.lastControlSource = undefined;
+    session.lastPerformance = undefined;
+    session.performanceWindow = undefined;
     if (session.pending) {
       const pending = session.pending;
       session.pending = null;
       clearTimeout(pending.timer);
-      pending.resolve({ ok: false, cursor: pending.cursor, error });
+      pending.resolve({ ok: false, cursor: pending.cursor, error, ...(pending.boundary && pending.controlSource ? { controlSource: pending.controlSource } : {}) });
     }
   }
 
@@ -209,9 +220,25 @@ export class VerificationBridge {
         else {
           const pending = session.pending;
           if (!pending || msg.id !== pending.id) throw new Error("unexpected command result");
+          let performanceResult: PerformanceSnapshot | undefined;
           // Validate before resolving: a malformed causal reply must invalidate the owned turn,
           // not leave its promise detached from the generation being closed.
           if (pending.command.type === "causal-click" && msg.ok) this.captureDispatch(session, pending, !!msg.truncated);
+          // A malformed typed tree must invalidate the still-owned pending promise.
+          const treeResult = pending.command.type === "semantic-tree" && msg.ok ? this.sanitizeReadResult(session, pending.command, msg.result) : undefined;
+          if (treeResult && msg.truncated) {
+            const tree = parseSemanticTree(treeResult.value); treeIncomplete(tree, "transport-budget-limit");
+            treeResult.value = sanitizeSemanticTree(tree, text => ({ value: text, truncated: false })); treeResult.incomplete = true;
+          }
+          if (pending.command.type === "performance" && msg.ok) {
+            const snapshot = parsePerformanceSnapshot(msg.result);
+            if (msg.truncated || snapshot.phase !== pending.command.phase) throw new Error("Invalid performance phase or partial response");
+            const previous = session.performanceWindow;
+            if (snapshot.phase === "capture" && (!previous || previous.documentId !== snapshot.documentId || previous.windowId !== snapshot.windowId
+              || previous.clock.timeOriginMs !== snapshot.clock.timeOriginMs || previous.clock.sinceMs !== snapshot.clock.sinceMs
+              || previous.clock.installedAtMs !== snapshot.clock.installedAtMs || (previous.clock.capturedAtMs !== null && snapshot.clock.capturedAtMs !== null && previous.clock.capturedAtMs > snapshot.clock.capturedAtMs))) throw new Error("Unmatched native performance window");
+            performanceResult = scrubPerformanceMetadata(snapshot, value => this.sanitize(session, value).value);
+          }
           session.pending = null;
           clearTimeout(pending.timer);
           const semanticAction = pending.command.type === "ref-click" || pending.command.type === "ref-fill";
@@ -220,9 +247,18 @@ export class VerificationBridge {
             pending.resolve({ ok: false, cursor: pending.cursor, error: "Application did not acknowledge the action boundary" });
             return;
           }
-          const cleaned = this.sanitizeReadResult(session, pending.command, msg.result);
+          const cleaned = pending.command.type === "performance" ? { value: performanceResult, incomplete: false }
+            : treeResult ?? (pending.command.type === "semantic-tree" ? { value: undefined, incomplete: false } : this.sanitizeReadResult(session, pending.command, msg.result));
           const result = cleaned.value;
           const truncated = msg.truncated || cleaned.incomplete;
+          if (pending.command.type === "performance") {
+            session.lastPerformance = undefined;
+            if (msg.ok) {
+              const snapshot = result as PerformanceSnapshot;
+              session.performanceWindow = snapshot;
+              session.lastPerformance = { generation: session.generation, cursor: pending.cursor, snapshot };
+            } else session.performanceWindow = undefined;
+          }
           const value = result && typeof result === "object" && !Array.isArray(result) ? result as Record<string, unknown> : {};
           if (pending.command.type === "state") {
             const readable = msg.ok && Object.hasOwn(value, "value");
@@ -234,6 +270,7 @@ export class VerificationBridge {
               truncated: truncated || !readable, actionId: session.currentActionId }, false);
           }
           pending.resolve({ ok: msg.ok, cursor: pending.cursor,
+            ...(pending.boundary && pending.controlSource ? { controlSource: pending.controlSource } : {}),
             // Action responses are acknowledgements; arbitrary page echoes must not persist fill input.
             result: isAction ? { acknowledged: msg.ok, ...(semanticAction ? { source: "sdk-reported" } : {}) } : result,
             ...(msg.error ? { error: String(this.sanitize(session, msg.error).value).slice(0, L.MAX_REASON_LENGTH) } : {}),
@@ -262,6 +299,15 @@ export class VerificationBridge {
   }
 
   private acceptEvent(session: VerificationSession, event: Omit<RuntimeEvent, "t">): void {
+    if (event.type === "action.source") {
+      const pending = session.pending;
+      if (!session.capabilities.includes(SOURCE_CAPABILITY) || !pending || pending.id !== event.actionId || pending.boundary || pending.controlSource
+        || !["click", "fill", "causal-click", "ref-click", "ref-fill"].includes(pending.command.type)) throw new Error("source outside its owned pre-dispatch command");
+      const observation = sanitizeControlSource(event.data.observation, value => String(this.sanitize(session, value).value));
+      pending.controlSource = Object.freeze({ actionId: pending.id, commandCursor: pending.cursor, cursor: this.tick(session), generation: session.generation,
+        capture: "before-dispatch", observation: Object.freeze(observation) });
+      return;
+    }
     if (event.type === "action.reading") {
       const pending = session.pending;
       if (!session.capabilities.includes(CAUSAL_CAPABILITY) || !pending || pending.command.type !== "causal-click"
@@ -286,6 +332,7 @@ export class VerificationBridge {
         || pending.command.type === "causal-click" && pending.before?.size !== pending.command.targets.length) throw new Error("invalid action boundary");
       pending.boundary = true;
       session.currentActionId = pending.id;
+      session.lastControlSource = pending.controlSource;
     }
     if (event.type === "network.start") {
       const requestId = event.data.requestId;
@@ -386,11 +433,13 @@ export class VerificationBridge {
     const cursor = this.tick(session);
     if (!session.ws || session.ws.readyState !== WebSocket.OPEN) return Promise.resolve({ ok: false, cursor, error: "Application is disconnected" });
     if (session.pending) throw new VerificationHttpError(409, "An application command is already pending");
+    if (command.type === "performance" && !session.capabilities.includes(PERFORMANCE_CAPABILITY)) return Promise.resolve({ ok: false, cursor, unavailable: true, error: "Native performance evidence requires explicit SDK opt-in; no capture was made" });
     if (["find", "semantic-snapshot", "ref-click", "ref-fill"].includes(command.type) && !session.capabilities.includes(SEMANTIC_CAPABILITY)) {
       return Promise.resolve({ ok: false, cursor, unavailable: true,
         error: "Application does not support semantic references; no action was executed" });
     }
-    if (["click", "fill", "causal-click", "ref-click", "ref-fill"].includes(command.type)) session.lastCausalResult = undefined;
+    if (command.type === "semantic-tree" && !session.capabilities.includes(TREE_CAPABILITY)) return Promise.resolve({ ok: false, cursor, unavailable: true, error: "Application does not support semantic tree snapshots; no observation was captured" });
+    if (["click", "fill", "causal-click", "ref-click", "ref-fill"].includes(command.type)) { session.lastCausalResult = undefined; session.lastControlSource = undefined; }
     if (command.type === "causal-click" && !session.capabilities.includes(CAUSAL_CAPABILITY)) {
       return Promise.resolve({ ok: false, cursor, unavailable: true,
         error: "Application does not support causal readings; no action was executed" });
@@ -404,8 +453,9 @@ export class VerificationBridge {
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         if (session.pending?.id !== id) return;
+        const pending = session.pending;
         session.pending = null;
-        resolve({ ok: false, cursor, error: "Application command timed out" });
+        resolve({ ok: false, cursor, error: "Application command timed out", ...(pending.boundary && pending.controlSource ? { controlSource: pending.controlSource } : {}) });
         // A late action may still execute. Terminate its generation rather than allow an ambiguous next action.
         session.ws?.terminate();
       }, Math.min(timeoutMs, this.options.commandTimeoutMs ?? L.COMMAND_TIMEOUT_MS));
@@ -462,6 +512,10 @@ export class VerificationBridge {
   }
 
   private sanitizeReadResult(session: VerificationSession, command: AppCommand, raw: unknown): { value: unknown; incomplete: boolean } {
+    if (command.type === "semantic-tree") {
+      const tree = sanitizeSemanticTree(raw, text => { const safe = this.sanitize(session, text); return { value: safe.value, truncated: safe.incomplete }; });
+      return { value: tree, incomplete: tree.availability === "partial" };
+    }
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return this.sanitize(session, raw);
     let incomplete = false;
     const value: Record<string, unknown> = {};

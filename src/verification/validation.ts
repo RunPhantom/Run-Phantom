@@ -1,9 +1,13 @@
 import {
-  PROTOCOL_VERSION, BUSINESS_PROTOCOL_VERSION, BUSINESS_CAPABILITY, BUSINESS_LIMITS, CAUSAL_PROTOCOL_VERSION, CAUSAL_CAPABILITY, SEMANTIC_PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SEMANTIC_REF_PATTERN, normalizeSemanticText, relativeTargetKey, relativeTargets, VERIFICATION_LIMITS as L,
+  PROTOCOL_VERSION, BUSINESS_CAPABILITY, BUSINESS_LIMITS, CAUSAL_PROTOCOL_VERSION, CAUSAL_CAPABILITY, SEMANTIC_PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_PROTOCOL_VERSION, SOURCE_CAPABILITY, TREE_PROTOCOL_VERSION, TREE_CAPABILITY, SEMANTIC_REF_PATTERN, normalizeSemanticText, relativeTargetKey, relativeTargets, VERIFICATION_LIMITS as L,
   type AppCommand, type BrowserMessage, type Coverage, type FlowStep, type Predicate, type RelativeTarget, type SemanticQuery, type VerificationCapability,
 } from "./protocol";
+import { parseFlowAnchor } from "./flow-anchors";
 import { isSensitiveKey } from "./redaction";
 import { sanitizeWithReport } from "./serialization";
+import { parseControlSourceObservation } from "./build/source";
+import { parsePerformancePredicate } from "./performance";
+import { PERFORMANCE_PROTOCOL_VERSION, PERFORMANCE_CAPABILITY } from "./protocol";
 
 export class VerificationInputError extends Error {
   readonly status = 400;
@@ -89,6 +93,10 @@ export function validateOrigin(value: unknown): string {
 export function parseCommand(value: unknown): AppCommand {
   const obj = record(value, "command");
   switch (obj.type) {
+    case "performance":
+      keys(obj, ["type", "phase"], "performance command");
+      if (obj.phase !== "begin" && obj.phase !== "capture") invalid("performance phase must be begin or capture");
+      return { type: "performance", phase: obj.phase };
     case "snapshot": {
       keys(obj, ["type", "selector"], "snapshot command");
       const selector = optionalString(obj, "selector", L.MAX_SELECTOR_LENGTH);
@@ -109,6 +117,9 @@ export function parseCommand(value: unknown): AppCommand {
     case "semantic-snapshot":
       keys(obj, ["type"], "semantic snapshot command");
       return { type: "semantic-snapshot" };
+    case "semantic-tree":
+      keys(obj, ["type"], "semantic tree command");
+      return { type: "semantic-tree" };
     case "ref-click": case "ref-fill": {
       keys(obj, obj.type === "ref-fill" ? ["type", "ref", "value"] : ["type", "ref"], "live reference command");
       const ref = text(obj.ref, "live reference", 38);
@@ -185,6 +196,8 @@ export function parsePredicate(value: unknown): Predicate {
     if (depth > L.MAX_PREDICATE_DEPTH || ++nodes > L.MAX_PREDICATE_NODES) invalid("predicate exceeds its complexity limit");
     const obj = record(raw, "predicate");
     switch (obj.kind) {
+      case "performance":
+        try { return parsePerformancePredicate(obj); } catch { return invalid("unsupported or invalid numeric performance lab predicate"); }
       case "relative": {
         keys(obj, ["kind", "target", "relation", "equals"], "relative predicate");
         const target = parseRelativeTarget(obj.target);
@@ -288,11 +301,11 @@ export function parseFlowSteps(value: unknown): FlowStep[] {
   size(value, L.MAX_FRAME_BYTES, "flow steps");
   return value.map((raw) => {
     const obj = record(raw, "flow step");
-    keys(obj, ["command", "predicate"], "flow step");
+    keys(obj, ["command", "predicate", "anchor"], "flow step");
     const predicate = parsePredicate(obj.predicate);
     assertSafePredicate(predicate);
     const command = Object.hasOwn(obj, "command") ? parseCommand(obj.command) : undefined;
-    if (command && ["find", "semantic-snapshot", "ref-click", "ref-fill"].includes(command.type)) invalid("semantic discovery and live references cannot be saved in flows; refresh them in the current session");
+    if (command && ["find", "semantic-snapshot", "semantic-tree", "ref-click", "ref-fill"].includes(command.type)) invalid("semantic discovery and live references cannot be saved in flows; refresh them in the current session");
     const targets = relativeTargets(predicate);
     if (targets.length && command?.type !== "click" && command?.type !== "causal-click") invalid("saved relative checks require an explicit click action");
     if (targets.length && command?.type === "causal-click"
@@ -302,7 +315,11 @@ export function parseFlowSteps(value: unknown): FlowStep[] {
     if (command?.type === "fill") invalid("saved flows cannot contain fill commands; use live fill so entered values are never persisted");
     if (command?.type === "state" && isSensitiveKey(command.store)) invalid("saved flows cannot read credential-bearing stores");
     if (command && "selector" in command && command.selector !== undefined) assertSafeSelector(command.selector);
-    const step = { ...(command === undefined ? {} : { command }), predicate };
+    const anchor = Object.hasOwn(obj, "anchor") ? parseFlowAnchor(obj.anchor) : undefined;
+    if (anchor && command?.type !== "click" && command?.type !== "causal-click") invalid("durable anchors require a saved click action");
+    if (anchor?.kind === "css" && command && "selector" in command && anchor.selector !== command.selector) invalid("CSS anchor must preserve the exact action selector");
+    if (anchor?.kind === "semantic" && targets.length) invalid("semantic anchors do not support CSS-addressed relative baselines; keep the CSS action");
+    const step = { ...(command === undefined ? {} : { command }), predicate, ...(anchor ? { anchor } : {}) };
     const sanitized = sanitizeWithReport(step);
     if (sanitized.redacted || sanitized.truncation) invalid("saved flow contains a secret or exceeds the safe persistence limits");
     return step;
@@ -325,6 +342,7 @@ const eventFields: Record<string, string[]> = {
   state: ["store", "value"], dom: ["selector", "count"],
   "observer.error": ["observer", "message"], "capture.loss": ["reason"], "action.boundary": [],
   "action.reading": ["phase", "target", "value", "available"],
+  "action.source": ["observation"],
 };
 function parseEvent(raw: unknown): Extract<BrowserMessage, { type: "event" }>["event"] {
   const obj = record(raw, "event");
@@ -374,7 +392,11 @@ function parseEvent(raw: unknown): Extract<BrowserMessage, { type: "event" }>["e
     if (!["network", "console", "dom", "state", "signal", "route"].includes(String(data.observer))) invalid("unsupported observer");
     text(data.message, "observer error", L.MAX_TEXT_LENGTH, true);
   } else if (type === "capture.loss") text(data.reason, "capture loss reason", L.MAX_TEXT_LENGTH);
-  else if (type === "action.reading") {
+  else if (type === "action.source") {
+    if (Object.hasOwn(obj, "truncated")) invalid("source context cannot claim a truncated pointer");
+    try { data.observation = parseControlSourceObservation(data.observation); }
+    catch { invalid("invalid control source context"); }
+  } else if (type === "action.reading") {
     if (data.phase !== "before" && data.phase !== "after") invalid("unsupported action reading phase");
     data.target = parseRelativeTarget(data.target);
     const available = bool(data.available, "reading available");
@@ -382,7 +404,7 @@ function parseEvent(raw: unknown): Extract<BrowserMessage, { type: "event" }>["e
     if (!available && Object.hasOwn(data, "value")) invalid("unavailable action readings cannot claim a value");
   }
   const actionId = optionalString(obj, "actionId", L.MAX_NAME_LENGTH);
-  if (["action.boundary", "action.reading"].includes(type) && actionId === undefined) invalid("action capture requires actionId");
+  if (["action.boundary", "action.reading", "action.source"].includes(type) && actionId === undefined) invalid("action capture requires actionId");
   size(obj, L.MAX_EVENT_BYTES, "event");
   return { type, data, ...(actionId === undefined ? {} : { actionId }),
     ...(Object.hasOwn(obj, "truncated") ? { truncated: bool(obj.truncated, "truncated") } : {}) };
@@ -393,15 +415,33 @@ export function parseBrowserMessage(value: unknown): BrowserMessage {
   const obj = record(value, "browser message");
   switch (obj.type) {
     case "hello": {
+      if (obj.version === TREE_PROTOCOL_VERSION) {
+        keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello message");
+        if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 5 || !obj.capabilities.includes(TREE_CAPABILITY)
+          || new Set(obj.capabilities).size !== obj.capabilities.length || obj.capabilities.some(entry => ![CAUSAL_CAPABILITY, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, TREE_CAPABILITY, BUSINESS_CAPABILITY].includes(entry))) invalid("unsupported or duplicate tree capabilities");
+        return { type: "hello", version: TREE_PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
+      }
+      if (obj.version === PERFORMANCE_PROTOCOL_VERSION) {
+        keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello");
+        if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 6 || !obj.capabilities.includes(PERFORMANCE_CAPABILITY)
+          || new Set(obj.capabilities).size !== obj.capabilities.length || obj.capabilities.some(entry => ![CAUSAL_CAPABILITY, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, TREE_CAPABILITY, PERFORMANCE_CAPABILITY, BUSINESS_CAPABILITY].includes(entry))) invalid("unsupported or duplicate performance capabilities");
+        return { type: "hello", version: PERFORMANCE_PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
+      }
+      // Version 4 is shared by source and response evidence; each stays explicitly opt-in.
+      if (obj.version === SOURCE_PROTOCOL_VERSION) {
+        keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello");
+        if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 4 || (!obj.capabilities.includes(SOURCE_CAPABILITY) && !obj.capabilities.includes(BUSINESS_CAPABILITY))
+          || new Set(obj.capabilities).size !== obj.capabilities.length || obj.capabilities.some(entry => ![CAUSAL_CAPABILITY, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, BUSINESS_CAPABILITY].includes(entry))) invalid("unsupported or duplicate version 4 capabilities");
+        return { type: "hello", version: SOURCE_PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
+      }
       if (obj.version === PROTOCOL_VERSION) {
         keys(obj, ["type", "version", "token", "coverage"], "hello");
         return { type: "hello", version: PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage) };
       }
-      if (obj.version === SEMANTIC_PROTOCOL_VERSION || obj.version === BUSINESS_PROTOCOL_VERSION) {
+      if (obj.version === SEMANTIC_PROTOCOL_VERSION) {
         keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello");
-        if (!Array.isArray(obj.capabilities) || obj.capabilities.length > (obj.version === BUSINESS_PROTOCOL_VERSION ? 3 : 2) || new Set(obj.capabilities).size !== obj.capabilities.length
-          || obj.capabilities.some((entry) => entry !== CAUSAL_CAPABILITY && entry !== SEMANTIC_CAPABILITY && !(obj.version === BUSINESS_PROTOCOL_VERSION && entry === BUSINESS_CAPABILITY))) invalid("unsupported or duplicate verification capabilities");
-        if (obj.version === BUSINESS_PROTOCOL_VERSION && !obj.capabilities.includes(BUSINESS_CAPABILITY)) invalid("response protocol requires explicit body capability");
+        if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 2 || new Set(obj.capabilities).size !== obj.capabilities.length
+          || obj.capabilities.some((entry) => entry !== CAUSAL_CAPABILITY && entry !== SEMANTIC_CAPABILITY)) invalid("unsupported or duplicate verification capabilities");
         return { type: "hello", version: obj.version, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
       }
       if (obj.version !== CAUSAL_PROTOCOL_VERSION) invalid("unsupported verification protocol version");

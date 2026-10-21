@@ -1,3 +1,18 @@
+import type { CursorHookCaptureView } from "./adapters/cursor-hook";
+import type { ClaudeHookCaptureView } from "./adapters/claude-hook";
+import type { CodexHookCaptureView } from "./adapters/codex-hook";
+export type HookCaptureView = ClaudeHookCaptureView | CursorHookCaptureView | CodexHookCaptureView;
+
+/** Producer observations can withhold completion authority, never establish it. */
+export function captureCompletion(capture: HookCaptureView | undefined): "unavailable" | null {
+  return capture?.coverage === "partial" && capture.runtimeVerified === false ? "unavailable" : null;
+}
+
+/** Only this validated observation contract withholds replay; partial Claude capture keeps its existing semantics. */
+export function observationReplayUnavailable(capture: HookCaptureView | undefined): boolean {
+  return capture?.contract === "runphantom.codex-hook.observation/v1" && captureCompletion(capture) === "unavailable";
+}
+
 /**
  * Canonical, SDK-agnostic view of a parsed span.
  *
@@ -38,6 +53,7 @@ export interface NormalizedMessage {
  * still has these defaults — the consumer just sees an empty conversation.
  */
 export interface NormalizedLLMSpan {
+  capture?: HookCaptureView;
   kind: "llm";
   /** Always an array. Empty if extraction failed or no messages were present. */
   messages: NormalizedMessage[];
@@ -58,6 +74,7 @@ export interface NormalizedLLMSpan {
 
 /** Normalized view of a tool-call span. Args/result are pre-parsed (or raw if not JSON). */
 export interface NormalizedToolSpan {
+  capture?: HookCaptureView;
   kind: "tool";
   name: string;
   args: unknown;
@@ -67,6 +84,7 @@ export interface NormalizedToolSpan {
 
 /** Span we couldn't normalize (e.g. internal/instrumentation spans). */
 export interface NormalizedOtherSpan {
+  capture?: HookCaptureView;
   kind: "other";
 }
 

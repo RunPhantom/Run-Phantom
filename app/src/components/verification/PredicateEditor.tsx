@@ -84,6 +84,7 @@ export function buildPredicate(draft: CheckDraft): Predicate {
 
 export function describePredicate(predicate: Predicate): string {
   switch (predicate.kind) {
+    case "performance": return `Native lab ${predicate.metric} ${predicate.op === "lte" ? "at most" : "at least"} ${predicate.value}`;
     case "element": return `${predicate.selector} is ${predicate.state}`;
     case "network": return `${predicate.method ?? "Any method"} ${predicate.urlContains}${predicate.status === undefined ? "" : ` returns ${predicate.status}`}`;
     case "business-response": return `${predicate.phase === "acceptance" ? "Acceptance" : predicate.phase === "final" ? "Final persistence" : "Response"} contract for ${predicate.operationId} at ${predicate.urlContains}${predicate.witness ? " with declared witness" : ""}`;
