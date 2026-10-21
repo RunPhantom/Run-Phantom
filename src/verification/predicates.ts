@@ -4,10 +4,15 @@
  * truncation or redaction produce an inconclusive verdict rather than a false
  * pass, because an assertion that cannot see its evidence has not been proven.
  */
-import { VERIFICATION_LIMITS as L, type Predicate, type PredicateContext, type RuntimeEvent, type Verdict } from "./protocol";
+import { relativeTargetKey, VERIFICATION_LIMITS as L, type Coverage, type Predicate, type PredicateContext, type RuntimeEvent, type Verdict } from "./protocol";
 import { selectPath } from "./state-select";
 import { isSensitiveKey } from "./redaction";
 import { sanitizeWithReport } from "./serialization";
+import { evaluatePerformancePredicate, type PerformanceSnapshot } from "./performance";
+import {
+  baselineCursor, captureBaselineReading, captureBaselineScope, isCapturedAttribution, sameBaselineScope,
+  type BaselineReading, type BaselineScope, type CausalAttribution, type OperationReading,
+} from "./baseline";
 
 /** the runtime verification module strict structural equality, with own-property and recursion guards. */
 export function structurallyEqual(got: unknown, want: unknown, depth = 0): boolean {
@@ -61,10 +66,23 @@ export function boundEvidence(events: RuntimeEvent[]): RuntimeEvent[] {
   return out;
 }
 
-export function evaluatePredicate(predicate: Predicate, context: PredicateContext): Verdict {
+export interface EvaluationContext extends PredicateContext {
+  performance?: { snapshot: PerformanceSnapshot; fresh: boolean };
+  relative?: ReadonlyMap<string, { scope: BaselineScope; input: CausalPredicateContext }>;
+}
+
+export function evaluatePredicate(predicate: Predicate, context: EvaluationContext): Verdict {
   const verdict = (status: Verdict["status"], reason: string, evidence: RuntimeEvent[] = []): Verdict =>
     ({ status, reason: reason.slice(0, L.MAX_REASON_LENGTH), evidence: boundEvidence(evidence) });
   const unknown = (reason: string, evidence: RuntimeEvent[] = []) => verdict("inconclusive", reason, evidence);
+  if (predicate.kind === "performance") return evaluatePerformancePredicate(predicate, context.performance?.snapshot, context.performance?.fresh === true);
+
+  if (predicate.kind === "relative") {
+    const captured = context.relative?.get(relativeTargetKey(predicate.target));
+    if (!captured) return unknown("A relative check requires a matching captured pre/action/post result; interval observations alone are insufficient.");
+    return evaluateCausalPredicate({ scope: captured.scope, relation: predicate.relation,
+      ...(predicate.relation === "becomes" ? { equals: predicate.equals } : {}) } as CausalPredicate, captured.input);
+  }
 
   if (predicate.kind === "allOf" || predicate.kind === "anyOf") {
     if (predicate.predicates.length === 0) return unknown("An empty composite proves no observable consequence.");
@@ -149,5 +167,107 @@ export function evaluatePredicate(predicate: Predicate, context: PredicateContex
       const pass = predicate.state === "present" ? present : !present;
       return verdict(pass ? "pass" : "fail", `The selector matched ${latest.data.count} element(s) in the observed document.`, [latest]);
     }
+  }
+}
+
+export type CausalPredicate = {
+  readonly scope: BaselineScope;
+  readonly requiredOutcome?: OperationReading;
+} & (
+  | { readonly relation: "changed" | "increased" | "decreased" }
+  | { readonly relation: "becomes"; readonly equals: unknown }
+);
+
+export interface CausalPredicateContext {
+  readonly before?: BaselineReading | null;
+  readonly after?: BaselineReading | null;
+  readonly action: {
+    readonly id: string;
+    readonly sessionId: string;
+    readonly generation: number;
+    readonly cursor: number;
+    readonly acknowledged: boolean;
+  };
+  readonly through: number;
+  readonly coverage: Coverage;
+  readonly complete: boolean;
+  readonly settled: boolean;
+  readonly attribution?: CausalAttribution;
+}
+
+/** Relative checks need captured result correlation in addition to the action interval.
+ * Standalone state/element checks continue to use evaluatePredicate and need no causal baseline.
+ */
+export function evaluateCausalPredicate(predicate: CausalPredicate, context: CausalPredicateContext): Verdict {
+  const events = [context.before, context.after].flatMap((reading, index): RuntimeEvent[] => reading ? [{
+    t: reading.cursor, type: "verification.baseline", ...(reading.actionId ? { actionId: reading.actionId } : {}),
+    data: { phase: index === 0 ? "before" : "after", generation: reading.scope.generation,
+      scope: { kind: reading.scope.kind, target: reading.scope.target, ...(reading.scope.path === undefined ? {} : { path: reading.scope.path }) },
+      availability: reading.availability, fresh: reading.fresh, value: reading.value },
+  }] : []);
+  const verdict = (status: Verdict["status"], reason: string): Verdict => ({ status, reason, evidence: boundEvidence(events) });
+  const unknown = (reason: string) => verdict("inconclusive", reason);
+  let scope: BaselineScope;
+  try {
+    scope = captureBaselineScope(predicate.scope);
+    baselineCursor(context.action.cursor);
+    baselineCursor(context.through);
+  } catch { return unknown("The declared scope or action interval is invalid."); }
+  const observer = scope.kind === "state" ? "state" : "dom";
+  if (context.coverage[observer] !== true || context.coverage.network !== true || context.complete !== true) return unknown("Continuous complete scope and network observer coverage is required for a relative assertion.");
+  if (context.action.acknowledged !== true) return unknown("The action boundary was not acknowledged.");
+  if (context.action.sessionId !== scope.sessionId || context.action.generation !== scope.generation) return unknown("The action belongs to another session or document generation.");
+  const { before, after } = context;
+  if (!before || !after) return unknown("Both a pre-action baseline and a fresh post-action reading are required.");
+  if (!sameBaselineScope(before.scope, scope) || !sameBaselineScope(after.scope, scope)) return unknown("The readings do not cover the exact declared session, document, and target scope.");
+  if (before.availability !== "complete" || after.availability !== "complete" || !before.complete || !after.complete
+    || hasUnavailableValue(before.value) || hasUnavailableValue(after.value)) return unknown("A baseline or result reading is unavailable, partial, or redacted.");
+  if (before.fresh !== true || after.fresh !== true) return unknown("The baseline and result must come from acknowledged fresh reads.");
+  if (!(before.cursor < context.action.cursor && context.action.cursor < after.cursor && after.cursor <= context.through)) return unknown("The readings do not bracket the acknowledged action boundary.");
+  if (context.action.cursor - before.cursor > L.MAX_EVENT_AGE_MS || context.through - after.cursor > L.MAX_EVENT_AGE_MS) return unknown("A reading is stale for the declared action interval.");
+  if (!context.action.id || after.actionId !== context.action.id) return unknown("The post-action reading is not attributed to this exact action.");
+  const attribution = context.attribution;
+  if (!isCapturedAttribution(attribution)) return unknown("An action interval alone does not link a change to the action; a captured result or declared operation is required.");
+  if (attribution.actionId !== context.action.id || !sameBaselineScope(attribution.scope, scope)
+    || attribution.cursor < after.cursor || attribution.cursor > context.through
+    || attribution.baseline.cursor !== before.cursor || !structurallyEqual(attribution.baseline.value, before.value)
+    || attribution.reading.cursor !== after.cursor || !structurallyEqual(attribution.reading.value, after.value)) {
+    return unknown("The captured result does not correlate this exact action and scoped result reading.");
+  }
+  const capturedOutcome = attribution.reading.outcome;
+  if ((after.outcome === undefined) !== (capturedOutcome === undefined)
+    || after.outcome && capturedOutcome && (after.outcome.operationId !== capturedOutcome.operationId || after.outcome.phase !== capturedOutcome.phase)) {
+    return unknown("The result reading and captured operation identity or phase disagree.");
+  }
+  if (predicate.requiredOutcome) {
+    const required = predicate.requiredOutcome;
+    const outcome = attribution.reading.outcome;
+    if (attribution.source !== "declared-operation" || !outcome || outcome.operationId !== required.operationId) return unknown("The declared operation identity was not correlated with this action result.");
+    if (required.phase !== "accepted" && required.phase !== "final") return unknown("The declared outcome phase is invalid.");
+    if (outcome.phase !== required.phase) return unknown(required.phase === "final"
+      ? "The request was accepted; final persistence has not been established."
+      : "The captured operation phase does not establish the declared acceptance-only contract.");
+  }
+  if (!context.settled) return unknown("The action interval has not reached its bounded quiet completion.");
+  const equal = structurallyEqual(before.value, after.value);
+  switch (predicate.relation) {
+    case "changed": return verdict(equal ? "fail" : "pass", equal
+      ? "The complete scoped value did not change during the declared action result."
+      : "The complete scoped value changed within the correlated action result.");
+    case "becomes": {
+      const expected = captureBaselineReading({ scope, cursor: 0, complete: true, fresh: true }, predicate.equals);
+      if (expected.availability !== "complete" || hasUnavailableValue(expected.value)) return unknown("The expected value is not complete, readable finite JSON.");
+      if (!structurallyEqual(after.value, expected.value)) return verdict("fail", "The correlated result differs from the declared expectation.");
+      if (structurallyEqual(before.value, expected.value)) return unknown("The expectation already held before the action; its continued presence does not prove a causal transition.");
+      return verdict("pass", "The complete value transitioned to the declared expectation within the correlated action result.");
+    }
+    case "increased": case "decreased": {
+      if (typeof before.value !== "number" || typeof after.value !== "number") return unknown("A numerical relative assertion requires two finite numerical readings.");
+      const pass = predicate.relation === "increased" ? after.value > before.value : after.value < before.value;
+      return verdict(pass ? "pass" : "fail", pass
+        ? `The scoped numerical value ${predicate.relation} within the correlated action result.`
+        : `The scoped numerical value did not ${predicate.relation === "increased" ? "increase" : "decrease"} within the correlated action result.`);
+    }
+    default: return unknown("The relative comparison is unsupported.");
   }
 }
