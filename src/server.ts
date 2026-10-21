@@ -1380,7 +1380,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
         getStringMetadata(metadata, "eventId") ??
         getStringMetadata(metadata, "event_id");
 
-      upsertLiveEvent({
+      const persistedId = upsertLiveEvent({
         traceId: normalizedTraceId,
         spanId: normalizedSpanId,
         type,
@@ -1398,6 +1398,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
         last_updated_at: ts,
       });
       broadcast("live", {
+        persistedId,
         traceId: normalizedTraceId,
         spanId: normalizedSpanId,
         type,
@@ -1664,11 +1665,26 @@ export async function createServer(port: number, options: { comparisons?: Compar
       // Fall back to saved run cache
       const cached = getCachedRun(id);
       if (cached) {
-        try { const data = JSON.parse(cached); if (data.run) { res.json({ ...data, spans: Array.isArray(data.spans) ? data.spans.map((span: any) => publicCaptureMetadata(withholdAgentDefinitionCapture(span))) : data.spans }); return; } } catch {}
+        try {
+          const data = JSON.parse(cached);
+          if (data.run) {
+            // A live-only run can reuse cached presentation, but its live rows
+            // must come from this store. Saved-only history survives clears.
+            const body = {
+              ...data,
+              spans: Array.isArray(data.spans) ? data.spans.map((span: any) => publicCaptureMetadata(withholdAgentDefinitionCapture(span))) : data.spans,
+              ...(run ? { liveEvents: getLiveEvents(id) } : {}),
+            };
+            res.setHeader("X-RunPhantom-Live-Events", run ? "current-store" : "saved-cache");
+            res.json(body);
+            return;
+          }
+        } catch {}
       }
       if (!run) { res.status(404).json({ error: "Not found" }); return; }
     }
     const subAgents = detectSubAgents(spans as any);
+    res.setHeader("X-RunPhantom-Live-Events", "current-store");
     res.json({ run, spans: spans.map(compactSpanForDetail), liveEvents: getLiveEvents(id), subAgents });
   });
   app.get("/api/runs/:id/outline", (req, res) => {
