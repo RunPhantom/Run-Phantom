@@ -16,6 +16,7 @@ import { saveReport } from "./store";
 import { boundReportContext } from "./report-context";
 import { getRunById } from "../db";
 import type { BrowserCompatibility } from "./browser-types";
+import { ACCESSIBILITY_LIMITS, parseAccessibilityRequest, normalizeAccessibility, parseAccessibilityEvidence, type AccessibilityEvidence } from "./accessibility";
 
 interface Turn { ticket: number; generation: number; since: number; started: number; actionId?: string; predicate?: Predicate; name: string; report?: VerificationReport }
 interface BrowserSession {
@@ -265,6 +266,27 @@ export class BrowserAutomation {
         engine: session.summary.engine, ownership: session.summary.ownership, generation, ...(rawConsent ? { rawConsent: true } : {}) });
     } catch (error) { if (error instanceof BrowserInputError) throw error; throw new BrowserInputError(503, "Captured artifact unavailable"); }
     finally { if (fd !== undefined) closeSync(fd); }
+  }
+  async audit(id: unknown, value: unknown): Promise<AccessibilityEvidence> {
+    this.#available();
+    const session = this.#get(id), request = parseAccessibilityRequest(value, session.secrets), generation = this.#current(session, request.generation);
+    if (session.busy || session.summary.state !== "ready") throw new BrowserInputError(409, "Browser connection is busy or unavailable");
+    const identity = { sessionId: session.summary.id, generation, capturedAt: Date.now() };
+    if (session.summary.ownership !== "owned" || session.summary.engine !== "chromium") {
+      const unavailable = normalizeAccessibility(request, identity, undefined, session.secrets); unavailable.loss.push("unsupported-browser"); return unavailable;
+    }
+    session.busy = true; const ticket = ++session.ticket;
+    try {
+      const reply = await session.worker.request("audit", generation, { request, identity }, ACCESSIBILITY_LIMITS.engineMs + B.CLOSE_MS + 1000);
+      if (!reply.ok || reply.generation !== generation || session.ticket !== ticket || session.summary.generation !== generation || session.summary.state !== "ready")
+        throw new BrowserInputError(409, "Browser audit authority changed; no current result was accepted");
+      return parseAccessibilityEvidence(reply.result, request, identity, session.secrets);
+    } catch (error) {
+      if (session.closing) await session.closing;
+      else await this.closeSession(session.summary.id, session.summary.generation);
+      if (error instanceof BrowserInputError) throw error;
+      throw new BrowserInputError(503, "Native accessibility evidence is unavailable; the owned connection was closed");
+    } finally { if (session.ticket === ticket) session.busy = false; }
   }
   async capture(id: unknown, value: unknown): Promise<BrowserArtifact> {
     this.#available();

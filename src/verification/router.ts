@@ -71,6 +71,13 @@ export function createVerificationRouter(service: VerificationService): express.
     const body = object(req.body, ["name", "origin", "steps"]);
     res.status(201).json(saveFlow(text(body.name, "name"), body.origin, body.steps));
   }));
+  router.post("/flows/:id/repair-proposals", route(async (req, res) => {
+    const body = object(req.body, ["sessionId", "step"]);
+    if (typeof body.step !== "number" || !Number.isSafeInteger(body.step) || body.step < 0 || body.step >= L.MAX_STEPS) throw new VerificationHttpError(400, "Invalid repair step");
+    res.status(201).json(await service.proposeRepair(String(req.params.id), text(body.sessionId, "sessionId"), body.step));
+  }));
+  router.post("/flows/:id/repair-proposals/:proposalId/commit", route(async (req, res) => res.json(await service.commitRepair(String(req.params.id), String(req.params.proposalId), req.body))));
+  router.delete("/flows/:id/repair-proposals/:proposalId", route((req, res) => { service.repairs.cancel(String(req.params.id), String(req.params.proposalId)); res.json({ ok: true }); }));
   router.post("/flows/:id/run", route(async (req, res) => {
     const body = object(req.body, ["sessionId"]);
     res.json(await service.runFlow(String(req.params.id), text(body.sessionId, "sessionId")));

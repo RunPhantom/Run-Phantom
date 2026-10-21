@@ -2,9 +2,12 @@ import {
   PROTOCOL_VERSION, CAUSAL_PROTOCOL_VERSION, CAUSAL_CAPABILITY, SEMANTIC_PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_PROTOCOL_VERSION, SOURCE_CAPABILITY, TREE_PROTOCOL_VERSION, TREE_CAPABILITY, SEMANTIC_REF_PATTERN, normalizeSemanticText, relativeTargetKey, relativeTargets, VERIFICATION_LIMITS as L,
   type AppCommand, type BrowserMessage, type Coverage, type FlowStep, type Predicate, type RelativeTarget, type SemanticQuery, type VerificationCapability,
 } from "./protocol";
+import { parseFlowAnchor } from "./flow-anchors";
 import { isSensitiveKey } from "./redaction";
 import { sanitizeWithReport } from "./serialization";
 import { parseControlSourceObservation } from "./build/source";
+import { parsePerformancePredicate } from "./performance";
+import { PERFORMANCE_PROTOCOL_VERSION, PERFORMANCE_CAPABILITY } from "./protocol";
 
 export class VerificationInputError extends Error {
   readonly status = 400;
@@ -90,6 +93,10 @@ export function validateOrigin(value: unknown): string {
 export function parseCommand(value: unknown): AppCommand {
   const obj = record(value, "command");
   switch (obj.type) {
+    case "performance":
+      keys(obj, ["type", "phase"], "performance command");
+      if (obj.phase !== "begin" && obj.phase !== "capture") invalid("performance phase must be begin or capture");
+      return { type: "performance", phase: obj.phase };
     case "snapshot": {
       keys(obj, ["type", "selector"], "snapshot command");
       const selector = optionalString(obj, "selector", L.MAX_SELECTOR_LENGTH);
@@ -189,6 +196,8 @@ export function parsePredicate(value: unknown): Predicate {
     if (depth > L.MAX_PREDICATE_DEPTH || ++nodes > L.MAX_PREDICATE_NODES) invalid("predicate exceeds its complexity limit");
     const obj = record(raw, "predicate");
     switch (obj.kind) {
+      case "performance":
+        try { return parsePerformancePredicate(obj); } catch { return invalid("unsupported or invalid numeric performance lab predicate"); }
       case "relative": {
         keys(obj, ["kind", "target", "relation", "equals"], "relative predicate");
         const target = parseRelativeTarget(obj.target);
@@ -262,7 +271,7 @@ export function parseFlowSteps(value: unknown): FlowStep[] {
   size(value, L.MAX_FRAME_BYTES, "flow steps");
   return value.map((raw) => {
     const obj = record(raw, "flow step");
-    keys(obj, ["command", "predicate"], "flow step");
+    keys(obj, ["command", "predicate", "anchor"], "flow step");
     const predicate = parsePredicate(obj.predicate);
     assertSafePredicate(predicate);
     const command = Object.hasOwn(obj, "command") ? parseCommand(obj.command) : undefined;
@@ -276,7 +285,11 @@ export function parseFlowSteps(value: unknown): FlowStep[] {
     if (command?.type === "fill") invalid("saved flows cannot contain fill commands; use live fill so entered values are never persisted");
     if (command?.type === "state" && isSensitiveKey(command.store)) invalid("saved flows cannot read credential-bearing stores");
     if (command && "selector" in command && command.selector !== undefined) assertSafeSelector(command.selector);
-    const step = { ...(command === undefined ? {} : { command }), predicate };
+    const anchor = Object.hasOwn(obj, "anchor") ? parseFlowAnchor(obj.anchor) : undefined;
+    if (anchor && command?.type !== "click" && command?.type !== "causal-click") invalid("durable anchors require a saved click action");
+    if (anchor?.kind === "css" && command && "selector" in command && anchor.selector !== command.selector) invalid("CSS anchor must preserve the exact action selector");
+    if (anchor?.kind === "semantic" && targets.length) invalid("semantic anchors do not support CSS-addressed relative baselines; keep the CSS action");
+    const step = { ...(command === undefined ? {} : { command }), predicate, ...(anchor ? { anchor } : {}) };
     const sanitized = sanitizeWithReport(step);
     if (sanitized.redacted || sanitized.truncation) invalid("saved flow contains a secret or exceeds the safe persistence limits");
     return step;
@@ -364,6 +377,12 @@ export function parseBrowserMessage(value: unknown): BrowserMessage {
         if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 4 || !obj.capabilities.includes(TREE_CAPABILITY)
           || new Set(obj.capabilities).size !== obj.capabilities.length || obj.capabilities.some(entry => ![CAUSAL_CAPABILITY, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, TREE_CAPABILITY].includes(entry))) invalid("unsupported or duplicate tree capabilities");
         return { type: "hello", version: TREE_PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
+      }
+      if (obj.version === PERFORMANCE_PROTOCOL_VERSION) {
+        keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello");
+        if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 5 || !obj.capabilities.includes(PERFORMANCE_CAPABILITY)
+          || new Set(obj.capabilities).size !== obj.capabilities.length || obj.capabilities.some(entry => ![CAUSAL_CAPABILITY, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, TREE_CAPABILITY, PERFORMANCE_CAPABILITY].includes(entry))) invalid("unsupported or duplicate performance capabilities");
+        return { type: "hello", version: PERFORMANCE_PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
       }
       if (obj.version === SOURCE_PROTOCOL_VERSION) {
         keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello");
