@@ -1,19 +1,22 @@
 import { Database } from "bun:sqlite";
 import { and, asc, count, desc, eq, gte, inArray, isNull, like, ne, or, sql as drizzleSql, type SQL } from "drizzle-orm";
 import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
-import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import path from "path";
 import os from "os";
 import fs from "fs";
 import { detectSubAgents } from "./agents";
 import { normalizeStoredSpan } from "./spans/normalize";
-import type { NormalizedSpan } from "./spans/normalized";
+import { captureCompletion, type NormalizedSpan } from "./spans/normalized";
 import * as schema from "./db/schema";
 import { embeddedMigrationFiles, embeddedMigrationJournal } from "./db/migration-assets";
 import { SOURCE_MIGRATIONS_DIR } from "./source-paths";
 import { IS_PACKAGED_RUNTIME, VERSION } from "./version";
+import { withholdAgentDefinitionCapture } from "./agent-definitions";
+import { OTLP_EVIDENCE_LIMITS } from "./spans/otlp-evidence";
 import { activeLocalEvidenceAttachmentIds } from "./evaluations/evidence-inventory";
 import { EvidenceError } from "./evaluations/evidence-protocol";
+import { bridgeLegacyFindingMigration } from "./db/legacy-finding-migration";
+import { migrateDatabase } from "./db/migrate";
 
 const RUNPHANTOM_DB_PATH_ENV_VAR = "RUNPHANTOM_DB_PATH";
 
@@ -38,15 +41,18 @@ function resolveMigrationsFolder(): string {
 function ensureEmbeddedMigrationsFolder(): string {
   const cacheRoot = path.join(os.homedir(), ".runphantom", "migrations", VERSION);
   const journalPath = path.join(cacheRoot, "meta", "_journal.json");
-  const hasAllFiles =
-    fs.existsSync(journalPath) &&
-    embeddedMigrationFiles.every((asset) => fs.existsSync(path.join(cacheRoot, asset.relativePath)));
-  if (hasAllFiles) return cacheRoot;
+  const journal = JSON.stringify(embeddedMigrationJournal, null, 2);
+  // Different source builds may share VERSION. File presence alone can retain
+  // an older journal or record modified cached SQL under an unexpected hash.
+  try {
+    if (fs.readFileSync(journalPath, "utf8").trim() === journal
+      && embeddedMigrationFiles.every(asset => fs.readFileSync(path.join(cacheRoot, asset.relativePath)).equals(fs.readFileSync(asset.sourcePath)))) return cacheRoot;
+  } catch { /* A missing or unreadable cache is extracted from the trusted assets below. */ }
 
   const tmp = `${cacheRoot}.extract.${process.pid}.${Date.now()}`;
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.mkdirSync(path.join(tmp, "meta"), { recursive: true });
-  fs.writeFileSync(path.join(tmp, "meta", "_journal.json"), JSON.stringify(embeddedMigrationJournal, null, 2));
+  fs.writeFileSync(path.join(tmp, "meta", "_journal.json"), journal);
   for (const asset of embeddedMigrationFiles) {
     const target = path.join(tmp, asset.relativePath);
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -74,11 +80,15 @@ export function getDrizzleDb(): RunPhantomDb {
   if (_drizzleDb) return _drizzleDb;
   const dbPath = resolveDbPath();
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  _dbPath = dbPath;
-  _sqliteDb = new Database(dbPath, { create: true });
-  _sqliteDb.exec("PRAGMA journal_mode = WAL");
+  // Trusted startup resolves the real parent once so OS aliases such as /var
+  // cannot create a second lifetime-lease identity for the same owner file.
+  const actualDbPath = path.join(fs.realpathSync(path.dirname(dbPath)), path.basename(dbPath));
+  _dbPath = actualDbPath;
+  _sqliteDb = new Database(actualDbPath, { create: true });
   _drizzleDb = drizzle(_sqliteDb, { schema });
   try {
+    _sqliteDb.exec("PRAGMA busy_timeout = 1000");
+    _sqliteDb.exec("PRAGMA journal_mode = WAL");
     // Both pragmas are required for the table rebuild in
     // 0003_span_identity_per_run.sql, which creates `__new_spans`, drops
     // `spans`, then renames. They must be set on the connection: drizzle runs
@@ -98,9 +108,14 @@ export function getDrizzleDb(): RunPhantomDb {
     // enforcement off while a referenced table is dropped and recreated.
     _sqliteDb.exec("PRAGMA legacy_alter_table = ON");
     _sqliteDb.exec("PRAGMA foreign_keys = OFF");
-    migrate(_drizzleDb, { migrationsFolder: resolveMigrationsFolder() });
+    const migrationsFolder = resolveMigrationsFolder();
+    // SQLite's immediate transaction coordinates the finite legacy backfill;
+    // all startup work stays synchronous, before feature stores or listeners.
+    const validateLegacyUpgrade = bridgeLegacyFindingMigration(_sqliteDb, migrationsFolder);
+    migrateDatabase(_sqliteDb, migrationsFolder);
     _sqliteDb.exec("PRAGMA foreign_keys = ON");
     _sqliteDb.exec("PRAGMA legacy_alter_table = OFF");
+    validateLegacyUpgrade?.();
   } catch (err) {
     closeDb();
     throw new Error(
@@ -184,7 +199,8 @@ function tokenizeSql(sql: string): SqlToken[] {
   const tokens: SqlToken[] = [];
   for (let index = 0; index < sql.length;) {
     const char = sql[index];
-    if (/[ \t\n\r\f]/.test(char)) {
+    // SQLite treats a BOM as whitespace at token start, but retains it inside identifiers.
+    if (/[ \t\n\r\f\uFEFF]/.test(char)) {
       index++;
       continue;
     }
@@ -351,10 +367,15 @@ function maskSqlLiterals(sql: string): string {
 }
 
 function assertReadOnlyTraceQuery(sql: string): string {
-  const trimmed = stripSqlComments(sql).trim();
+  // JavaScript trim() also removes characters that SQLite retains in identifiers.
+  const trimmed = stripSqlComments(sql)
+    .replace(/^[ \t\n\r\f\uFEFF]+/, "")
+    .replace(/[ \t\n\r\f]+$/, "");
   if (!trimmed) throw new Error("sql required");
 
-  const withoutTrailingSemicolon = trimmed.replace(/;\s*$/, "").trim();
+  const withoutTrailingSemicolon = trimmed
+    .replace(/;[ \t\n\r\f\uFEFF]*$/, "")
+    .replace(/[ \t\n\r\f]+$/, "");
   // Mask literals for keyword/separator checks; token-based name checks below
   // retain quoted function and table identifiers.
   const code = maskSqlLiterals(withoutTrailingSemicolon);
@@ -666,7 +687,7 @@ export function reassignAnnotations(fromRunId: string, toRunId: string): number 
   return rows.length;
 }
 
-export function insertSpan(span: { id: string; run_id: string; parent_span_id?: string; name: string; span_type?: string; status?: string; input_payload?: string; output_payload?: string; start_time_ms: number; end_time_ms: number; duration_ms: number; model?: string; provider?: string; input_tokens?: number; output_tokens?: number; attributes?: string }) {
+export function insertSpan(span: { id: string; run_id: string; parent_span_id?: string; name: string; span_type?: string; status?: string; input_payload?: string; output_payload?: string; start_time_ms: number; end_time_ms: number; duration_ms: number; model?: string; provider?: string; input_tokens?: number; output_tokens?: number; attributes?: string; otlp_evidence?: string }) {
   const row = {
     id: span.id,
     run_id: span.run_id,
@@ -684,6 +705,7 @@ export function insertSpan(span: { id: string; run_id: string; parent_span_id?: 
     input_tokens: span.input_tokens ?? null,
     output_tokens: span.output_tokens ?? null,
     attributes: span.attributes ?? null,
+    otlp_evidence: span.otlp_evidence ?? null,
   };
   getDrizzleDb()
     .insert(schema.spans)
@@ -745,6 +767,13 @@ export function upsertEventSpan(span: { id: string; run_id: string; name: string
     .run();
 }
 
+function runCaptureCompletion(attributes: string | null) {
+  if (!attributes || Buffer.byteLength(attributes) > 16384) return null;
+  try {
+    return captureCompletion(normalizeStoredSpan({ name: "", span_type: "AGENT_ROOT", input_payload: null, output_payload: null, attributes }).normalized.capture);
+  } catch { return null; }
+}
+
 export function getRuns(limit = 200) {
   // Deliberately not `select()`: runs_with_hints also derives payload_total_chars,
   // which sums LENGTH() over every payload of every run it returns. Measured on
@@ -767,11 +796,14 @@ export function getRuns(limit = 200) {
       finished: schema.runs_with_hints.finished,
       span_count: schema.runs_with_hints.span_count,
       live_event_count: schema.runs_with_hints.live_event_count,
+      // The outer view must be qualified inside the correlated root lookup.
+      capture_attributes: drizzleSql<string | null>`(SELECT CASE WHEN length(CAST(root.attributes AS BLOB)) <= 16384 THEN root.attributes END FROM spans root WHERE root.run_id = runs_with_hints.id AND root.parent_span_id IS NULL AND root.span_type = 'AGENT_ROOT' ORDER BY root.start_time_ms, root.id LIMIT 1)`,
     })
     .from(schema.runs_with_hints)
     .orderBy(desc(schema.runs_with_hints.last_updated_at))
     .limit(limit)
-    .all();
+    .all()
+    .map(({ capture_attributes, ...run }) => ({ ...run, capture_completion: runCaptureCompletion(capture_attributes) }));
   if (rows.length === 0) return rows.map((r) => ({ ...r, error_count: 0 }));
   // The list view needs a failed/complete signal so a run with errors reads
   // "Run failed" in the sidebar, matching the detail header. The runs_with_hints
@@ -808,8 +840,10 @@ function attachNormalized<T extends {
   input_payload: string | null;
   output_payload: string | null;
   attributes: string | null;
+  id?: string; run_id?: string; otlp_evidence?: string | null;
 }>(span: T): T & { normalized: NormalizedSpan } {
-  return { ...span, normalized: normalizeStoredSpan(span).normalized };
+  const match = normalizeStoredSpan(span);
+  return { ...span, normalized: match.normalized, ...(match.captureVisibility ? { captureVisibility: match.captureVisibility } : {}) };
 }
 
 export function getRunWithSpans(runId: string) {
@@ -831,6 +865,9 @@ export function getRunWithSpans(runId: string) {
     .where(eq(schema.spans.run_id, runId))
     .orderBy(asc(schema.spans.start_time_ms))
     .all() as Array<{
+    id: string;
+    parent_span_id: string | null;
+    start_time_ms: number;
     name: string;
     span_type: string | null;
     input_payload: string | null;
@@ -838,7 +875,9 @@ export function getRunWithSpans(runId: string) {
     attributes: string | null;
   }>;
   const spans = rows.map(attachNormalized);
-  return { run: run ?? null, spans };
+  const root = [...spans].filter(span => span.span_type === "AGENT_ROOT" && span.parent_span_id === null)
+    .sort((a, b) => a.start_time_ms - b.start_time_ms || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0];
+  return { run: run ? { ...run, capture_completion: runCaptureCompletion(root?.attributes ?? null) } : null, spans };
 }
 
 /** See getSpanMeta on why an unscoped span id is ambiguous and how it resolves. */
@@ -918,6 +957,7 @@ export function getSpanMeta(spanId: string, runId?: string): SpanMetaRow | null 
       model: schema.spans.model,
       provider: schema.spans.provider,
       attributes: schema.spans.attributes,
+      otlp_evidence: schema.spans.otlp_evidence,
       input_head: drizzleSql<string>`SUBSTR(COALESCE(${schema.spans.input_payload}, ''), 1, 81)`,
       input_chars: drizzleSql<number>`LENGTH(COALESCE(${schema.spans.input_payload}, ''))`,
       output_head: drizzleSql<string>`SUBSTR(COALESCE(${schema.spans.output_payload}, ''), 1, 81)`,
@@ -1010,10 +1050,14 @@ export function getRunsByConvoId(convoId: string) {
 
 export function clearAll() {
   getDrizzleDb().transaction((tx) => {
+    // Keep source epochs and suppression tombstones while fencing every old callback.
+    tx.update(schema.coding_hook_owner).set({ generation: drizzleSql`lower(hex(randomblob(16)))`, updated_at: Date.now() }).where(eq(schema.coding_hook_owner.id, 1)).run();
+    tx.delete(schema.review_queues).run();
     tx.delete(schema.evaluation_reviews).run();
     tx.delete(schema.evaluation_experiments).run();
     tx.delete(schema.evaluation_revisions).run();
     tx.delete(schema.evaluation_datasets).run();
+    tx.delete(schema.verification_snapshots).run();
     tx.delete(schema.verification_reports).run();
     tx.delete(schema.verification_flows).run();
     tx.delete(schema.live_events).run();
@@ -1803,6 +1847,13 @@ function quantifierAt(pattern: string, i: number): { unbounded: boolean; length:
 // Bounds the joined live-event transcript a single search will assemble. A long
 // streaming run can hold far more text than any one search needs to scan.
 const LIVE_EVENT_SEARCH_CHAR_CAP = 2_000_000;
+const SPAN_SEARCH_ROW_CAP = 2_000;
+const SPAN_SEARCH_BYTE_CAP = 16 * 1024 * 1024;
+
+export class SpanSearchLimitError extends Error {
+  readonly status = 413;
+  constructor() { super("Selected spans exceed search evidence limits (2,000 rows and 16 MiB acquired text)."); }
+}
 
 export function searchRun(runId: string, opts: SearchRunOpts): { matches: SearchMatch[]; truncated: boolean } {
   const ctx = Math.max(0, Math.min(400, opts.context_chars ?? 80));
@@ -1867,11 +1918,22 @@ export function searchRun(runId: string, opts: SearchRunOpts): { matches: Search
   }
 
   if (scopes.has("span_input") || scopes.has("span_output") || scopes.has("span_attributes")) {
-    const rows = rawQuery(`
-      SELECT id, name, input_payload, output_payload, attributes
-      FROM spans WHERE ${spanWhere.join(" AND ")}
-      ORDER BY start_time_ms ASC
-    `).all(...spanParams) as any[];
+    const columns = [["span_input", "input_payload"], ["span_output", "output_payload"], ["span_attributes", "attributes"]]
+      .filter(([scope]) => scopes.has(scope)).map(([, column]) => column);
+    const fields = ["id", "name", ...columns];
+    const receipt = `CASE WHEN length(CAST(otlp_evidence AS BLOB)) <= ${OTLP_EVIDENCE_LIMITS.bytes} THEN otlp_evidence ELSE NULL END`;
+    const acquired = [...fields, ...(scopes.has("span_attributes") ? [receipt] : [])];
+    const bytes = acquired.map(field => `COALESCE(length(CAST((${field}) AS BLOB)), 0)`).join(" + ");
+    const where = spanWhere.join(" AND ");
+    const rows = runInTransaction(() => {
+      const admission = rawQuery(`SELECT count(*) AS count, COALESCE(SUM(${bytes}), 0) AS bytes FROM spans WHERE ${where}`).get(...spanParams) as { count: number; bytes: number };
+      if (!Number.isSafeInteger(admission.count) || !Number.isSafeInteger(admission.bytes)
+        || admission.count > SPAN_SEARCH_ROW_CAP || admission.bytes > SPAN_SEARCH_BYTE_CAP) throw new SpanSearchLimitError();
+      // The admitted typed companion and requested scopes use this same row
+      // population; no raw parallel fetch or prefix can authorize projection.
+      return rawQuery(`SELECT ${fields.join(", ")}${scopes.has("span_attributes") ? `, ${receipt} AS otlp_evidence` : ""}
+        FROM spans WHERE ${where} ORDER BY start_time_ms ASC`).all(...spanParams) as any[];
+    });
 
     outer: for (const r of rows) {
       for (const [scope, col] of [
@@ -1880,7 +1942,16 @@ export function searchRun(runId: string, opts: SearchRunOpts): { matches: Search
         ["span_attributes", "attributes"],
       ] as const) {
         if (!scopes.has(scope)) continue;
-        const text = (r as any)[col] ?? "";
+        let text = r[col] ?? "";
+        if (col === "attributes") {
+          try { text = withholdAgentDefinitionCapture({ attributes: r.attributes, otlp_evidence: r.otlp_evidence }).attributes ?? ""; }
+          catch {
+            // An invalid/unprojectable typed companion proves no composite
+            // authority. Withhold relevant carriers before matching, never
+            // recover a raw companion or search a guessed safe prefix.
+            text = withholdAgentDefinitionCapture({ attributes: r.attributes, otlp_evidence: null }).attributes ?? "";
+          }
+        }
         if (!text) continue;
         for (const [s, e] of matcher(text)) {
           matches.push({

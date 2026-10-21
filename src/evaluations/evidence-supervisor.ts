@@ -159,7 +159,7 @@ export class EvidenceSupervisor {
         if (!response || typeof response !== "object" || Array.isArray(response)) throw new EvidenceSupervisorError("worker_protocol");
         const message = response as Record<string, unknown>;
         if (Object.keys(message).length !== 3 || message.version !== 1 || message.id !== id || !Object.hasOwn(message, "normalized")) throw new EvidenceSupervisorError("worker_protocol");
-        const normalized = parseNormalizedEvidence(message.normalized, source.dialect === "junit-xml/v1" ? "junit" : "attestation");
+        const normalized = parseNormalizedEvidence(message.normalized, source.dialect === "junit-xml/v1" ? "junit" : source.dialect === "runphantom-findings-json/v1" ? "finding" : "attestation");
         const sourceBytes = Buffer.byteLength(JSON.stringify(normalized));
         if (normalized.sourceId !== source.sourceId || sourceBytes > this.#limits.maxNormalizedBytes) throw new EvidenceSupervisorError("worker_protocol");
         normalizedBytes += sourceBytes; leaves += normalized.leaves.length;

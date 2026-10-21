@@ -26,8 +26,8 @@ function scope(db: Database, id: string) {
 
 test("fresh Team initialization creates only existing-project evidence scopes and enforces safe generations", () => {
   const db = connection(); initializeTeamSchema(db);
-  expect(TEAM_SCHEMA_VERSION).toBe(2);
-  expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+  expect(TEAM_SCHEMA_VERSION).toBe(5);
+  expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: TEAM_SCHEMA_VERSION });
   expect(db.query("SELECT * FROM evaluation_evidence_scopes").all()).toEqual([]);
   db.query("INSERT INTO projects(id,name,created_at) VALUES(?,?,?)").run("project-a", "A", 1);
   db.query("INSERT INTO projects(id,name,created_at) VALUES(?,?,?)").run("project-b", "B", 2);
@@ -66,7 +66,7 @@ test("genuine populated v1 Team rows remain exact through migration and two Team
       const store = new TeamStore(path); store.close();
       const observed = new Database(path, { readonly: true, strict: true });
       try {
-        expect(observed.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+        expect(observed.query("PRAGMA user_version").get()).toEqual({ user_version: TEAM_SCHEMA_VERSION });
         const after = snapshot(observed);
         for (const [table, rows] of Object.entries(before)) expect(after[table]).toEqual(rows);
         expect(scope(observed, "old-project")).toEqual({ scope_key: "project:old-project", generation: 1, active: 1 });
@@ -112,7 +112,7 @@ test("failed v1 evidence migration rolls back the entire upgrade and original ro
   expect(db.query("SELECT * FROM sqlite_master ORDER BY name").all()).toEqual(schema);
 });
 
-test("an altered v2 schema refuses reopening without changing the saved generation or project", () => {
+test("an altered current schema refuses reopening without changing the saved generation or project", () => {
   const db = connection(); initializeTeamSchema(db);
   db.exec("INSERT INTO projects(id,name,created_at) VALUES('saved','Saved',1); UPDATE evaluation_evidence_scopes SET generation=3 WHERE scope_key='project:saved'; DROP TRIGGER evaluation_evidence_sets_immutable");
   const before = snapshot(db), schema = db.query("SELECT * FROM sqlite_master ORDER BY name").all();
@@ -122,11 +122,11 @@ test("an altered v2 schema refuses reopening without changing the saved generati
   expect(scope(db, "saved")).toEqual({ scope_key: "project:saved", generation: 3, active: 1 });
 });
 
-for (const version of [0, 1, 2]) {
+for (const version of [0, 1, TEAM_SCHEMA_VERSION]) {
   test(`a legal sqliteX table is an unknown user object at version ${version}, not a reserved SQLite table`, () => {
     const db = connection();
     if (version === 1) db.exec(oldSql);
-    else if (version === 2) initializeTeamSchema(db);
+    else if (version === TEAM_SCHEMA_VERSION) initializeTeamSchema(db);
     db.exec("CREATE TABLE sqliteXprotected(value TEXT); INSERT INTO sqliteXprotected VALUES('original captured payload')");
     const before = snapshot(db), schema = db.query("SELECT * FROM sqlite_master ORDER BY name").all();
     expect(() => initializeTeamSchema(db)).toThrow(TeamError);

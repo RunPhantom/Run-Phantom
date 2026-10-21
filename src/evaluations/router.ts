@@ -9,6 +9,8 @@ import { analyzeTrials, parseTrialSelection } from "./trials";
 import { createEvidenceRouter } from "./evidence-router";
 import type { EvidenceImportService } from "./evidence-import";
 import type { EvidenceOwner } from "./evidence-inventory";
+import { createFindingRouter } from "./finding-router";
+import { createCompletionRouter } from "../claims/router";
 
 function version(value: unknown): number | undefined {
   if (value === undefined) return undefined;
@@ -18,6 +20,10 @@ function version(value: unknown): number | undefined {
 export function createEvaluationRouter(service: EvaluationService, evidence?: { service: EvidenceImportService; owner: EvidenceOwner }): express.Router {
   const router = express.Router();
   if (evidence) router.use("/evidence", createEvidenceRouter(evidence.service, evidence.owner));
+  if (evidence?.owner.scope.kind === "local") {
+    router.use("/findings", createFindingRouter(evidence.owner));
+    router.use("/claims", createCompletionRouter(evidence.owner));
+  }
   const route = (handler: (req: Request, res: Response) => unknown) => (req: Request, res: Response, next: NextFunction) => {
     Promise.resolve().then(() => handler(req, res)).catch(next);
   };

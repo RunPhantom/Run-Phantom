@@ -1,3 +1,4 @@
+import { boundedPromptJson } from "../components/prompts/client";
 import type { ApiError, SessionResponse } from "../../../src/team/protocol";
 export type * from "../../../src/team/protocol";
 
@@ -6,6 +7,17 @@ export class TeamApiError extends Error {
     super(message);
     this.name = "TeamApiError";
   }
+}
+
+async function boundedTeamReviewJson(response: Response): Promise<unknown> {
+  const invalid = () => new TeamApiError(502, "invalid_response", "The project review response is unavailable or exceeds its bounds.");
+  const reader = response.body?.getReader(); if (!reader) throw invalid();
+  const chunks: Uint8Array[] = []; let size = 0;
+  try {
+    for (;;) { const part = await reader.read(); if (part.done) break; size += part.value.byteLength; if (size > 2 * 1024 * 1024) throw invalid(); chunks.push(part.value); }
+    const bytes = new Uint8Array(size); let offset = 0; for (const part of chunks) { bytes.set(part, offset); offset += part.byteLength; }
+    try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { throw invalid(); }
+  } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
 
 /** One in-memory client per team session provider; no local daemon requests. */
@@ -24,6 +36,24 @@ export class TeamClient {
   }
 
   async request<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
+    return this.jsonRequest(path, options, false);
+  }
+
+  /** Prompt transport keeps the ordinary Team request budget unchanged. */
+  async prompts<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal; responseBytes?: 65536 | 131072 } = {}): Promise<T> {
+    if (!/^\/projects\/[0-9a-f-]{36}\/prompts(?:\/|\?|$)/.test(path) || path.includes("#") || path.includes("\\")) throw new TeamApiError(400, "invalid_request", "Choose a project prompt endpoint.");
+    if (options.body !== undefined && new TextEncoder().encode(JSON.stringify(options.body)).byteLength > 65536) throw new TeamApiError(413, "too_large", "Prompt request exceeds its limit.");
+    return this.jsonRequest(path, options, true);
+  }
+
+  /** Project review transport preserves the ordinary Team request and prompt budgets. */
+  async reviews<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
+    if (!/^\/projects\/[0-9a-f-]{36}\/review-(?:queues|datasets)(?:\/|\?|$)/.test(path) || path.includes("#") || path.includes("\\")) throw new TeamApiError(400, "invalid_request", "Choose a project review endpoint.");
+    if (options.body !== undefined && new TextEncoder().encode(JSON.stringify(options.body)).byteLength > 65536) throw new TeamApiError(413, "too_large", "Project review request exceeds its limit.");
+    return this.jsonRequest(path, options, "review");
+  }
+
+  private async jsonRequest<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal; responseBytes?: 65536 | 131072 }, prompt: boolean | "review"): Promise<T> {
     const generation = this.generation;
     const project = path.match(/^\/projects\/([^/?]+)(?:\/|$)/)?.[1];
     const projectGeneration = project ? this.projectGenerations.get(project) ?? 0 : 0;
@@ -38,7 +68,7 @@ export class TeamClient {
       method, headers, credentials: "same-origin", cache: "no-store", signal: options.signal,
       ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
     });
-    const data: unknown = response.status === 204 ? undefined : await response.json().catch(() => undefined);
+    const data: unknown = response.status === 204 ? undefined : prompt === "review" ? await boundedTeamReviewJson(response) : prompt ? await boundedPromptJson(response, options.responseBytes) : await response.json().catch(() => undefined);
     if (generation !== this.generation || options.signal?.aborted || project && !membershipRead && projectGeneration !== (this.projectGenerations.get(project) ?? 0)) throw new DOMException("Request superseded", "AbortError");
     if (!response.ok) {
       const failure = (data as ApiError | undefined)?.error;

@@ -6,7 +6,7 @@ import http from "node:http";
 import { once } from "node:events";
 import express from "express";
 import { WebSocket } from "ws";
-import { createVerificationService } from "../src/verification/service";
+import { createVerificationService, flowPassReason } from "../src/verification/service";
 import { createVerificationRouter } from "../src/verification/router";
 import { closeDb, clearAll, getDrizzleDb, upsertRun, deleteRun } from "../src/db";
 import { listReports, listFlows, saveReport } from "../src/verification/store";
@@ -364,7 +364,9 @@ describe("application verification daemon", () => {
       expect(flow.status).toBe(201);
       expect((await f.api(`/flows/${flow.body.id}/run`, { sessionId: created.id })).body.status).toBe("fail");
       count = 1;
-      expect((await f.api(`/flows/${flow.body.id}/run`, { sessionId: created.id })).body.status).toBe("pass");
+      const passed = await f.api(`/flows/${flow.body.id}/run`, { sessionId: created.id });
+      expect(passed.body.status).toBe("pass");
+      expect(passed.body.reason).toStartWith("1 step verified during its observed interval;");
       const wrong = await f.api("/sessions", { origin: "http://localhost:4999" });
       expect((await f.api(`/flows/${flow.body.id}/run`, { sessionId: wrong.body.id })).status).toBe(409);
       closeDb();
@@ -457,5 +459,15 @@ describe("application verification daemon", () => {
       for (const ws of sockets) { ws.on("error", () => {}); ws.terminate(); }
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+});
+
+describe("flow pass reason", () => {
+  // A one-step flow used to report "1 steps verified during their observed intervals".
+  test("agrees in number with the step count", () => {
+    expect(flowPassReason(0)).toStartWith("0 steps verified during their observed intervals; each completed ");
+    expect(flowPassReason(1)).toStartWith("1 step verified during its observed interval; it completed ");
+    expect(flowPassReason(2)).toStartWith("2 steps verified during their observed intervals; each completed ");
+    expect(flowPassReason(1)).toEndWith(`with no tracked requests pending and at least ${L.QUIET_MS}ms quiet.`);
   });
 });
