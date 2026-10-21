@@ -19,9 +19,9 @@ export function validClaudeCapabilityOrigin(value: unknown): value is string {
   return Number(value.slice(value.lastIndexOf(":") + 1)) <= 65535;
 }
 export function encodeClaudeCapability(value: ClaudeCapabilityDescriptor): string {
-  const raw = JSON.stringify(value); validateDescriptor(raw, value.capabilityFile, value.installationId, value.ownerKey); return raw + "\n";
+  const raw = JSON.stringify(value); decodeClaudeCapabilityDescriptor(raw, value.capabilityFile, value.installationId, value.ownerKey); return raw + "\n";
 }
-function validateDescriptor(raw: string, file: string, id: string, expectedOwnerKey?: string): ClaudeCapabilityDescriptor {
+export function decodeClaudeCapabilityDescriptor(raw: string, file: string, id: string, expectedOwnerKey?: string): ClaudeCapabilityDescriptor {
   const parsed = parseBoundedHookJson(raw, CAPABILITY_LIMITS.bytes);
   if (parsed.status !== "accepted" || !parsed.value || typeof parsed.value !== "object" || Array.isArray(parsed.value)) fail("corrupt");
   const value = parsed.value;
@@ -35,6 +35,9 @@ function validateDescriptor(raw: string, file: string, id: string, expectedOwner
 /** Reads only the installed private path; no ambient profile lookup or remote fallback. */
 export async function readClaudeCapabilityDescriptor(file: string, installationId: string, expectedOwnerKey?: string, signal?: AbortSignal): Promise<ClaudeCapabilityDescriptor> {
   if (!validClaudeCapabilityPath(file) || !hex(installationId, 32) || expectedOwnerKey !== undefined && !hex(expectedOwnerKey, 64)) fail("unauthorized");
+  if (signal?.aborted) fail("aborted");
+  // Windows private descriptors require native owner/ACL and no-reparse proofs.
+  if (process.platform === "win32") fail("unavailable");
   const controller = new AbortController(); let timedOut = false;
   const abort = () => controller.abort(); signal?.addEventListener("abort", abort, { once: true }); if (signal?.aborted) abort();
   const check = () => { if (controller.signal.aborted) fail(timedOut ? "deadline" : "aborted"); };
@@ -67,7 +70,7 @@ export async function readClaudeCapabilityDescriptor(file: string, installationI
       for (const ancestor of ancestors) { const current = await lstat(ancestor.file, { bigint: true }); check(); if (!same(ancestor.stat, current) || current.isSymbolicLink() || current.mode !== ancestor.stat.mode || current.uid !== ancestor.stat.uid) fail("unavailable"); }
       if (await realpath(file) !== file) fail("unavailable"); check();
       let raw: string; try { raw = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { fail("corrupt"); }
-      return validateDescriptor(raw, file, installationId, expectedOwnerKey);
+      return decodeClaudeCapabilityDescriptor(raw, file, installationId, expectedOwnerKey);
     } finally { await handle.close(); }
   };
   try { return await Promise.race([acquire(), expiration]); }

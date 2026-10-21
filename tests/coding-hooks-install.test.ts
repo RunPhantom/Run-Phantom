@@ -5,7 +5,11 @@ import path from "node:path";
 import { CLAUDE_HOOK_EVENTS } from "../src/coding-hooks/shared";
 import { inspectClaudeHookSettings, mergeClaudeSettings, updateClaudeSettings, SETTINGS_LIMITS } from "../src/coding-hooks/install";
 
-const authority = { executable: '/private/Run Phantom $fixture` /runphantom "copy"', installationId: "a".repeat(32), capabilityFile: "/private/custom profile/coding-hooks/claude/" + "a".repeat(32) + ".json" };
+const authorityRoot = path.join(os.tmpdir(), "runphantom-hook-settings-authority");
+const authority = {
+  executable: path.join(authorityRoot, "Run Phantom $fixture`", 'runphantom "copy"'), installationId: "a".repeat(32),
+  capabilityFile: path.join(authorityRoot, "custom profile", "coding-hooks", "claude", "a".repeat(32) + ".json"),
+};
 const original = { permissions: { allow: ["Read"], custom: { enabled: true } }, future: ["preserved", { value: 2 }], hooks: {
   PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "ordinary existing command", timeout: 20 }] }],
   FutureEvent: [{ matcher: "future", hooks: [{ type: "http", url: "https://fixture.invalid/hook" }] }],
@@ -47,7 +51,7 @@ describe("exact owned Claude hook configuration", () => {
   test("a second installation's exact handlers remain outside this authority", () => {
     const first = merged(original);
     if (first.status !== "accepted") throw new Error("fixture not admitted");
-    const other = { ...authority, installationId: "b".repeat(32), capabilityFile: "/private/other profile/" + "b".repeat(32) + ".json" };
+    const other = { ...authority, installationId: "b".repeat(32), capabilityFile: path.join(authorityRoot, "other profile", "b".repeat(32) + ".json") };
     const second = mergeClaudeSettings(first.text, "install", other);
     if (second.status !== "accepted") throw new Error("fixture not admitted");
     const removed = mergeClaudeSettings(second.text, "uninstall", authority);
@@ -87,8 +91,8 @@ describe("exact owned Claude hook configuration", () => {
     if (edit === "matcher") group.matcher = "edited";
     if (edit === "group_metadata") group.future = "edited";
     if (edit === "args") group.hooks[0].args.push("--edited");
-    if (edit === "capability_file") group.hooks[0].args[6] = "/private/other-owner.json";
-    if (edit === "command") group.hooks[0].command = "/private/other executable";
+    if (edit === "capability_file") group.hooks[0].args[6] = path.join(authorityRoot, "other-owner.json");
+    if (edit === "command") group.hooks[0].command = path.join(authorityRoot, "other executable");
     if (edit === "handler_metadata") group.hooks[0].future = "edited";
     for (const operation of ["install", "uninstall"] as const) expect(merged(settings, operation)).toEqual({ status: "unavailable", reason: "ownership_uncertain" });
   });
@@ -108,16 +112,16 @@ describe("exact owned Claude hook configuration", () => {
 
 describe("bounded settings admission", () => {
   test.each([
-    '{"hooks":{},"hooks":{}}',
-    '{"future":{"password":"private","passw\\u006frd":"safe"}}',
-    '{"__proto__":{}}',
-    '{"value":9007199254740993}',
-    '{"value":1e400}',
-    '[{"hooks":{}}]',
-    '{"hooks":{"Stop":{}}}',
-    '{"hooks":{"Stop":[{"hooks":"malformed"}]}}',
-  ])("ambiguous or malformed settings cannot become a writable configuration", text => {
-    expect(mergeClaudeSettings(text, "install", authority).status).toBe("unavailable");
+    ['{"hooks":{},"hooks":{}}', "duplicate_keys"],
+    ['{"future":{"password":"private","passw\\u006frd":"safe"}}', "duplicate_keys"],
+    ['{"__proto__":{}}', "unsafe_key"],
+    ['{"value":9007199254740993}', "invalid_json"],
+    ['{"value":1e400}', "invalid_json"],
+    ['[{"hooks":{}}]', "invalid_fields"],
+    ['{"hooks":{"Stop":{}}}', "invalid_fields"],
+    ['{"hooks":{"Stop":[{"hooks":"malformed"}]}}', "invalid_fields"],
+  ] as const)("ambiguous or malformed settings cannot become a writable configuration", (text, reason) => {
+    expect(mergeClaudeSettings(text, "install", authority)).toEqual({ status: "unavailable", reason });
   });
 
   test("byte, lexical depth and cumulative node caps apply before merge", () => {
