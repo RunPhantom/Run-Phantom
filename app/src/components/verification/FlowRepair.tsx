@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "../ui/button";
 import { Field, Select } from "./PredicateEditor";
 import { verificationApi, type VerificationFlow } from "../../api/verification";
@@ -32,13 +32,20 @@ export function FlowRepair({ flow, sessionId, available, disabled, onCommitted }
   const currentScope = useRef(scope); currentScope.current = scope;
   const editable = flow.steps.flatMap((entry, index) => entry.command?.type === "click" && relativeTargets(entry.predicate).length === 0 ? [index] : []);
   const currentProposal = proposal && proposal.revision === flow.revision && available ? proposal : null;
-  async function perform(work: () => Promise<void>) {
+  const firstEditable = editable[0] ?? 0;
+  useEffect(() => () => { ticket.current++; running.current = false; }, []);
+  useEffect(() => {
+    ticket.current++; running.current = false; setBusy(false); setError(""); setProposal(null); setSelected(""); setStep(firstEditable);
+  }, [scope, firstEditable]);
+  useEffect(() => { setNotice(""); }, [flow.id, sessionId, available]);
+  async function perform(work: (current: () => boolean) => Promise<void>) {
     if (running.current || disabled) return;
     running.current = true; setBusy(true); setError(""); setNotice("");
     const owned = currentScope.current; const sequence = ++ticket.current;
-    try { await work(); }
-    catch (cause) { if (currentScope.current === owned && ticket.current === sequence) setError(cause instanceof Error ? cause.message : "Repair review failed."); }
-    finally { running.current = false; setBusy(false); }
+    const current = () => currentScope.current === owned && ticket.current === sequence;
+    try { await work(current); }
+    catch (cause) { if (current()) setError(cause instanceof Error ? cause.message : "Repair review failed."); }
+    finally { if (current()) { running.current = false; setBusy(false); } }
   }
   return <div className="flow-repair w-full min-w-0 space-y-3">
     <Button variant="outline" size="sm" disabled={disabled || busy || !editable.length} aria-expanded={open} aria-label={`Review repair for ${flow.name}`} onClick={() => { setOpen(!open); setStep(editable[0] ?? 0); }}>Review repair</Button>
@@ -48,11 +55,11 @@ export function FlowRepair({ flow, sessionId, available, disabled, onCommitted }
       <p className="break-words">Version {flow.version} · revision {flow.revision.slice(0, 12)}</p>
       {!available && <p role="status" style={{ color: C.orange }}>Select a connected app at this origin with semantic discovery to review a repair.</p>}
       <fieldset disabled={disabled || busy || !available} className="space-y-3">
-        <Field label="Repair step"><Select value={step} onChange={event => { setStep(Number(event.target.value)); setProposal(null); setSelected(""); }}>{editable.map(index => <option key={index} value={index}>Step {index + 1}</option>)}</Select></Field>
-        <Button size="sm" onClick={() => void perform(async () => {
-          const owned = currentScope.current; setProposal(null); setSelected("");
+        <Field label="Repair step"><Select className="min-h-11" value={step} onChange={event => { setStep(Number(event.target.value)); setProposal(null); setSelected(""); }}>{editable.map(index => <option key={index} value={index}>Step {index + 1}</option>)}</Select></Field>
+        <Button size="sm" onClick={() => void perform(async current => {
+          setProposal(null); setSelected("");
           const result = await verificationApi.proposeRepair(flow.id, sessionId, step);
-          if (owned === currentScope.current) setProposal(result);
+          if (current()) setProposal(result);
         })} className="flow-repair-primary">Propose repair</Button>
       </fieldset>
       {currentProposal && <div className="space-y-3">
@@ -68,10 +75,11 @@ export function FlowRepair({ flow, sessionId, available, disabled, onCommitted }
             <span className="min-w-0 break-words">New: {describe(candidate.anchor)}<br />New source: {source(candidate.anchor)} · comparison: {candidate.sourceMatch}<br />{candidate.reason}</span>
           </label>)}
         </fieldset>
-        <div className="flow-repair-actions flex flex-wrap gap-2"><Button size="sm" disabled={disabled || busy || !selected || !available} onClick={() => void perform(async () => {
+        <div className="flow-repair-actions flex flex-wrap gap-2"><Button size="sm" disabled={disabled || busy || !selected || !available} onClick={() => void perform(async current => {
           await verificationApi.commitRepair(flow.id, currentProposal.id, selected, currentProposal.revision);
+          if (!current()) return;
           setProposal(null); setSelected(""); setNotice("Reviewed repair saved. Replay separately to check the outcome."); await onCommitted();
-        })} className="flow-repair-primary">Commit selected repair</Button><Button size="sm" variant="ghost" disabled={disabled || busy} onClick={() => void perform(async () => { await verificationApi.cancelRepair(flow.id, currentProposal.id); setProposal(null); setSelected(""); setNotice("Repair canceled. Saved flow unchanged."); })}>Cancel repair</Button></div>
+        })} className="flow-repair-primary">Commit selected repair</Button><Button size="sm" variant="ghost" disabled={disabled || busy} onClick={() => void perform(async current => { await verificationApi.cancelRepair(flow.id, currentProposal.id); if (!current()) return; setProposal(null); setSelected(""); setNotice("Repair canceled. Saved flow unchanged."); })}>Cancel repair</Button></div>
       </div>}
       <div role="status" aria-live="polite">{busy ? "Reading or saving the review…" : notice}</div>
       {error && <p role="alert" className="break-words" style={{ color: C.red }}>{error}</p>}
