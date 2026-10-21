@@ -1,5 +1,7 @@
 import type { CapturedGuardEvidence } from "../../../src/guard-evidence-protocol";
 
+import type { HookCaptureView } from "../../../src/spans/normalized";
+
 export interface Run {
   id: string;
   name: string | null;
@@ -14,6 +16,7 @@ export interface Run {
   finished?: number | null; // 1 if root span has OK/ERROR status
   error_count?: number | null; // spans with ERROR status; drives the "Run failed" list label
   live_event_count?: number | null;
+  capture_completion?: "unavailable" | null;
 }
 
 export interface ReplayMetadata {
@@ -67,6 +70,7 @@ export interface NormalizedMessage {
 }
 
 export interface NormalizedLLMSpan {
+  capture?: HookCaptureView;
   kind: "llm";
   messages: NormalizedMessage[];
   userMessage: string;
@@ -76,6 +80,7 @@ export interface NormalizedLLMSpan {
 }
 
 export interface NormalizedToolSpan {
+  capture?: HookCaptureView;
   kind: "tool";
   name: string;
   args: unknown;
@@ -84,10 +89,12 @@ export interface NormalizedToolSpan {
 }
 
 export interface NormalizedOtherSpan {
+  capture?: HookCaptureView;
   kind: "other";
 }
 
-export type NormalizedSpan = NormalizedLLMSpan | NormalizedToolSpan | NormalizedOtherSpan;
+import type { CaptureVisibilityV1, RetrievalCapture, EmbeddingCapture } from "../../../src/spans/adapters/capture-visibility-types";
+export type NormalizedSpan = RetrievalCapture | EmbeddingCapture | NormalizedLLMSpan | NormalizedToolSpan | NormalizedOtherSpan;
 
 export interface Span {
   id: string;
@@ -115,6 +122,7 @@ export interface Span {
    * consumers should treat absence the same as `{ kind: "other" }`.
    */
   normalized?: NormalizedSpan;
+  captureVisibility?: CaptureVisibilityV1;
 }
 
 export function getNormalizedTool(span: Span): NormalizedToolSpan | null {

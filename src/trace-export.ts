@@ -1,6 +1,7 @@
 import { getCachedRun, getDrizzleDb, runInTransaction } from "./db";
 import { importAnnotations, parseImportedAnnotations, MAX_IMPORTED_ANNOTATIONS, type Annotation } from "./annotations";
 import { OTLP_EVIDENCE_LIMITS, validateOtlpEvidence } from "./spans/otlp-evidence";
+import { publicCaptureMetadata } from "./spans/adapters/capture-visibility";
 import { withholdAgentDefinitionCapture } from "./agent-definitions";
 import { guardSpanForExport } from "./guard-evidence";
 import { parseJsonEvidence } from "./evaluations/json-evidence";
@@ -107,7 +108,7 @@ function exportCachedTrace(runId: string, publicProjection: boolean): CachedTrac
     exportNotice: "Legacy saved trace: payloads reflect the cached view and may be compacted. Only annotations still present in this store are included.",
   };
   parseTrace(trace);
-  if (publicProjection) trace.spans = spans.map(span => guardSpanForExport(withholdAgentDefinitionCapture(span)));
+  if (publicProjection) trace.spans = spans.map(span => publicCaptureMetadata(guardSpanForExport(withholdAgentDefinitionCapture(span))));
   boundedJson(trace);
   return trace;
 }
@@ -152,7 +153,7 @@ function retainedTrace(runId: string, publicProjection: boolean): ExportedTrace 
       annotations: client.prepare("SELECT id, run_id, span_id, kind, note, source, created_at FROM annotations WHERE run_id = ? ORDER BY created_at, id").all(runId) as Annotation[],
     };
     parseTrace(trace);
-    if (publicProjection) trace.spans = spans.map(span => guardSpanForExport(withholdAgentDefinitionCapture(span)));
+    if (publicProjection) trace.spans = spans.map(span => publicCaptureMetadata(guardSpanForExport(withholdAgentDefinitionCapture(span))));
     boundedJson(trace);
     return trace;
   });
