@@ -59,6 +59,7 @@ type SpansBroadcast = {
 };
 
 type LiveEventBroadcast = {
+  persistedId?: number;
   traceId?: string;
   spanId?: string | null;
   type?: string;
@@ -66,6 +67,54 @@ type LiveEventBroadcast = {
   timestamp?: number;
   metadata?: string | Record<string, unknown> | null;
 };
+
+type DetailData = { run: Run; spans: Span[]; liveEvents: LiveEvent[]; subAgents: SubAgent[] };
+type DetailContext = {
+  lifecycle: object; route: string; tab: string; agentTab: string;
+  spanId: string | null; view: string; agentId: string | null;
+};
+type LiveObservation = { sequence: number; event: LiveEvent; persisted: boolean };
+type LiveCoverage = "current-store" | "saved-cache" | "legacy";
+type LiveView = {
+  base: LiveEvent[]; overlay: LiveObservation[]; coverage: LiveCoverage;
+  lifecycle: object | null; generation: number; coveredThrough: number;
+};
+type DetailOwner = {
+  request: number; generation: number; controller: AbortController;
+  sequence: number; context: DetailContext; pending: boolean;
+};
+type DetailLifecycle = {
+  runId: string; preloaded: boolean; mounted: boolean; generation: number;
+  owner: DetailOwner | null; publication: DetailOwner | null;
+  sequence: number;
+};
+
+function persistedLiveId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function liveViewEvents(view: LiveView): LiveEvent[] {
+  const events = [...view.base];
+  // Cache IDs belong to a historical store, so only a current-store base can
+  // acknowledge a native broadcast. Identical rows with different IDs survive.
+  const seen = new Set(view.coverage === "current-store" ? view.base.map(event => event.id) : []);
+  for (const observation of view.overlay) {
+    if (observation.persisted) {
+      if (seen.has(observation.event.id)) continue;
+      seen.add(observation.event.id);
+    }
+    events.push(observation.event);
+  }
+  return view.coverage === "current-store"
+    ? events.sort((a, b) => a.timestamp - b.timestamp || a.id - b.id)
+    : events;
+}
+
+function containsDetailContext(data: DetailData, context: DetailContext): boolean {
+  return (!context.spanId || data.spans.some(span => span.id === context.spanId))
+    && (context.view !== "convo" || !!data.run.convo_id)
+    && (!context.agentId || data.subAgents.some(agent => agent.root_span_id === context.agentId));
+}
 
 function handleHorizontalTabKeys(event: ReactKeyboardEvent<HTMLDivElement>): void {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -95,7 +144,7 @@ function toLiveEvent(event: LiveEventBroadcast | undefined): LiveEvent | null {
     return null;
   }
   return {
-    id: event.timestamp,
+    id: persistedLiveId(event.persistedId) ? event.persistedId : event.timestamp,
     trace_id: event.traceId,
     span_id: event.spanId ?? null,
     type: event.type,
@@ -1367,7 +1416,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   const runSpansTabId = `${tabIdPrefix}-run-spans`;
   const runConversationTabId = `${tabIdPrefix}-run-conversation`;
   const runPanelId = `${tabIdPrefix}-run-panel`;
-  const [data, setData] = useState<{ run: Run; spans: Span[]; liveEvents: LiveEvent[]; subAgents: SubAgent[] } | null>(
+  const [data, setData] = useState<DetailData | null>(
     initialData ? { run: initialData.run, spans: initialData.spans, liveEvents: initialData.liveEvents ?? [], subAgents: initialData.subAgents ?? [] } : null
   );
   const dataRef = useRef(data);
@@ -1389,7 +1438,8 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   const [loading, setLoading] = useState(!initialData);
   const [notFound, setNotFound] = useState(false);
   const [agentTab, setAgentTab] = useState<"chat" | "tree">("chat");
-  const [liveEvents, setLiveEvents] = useState<LiveEvent[]>(initialData?.liveEvents ?? []);
+  const [liveView, setLiveView] = useState<LiveView>({ base: initialData?.liveEvents ?? [], overlay: [], coverage: "legacy", lifecycle: null, generation: 0, coveredThrough: 0 });
+  const liveEvents = useMemo(() => liveViewEvents(liveView), [liveView]);
   const [anthropicModels, setAnthropicModels] = useState<string[]>([]);
   const annotationsApi = useAnnotations(runId);
   const autoSavedAnnotationIdsRef = useRef<Set<string>>(new Set());
@@ -1475,54 +1525,111 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   // new one: the URL showed trace B while the pane rendered trace A. Every write
   // below is gated on the request still being the current one.
   const detailRequestRef = useRef(0);
-  const detailAbortRef = useRef<AbortController | null>(null);
-  const detailInFlightRef = useRef(false);
-  const detailPendingRefreshRef = useRef(false);
+  const lifecycle = useMemo<DetailLifecycle>(() => ({
+    runId, preloaded: !!initialData, mounted: false, generation: 0,
+    owner: null, publication: null, sequence: 0,
+  }), [runId, initialData]);
+  const currentLifecycleRef = useRef<DetailLifecycle | null>(null);
+  const context = useMemo<DetailContext>(() => ({
+    lifecycle, route: pathname + search, tab: activeTab, agentTab,
+    spanId: selectedSpanId, view: runView, agentId: focusedAgent,
+  }),
+    [lifecycle, pathname, search, activeTab, selectedSpanId, runView, focusedAgent, agentTab]);
+  const contextRef = useRef(context);
+  const [publishedContext, setPublishedContext] = useState<DetailContext | null>(null);
+  const [contextSnapshot, setContextSnapshot] = useState<{ context: DetailContext; data: DetailData } | null>(null);
 
   const connectionStatus = useRunPhantomConnectionStatus();
   const previousConnectionStatus = useRef(connectionStatus);
 
-  const fetchData = useCallback(async (): Promise<void> => {
-    if (initialData || isRunDeleting(runId)) return; // Keep the visible trace during deletion.
-    // Handshake/broadcast refreshes need a newer snapshot, not cancellation of
-    // the same run's current read. Retain one trailing refresh until it settles.
-    if (detailInFlightRef.current) { detailPendingRefreshRef.current = true; return; }
+  const retireDetail = useCallback(() => {
+    // An old passive cleanup must not invalidate a new run's layout-owned read.
+    if (currentLifecycleRef.current === lifecycle) ++detailRequestRef.current;
+    ++lifecycle.generation;
+    const owner = lifecycle.owner;
+    lifecycle.owner = lifecycle.publication = null;
+    owner?.controller.abort();
+  }, [lifecycle]);
+
+  useLayoutEffect(() => {
+    currentLifecycleRef.current = lifecycle;
+    lifecycle.mounted = true;
+    return () => { lifecycle.mounted = false; retireDetail(); };
+  }, [lifecycle, retireDetail]);
+
+  useLayoutEffect(() => {
+    contextRef.current = context;
+    if (data?.run.id === runId && containsDetailContext(data, context)) {
+      setContextSnapshot({ context, data });
+    }
+  }, [context, data, runId]);
+
+  const fetchData = useCallback(async function refresh(): Promise<void> {
+    const live = () => lifecycle.mounted && currentLifecycleRef.current === lifecycle
+      && !lifecycle.preloaded && !isRunDeleting(lifecycle.runId);
+    if (!live()) return;
+    if (lifecycle.owner) { lifecycle.owner.pending = true; return; }
     const controller = new AbortController();
-    detailAbortRef.current = controller;
-    detailInFlightRef.current = true;
-    detailPendingRefreshRef.current = false;
-    const requestId = ++detailRequestRef.current;
-    const isCurrent = () => detailRequestRef.current === requestId && !controller.signal.aborted;
+    const owner: DetailOwner = {
+      request: ++detailRequestRef.current, generation: lifecycle.generation, controller,
+      sequence: lifecycle.sequence, context: contextRef.current, pending: false,
+    };
+    lifecycle.owner = owner;
+    const isCurrent = () => live() && lifecycle.owner === owner && owner.generation === lifecycle.generation
+      && detailRequestRef.current === owner.request && !controller.signal.aborted;
+    // Starting the queued transport does not revoke a completed read's React
+    // publication. Retirement or a newer completion does revoke it.
+    const canPublish = () => live() && lifecycle.publication === owner
+      && owner.generation === lifecycle.generation && !controller.signal.aborted;
+    const publishFailure = () => {
+      lifecycle.publication = owner;
+      setData(previous => canPublish() ? null : previous);
+      setNotFound(previous => canPublish() ? true : previous);
+    };
     try {
-      const res = await fetch(`/api/runs/detail/${runId}`, { signal: controller.signal });
+      const res = await fetch(`/api/runs/detail/${lifecycle.runId}`, { signal: controller.signal });
       if (!isCurrent()) return;
       if (res.status === 404) {
-        setData(null);
-        setNotFound(true);
+        publishFailure();
         return;
       }
       if (!res.ok) throw new Error(`Could not load run (${res.status})`);
-      const j = await res.json();
+      const j = await res.json() as DetailData;
       if (!isCurrent()) return;
-      setData(j);
-      setNotFound(false);
-      if (j.liveEvents) setLiveEvents(j.liveEvents);
+      lifecycle.publication = owner;
+      setData(previous => canPublish() ? j : previous);
+      setNotFound(previous => canPublish() ? false : previous);
+      setPublishedContext(previous => canPublish() ? owner.context : previous);
+      const source = res.headers.get("X-RunPhantom-Live-Events");
+      setLiveView(previous => {
+        if (!canPublish()) return previous;
+        // The ledger and its watermark are state, not external receipts retired
+        // by render-time evaluation. Replaying/discarding this pure calculation
+        // cannot acknowledge a frame outside React. Frame updaters reconcile
+        // against React's preceding view state; only its commit changes the UI.
+        const sameGeneration = previous.lifecycle === lifecycle && previous.generation === owner.generation;
+        const overlay = sameGeneration ? previous.overlay.filter(observation => observation.sequence > owner.sequence) : [];
+        // Unclassified HTTP still advances the base. Its pre-start overlay is
+        // replaced as legacy best effort, never acknowledged by numeric IDs.
+        // Post-start frames remain separate; exact-once needs both native IDs
+        // and the matching daemon's truthful classification.
+        return {
+          base: j.liveEvents ?? [], overlay,
+          coverage: source === "current-store" || source === "saved-cache" ? source : "legacy",
+          lifecycle, generation: owner.generation, coveredThrough: owner.sequence,
+        };
+      });
     } catch {
       if (!isCurrent()) return;
-      setData(null);
-      setNotFound(true);
-    }
-    finally {
+      publishFailure();
+    } finally {
       if (isCurrent()) {
-        setLoading(false);
-        detailInFlightRef.current = false;
-        detailAbortRef.current = null;
-        const refresh = detailPendingRefreshRef.current;
-        detailPendingRefreshRef.current = false;
-        if (refresh) void fetchData();
+        setLoading(previous => canPublish() ? false : previous);
+        lifecycle.owner = null;
+        if (owner.pending && live()) void refresh();
       }
     }
-  }, [runId, initialData]);
+  }, [lifecycle]);
 
   useEffect(() => {
     const recovered = previousConnectionStatus.current !== "connected" && connectionStatus === "connected";
@@ -1545,17 +1652,10 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
 
   useEffect(() => {
     let wasDeleting = isRunDeleting(runId);
-    const cancelDetail = () => {
-      ++detailRequestRef.current;
-      detailPendingRefreshRef.current = false;
-      detailInFlightRef.current = false;
-      detailAbortRef.current?.abort();
-      detailAbortRef.current = null;
-    };
     const unsubscribe = subscribeRunDeletions(() => {
       const deleting = isRunDeleting(runId);
       if (deleting) {
-        cancelDetail();
+        retireDetail();
       } else if (wasDeleting) {
         void fetchData(); // A failed delete leaves the trace selected and live.
       }
@@ -1563,29 +1663,44 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
     });
     return () => {
       unsubscribe();
-      cancelDetail();
+      retireDetail();
     };
-  }, [runId, fetchData]);
+  }, [runId, fetchData, retireDetail]);
 
   useEffect(() => {
     if (initialData) return;
     setLoading(true);
     setNotFound(false);
     setData(null);
-    setLiveEvents([]); setFocusedAgent(null); setAgentTab("chat"); setLocalTab("chat"); setLocalSelectedSpanId(null); setEditModal(null); fetchData();
+    setLiveView({ base: [], overlay: [], coverage: "legacy", lifecycle: null, generation: 0, coveredThrough: 0 }); setPublishedContext(null); setFocusedAgent(null); setAgentTab("chat"); setLocalTab("chat"); setLocalSelectedSpanId(null); setEditModal(null); fetchData();
   }, [runId, fetchData, initialData]);
 
   useEffect(() => {
     if (!routeBase || !selectedSpanId || !data?.spans.length) return;
     if (!data.spans.some((s) => s.id === selectedSpanId)) {
+      if (publishedContext !== context) {
+        if (lifecycle.owner?.context !== context) void fetchData();
+        return;
+      }
       navigate(`${traceSpansPath(routeBase, runId)}${searchQuery}`, { replace: true });
     }
-  }, [data?.spans, navigate, routeBase, runId, searchQuery, selectedSpanId]);
+  }, [context, data?.spans, fetchData, lifecycle, navigate, publishedContext, routeBase, runId, searchQuery, selectedSpanId]);
 
   useEffect(() => {
     if (!routeBase || runView !== "convo" || !data?.run) return;
-    if (!data.run.convo_id) navigate(`${tracePath(routeBase, runId)}${searchQuery}`, { replace: true });
-  }, [data?.run, navigate, routeBase, runId, runView, searchQuery]);
+    if (!data.run.convo_id) {
+      if (publishedContext !== context) {
+        if (lifecycle.owner?.context !== context) void fetchData();
+        return;
+      }
+      navigate(`${tracePath(routeBase, runId)}${searchQuery}`, { replace: true });
+    }
+  }, [context, data?.run, fetchData, lifecycle, navigate, publishedContext, routeBase, runId, runView, searchQuery]);
+
+  useEffect(() => {
+    if (!focusedAgent || !data || data.subAgents.some(agent => agent.root_span_id === focusedAgent)) return;
+    if (publishedContext !== context && lifecycle.owner?.context !== context) void fetchData();
+  }, [context, data, fetchData, focusedAgent, lifecycle, publishedContext]);
 
   useLayoutEffect(() => {
     stickToBottomContextRef.current?.stopScroll();
@@ -1626,9 +1741,22 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   });
 
   useRunPhantomEvent<LiveEventBroadcast | undefined>("live", (data) => {
-    if (initialData || data?.traceId !== runId) return; // No WebSocket updates for pre-loaded data
+    if (initialData || data?.traceId !== runId || !lifecycle.mounted || isRunDeleting(runId)) return;
     const event = toLiveEvent(data);
-    if (event) setLiveEvents(p => [...p, event]);
+    if (!event) return;
+    const generation = lifecycle.generation;
+    const observation: LiveObservation = { sequence: ++lifecycle.sequence, event, persisted: persistedLiveId(data.persistedId) };
+    setLiveView(previous => {
+      if (!lifecycle.mounted || currentLifecycleRef.current !== lifecycle || generation !== lifecycle.generation) return previous;
+      const sameGeneration = previous.lifecycle === lifecycle && previous.generation === generation;
+      if (sameGeneration && (observation.sequence <= previous.coveredThrough || previous.overlay.includes(observation))) return previous;
+      // A failed deletion resumes the same run. Its last committed display
+      // survives retirement; the monotonic sequence lets the next read replace
+      // that older prefix without treating a different run's state as current.
+      return previous.lifecycle === lifecycle
+        ? { ...previous, generation, overlay: [...previous.overlay, observation] }
+        : { base: [], overlay: [observation], coverage: "legacy", lifecycle, generation, coveredThrough: 0 };
+    });
   });
 
   // Extract last user message for fork pre-fill (must be before early returns — rules of hooks).
@@ -1692,15 +1820,18 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   if (notFound || !data?.run) return <TraceNotFound runId={runId} backPath={routeBase ?? "/runs"} />;
 
   const { run, spans, subAgents } = data;
+  const paneData = publishedContext !== context && contextSnapshot?.context === context ? contextSnapshot.data : data;
+  const paneSpans = paneData.spans;
+  const paneConvoId = paneData.run.convo_id;
   const replayMeta = parseReplayMetadata(run);
 
   // If focused on a sub-agent, show that sub-agent's view
-  const agent = focusedAgent ? subAgents.find(a => a.root_span_id === focusedAgent) : null;
+  const agent = focusedAgent ? paneData.subAgents.find(a => a.root_span_id === focusedAgent) : null;
 
   if (agent) {
     const agentSpanSet = new Set(agent.span_ids);
     // Exclude the root tool call span — it's the parent invocation, not part of the sub-agent's work
-    const agentSpans = spans.filter(s => agentSpanSet.has(s.id) && s.id !== agent.root_span_id);
+    const agentSpans = paneSpans.filter(s => agentSpanSet.has(s.id) && s.id !== agent.root_span_id);
     const agentTools = agentSpans.filter(s => s.span_type === "TOOL_CALL");
     const agentLLMs = agentSpans.filter(s => s.span_type?.includes("LLM"));
     const agentErrs = agentSpans.filter(s => s.status === "ERROR");
@@ -1823,14 +1954,14 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
       <div role="tablist" aria-label="Run views" aria-orientation="horizontal" onKeyDown={handleHorizontalTabKeys} className="flex-shrink-0 flex" style={{ borderBottom: `1px solid ${C.border}`, paddingLeft: 16 }}>
         <button type="button" id={runOverviewTabId} className="rp-tab" role="tab" aria-selected={activeTab === "chat"} aria-controls={runPanelId} tabIndex={activeTab === "chat" ? 0 : -1} style={tabStyle("chat")} onClick={goOverview}>Overview</button>
         <button type="button" id={runSpansTabId} className="rp-tab" role="tab" aria-selected={activeTab === "tree"} aria-controls={runPanelId} tabIndex={activeTab === "tree" ? 0 : -1} style={tabStyle("tree")} onClick={goSpans}>Span Tree</button>
-        {run.convo_id && (
+        {paneConvoId && (
           <button type="button" id={runConversationTabId} className="rp-tab" role="tab" aria-selected={activeTab === "convo"} aria-controls={runPanelId} tabIndex={activeTab === "convo" ? 0 : -1} style={tabStyle("convo")} onClick={goConvo}>Conversation</button>
         )}
       </div>
       {activeTab === "tree" ? (
         <div id={runPanelId} role="tabpanel" aria-labelledby={runSpansTabId} className="flex-1 relative min-h-0 overflow-auto sb" style={{ padding: 16 }}>
           <SpanTree
-            spans={spans}
+            spans={paneSpans}
             selectedSpanId={selectedSpanId}
             onSelectSpan={selectSpan}
             annotations={annotationsApi.annotations}
@@ -1845,7 +1976,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
         <StickToBottom id={runPanelId} role="tabpanel" aria-labelledby={activeTab === "convo" ? runConversationTabId : runOverviewTabId} className="flex-1 relative min-h-0" resize={prefersReducedMotion ? "instant" : "smooth"} initial={false} contextRef={stickToBottomContextRef}>
           <StickToBottom.Content className="sb">
             {activeTab === "chat" && <ChatFlow spans={spans} liveEvents={liveEvents} subAgents={subAgents} onDiveIn={setFocusedAgent} isActive={active} lastUpdatedAt={run.last_updated_at} onEditMessage={onForkStarted && !active && !replayUnavailable ? (msg) => setEditModal({ userMessage: msg }) : undefined} replayError={replayMeta?.replay?.error ?? null} />}
-            {activeTab === "convo" && run.convo_id && <ConvoDetail convoId={run.convo_id} onOpenTurn={openConversationTurn} />}
+            {activeTab === "convo" && paneConvoId && <ConvoDetail convoId={paneConvoId} onOpenTurn={openConversationTurn} />}
           </StickToBottom.Content>
           <ScrollToBottomButton />
         </StickToBottom>
