@@ -210,7 +210,7 @@ export async function inspectClaudeHookSettings(file: string, authority: HookIns
 }
 
 /** A cooperative lock and observed-change check, not CAS against a noncooperating writer's rename. */
-export async function updateClaudeSettings(file: string, operation: "install" | "uninstall", authority: HookInstallAuthority): Promise<SettingsResult> {
+export async function updateClaudeSettings(file: string, operation: "install" | "uninstall", authority: HookInstallAuthority, merge = mergeClaudeSettings): Promise<SettingsResult> {
   let lock: FileHandle | undefined, lockStats: BigIntStats | undefined, temporary: string | undefined, temporaryStats: BigIntStats | undefined;
   const parent = path.dirname(file), lockPath = path.join(parent, ".runphantom-hooks.lock");
   try {
@@ -221,7 +221,7 @@ export async function updateClaudeSettings(file: string, operation: "install" | 
     try { parentStats = await lstat(parent, { bigint: true }); }
     catch (error) {
       if (!isMissing(error)) throw error;
-      if (operation === "uninstall") return mergeClaudeSettings(null, operation, authority);
+      if (operation === "uninstall") return merge(null, operation, authority);
       await mkdir(parent, { recursive: true, mode: 0o700 });
       parentStats = await lstat(parent, { bigint: true });
     }
@@ -229,7 +229,7 @@ export async function updateClaudeSettings(file: string, operation: "install" | 
     try { lock = await open(lockPath, "wx", 0o600); }
     catch (error) { if (error instanceof Error && "code" in error && error.code === "EEXIST") fail("locked"); throw error; }
     lockStats = await lock.stat({ bigint: true });
-    const before = await readSnapshot(file), result = mergeClaudeSettings(before?.text ?? null, operation, authority);
+    const before = await readSnapshot(file), result = merge(before?.text ?? null, operation, authority);
     if (result.status !== "accepted" || !result.changed || result.text === null) return result;
     temporary = path.join(parent, `.runphantom-hooks-${randomBytes(12).toString("hex")}.tmp`);
     const next = await open(temporary, "wx", before ? Number(before.stats.mode & 0o777n) : 0o600);

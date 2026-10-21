@@ -5,7 +5,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { startTeamFixture, type TeamFixture } from "../../tests/helpers/team-server";
 import type { PromptPage, PromptRevision } from "../../src/prompts/protocol";
 const test = base.extend<{ team: TeamFixture }>({ team: async ({}, use) => { const team = await startTeamFixture("prompts"); try { await use(team); } finally { await team.close(); } } });
-const password = "Prompt browser passphrase 2026", evidence = path.resolve(import.meta.dirname, "../../.omx/evidence/F33/ui");
+const password = "Prompt browser passphrase 2026", evidence = path.resolve(process.env.F33_UI_ARTIFACT_ROOT ?? path.resolve(import.meta.dirname, `../../.omx/evidence/F33/connected-ui-${Date.now()}-${process.pid}/team`));
 async function mutate<T>(request: APIRequestContext, url: string, endpoint: string, body?: unknown, method = "POST") {
   const session = await (await request.get(`${url}/api/team/session`)).json();
   const result = await request.fetch(`${url}/api/team${endpoint}`, { method, headers: { Origin: url, "X-RunPhantom-CSRF": session.csrfToken }, ...(body === undefined ? {} : { data: body }) });
@@ -51,7 +51,7 @@ test("real Team prompt journey pins revisions, retains conflicts, exports litera
   await page.getByRole("button", { name: "Load current revision", exact: true }).click(); await expect(page.getByRole("alertdialog")).toContainText("Discard unsaved changes"); await page.getByRole("button", { name: "Discard changes", exact: true }).click(); await expect(page.getByLabel("Template", { exact: true })).toHaveValue("Concurrent {{topic}}");
   await page.getByRole("button", { name: "Clear all prompts", exact: true }).click(); await expect(page.getByRole("alertdialog")).toContainText("This cannot be undone"); await expect(page.getByRole("button", { name: "Keep working", exact: true })).toBeFocused(); await page.keyboard.press("Shift+Tab"); await expect(page.getByRole("button", { name: "Permanently remove", exact: true })).toBeFocused(); await page.keyboard.press("Escape"); await expect(page.getByRole("button", { name: "Clear all prompts", exact: true })).toBeFocused();
   await page.getByRole("button", { name: "Clear all prompts", exact: true }).click(); await page.getByRole("button", { name: "Permanently remove", exact: true }).click(); await expect(page.getByText("No prompts yet. Save your first template to start its history.", { exact: true })).toBeVisible(); expect((await (await page.request.get(`${team.url}/api/team${base}`)).json()).items).toEqual([]);
-  writeFileSync(path.join(evidence, "measurements.json"), JSON.stringify({ measurements, errors, foreign, provenance: "Actual authenticated Team server and SQLite; local migration activation is pending." }, null, 2)); expect(errors).toEqual([]); expect(foreign).toEqual([]);
+  writeFileSync(path.join(evidence, "measurements.json"), JSON.stringify({ measurements, errors, foreign, provenance: "Actual authenticated Team server and SQLite; canonical12 local storage is independently activated and tested." }, null, 2)); expect(errors).toEqual([]); expect(foreign).toEqual([]);
 });
 
 test("actual viewer and editor controls remain scoped when project access is revoked", async ({ page, browser, team }) => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { flushSync } from "react-dom";
 import { isRunDeleting, setRunDeleting, subscribeRunDeletions, setRunDeletionError, useRunDeletionError, useRunDeletions } from "../hooks/use-runs";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
@@ -23,7 +23,9 @@ import { SavePopover } from "./SavePopover";
 import { RotateCcw, Bookmark, Download, Pencil, ChevronDown, ArrowDown, ChevronRight, MessageCircle, SearchX } from "lucide-react";
 import { LocalAgentSetupCTA, SetupReplayModal } from "./LocalAgentSetupCTA";
 import { C } from "../utils/colors";
-import { fmt, isActive, plural, runDisplayName, isoTimestamp, safeDecodeParam } from "../utils/helpers";
+import { fmt, isActive, plural, replayOutcome, runDisplayName, isoTimestamp, safeDecodeParam, spanErrorReason } from "../utils/helpers";
+import type { RunStatus } from "../utils/helpers";
+import { captureCompletion, observationReplayUnavailable } from "../../../src/spans/normalized";
 import { useQueryClient } from "@tanstack/react-query";
 import { parseReplayMetadata } from "../utils/types";
 import { deleteRun, renameRun } from "../api/runs";
@@ -43,7 +45,7 @@ import { useAnnotations } from "../hooks/use-annotations";
 import type { Annotation, AnnotationKind } from "../hooks/use-annotations";
 import { useAgentForEvent } from "../hooks/use-agents";
 import { useRunPhantomConnectionStatus, useRunPhantomEvent } from "../hooks/use-runphantom-ws";
-import { getCostBreakdown, fmtCost } from "../utils/costs";
+import { getCostBreakdown, getPricingSnapshot, getPricingUsageByModel, subscribePricing, fmtCost, fmtRate } from "../utils/costs";
 import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
 import { useDialogFocus } from "../hooks/use-dialog-focus";
 
@@ -57,6 +59,7 @@ type SpansBroadcast = {
 };
 
 type LiveEventBroadcast = {
+  persistedId?: number;
   traceId?: string;
   spanId?: string | null;
   type?: string;
@@ -64,6 +67,54 @@ type LiveEventBroadcast = {
   timestamp?: number;
   metadata?: string | Record<string, unknown> | null;
 };
+
+type DetailData = { run: Run; spans: Span[]; liveEvents: LiveEvent[]; subAgents: SubAgent[] };
+type DetailContext = {
+  lifecycle: object; route: string; tab: string; agentTab: string;
+  spanId: string | null; view: string; agentId: string | null;
+};
+type LiveObservation = { sequence: number; event: LiveEvent; persisted: boolean };
+type LiveCoverage = "current-store" | "saved-cache" | "legacy";
+type LiveView = {
+  base: LiveEvent[]; overlay: LiveObservation[]; coverage: LiveCoverage;
+  lifecycle: object | null; generation: number; coveredThrough: number;
+};
+type DetailOwner = {
+  request: number; generation: number; controller: AbortController;
+  sequence: number; context: DetailContext; pending: boolean;
+};
+type DetailLifecycle = {
+  runId: string; preloaded: boolean; mounted: boolean; generation: number;
+  owner: DetailOwner | null; publication: DetailOwner | null;
+  sequence: number;
+};
+
+function persistedLiveId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function liveViewEvents(view: LiveView): LiveEvent[] {
+  const events = [...view.base];
+  // Cache IDs belong to a historical store, so only a current-store base can
+  // acknowledge a native broadcast. Identical rows with different IDs survive.
+  const seen = new Set(view.coverage === "current-store" ? view.base.map(event => event.id) : []);
+  for (const observation of view.overlay) {
+    if (observation.persisted) {
+      if (seen.has(observation.event.id)) continue;
+      seen.add(observation.event.id);
+    }
+    events.push(observation.event);
+  }
+  return view.coverage === "current-store"
+    ? events.sort((a, b) => a.timestamp - b.timestamp || a.id - b.id)
+    : events;
+}
+
+function containsDetailContext(data: DetailData, context: DetailContext): boolean {
+  return (!context.spanId || data.spans.some(span => span.id === context.spanId))
+    && (context.view !== "convo" || !!data.run.convo_id)
+    && (!context.agentId || data.subAgents.some(agent => agent.root_span_id === context.agentId));
+}
 
 function handleHorizontalTabKeys(event: ReactKeyboardEvent<HTMLDivElement>): void {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -93,7 +144,7 @@ function toLiveEvent(event: LiveEventBroadcast | undefined): LiveEvent | null {
     return null;
   }
   return {
-    id: event.timestamp,
+    id: persistedLiveId(event.persistedId) ? event.persistedId : event.timestamp,
     trace_id: event.traceId,
     span_id: event.spanId ?? null,
     type: event.type,
@@ -152,60 +203,126 @@ function getTokensByModel(spans: Span[]): Map<string, { inTok: number; outTok: n
 }
 
 function ErrorMessage({ span }: { span: Span }) {
-  let msg = span.output_payload;
-  if (!msg && span.attributes) {
-    try {
-      const attrs = JSON.parse(span.attributes);
-      msg = String(attrs["error.message"] ?? attrs["ai.response.error"] ?? attrs["exception.message"] ?? "");
-    } catch {}
-  }
+  const msg = spanErrorReason(span);
   if (!msg) return null;
   return (
-    <div className="text-[10px] font-mono mt-1 whitespace-pre-wrap break-words" style={{ color: C.red, maxHeight: 80, overflow: "hidden" }}>
+    <div className="text-[10px] font-mono mt-1 whitespace-pre-wrap break-words" style={{ color: C.red }}>
       {String(msg).length > 200 ? String(msg).slice(0, 200) + "\u2026" : String(msg)}
     </div>
   );
 }
 
+const ERRORS_TOOLTIP_VIEWPORT_GAP = 12;
+const ERRORS_TOOLTIP_MIN_HEIGHT = 96;
+
 function ErrorsTooltip({ spans }: { spans: Span[] }) {
   const [show, setShow] = useState(false);
+  const [maxHeight, setMaxHeight] = useState<number>();
+  const [scrollable, setScrollable] = useState(false);
+  const [moreBelow, setMoreBelow] = useState(false);
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  // Escape returns focus to the trigger, whose focus handler would otherwise
+  // reopen the tooltip that was just dismissed.
+  const dismissedRef = useRef(false);
   const errorSpans = useMemo(() => spans.filter(s => s.status === "ERROR"), [spans]);
+
+  // A fixed 300px list cut its last line through the glyphs, and overlay
+  // scrollbars gave no sign the rest existed. Size to the viewport instead,
+  // and only scroll (with a visible hint) when the viewport is genuinely short.
+  useLayoutEffect(() => {
+    if (!show) return;
+    const place = () => {
+      const bottom = triggerRef.current?.getBoundingClientRect().bottom ?? 0;
+      setMaxHeight(Math.max(ERRORS_TOOLTIP_MIN_HEIGHT, window.innerHeight - bottom - ERRORS_TOOLTIP_VIEWPORT_GAP));
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [show]);
+
+  const measure = useCallback(() => {
+    const list = listRef.current;
+    if (!list) return;
+    setScrollable(list.scrollHeight > list.clientHeight + 1);
+    setMoreBelow(list.scrollTop + list.clientHeight < list.scrollHeight - 1);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (show) measure();
+  }, [show, maxHeight, errorSpans, measure]);
+
   if (errorSpans.length === 0) return null;
 
   return (
-    <span className="relative cursor-help" tabIndex={0} aria-label={`${plural(errorSpans.length, "run error")}. Focus for details.`}
-      onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)} onFocus={() => setShow(true)} onBlur={() => setShow(false)}>
+    <span ref={triggerRef} className="relative cursor-help" tabIndex={0} aria-label={`${plural(errorSpans.length, "run error")}. Focus for details.`}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={(event) => {
+        if (!event.currentTarget.contains(document.activeElement)) setShow(false);
+      }}
+      onFocus={() => {
+        if (dismissedRef.current) dismissedRef.current = false;
+        else setShow(true);
+      }}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setShow(false);
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || !show) return;
+        event.stopPropagation();
+        setShow(false);
+        if (document.activeElement !== triggerRef.current) {
+          dismissedRef.current = true;
+          triggerRef.current?.focus();
+        }
+      }}>
       <span style={{ color: C.red }}><NumberFlow value={errorSpans.length} /> error{errorSpans.length !== 1 ? "s" : ""}</span>
       {show && (
-        <div className="absolute left-0 top-full mt-1 z-50 rounded-xl shadow-2xl overflow-hidden"
-          style={{
-            width: "min(380px, calc(100vw - 32px))", maxHeight: 350,
-            background: "var(--rp-surface)",
-            border: "1px solid color-mix(in srgb, var(--rp-danger) 28%, white 72%)",
-            boxShadow: "var(--rp-e3)",
-          }}>
-          <div className="px-3 py-2 flex items-center gap-2" style={{ borderBottom: "1px solid color-mix(in srgb, var(--rp-danger) 20%, white 80%)" }}>
-            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke={C.red} strokeWidth={2.5} strokeLinecap="round">
-              <circle cx={12} cy={12} r={10} /><line x1={12} y1={8} x2={12} y2={12} /><line x1={12} y1={16} x2={12.01} y2={16} />
-            </svg>
-            <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: C.red }}>
-              {errorSpans.length} Error{errorSpans.length !== 1 ? "s" : ""}
-            </span>
-          </div>
-          <div className="overflow-auto" style={{ maxHeight: 300 }}>
-            {errorSpans.map((s, idx) => (
-              <div key={s.id} className="px-3 py-2" style={{ borderBottom: idx < errorSpans.length - 1 ? "1px solid color-mix(in srgb, var(--rp-danger) 14%, white 86%)" : "none" }}>
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-[10px] font-mono font-bold px-1 py-0.5 rounded"
-                    style={{ color: s.span_type === "TOOL_CALL" ? C.orange : s.span_type?.includes("LLM") ? C.cyan : C.fg0, background: "var(--rp-ink-wash)" }}>
-                    {s.span_type === "TOOL_CALL" ? "TOOL" : s.span_type?.includes("LLM") ? "LLM" : "SPAN"}
-                  </span>
-                  <span className="text-[11px] font-mono truncate" style={{ color: C.red }}>{s.name}</span>
-                  <span className="text-[9px] font-mono ml-auto flex-shrink-0" style={{ color: C.fg0 }}>{fmt(s.duration_ms)}</span>
-                </div>
-                <ErrorMessage span={s} />
+        // Padding rather than margin bridges the gap, so moving the pointer
+        // onto the tooltip to scroll it does not fire mouseleave on the way.
+        <div className="absolute left-0 top-full z-50 pt-1">
+          <div className="flex flex-col rounded-xl shadow-2xl overflow-hidden"
+            style={{
+              width: "min(380px, calc(100vw - 32px))", maxHeight,
+              background: "var(--rp-surface)",
+              border: "1px solid color-mix(in srgb, var(--rp-danger) 28%, white 72%)",
+              boxShadow: "var(--rp-e3)",
+            }}>
+            <div className="px-3 py-2 flex flex-shrink-0 items-center gap-2" style={{ borderBottom: "1px solid color-mix(in srgb, var(--rp-danger) 20%, white 80%)" }}>
+              <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke={C.red} strokeWidth={2.5} strokeLinecap="round">
+                <circle cx={12} cy={12} r={10} /><line x1={12} y1={8} x2={12} y2={12} /><line x1={12} y1={16} x2={12.01} y2={16} />
+              </svg>
+              <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: C.red }}>
+                {errorSpans.length} Error{errorSpans.length !== 1 ? "s" : ""}
+              </span>
+            </div>
+            <div className="relative flex min-h-0 flex-col">
+              <div ref={listRef} role="region" aria-label="Error details" tabIndex={scrollable ? 0 : undefined}
+                className="min-h-0 overflow-auto" onScroll={measure}>
+                {errorSpans.map((s, idx) => (
+                  <div key={s.id} className="px-3 py-2" style={{ borderBottom: idx < errorSpans.length - 1 ? "1px solid color-mix(in srgb, var(--rp-danger) 14%, white 86%)" : "none" }}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-[10px] font-mono font-bold px-1 py-0.5 rounded"
+                        style={{ color: s.span_type === "TOOL_CALL" ? C.orange : s.span_type?.includes("LLM") ? C.cyan : C.fg0, background: "var(--rp-ink-wash)" }}>
+                        {s.span_type === "TOOL_CALL" ? "TOOL" : s.span_type?.includes("LLM") ? "LLM" : "SPAN"}
+                      </span>
+                      <span className="text-[11px] font-mono truncate" style={{ color: C.red }}>{s.name}</span>
+                      <span className="text-[9px] font-mono ml-auto flex-shrink-0" style={{ color: C.fg0 }}>{fmt(s.duration_ms)}</span>
+                    </div>
+                    <ErrorMessage span={s} />
+                  </div>
+                ))}
               </div>
-            ))}
+              {moreBelow && (
+                <div data-errors-overflow-hint aria-hidden="true"
+                  className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-center pb-1.5"
+                  style={{ height: 44, background: "linear-gradient(to bottom, color-mix(in srgb, var(--rp-surface) 0%, transparent), var(--rp-surface) 72%)" }}>
+                  <span className="flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider" style={{ color: C.fg2 }}>
+                    <ArrowDown size={10} strokeWidth={2.5} />Scroll for more
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -213,7 +330,13 @@ function ErrorsTooltip({ spans }: { spans: Span[] }) {
   );
 }
 
-const Dot = () => <span aria-hidden="true" style={{ color: C.fg0, opacity: 0.6 }}>&middot;</span>;
+const Dot = () => <span data-separator aria-hidden="true" style={{ color: C.fg0, opacity: 0.6 }}>&middot;</span>;
+
+// A stat wraps together with the separator after it, so a wrap can only leave
+// a separator at the end of a line, never at the start of the next one.
+function Stat({ children, last }: { children: React.ReactNode; last?: boolean }) {
+  return <span className="inline-flex items-center gap-1.5">{children}{!last && <Dot />}</span>;
+}
 
 function Badge({ label, copyValue }: { label: string; copyValue?: string }) {
   const [copied, setCopied] = useState(false);
@@ -252,101 +375,163 @@ function Badge({ label, copyValue }: { label: string; copyValue?: string }) {
   );
 }
 
-function StatsLine({ stats, model, spans, active, startedAt }: {
+function StatsLine({ stats, model, spans, active, startedAt, completionUnavailable }: {
   stats: { spans: number; tools: number; llms: number; errors: number; dur: number; agents?: number; inTokens?: number; outTokens?: number };
   model?: string | null;
   spans?: Span[];
   active?: boolean;
   startedAt?: number;
+  completionUnavailable?: boolean;
 }) {
   const [showCost, setShowCost] = useState(false);
   const costRef = useRef<HTMLSpanElement>(null);
+  const costButtonRef = useRef<HTMLButtonElement>(null);
+  const costPanelRef = useRef<HTMLDivElement>(null);
+  const costPanelId = useId();
+  const pricing = useSyncExternalStore(subscribePricing, getPricingSnapshot, getPricingSnapshot);
+  const [costPosition, setCostPosition] = useState<{ left: number; top: number; width: number } | null>(null);
   const inTok = stats.inTokens ?? 0;
   const outTok = stats.outTokens ?? 0;
 
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    if (!active) return;
+    if (!active || completionUnavailable) return;
     const i = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(i);
-  }, [active]);
+  }, [active, completionUnavailable]);
 
   const breakdown = useMemo(() => {
     if (!spans) return [];
-    const byModel = getTokensByModel(spans);
+    const byModel = getPricingUsageByModel(spans);
     return [...byModel.entries()].map(([m, { inTok, outTok }]) => ({
       model: m, inTok, outTok,
-      breakdown: getCostBreakdown(m, inTok, outTok),
+      breakdown: pricing.catalogue ? getCostBreakdown(m, inTok, outTok) : null,
     }));
-  }, [spans]);
+  }, [spans, pricing.catalogue]);
 
+  useLayoutEffect(() => {
+    if (!showCost) return;
+    const position = () => {
+      const rect = costButtonRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = Math.min(352, window.innerWidth - 32);
+      const height = Math.min(costPanelRef.current?.scrollHeight ?? 400, 400, window.innerHeight - 32);
+      setCostPosition({ left: Math.max(16, Math.min(rect.left, window.innerWidth - width - 16)), top: rect.bottom + height + 8 <= window.innerHeight - 16 ? rect.bottom + 8 : Math.max(16, rect.top - height - 8), width });
+    };
+    position();
+    window.addEventListener("resize", position);
+    window.addEventListener("scroll", position, true);
+    return () => { window.removeEventListener("resize", position); window.removeEventListener("scroll", position, true); };
+  }, [showCost, breakdown]);
+
+  useEffect(() => {
+    if (!showCost) return;
+    const dismiss = (event: PointerEvent) => { if (event.target instanceof Node && !costRef.current?.contains(event.target)) setShowCost(false); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { setShowCost(false); costButtonRef.current?.focus(); } };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", escape); };
+  }, [showCost]);
+
+  const ticking = !!(active && startedAt);
   const liveDur = active && startedAt ? now - startedAt : stats.dur;
   const durValid = Number.isFinite(liveDur) && liveDur >= 0;
   const durSec = Math.round(liveDur / 1000);
   const durMin = Math.floor(durSec / 60);
   const durRemSec = durSec % 60;
+  const hasTokens = inTok > 0 || outTok > 0;
+  const hasCost = breakdown.length > 0;
+  const known = breakdown.filter(row => row.breakdown !== null);
+  const unavailableCount = breakdown.length - known.length;
+  const totalCost = known.reduce((sum, row) => sum + row.breakdown!.totalCost, 0);
+  const availableTotal = known.length > 0 && Number.isFinite(totalCost);
+  const costLabel = availableTotal ? `${unavailableCount ? "Known estimates" : "Estimated cost"} ${fmtCost(totalCost)}${unavailableCount ? ` · ${unavailableCount} unavailable` : ""}` : "Estimate unavailable";
+
+  // Where the stats wrap, the separator after the last stat on a line has
+  // nothing to separate; index.css hides it on the stat marked here.
+  const rowRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    if (!row) return;
+    const markLineEnds = () => {
+      const items = [...row.children];
+      const boxes = items.map(item => item.getBoundingClientRect());
+      items.forEach((item, index) => {
+        const next = boxes[index + 1];
+        item.toggleAttribute("data-line-end", !next || next.top >= boxes[index].bottom);
+      });
+    };
+    markLineEnds();
+    const observer = new ResizeObserver(markLineEnds);
+    observer.observe(row);
+    for (const item of row.children) observer.observe(item);
+    return () => observer.disconnect();
+  });
 
   return (
-    <div className="rp-meta-metrics flex items-center gap-1.5 text-[11px] flex-wrap" style={{ color: C.fg3 }}>
-      {model && <><Badge label="model" copyValue={model} /><span>{model}</span><Dot /></>}
-      {stats.tools > 0 && <><span><NumberFlow value={stats.tools} /> tool{stats.tools !== 1 ? "s" : ""}</span><Dot /></>}
-      {(stats.agents ?? 0) > 0 && <><span><NumberFlow value={stats.agents!} /> sub-agent{stats.agents !== 1 ? "s" : ""}</span><Dot /></>}
-      {stats.errors > 0 && spans && <><ErrorsTooltip spans={spans} /><Dot /></>}
-      {stats.errors > 0 && !spans && <><span style={{ color: C.red }}><NumberFlow value={stats.errors} /> error{stats.errors !== 1 ? "s" : ""}</span><Dot /></>}
-      {/* NumberFlow animates whole seconds, which reads well for a run in flight
-          but rounds a 420ms run to "0s" while the span tree shows "420ms" for the
-          same trace — and it has no hour unit, so a 3h run read as "205m". Keep
-          the animation for the range it suits and defer to fmt() outside it. */}
-      <Badge label="duration" /><span>{
-        !durValid
+    <div ref={rowRef} className="rp-meta-metrics flex items-center gap-1.5 text-[11px] flex-wrap" style={{ color: C.fg3 }}>
+      {model && <Stat><Badge label="model" copyValue={model} /><span>{model}</span></Stat>}
+      {stats.tools > 0 && <Stat><span><NumberFlow value={stats.tools} /> tool{stats.tools !== 1 ? "s" : ""}</span></Stat>}
+      {(stats.agents ?? 0) > 0 && <Stat><span><NumberFlow value={stats.agents!} /> sub-agent{stats.agents !== 1 ? "s" : ""}</span></Stat>}
+      {stats.errors > 0 && spans && <Stat><ErrorsTooltip spans={spans} /></Stat>}
+      {stats.errors > 0 && !spans && <Stat><span style={{ color: C.red }}><NumberFlow value={stats.errors} /> error{stats.errors !== 1 ? "s" : ""}</span></Stat>}
+      {/* NumberFlow animates whole seconds, which reads well for a clock ticking
+          on a run in flight. A settled duration is a measurement, though: rounded
+          to whole seconds it read "6s" beside a span tree root of "6.2s", "0s"
+          beside "420ms", and "205m" for a 3h run. Only the live tick animates;
+          everything else goes through fmt(), exactly like the span tree. */}
+      <Stat last={!hasTokens && !hasCost}><Badge label="duration" /><span data-run-duration>{
+        completionUnavailable
+          ? "Unavailable"
+          : !durValid
           ? "—"
-          : liveDur < 1000 || liveDur >= 3_600_000
+          : !ticking || liveDur < 1000 || liveDur >= 3_600_000
             ? fmt(liveDur)
             : durMin > 0
               ? <><NumberFlow value={durMin} />m <NumberFlow value={durRemSec} />s</>
               : <><NumberFlow value={durSec} />s</>
-      }</span>
-      {(inTok > 0 || outTok > 0) && <><Dot /><Badge label="tokens" /><span><NumberFlow value={inTok} {...TOKEN_NUMBER_FLOW_TIMING} /> in / <NumberFlow value={outTok} {...TOKEN_NUMBER_FLOW_TIMING} /> out</span></>}
-      {(() => {
-        const totalCost = breakdown.reduce((sum, b) => sum + (b.breakdown?.totalCost ?? 0), 0);
-        const cost = totalCost > 0 ? fmtCost(totalCost) : null;
-        return cost && (
-        <>
-          <Dot />
-          <span ref={costRef} className="relative cursor-help"
-            onMouseEnter={() => setShowCost(true)} onMouseLeave={() => setShowCost(false)}>
-            {cost}
-            {showCost && breakdown.length > 0 && (
-              <div className="absolute left-0 top-full mt-1 z-50 rounded-lg p-2.5 shadow-xl whitespace-nowrap"
-                style={{ background: C.elevated, border: `1px solid ${C.borderLight}` }}>
-                <div className="text-[9px] uppercase tracking-wide mb-2 font-medium" style={{ color: C.fg0 }}>Cost Breakdown</div>
+      }</span></Stat>
+      {hasTokens && <Stat last={!hasCost}><Badge label="tokens" /><span><NumberFlow value={inTok} {...TOKEN_NUMBER_FLOW_TIMING} /> in / <NumberFlow value={outTok} {...TOKEN_NUMBER_FLOW_TIMING} /> out</span></Stat>}
+      {hasCost && (
+        <Stat last>
+          <span ref={costRef} className="relative">
+            <button ref={costButtonRef} type="button" className="min-h-11 min-w-11 rounded px-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2" aria-expanded={showCost} aria-controls={costPanelId} onClick={() => setShowCost(open => !open)}>
+              <span aria-live="polite">{costLabel}</span>
+            </button>
+            {showCost && (
+              <div ref={costPanelRef} id={costPanelId} role="region" aria-label="Nominal cost estimates" className="fixed z-50 rounded-lg p-3 shadow-xl overflow-y-auto text-[12px]"
+                style={{ background: C.elevated, border: `1px solid ${C.borderLight}`, ...costPosition, maxHeight: "min(400px, calc(100vh - 32px))", visibility: costPosition ? "visible" : "hidden" }}>
+                <div className="mb-2 font-medium" style={{ color: C.fg2 }}>Nominal input/output estimates</div>
+                <p className="mb-3 whitespace-normal" style={{ color: C.fg1 }}>OpenRouter catalogue quotes; actual provider and tier billing may differ. Cache, audio, discounts, and other fees are excluded. Reported cost stays separate.</p>
                 {breakdown.map(b => (
-                  <div key={b.model} className="mb-2 last:mb-0">
-                    <div className="text-[10px] font-medium mb-0.5" style={{ color: C.fg2 }}>{b.model}</div>
-                    {b.breakdown && (
-                      <div className="text-[9px] space-y-0.5" style={{ color: C.fg0 }}>
+                  <div key={b.model === null ? "missing-model" : `model:${b.model}`} className="mb-3 last:mb-0 whitespace-normal break-words">
+                    <div className="font-medium mb-1" style={{ color: C.fg2 }}>{b.model ?? "Model unavailable"}</div>
+                    {b.breakdown ? (
+                      <div className="space-y-1" style={{ color: C.fg0 }}>
                         <div className="flex justify-between gap-4">
-                          <span>{b.inTok.toLocaleString()} input @ ${b.breakdown.inRate}/M</span>
+                          <span>{b.inTok!.toLocaleString()} input @ {fmtRate(b.breakdown.inRate)}/M</span>
                           <span style={{ color: C.fg1 }}>{fmtCost(b.breakdown.inCost)}</span>
                         </div>
                         <div className="flex justify-between gap-4">
-                          <span>{b.outTok.toLocaleString()} output @ ${b.breakdown.outRate}/M</span>
+                          <span>{b.outTok!.toLocaleString()} output @ {fmtRate(b.breakdown.outRate)}/M</span>
                           <span style={{ color: C.fg1 }}>{fmtCost(b.breakdown.outCost)}</span>
                         </div>
                         <div className="flex justify-between gap-4 pt-0.5" style={{ borderTop: `1px solid ${C.border}` }}>
                           <span style={{ color: C.fg1 }}>total</span>
                           <span style={{ color: C.fg2 }}>{fmtCost(b.breakdown.totalCost)}</span>
                         </div>
+                        <div style={{ color: C.fg1 }}>Catalogue ID: {b.breakdown.catalogueId}</div>
+                        <div style={{ color: C.fg1 }}>Revision: <span className="font-mono">{b.breakdown.rateRevision}</span></div>
+                        <div style={{ color: C.fg1 }}>Fetched: {b.breakdown.source.observedAt}</div>
                       </div>
-                    )}
+                    ) : <p style={{ color: C.fg1 }}>{b.model === null ? "Model identity was not captured." : b.inTok === null || b.outTok === null ? "Input or output token capture is unavailable." : pricing.status === "disabled" ? "Public pricing is disabled. Enable it in Settings." : pricing.status === "loading" || pricing.status === "idle" ? "Public pricing is loading." : pricing.status === "error" ? pricing.error : "No unambiguous exact catalogue price is available."}</p>}
                   </div>
                 ))}
               </div>
             )}
           </span>
-        </>
-      );
-      })()}
+        </Stat>
+      )}
     </div>
   );
 }
@@ -581,6 +766,7 @@ function ViewHeader({
   const parentName = breadcrumb?.parentName;
   const onFork = fork?.onFork;
   const userMessage = fork?.userMessage;
+  const replayUnavailable = allSpans?.some(span => observationReplayUnavailable(span.normalized?.capture)) === true;
   const queryClient = useQueryClient();
   const replayMeta = run ? parseReplayMetadata(run) : null;
   const traceModelFromMetadata = replayMeta?.replay?.model ?? null;
@@ -648,7 +834,7 @@ function ViewHeader({
   }, [queryClient, run]);
 
   useEffect(() => {
-    if (!optionsOpen || !run?.id || !agentConfigured) return;
+    if (replayUnavailable || !optionsOpen || !run?.id || !agentConfigured) return;
     fetch("/api/replay/context", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ runId: run.id, eventName: run.event_name }),
@@ -658,7 +844,7 @@ function ViewHeader({
         setContextEdits(Object.fromEntries(Object.entries(data.context).map(([k, v]) => [k, String(v)])));
       }
     }).catch(() => {});
-  }, [optionsOpen, run?.id, run?.event_name, agentConfigured]);
+  }, [optionsOpen, run?.id, run?.event_name, agentConfigured, replayUnavailable]);
 
   useEffect(() => {
     if (!optionsOpen) return;
@@ -680,8 +866,15 @@ function ViewHeader({
     };
   }, [optionsOpen]);
   const displayTitle = cleanTitle(title);
-  const statusLabel = active ? "Run live" : stats.errors > 0 ? "Run failed" : "Run complete";
-  const statusColor = active ? C.green : stats.errors > 0 ? C.red : C.fg1;
+  const completionUnavailable = run?.capture_completion === "unavailable" || allSpans?.some(span => captureCompletion(span.normalized?.capture) === "unavailable") === true;
+  const status: RunStatus = (run && replayOutcome(run)) || (active ? "live" : stats.errors > 0 ? "failed" : "complete");
+  const statusLabel = completionUnavailable ? "Completion unavailable" : { live: "Run live", failed: "Run failed", cancelled: "Run cancelled", complete: "Run complete" }[status];
+  const statusColor = completionUnavailable ? C.fg1 : status === "live" ? C.green : status === "failed" ? C.red : C.fg1;
+  const statusBackground = completionUnavailable ? "var(--rp-ink-wash)" : status === "live"
+    ? "color-mix(in oklch, var(--rp-success) 12%, transparent)"
+    : status === "failed"
+      ? "color-mix(in oklch, var(--rp-danger) 10%, transparent)"
+      : "var(--rp-ink-wash)";
   return (
     <div className="flex-shrink-0" style={{ padding: isReplay ? "8px 16px" : "10px 16px", borderBottom: `1px solid ${C.border}` }}>
       {parentName && onBack ? (
@@ -697,30 +890,26 @@ function ViewHeader({
                 <h2 style={{ fontSize: "18px", fontWeight: 600, color: C.fg5 }}>{displayTitle}</h2>
                 {model && <span className="text-[10px] px-2 py-0.5 rounded font-mono" style={{ background: "var(--rp-ink-a04)", color: C.fg1 }}>{model}</span>}
                 <span className="text-[10px] px-2 py-0.5 rounded-full font-medium"
-                  style={{
-                    background: active
-                      ? "color-mix(in oklch, var(--rp-success) 12%, transparent)"
-                      : stats.errors > 0
-                        ? "color-mix(in oklch, var(--rp-danger) 10%, transparent)"
-                        : "var(--rp-ink-wash)",
-                    color: statusColor,
-                  }}>
+                  style={{ background: statusBackground, color: statusColor }}>
                   {statusLabel}
                 </span>
               </div>
-              <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
+              <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
             </div>
           </div>
         </>
       ) : isReplay ? (
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[12px] font-medium" style={{ color: C.fg3 }}>{displayTitle}</span>
-            {model && <span className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: "var(--rp-ink-a04)", color: C.fg0 }}>{model}</span>}
-            <span style={{ color: C.fg0, opacity: 0.4 }}>|</span>
-            <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
+        // Not on the title row after a "|": in the side-by-side compare view
+        // the stats wrapped below the title and left the "|" dangling.
+        <div className="flex flex-col gap-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[12px] font-medium" style={{ color: C.fg3 }}>{displayTitle}</span>
+              {model && <span className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: "var(--rp-ink-a04)", color: C.fg0 }}>{model}</span>}
+            </div>
+            <MoreMenu runId={run?.id} />
           </div>
-          <MoreMenu runId={run?.id} />
+          <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
         </div>
       ) : (
         <>
@@ -742,7 +931,7 @@ function ViewHeader({
               <span
                 data-run-status
                 className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium"
-                style={{ color: statusColor, background: active ? "color-mix(in oklch, var(--rp-success) 12%, transparent)" : stats.errors > 0 ? "color-mix(in oklch, var(--rp-danger) 10%, transparent)" : "var(--rp-ink-wash)" }}
+                style={{ color: statusColor, background: statusBackground }}
               >
                 {statusLabel}
               </span>
@@ -837,14 +1026,14 @@ function ViewHeader({
                   return <>
                   <div className="rp-clipped-ring flex items-stretch rounded-md overflow-hidden" style={{ border: `1px solid var(--rp-ink-a10)` }}>
                     <button
-                      disabled={agentRegistryStatus !== "success"}
+                      disabled={replayUnavailable || agentRegistryStatus !== "success"}
                       className="flex items-center gap-1.5 text-[11px] px-3 py-1 font-medium transition-colors rp-hover-wash disabled:opacity-50"
                       style={{
                         color: C.fg3,
                         background: "var(--rp-ink-a06)",
                       }}
                       onClick={() => {
-                        if (agentRegistryStatus !== "success") return;
+                        if (replayUnavailable || agentRegistryStatus !== "success") return;
                         if (agentConfigured) {
                           onFork(undefined, forkMode, forkModel || undefined);
                         } else {
@@ -862,10 +1051,11 @@ function ViewHeader({
                       aria-expanded={optionsOpen}
                       aria-controls={optionsOpen ? replayOptionsId : undefined}
                       aria-haspopup="dialog"
-                      disabled={agentRegistryStatus !== "success"}
+                      disabled={replayUnavailable || agentRegistryStatus !== "success"}
                       className="flex items-center justify-center px-1.5 transition-colors rp-hover-wash disabled:opacity-50"
                       style={{ color: C.fg1, background: "var(--rp-ink-a06)", borderLeft: "1px solid var(--rp-ink-a10)" }}
                       onClick={() => {
+                        if (replayUnavailable) return;
                         setAnnotationPopoverOpen(false);
                         setOptionsOpen(!optionsOpen);
                       }}
@@ -874,13 +1064,13 @@ function ViewHeader({
                       <ChevronDown className="h-3.5 w-3.5" />
                     </button>
                   </div>
-                  {agentRegistryStatus !== "success" && <ReplayRegistryNotice status={agentRegistryStatus} onRetry={refetchAgents} />}
+                  {!replayUnavailable && agentRegistryStatus !== "success" && <ReplayRegistryNotice status={agentRegistryStatus} onRetry={refetchAgents} />}
                   <SetupReplayModal
-                    open={setupModalOpen}
+                    open={setupModalOpen && !replayUnavailable}
                     onClose={() => setSetupModalOpen(false)}
                     eventName={run?.event_name ?? undefined}
                   />
-                  {optionsOpen && (
+                  {optionsOpen && !replayUnavailable && (
                     <div
                       id={replayOptionsId}
                       data-replay-options
@@ -947,7 +1137,7 @@ function ViewHeader({
                         </div>
                       )}
                       <button
-                        disabled={agentRegistryStatus !== "success"}
+                        disabled={replayUnavailable || agentRegistryStatus !== "success"}
                         className="w-full py-1.5 rounded text-[11px] font-medium transition-colors hover:brightness-110 disabled:opacity-50"
                         style={{
                           background: "var(--rp-ink-a08)",
@@ -955,7 +1145,7 @@ function ViewHeader({
                           border: `1px solid var(--rp-ink-a10)`,
                         }}
                         onClick={() => {
-                          if (agentRegistryStatus !== "success") return;
+                          if (replayUnavailable || agentRegistryStatus !== "success") return;
                           if (!agentConfigured) {
                             setOptionsOpen(false);
                             setSetupModalOpen(true);
@@ -978,17 +1168,17 @@ function ViewHeader({
               </div>
             )}
           </div>
-          <div className="flex items-center gap-1.5 text-[11px] flex-wrap">
-            <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
+          {!active && onFork && replayUnavailable && <div role="status" className="basis-full text-[10px]" style={{ color: C.fg1 }}>Replay unavailable for partial, unverified observations.</div>}
+          {/* Not on the stats row after a separator: at laptop widths the ids
+              wrapped and left the separator dangling at the end of the stats. */}
+          <div className="flex flex-col gap-1.5 text-[11px]">
+            <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
             {run && (run.id || run.user_id || run.convo_id) && (
-              <>
-                <Dot />
-                <span className="rp-meta-ids flex items-center gap-1.5" style={{ color: C.fg0 }}>
-                  {run.user_id && <span className="inline-flex items-center gap-1" title={run.user_id}><Badge label="user" copyValue={run.user_id} />{run.user_id.length > 12 ? run.user_id.slice(0, 12) + "…" : run.user_id}</span>}
-                  {run.convo_id && <span className="inline-flex items-center gap-1" title={run.convo_id}><Badge label="conversation" copyValue={run.convo_id} />{run.convo_id.length > 12 ? run.convo_id.slice(0, 12) + "…" : run.convo_id}</span>}
-                  <span className="inline-flex items-center gap-1" title={run.id}><Badge label="trace" copyValue={run.id} />{run.id.slice(0, 8)}</span>
-                </span>
-              </>
+              <span className="rp-meta-ids flex min-w-0 max-w-full flex-wrap items-center gap-1.5" style={{ color: C.fg0 }}>
+                {run.user_id && <span className="inline-flex items-center gap-1" title={run.user_id}><Badge label="user" copyValue={run.user_id} />{run.user_id.length > 12 ? run.user_id.slice(0, 12) + "…" : run.user_id}</span>}
+                {run.convo_id && <span className="inline-flex items-center gap-1" title={run.convo_id}><Badge label="conversation" copyValue={run.convo_id} />{run.convo_id.length > 12 ? run.convo_id.slice(0, 12) + "…" : run.convo_id}</span>}
+                <span className="inline-flex min-w-0 items-center gap-1"><Badge label="trace" copyValue={run.id} /><span className="min-w-0 truncate" title={run.id}>{run.id}</span></span>
+              </span>
             )}
           </div>
         </>
@@ -1226,7 +1416,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   const runSpansTabId = `${tabIdPrefix}-run-spans`;
   const runConversationTabId = `${tabIdPrefix}-run-conversation`;
   const runPanelId = `${tabIdPrefix}-run-panel`;
-  const [data, setData] = useState<{ run: Run; spans: Span[]; liveEvents: LiveEvent[]; subAgents: SubAgent[] } | null>(
+  const [data, setData] = useState<DetailData | null>(
     initialData ? { run: initialData.run, spans: initialData.spans, liveEvents: initialData.liveEvents ?? [], subAgents: initialData.subAgents ?? [] } : null
   );
   const dataRef = useRef(data);
@@ -1248,7 +1438,8 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   const [loading, setLoading] = useState(!initialData);
   const [notFound, setNotFound] = useState(false);
   const [agentTab, setAgentTab] = useState<"chat" | "tree">("chat");
-  const [liveEvents, setLiveEvents] = useState<LiveEvent[]>(initialData?.liveEvents ?? []);
+  const [liveView, setLiveView] = useState<LiveView>({ base: initialData?.liveEvents ?? [], overlay: [], coverage: "legacy", lifecycle: null, generation: 0, coveredThrough: 0 });
+  const liveEvents = useMemo(() => liveViewEvents(liveView), [liveView]);
   const [anthropicModels, setAnthropicModels] = useState<string[]>([]);
   const annotationsApi = useAnnotations(runId);
   const autoSavedAnnotationIdsRef = useRef<Set<string>>(new Set());
@@ -1334,39 +1525,111 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   // new one: the URL showed trace B while the pane rendered trace A. Every write
   // below is gated on the request still being the current one.
   const detailRequestRef = useRef(0);
-  const detailAbortRef = useRef<AbortController | null>(null);
+  const lifecycle = useMemo<DetailLifecycle>(() => ({
+    runId, preloaded: !!initialData, mounted: false, generation: 0,
+    owner: null, publication: null, sequence: 0,
+  }), [runId, initialData]);
+  const currentLifecycleRef = useRef<DetailLifecycle | null>(null);
+  const context = useMemo<DetailContext>(() => ({
+    lifecycle, route: pathname + search, tab: activeTab, agentTab,
+    spanId: selectedSpanId, view: runView, agentId: focusedAgent,
+  }),
+    [lifecycle, pathname, search, activeTab, selectedSpanId, runView, focusedAgent, agentTab]);
+  const contextRef = useRef(context);
+  const [publishedContext, setPublishedContext] = useState<DetailContext | null>(null);
+  const [contextSnapshot, setContextSnapshot] = useState<{ context: DetailContext; data: DetailData } | null>(null);
 
   const connectionStatus = useRunPhantomConnectionStatus();
   const previousConnectionStatus = useRef(connectionStatus);
 
-  const fetchData = useCallback(async () => {
-    if (initialData || isRunDeleting(runId)) return; // Keep the visible trace during deletion.
-    detailAbortRef.current?.abort();
+  const retireDetail = useCallback(() => {
+    // An old passive cleanup must not invalidate a new run's layout-owned read.
+    if (currentLifecycleRef.current === lifecycle) ++detailRequestRef.current;
+    ++lifecycle.generation;
+    const owner = lifecycle.owner;
+    lifecycle.owner = lifecycle.publication = null;
+    owner?.controller.abort();
+  }, [lifecycle]);
+
+  useLayoutEffect(() => {
+    currentLifecycleRef.current = lifecycle;
+    lifecycle.mounted = true;
+    return () => { lifecycle.mounted = false; retireDetail(); };
+  }, [lifecycle, retireDetail]);
+
+  useLayoutEffect(() => {
+    contextRef.current = context;
+    if (data?.run.id === runId && containsDetailContext(data, context)) {
+      setContextSnapshot({ context, data });
+    }
+  }, [context, data, runId]);
+
+  const fetchData = useCallback(async function refresh(): Promise<void> {
+    const live = () => lifecycle.mounted && currentLifecycleRef.current === lifecycle
+      && !lifecycle.preloaded && !isRunDeleting(lifecycle.runId);
+    if (!live()) return;
+    if (lifecycle.owner) { lifecycle.owner.pending = true; return; }
     const controller = new AbortController();
-    detailAbortRef.current = controller;
-    const requestId = ++detailRequestRef.current;
-    const isCurrent = () => detailRequestRef.current === requestId && !controller.signal.aborted;
+    const owner: DetailOwner = {
+      request: ++detailRequestRef.current, generation: lifecycle.generation, controller,
+      sequence: lifecycle.sequence, context: contextRef.current, pending: false,
+    };
+    lifecycle.owner = owner;
+    const isCurrent = () => live() && lifecycle.owner === owner && owner.generation === lifecycle.generation
+      && detailRequestRef.current === owner.request && !controller.signal.aborted;
+    // Starting the queued transport does not revoke a completed read's React
+    // publication. Retirement or a newer completion does revoke it.
+    const canPublish = () => live() && lifecycle.publication === owner
+      && owner.generation === lifecycle.generation && !controller.signal.aborted;
+    const publishFailure = () => {
+      lifecycle.publication = owner;
+      setData(previous => canPublish() ? null : previous);
+      setNotFound(previous => canPublish() ? true : previous);
+    };
     try {
-      const res = await fetch(`/api/runs/detail/${runId}`, { signal: controller.signal });
+      const res = await fetch(`/api/runs/detail/${lifecycle.runId}`, { signal: controller.signal });
       if (!isCurrent()) return;
       if (res.status === 404) {
-        setData(null);
-        setNotFound(true);
+        publishFailure();
         return;
       }
       if (!res.ok) throw new Error(`Could not load run (${res.status})`);
-      const j = await res.json();
+      const j = await res.json() as DetailData;
       if (!isCurrent()) return;
-      setData(j);
-      setNotFound(false);
-      if (j.liveEvents) setLiveEvents(j.liveEvents);
+      lifecycle.publication = owner;
+      setData(previous => canPublish() ? j : previous);
+      setNotFound(previous => canPublish() ? false : previous);
+      setPublishedContext(previous => canPublish() ? owner.context : previous);
+      const source = res.headers.get("X-RunPhantom-Live-Events");
+      setLiveView(previous => {
+        if (!canPublish()) return previous;
+        // The ledger and its watermark are state, not external receipts retired
+        // by render-time evaluation. Replaying/discarding this pure calculation
+        // cannot acknowledge a frame outside React. Frame updaters reconcile
+        // against React's preceding view state; only its commit changes the UI.
+        const sameGeneration = previous.lifecycle === lifecycle && previous.generation === owner.generation;
+        const overlay = sameGeneration ? previous.overlay.filter(observation => observation.sequence > owner.sequence) : [];
+        // Unclassified HTTP still advances the base. Its pre-start overlay is
+        // replaced as legacy best effort, never acknowledged by numeric IDs.
+        // Post-start frames remain separate; exact-once needs both native IDs
+        // and the matching daemon's truthful classification.
+        return {
+          base: j.liveEvents ?? [], overlay,
+          coverage: source === "current-store" || source === "saved-cache" ? source : "legacy",
+          lifecycle, generation: owner.generation, coveredThrough: owner.sequence,
+        };
+      });
     } catch {
       if (!isCurrent()) return;
-      setData(null);
-      setNotFound(true);
+      publishFailure();
+    } finally {
+      if (isCurrent()) {
+        setLoading(previous => canPublish() ? false : previous);
+        lifecycle.owner = null;
+        if (owner.pending && live()) void refresh();
+      }
     }
-    finally { if (isCurrent()) setLoading(false); }
-  }, [runId, initialData]);
+  }, [lifecycle]);
 
   useEffect(() => {
     const recovered = previousConnectionStatus.current !== "connected" && connectionStatus === "connected";
@@ -1392,8 +1655,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
     const unsubscribe = subscribeRunDeletions(() => {
       const deleting = isRunDeleting(runId);
       if (deleting) {
-        ++detailRequestRef.current;
-        detailAbortRef.current?.abort();
+        retireDetail();
       } else if (wasDeleting) {
         void fetchData(); // A failed delete leaves the trace selected and live.
       }
@@ -1401,29 +1663,44 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
     });
     return () => {
       unsubscribe();
-      detailAbortRef.current?.abort();
+      retireDetail();
     };
-  }, [runId, fetchData]);
+  }, [runId, fetchData, retireDetail]);
 
   useEffect(() => {
     if (initialData) return;
     setLoading(true);
     setNotFound(false);
     setData(null);
-    setLiveEvents([]); setFocusedAgent(null); setAgentTab("chat"); setLocalTab("chat"); setLocalSelectedSpanId(null); setEditModal(null); fetchData();
+    setLiveView({ base: [], overlay: [], coverage: "legacy", lifecycle: null, generation: 0, coveredThrough: 0 }); setPublishedContext(null); setFocusedAgent(null); setAgentTab("chat"); setLocalTab("chat"); setLocalSelectedSpanId(null); setEditModal(null); fetchData();
   }, [runId, fetchData, initialData]);
 
   useEffect(() => {
     if (!routeBase || !selectedSpanId || !data?.spans.length) return;
     if (!data.spans.some((s) => s.id === selectedSpanId)) {
+      if (publishedContext !== context) {
+        if (lifecycle.owner?.context !== context) void fetchData();
+        return;
+      }
       navigate(`${traceSpansPath(routeBase, runId)}${searchQuery}`, { replace: true });
     }
-  }, [data?.spans, navigate, routeBase, runId, searchQuery, selectedSpanId]);
+  }, [context, data?.spans, fetchData, lifecycle, navigate, publishedContext, routeBase, runId, searchQuery, selectedSpanId]);
 
   useEffect(() => {
     if (!routeBase || runView !== "convo" || !data?.run) return;
-    if (!data.run.convo_id) navigate(`${tracePath(routeBase, runId)}${searchQuery}`, { replace: true });
-  }, [data?.run, navigate, routeBase, runId, runView, searchQuery]);
+    if (!data.run.convo_id) {
+      if (publishedContext !== context) {
+        if (lifecycle.owner?.context !== context) void fetchData();
+        return;
+      }
+      navigate(`${tracePath(routeBase, runId)}${searchQuery}`, { replace: true });
+    }
+  }, [context, data?.run, fetchData, lifecycle, navigate, publishedContext, routeBase, runId, runView, searchQuery]);
+
+  useEffect(() => {
+    if (!focusedAgent || !data || data.subAgents.some(agent => agent.root_span_id === focusedAgent)) return;
+    if (publishedContext !== context && lifecycle.owner?.context !== context) void fetchData();
+  }, [context, data, fetchData, focusedAgent, lifecycle, publishedContext]);
 
   useLayoutEffect(() => {
     stickToBottomContextRef.current?.stopScroll();
@@ -1446,6 +1723,9 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
     };
   }, [data?.run.id]);
 
+  // The handshake also covers updates persisted before this socket connected.
+  useRunPhantomEvent("agent_provider", () => { void fetchData(); });
+
   useRunPhantomEvent<SpansBroadcast | undefined>("spans", (data) => {
     if (initialData) return; // No WebSocket updates for pre-loaded data
     if (data?.runIds?.includes(runId)) fetchData();
@@ -1461,9 +1741,22 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   });
 
   useRunPhantomEvent<LiveEventBroadcast | undefined>("live", (data) => {
-    if (initialData || data?.traceId !== runId) return; // No WebSocket updates for pre-loaded data
+    if (initialData || data?.traceId !== runId || !lifecycle.mounted || isRunDeleting(runId)) return;
     const event = toLiveEvent(data);
-    if (event) setLiveEvents(p => [...p, event]);
+    if (!event) return;
+    const generation = lifecycle.generation;
+    const observation: LiveObservation = { sequence: ++lifecycle.sequence, event, persisted: persistedLiveId(data.persistedId) };
+    setLiveView(previous => {
+      if (!lifecycle.mounted || currentLifecycleRef.current !== lifecycle || generation !== lifecycle.generation) return previous;
+      const sameGeneration = previous.lifecycle === lifecycle && previous.generation === generation;
+      if (sameGeneration && (observation.sequence <= previous.coveredThrough || previous.overlay.includes(observation))) return previous;
+      // A failed deletion resumes the same run. Its last committed display
+      // survives retirement; the monotonic sequence lets the next read replace
+      // that older prefix without treating a different run's state as current.
+      return previous.lifecycle === lifecycle
+        ? { ...previous, generation, overlay: [...previous.overlay, observation] }
+        : { base: [], overlay: [observation], coverage: "legacy", lifecycle, generation, coveredThrough: 0 };
+    });
   });
 
   // Extract last user message for fork pre-fill (must be before early returns — rules of hooks).
@@ -1510,7 +1803,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   }, []);
 
   const createAnnotationAndSave = useCallback(async (
-    input: { span_id?: string | null; kind: AnnotationKind; note?: string; source?: "user" | "claude-code" | "codex" }
+    input: { span_id?: string | null; kind: AnnotationKind; note?: string; source?: "user" | "claude-code" | "codex" | "opencode" }
   ) => {
     const created = await annotationsApi.create({ ...input, source: input.source ?? "user" });
     if (created) saveAnnotationPreview(created);
@@ -1527,15 +1820,18 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   if (notFound || !data?.run) return <TraceNotFound runId={runId} backPath={routeBase ?? "/runs"} />;
 
   const { run, spans, subAgents } = data;
+  const paneData = publishedContext !== context && contextSnapshot?.context === context ? contextSnapshot.data : data;
+  const paneSpans = paneData.spans;
+  const paneConvoId = paneData.run.convo_id;
   const replayMeta = parseReplayMetadata(run);
 
   // If focused on a sub-agent, show that sub-agent's view
-  const agent = focusedAgent ? subAgents.find(a => a.root_span_id === focusedAgent) : null;
+  const agent = focusedAgent ? paneData.subAgents.find(a => a.root_span_id === focusedAgent) : null;
 
   if (agent) {
     const agentSpanSet = new Set(agent.span_ids);
     // Exclude the root tool call span — it's the parent invocation, not part of the sub-agent's work
-    const agentSpans = spans.filter(s => agentSpanSet.has(s.id) && s.id !== agent.root_span_id);
+    const agentSpans = paneSpans.filter(s => agentSpanSet.has(s.id) && s.id !== agent.root_span_id);
     const agentTools = agentSpans.filter(s => s.span_type === "TOOL_CALL");
     const agentLLMs = agentSpans.filter(s => s.span_type?.includes("LLM"));
     const agentErrs = agentSpans.filter(s => s.status === "ERROR");
@@ -1587,6 +1883,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   }
 
   // Normal run view
+  const replayUnavailable = spans.some(span => observationReplayUnavailable(span.normalized?.capture));
   const active = isActive(run);
   const tools = spans.filter(s => s.span_type === "TOOL_CALL");
   const llms = spans.filter(s => s.span_type?.includes("LLM"));
@@ -1625,7 +1922,10 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
         title={runDisplayName(run)}
         model={model}
         active={active}
-        startedAt={run.started_at}
+        // A run stays "active" for 30s after its last live event, and the
+        // header clock kept counting wall time past the run's own end ("12s"
+        // for a 6.2s run). Once finished, the header shows the recorded span.
+        startedAt={run.finished ? undefined : run.started_at}
         anthropicModels={anthropicModels}
         stats={{
           spans: spans.length, tools: tools.length, llms: llms.length, errors: errs.length, dur,
@@ -1654,14 +1954,14 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
       <div role="tablist" aria-label="Run views" aria-orientation="horizontal" onKeyDown={handleHorizontalTabKeys} className="flex-shrink-0 flex" style={{ borderBottom: `1px solid ${C.border}`, paddingLeft: 16 }}>
         <button type="button" id={runOverviewTabId} className="rp-tab" role="tab" aria-selected={activeTab === "chat"} aria-controls={runPanelId} tabIndex={activeTab === "chat" ? 0 : -1} style={tabStyle("chat")} onClick={goOverview}>Overview</button>
         <button type="button" id={runSpansTabId} className="rp-tab" role="tab" aria-selected={activeTab === "tree"} aria-controls={runPanelId} tabIndex={activeTab === "tree" ? 0 : -1} style={tabStyle("tree")} onClick={goSpans}>Span Tree</button>
-        {run.convo_id && (
+        {paneConvoId && (
           <button type="button" id={runConversationTabId} className="rp-tab" role="tab" aria-selected={activeTab === "convo"} aria-controls={runPanelId} tabIndex={activeTab === "convo" ? 0 : -1} style={tabStyle("convo")} onClick={goConvo}>Conversation</button>
         )}
       </div>
       {activeTab === "tree" ? (
         <div id={runPanelId} role="tabpanel" aria-labelledby={runSpansTabId} className="flex-1 relative min-h-0 overflow-auto sb" style={{ padding: 16 }}>
           <SpanTree
-            spans={spans}
+            spans={paneSpans}
             selectedSpanId={selectedSpanId}
             onSelectSpan={selectSpan}
             annotations={annotationsApi.annotations}
@@ -1675,13 +1975,13 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
       ) : (
         <StickToBottom id={runPanelId} role="tabpanel" aria-labelledby={activeTab === "convo" ? runConversationTabId : runOverviewTabId} className="flex-1 relative min-h-0" resize={prefersReducedMotion ? "instant" : "smooth"} initial={false} contextRef={stickToBottomContextRef}>
           <StickToBottom.Content className="sb">
-            {activeTab === "chat" && <ChatFlow spans={spans} liveEvents={liveEvents} subAgents={subAgents} onDiveIn={setFocusedAgent} isActive={active} lastUpdatedAt={run.last_updated_at} onEditMessage={onForkStarted && !active ? (msg) => setEditModal({ userMessage: msg }) : undefined} replayError={replayMeta?.replay?.error ?? null} />}
-            {activeTab === "convo" && run.convo_id && <ConvoDetail convoId={run.convo_id} onOpenTurn={openConversationTurn} />}
+            {activeTab === "chat" && <ChatFlow spans={spans} liveEvents={liveEvents} subAgents={subAgents} onDiveIn={setFocusedAgent} isActive={active} lastUpdatedAt={run.last_updated_at} onEditMessage={onForkStarted && !active && !replayUnavailable ? (msg) => setEditModal({ userMessage: msg }) : undefined} replayError={replayMeta?.replay?.error ?? null} />}
+            {activeTab === "convo" && paneConvoId && <ConvoDetail convoId={paneConvoId} onOpenTurn={openConversationTurn} />}
           </StickToBottom.Content>
           <ScrollToBottomButton />
         </StickToBottom>
       )}
-      {editModal && onForkStarted && (
+      {editModal && onForkStarted && !replayUnavailable && (
         <EditReplayModal
           userMessage={editModal.userMessage}
           model={model}

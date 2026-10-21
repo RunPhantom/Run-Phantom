@@ -1,14 +1,34 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ReviewItem, ReviewQueue } from "../../src/review-queues/protocol";
 const evidence = process.env.REVIEW_QUEUE_EVIDENCE_DIR ?? path.resolve("test-results/review-queues-component");
-const fixturePath = "/tests-e2e/review-queue-component.html";
+const connected = process.env.REVIEW_QUEUE_CONNECTED === "1";
+const fixturePath = connected ? "/review-queues" : "/tests-e2e/review-queue-component.html";
+const navigation = (page: Page) => connected
+  ? page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Evaluations", exact: true })
+  : page.getByRole("link", { name: "Fixture evaluations navigation", exact: true });
+async function delayAcknowledgment(page: Page, pattern: string) {
+  await page.route(pattern, async route => {
+    if (!connected) return route.continue({ headers: { ...route.request().headers(), "x-review-fixture-delay-ack": "1" } });
+    const response = await route.fetch();
+    await new Promise(resolve => setTimeout(resolve, 900));
+    await route.fulfill({ response });
+  });
+}
 
 test("actual review component persists A/B drafts, immediately approves newest edit and promotes frozen typed output", async ({ page, request }) => {
   mkdirSync(evidence,{ recursive:true });
   const errors:string[]=[]; page.on("pageerror",error=>errors.push(error.message));
   await page.goto(fixturePath);
+  if (connected) {
+    await expect(page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Review queues", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(page.locator("[data-connection-status]")).toHaveAttribute("data-connection-status", "connected");
+    const fonts = await page.evaluate(async () => { await document.fonts.ready; return { faces: [...document.fonts].map(font => ({ family: font.family, status: font.status, weight: font.weight })), heading: getComputedStyle(document.querySelector("h1")!).fontFamily, resources: performance.getEntriesByType("resource").filter(entry => entry.name.includes("syne")) }; });
+    writeFileSync(path.join(evidence, "font-proof.json"), JSON.stringify(fonts, null, 2));
+    expect(fonts.heading).toContain("Syne");
+    await expect.poll(() => page.evaluate(async () => { await document.fonts.ready; return { inter: [...document.fonts].some(font => font.family.replace(/["']/g, "") === "Inter Variable" && font.status === "loaded"), syne: [...document.fonts].some(font => font.family.replace(/["']/g, "") === "Syne" && font.status === "loaded") }; })).toEqual({ inter: true, syne: true });
+  }
   await page.getByRole("textbox",{ name:"New queue name" }).fill("Checkout curation");
   await page.getByRole("button",{ name:"Create queue",exact:true }).click();
   const queues = await (await request.get("/api/review-queues")).json() as ReviewQueue[];
@@ -43,9 +63,11 @@ test("actual review component persists A/B drafts, immediately approves newest e
   expect(revision.cases).toHaveLength(1); expect(revision.cases[0].sourceOutput).toContain('"status":"refunded"'); expect(revision.cases[0].rules[0].value).toBe("Newest B before approval");
   expect((await stored(first.id)).state).toBe("draft"); expect((await stored(second.id)).state).toBe("promoted");
   await page.screenshot({ path:path.join(evidence,"review-desktop.png"),fullPage:true });
-  writeFileSync(path.join(evidence,"component-output.json"),JSON.stringify({ qualification:"unactivated component fixture",queue,first:await stored(first.id),second:await stored(second.id),revision,errors },null,2));
+  if (connected) { await page.getByRole("heading", { name: "Review queues", exact: true }).scrollIntoViewIfNeeded(); await page.screenshot({ path: path.join(evidence, "review-desktop-top.png"), fullPage: true }); }
+  writeFileSync(path.join(evidence,"component-output.json"),JSON.stringify({ qualification:connected ? "actual source app and daemon" : "isolated component fixture with canonical migrations",queue,first:await stored(first.id),second:await stored(second.id),revision,errors },null,2));
   await page.setViewportSize({ width:390,height:844 }); await page.emulateMedia({ reducedMotion:"reduce" });
   await page.screenshot({ path:path.join(evidence,"review-mobile.png"),fullPage:true });
+  if (connected) { await page.getByRole("heading", { name: "Review queues", exact: true }).scrollIntoViewIfNeeded(); await page.screenshot({ path: path.join(evidence, "review-mobile-top.png"), fullPage: true }); }
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true); expect(errors).toEqual([]);
   await request.put(`/api/evaluations/datasets/${revisions[0].id}`,{ data:{ expectedVersion:2,cases:[] } });
   await page.getByRole("link",{ name:"Open saved dataset revision",exact:true }).click();
@@ -93,13 +115,13 @@ test("typing shortcuts and SPA navigation retain in-flight drafts until acknowle
   await page.goto(`${fixturePath}?queueId=${queue.id}&itemId=${item.id}`);
   const note = page.getByRole("textbox",{ name:/Review note/ });
   await expect(note).toBeVisible();
-  await page.route(`**/api/review-queues/${queue.id}/items/${item.id}`,route=>route.continue({ headers:{ ...route.request().headers(),"x-review-fixture-delay-ack":"1" } }));
+  await delayAcknowledgment(page, `**/api/review-queues/${queue.id}/items/${item.id}`);
   await note.fill("Retained while acknowledgment is delayed");
   await note.press("Control+Enter");
   const current = async()=>(await (await request.get(`/api/review-queues/${queue.id}/window?centerId=${item.id}`)).json() as ReviewItem[])[0];
   expect((await current()).state).toBe("draft");
   await expect.poll(async()=> (await current()).draft.note).toBe("Retained while acknowledgment is delayed");
-  const nav = page.getByRole("link",{ name:"Fixture evaluations navigation",exact:true }); await nav.focus(); await nav.press("Enter");
+  const nav = navigation(page); await nav.focus(); await nav.press("Enter");
   await expect(page.getByRole("dialog",{ name:"Retained drafts on this page",exact:true })).toBeVisible();
   await expect(page.getByRole("button",{ name:"Discard local drafts and leave",exact:true })).toBeDisabled();
   await page.getByRole("dialog").press("Control+Enter"); expect((await current()).state).toBe("draft");
@@ -147,20 +169,20 @@ test("explicit approval and reapply keep source frames in the displayed window",
   expect(otherWriter.status()).toBe(200);
   await expect(page.getByRole("button",{ name:"Reapply to latest revision",exact:true })).toBeVisible();
   await secondButton.click(); await expect(source).toContainText("Input for source-b");
-  await page.route(`**/api/review-queues/${queue.id}/items/${first.id}`,route=>route.continue({ headers:{ ...route.request().headers(),"x-review-fixture-delay-ack":"1" } }));
+  await delayAcknowledgment(page, `**/api/review-queues/${queue.id}/items/${first.id}`);
   await page.getByRole("button",{ name:"Reapply to latest revision",exact:true }).click();
   await expect.poll(async()=> (await current(first.id)).draft.target.expectedOutput).toBe("Retained first target");
   await expect(source).toContainText("Input for source-a"); await expect(target).toHaveValue("Retained first target");
   await expect(secondButton).toBeDisabled(); await expect(page.getByRole("combobox",{ name:"Review queue",exact:true })).toBeDisabled();
   await secondButton.click({ force:true }); await expect(source).toContainText("Input for source-a");
   await expect(secondButton).toBeEnabled(); await secondButton.click(); await expect(source).toContainText("Input for source-b");
-  await page.route("**/api/review-queues",route=>route.continue({ headers:{ ...route.request().headers(),"x-review-fixture-delay-ack":"1" } }));
-  await page.route(`**/api/review-queues/${queue.id}/items/${second.id}/*`,route=>route.continue({ headers:{ ...route.request().headers(),"x-review-fixture-delay-ack":"1" } }));
+  await delayAcknowledgment(page, "**/api/review-queues");
+  await delayAcknowledgment(page, `**/api/review-queues/${queue.id}/items/${second.id}/*`);
   await target.fill("Newest second target"); await page.getByRole("button",{ name:"Approve local review",exact:true }).click();
   await expect.poll(async()=> (await current(second.id)).state).toBe("approved");
   await expect(firstButton).toBeDisabled(); await firstButton.click({ force:true }); await expect(source).toContainText("Input for source-b");
   await expect(page.getByRole("button",{ name:"Reopen review",exact:true })).toBeVisible(); await expect(firstButton).toBeDisabled();
-  const navigation = page.getByRole("link",{ name:"Fixture evaluations navigation",exact:true }); await navigation.focus(); await navigation.press("Enter");
+  const nav = navigation(page); await nav.focus(); await nav.press("Enter");
   await expect(page.getByRole("dialog",{ name:"Retained drafts on this page",exact:true })).toBeVisible();
   await expect(page.getByRole("button",{ name:"Discard local drafts and leave",exact:true })).toBeDisabled();
   await page.getByRole("button",{ name:"Stay on this page",exact:true }).click(); await expect(source).toContainText("Input for source-b");

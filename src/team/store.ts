@@ -3,12 +3,24 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { SnapshotRun, SnapshotSpan } from "../evaluations/protocol";
+import { snapshotRun } from "../evaluations/snapshot";
+import { canonicalCaseDefinitions, parseVersion } from "../evaluations/validation";
+import { REVIEW_LIMITS as R, type ReviewCounts, type ReviewItemSummary } from "../review-queues/protocol";
+import { approvalHash } from "../review-queues/state";
+import { canonicalReviewJson, freezeReviewSource, reviewHash, reviewItemId, reviewCaseId, reviewTimestamp } from "../review-queues/validation";
+import { assertTeamReviewItem, createTeamReviewItem, mutateTeamReviewItem, promoteTeamReviewItem, compileTeamReviewCase,
+  parseTeamReviewQueue, parseTeamReviewDataset, parseTeamReviewInsert, parseTeamReviewPromotion, parseTeamReviewStored, parseTeamReviewCases, parseTeamReviewReceipt,
+  TEAM_REVIEW_ITEM_BYTES, TEAM_REVIEW_REVISION_BYTES,
+  type TeamReviewQueue, type TeamReviewItem, type TeamReviewDataset, type TeamReviewDatasetRevision, type TeamReviewReceipt } from "./review-queues";
 import { initializeTeamSchema } from "./store-schema";
 import type { IncomingMessage } from "node:http";
 import { TeamEvidence, teamEvidenceAccess, type TeamEvidenceRead, type TeamEvidenceWrite, type TeamEvidenceResponse } from "./evidence";
 import { EvidenceStore } from "../evaluations/evidence-store";
 import { PromptRegistry } from "../prompts/registry";
 import type { PromptCapability, PromptFence } from "../prompts/protocol";
+import { createComparisonRuntime, type ComparisonRuntime, type ComparisonRuntimeOptions } from "../prompts/comparison-runtime";
+import type { ComparisonFence, ComparisonStore } from "../prompts/comparison-store";
+import { readTeamComparison, writeTeamComparison, teamComparisonOperation, type TeamComparisonRead, type TeamComparisonWrite, type TeamComparisonResponse } from "./comparisons";
 import { readTeamPrompt, writeTeamPrompt, teamPromptOperation, type TeamPromptRead, type TeamPromptWrite, type TeamPromptResponse } from "./prompts";
 import { EvidenceError, type EvidenceCapability, type EvidenceAttachment } from "../evaluations/evidence-protocol";
 import type { EvidenceOwner, EvidenceInventoryAnchor, EvidenceAnchorIdentity } from "../evaluations/evidence-inventory";
@@ -52,6 +64,8 @@ export class TeamStore {
   readonly #path: string;
   readonly #now: () => number;
   readonly #evidence: TeamEvidence;
+  #comparisons: ComparisonRuntime | null = null;
+  #comparisonStart: Promise<void> | undefined;
   #closed = false;
 
   constructor(path: string, options: { bootstrapHash?: string; now?: () => number } = {}) {
@@ -70,12 +84,26 @@ export class TeamStore {
   }
   close(): void {
     if (!this.#closed) {
+      if (this.#comparisons) throw new TeamError("conflict", "Comparison work must stop before the database closes");
       const state = this.#evidence.state;
       if (state.active || state.queued || state.acquiringMetadata) throw new TeamError("conflict", "Evidence work must stop before the database closes");
       this.#db.close(); this.#closed = true;
     }
   }
   shutdownEvidence(): Promise<void> { return this.#evidence.close(); }
+  /** Trusted server startup only. Native acquisition and recovery happen once before listening. */
+  startComparisons(options: ComparisonRuntimeOptions = {}): Promise<void> {
+    this.#comparisonStart ??= (async () => {
+      if (this.#closed) throw new TeamError("conflict", "The project store is closed");
+      try {
+        const runtime = await createComparisonRuntime(this.#db, options);
+        if (this.#closed) { await runtime.close(); return; }
+        this.#comparisons = runtime;
+      } catch { this.#comparisons = null; }
+    })();
+    return this.#comparisonStart;
+  }
+  async shutdownComparisons(): Promise<void> { await this.#comparisonStart; if (this.#comparisons) { await this.#comparisons.close(); this.#comparisons = null; } }
   #get<T>(sql: string, ...params: SQLQueryBindings[]): T | null { return this.#db.query(sql).get(...params) as T | null; }
   #all<T>(sql: string, ...params: SQLQueryBindings[]): T[] { return this.#db.query(sql).all(...params) as T[]; }
   #run(sql: string, ...params: SQLQueryBindings[]): void { this.#db.query(sql).run(...params); }
@@ -245,6 +273,22 @@ export class TeamStore {
   writePrompt(context: ProjectContext, input: TeamPromptWrite, generation: PromptFence): TeamPromptResponse {
     return writeTeamPrompt(this.#promptRegistry(context), input, generation);
   }
+  #comparisonStore(context: ProjectContext): ComparisonStore {
+    const current = this.#project(context);
+    if (!this.#comparisons) throw new TeamError("conflict", "Model comparisons are unavailable for this native owner");
+    return this.#comparisons.scope({ database: this.#db, scope: { kind: "project", id: current.projectId }, authorize: capability => {
+      this.#project(context, capability === "delete" ? "admin" : capability === "edit" ? "editor" : "viewer");
+    } });
+  }
+  comparisonGeneration(context: ProjectContext, capability: PromptCapability): ComparisonFence {
+    return teamComparisonOperation(() => this.#comparisonStore(context).capture(capability));
+  }
+  readComparison(context: ProjectContext, input: TeamComparisonRead, fence: ComparisonFence): TeamComparisonResponse {
+    return readTeamComparison(this.#comparisonStore(context), input, fence);
+  }
+  writeComparison(context: ProjectContext, input: TeamComparisonWrite, fence: ComparisonFence): TeamComparisonResponse {
+    return writeTeamComparison(this.#comparisonStore(context), this.#comparisons!.coordinator, input, fence);
+  }
   async invalidateEvidenceRun(context: ProjectContext, id: string): Promise<void> {
     this.#db.transaction(() => { this.#project(context, "admin"); this.#evidenceAnchor(context, { kind: "run", id }); }).immediate();
     await this.#evidence.invalidateRun(this.#evidenceOwner(context), id);
@@ -271,6 +315,8 @@ export class TeamStore {
       this.#run("INSERT INTO projects(id,name,created_at) VALUES(?,?,?)", id, name, now);
       this.#run("INSERT INTO prompt_scope_controls(scope_key,generation) SELECT scope_key,1 FROM evaluation_evidence_scopes WHERE scope_key=?", "project:" + id);
       if (!this.#get("SELECT scope_key FROM prompt_scope_controls WHERE scope_key=?", "project:" + id)) throw new TeamError("conflict", "Team prompt scope is unavailable");
+      this.#run("INSERT INTO comparison_scope_controls(scope_key,generation) SELECT p.scope_key,1 FROM prompt_scope_controls p JOIN evaluation_evidence_scopes e USING(scope_key) WHERE p.scope_key=? AND e.active=1", "project:" + id);
+      if (!this.#get("SELECT scope_key FROM comparison_scope_controls WHERE scope_key=?", "project:" + id)) throw new TeamError("conflict", "Team comparison scope is unavailable");
       this.#run("INSERT INTO memberships(project_id,account_id,role,joined_at) VALUES(?,?,'admin',?)", id, current.user.id, now);
       this.#audit({ ...current, projectId: id, role: "admin" }, "project.created", { type: "project", id });
       return { id, name, createdAt: now, role: "admin" };
@@ -419,7 +465,7 @@ export class TeamStore {
   #quotaDelta(projectId: string, amount: number, runs = 0, spans = 0, checks = 0): void {
     const project = this.#get<ProjectRow>("SELECT * FROM projects WHERE id=?", projectId);
     if (!project) throw missing();
-    if (project.evidence_bytes + amount > L.PROJECT_BYTES || project.run_count + runs > L.PROJECT_RUNS
+    if (Math.max(project.evidence_bytes + amount, this.#telemetryBytes(projectId)) + this.#reviewBytes(projectId) > L.PROJECT_BYTES || project.run_count + runs > L.PROJECT_RUNS
       || project.span_count + spans > L.PROJECT_SPANS || project.check_count + checks > L.PROJECT_CHECKS) throw quota();
     this.#run("UPDATE projects SET evidence_bytes=evidence_bytes+?,run_count=run_count+?,span_count=span_count+?,check_count=check_count+? WHERE id=?", amount, runs, spans, checks, projectId);
   }
@@ -589,20 +635,21 @@ export class TeamStore {
         amount += run.size + spans.size; count += spans.n;
       }
       if (amount > L.CHECK_ACQUISITION_BYTES || count > L.CHECK_ACQUISITION_SPANS) throw new TeamError("too_large", "Selected evidence exceeds the check acquisition limit");
-      const runs = runIds.map(id => {
-        const view = this.#readRun(scope.projectId, id);
-        const run: SnapshotRun = { id, name: view.name, display_name: view.displayName, started_at: view.startedAt, last_updated_at: view.updatedAt };
-        const spans = this.#all<{ data: string }>("SELECT data FROM spans WHERE project_id=? AND run_id=? ORDER BY started_at IS NULL,started_at,id", scope.projectId, id).map(row => {
-          const span = JSON.parse(row.data) as Span;
-          const snapshot: SnapshotSpan = { id: span.id, run_id: span.runId, parent_span_id: span.parentSpanId, name: span.name, span_type: span.kind, status: span.status,
-            input_payload: span.inputPayload, output_payload: span.outputPayload, start_time_ms: span.startedAt, end_time_ms: span.endedAt, duration_ms: span.durationMs,
-            model: span.model, provider: span.provider, input_tokens: span.inputTokens, output_tokens: span.outputTokens, attributes: span.attributes, unavailable: span.unavailable };
-          return snapshot;
-        });
-        return { run, spans };
-      });
+      const runs = runIds.map(id => this.#snapshotEvidence(scope.projectId, id));
       return { author: this.#actor(scope.user.id), acquiredAt: this.#now(), runs };
     })();
+  }
+  #snapshotEvidence(projectId: string, id: string): { run: SnapshotRun; spans: SnapshotSpan[] } {
+    const view = this.#readRun(projectId, id);
+    const run: SnapshotRun = { id, name: view.name, display_name: view.displayName, started_at: view.startedAt, last_updated_at: view.updatedAt };
+    const spans = this.#all<{ data: string }>("SELECT data FROM spans WHERE project_id=? AND run_id=? ORDER BY started_at IS NULL,started_at,id", projectId, id).map(row => {
+      const span = JSON.parse(row.data) as Span;
+      const snapshot: SnapshotSpan = { id: span.id, run_id: span.runId, parent_span_id: span.parentSpanId, name: span.name, span_type: span.kind, status: span.status,
+        input_payload: span.inputPayload, output_payload: span.outputPayload, start_time_ms: span.startedAt, end_time_ms: span.endedAt, duration_ms: span.durationMs,
+        model: span.model, provider: span.provider, input_tokens: span.inputTokens, output_tokens: span.outputTokens, attributes: span.attributes, unavailable: span.unavailable };
+      return snapshot;
+    });
+    return { run, spans };
   }
   persistCheck(context: ProjectContext, check: Check, report: CheckReport): Check {
     const data = JSON.stringify(check), reportData = JSON.stringify(report);
@@ -638,6 +685,255 @@ export class TeamStore {
     const row = this.#get<{ report: string }>("SELECT report FROM checks WHERE project_id=? AND id=?", scope.projectId, id);
     if (!row) throw missing();
     return JSON.parse(row.report) as CheckReport;
+  }
+
+  #reviewIntegrity(): never { throw new TeamError("conflict", "Frozen project review evidence is invalid; reload its current revision"); }
+  #reviewCount(value: number): number {
+    if (!Number.isSafeInteger(value) || value < 0) return this.#reviewIntegrity(); return value;
+  }
+  #reviewBytes(project: string): number {
+    return this.#reviewCount(this.#count(`SELECT COALESCE(SUM(n),0) AS n FROM (
+      SELECT SUM(length(CAST(project_id||id||name||schema_json||schema_hash AS BLOB))+128) AS n FROM team_review_queues WHERE project_id=?
+      UNION ALL SELECT SUM(length(CAST(project_id||queue_id||id||source_run_id||source_span_key||data||data_hash AS BLOB))+128) FROM team_review_items WHERE project_id=?
+      UNION ALL SELECT SUM(length(CAST(project_id||id||name AS BLOB))+128) FROM team_review_datasets WHERE project_id=?
+      UNION ALL SELECT SUM(length(CAST(project_id||dataset_id||cases_json||hash AS BLOB))+128) FROM team_review_dataset_revisions WHERE project_id=?
+      UNION ALL SELECT SUM(length(CAST(project_id||queue_id||idempotency_key||request_json||request_hash||result_json||result_hash AS BLOB))+128) FROM team_review_promotions WHERE project_id=?)`, project, project, project, project, project));
+  }
+  #telemetryBytes(project: string): number {
+    return this.#reviewCount(this.#count(`SELECT COALESCE(SUM(n),0) AS n FROM (
+      SELECT SUM(length(CAST(data||metadata||search_text AS BLOB))+128) AS n FROM runs WHERE project_id=?
+      UNION ALL SELECT SUM(length(CAST(data||name||COALESCE(model,'')||COALESCE(provider,'') AS BLOB))+128) FROM spans WHERE project_id=?
+      UNION ALL SELECT SUM(length(CAST(data AS BLOB))+128) FROM notes WHERE project_id=?
+      UNION ALL SELECT SUM(length(CAST(data||summary||report AS BLOB))+128) FROM checks WHERE project_id=?)`, project, project, project, project));
+  }
+  #reviewRetention(project: string): void {
+    const reviewBytes = this.#reviewBytes(project), old = this.#count("SELECT evidence_bytes AS n FROM projects WHERE id=?", project);
+    const queues = this.#count("SELECT count(*) AS n FROM team_review_queues WHERE project_id=?", project);
+    const items = this.#count("SELECT count(*) AS n FROM team_review_items WHERE project_id=?", project);
+    const promotions = this.#count("SELECT count(*) AS n FROM team_review_promotions WHERE project_id=?", project);
+    const datasets = this.#count("SELECT count(*) AS n FROM team_review_datasets WHERE project_id=?", project);
+    if (reviewBytes > R.MAX_RETAINED_BYTES || Math.max(old, this.#telemetryBytes(project)) + reviewBytes > L.PROJECT_BYTES
+      || queues > R.MAX_QUEUES || items > R.MAX_ITEMS || promotions > R.MAX_PROMOTIONS || datasets > 50) throw quota();
+  }
+  #readReviewQueue(project: string, id: string): TeamReviewQueue {
+    requiredId(id);
+    const row = this.#get<{name: string | null;schema_json: string | null;schema_hash: string;created_at: number;next_ordinal: number}>(`SELECT
+      CASE WHEN length(CAST(name AS BLOB))<=512 THEN name END AS name,
+      CASE WHEN length(CAST(schema_json AS BLOB))<=8192 THEN schema_json END AS schema_json,
+      schema_hash,created_at,next_ordinal FROM team_review_queues WHERE project_id=? AND id=?`, project, id);
+    if (!row) throw missing();
+    try {
+      const parsed = parseTeamReviewQueue({ name: row.name, schema: parseTeamReviewStored(row.schema_json, R.MAX_SCHEMA_BYTES) });
+      if (reviewHash(parsed.schema) !== row.schema_hash) return this.#reviewIntegrity(); parseVersion(row.next_ordinal);
+      return { ...parsed, projectId: project, id, schemaHash: row.schema_hash, createdAt: reviewTimestamp(row.created_at) };
+    } catch { return this.#reviewIntegrity(); }
+  }
+  #reviewCounts(project: string, queue: string): ReviewCounts {
+    const row = this.#get<ReviewCounts>(`SELECT count(*) AS total,COALESCE(sum(state='draft'),0) AS draft,
+      COALESCE(sum(state='approved'),0) AS approved,COALESCE(sum(state='promoted'),0) AS promoted FROM team_review_items WHERE project_id=? AND queue_id=?`, project, queue)!;
+    for (const value of Object.values(row)) this.#reviewCount(value);
+    if (row.total !== row.draft + row.approved + row.promoted || row.total > R.MAX_ITEMS_PER_QUEUE) return this.#reviewIntegrity(); return row;
+  }
+  listReviewQueues(context: ProjectContext): Array<TeamReviewQueue & {counts: ReviewCounts}> {
+    return this.#db.transaction(() => {
+      const scope = this.#project(context); this.#reviewRetention(scope.projectId);
+      return this.#all<{id: string}>("SELECT id FROM team_review_queues WHERE project_id=? ORDER BY created_at DESC,id DESC LIMIT ?", scope.projectId, R.MAX_QUEUES)
+        .map(row => ({ ...this.#readReviewQueue(scope.projectId, row.id), counts: this.#reviewCounts(scope.projectId, row.id) }));
+    }).immediate();
+  }
+  createReviewQueue(context: ProjectContext, body: unknown): TeamReviewQueue {
+    return this.#write(() => {
+      const scope = this.#project(context, "editor"), parsed = parseTeamReviewQueue(body), id = randomUUID(), createdAt = this.#now();
+      this.#reviewRetention(scope.projectId);
+      if (this.#count("SELECT count(*) AS n FROM team_review_queues WHERE project_id=?", scope.projectId) >= R.MAX_QUEUES) throw quota();
+      this.#run("INSERT INTO team_review_queues(project_id,id,name,schema_json,schema_hash,created_at) VALUES(?,?,?,?,?,?)", scope.projectId, id, parsed.name, canonicalReviewJson(parsed.schema), reviewHash(parsed.schema), createdAt);
+      this.#reviewRetention(scope.projectId); this.#audit(scope, "review_queue.created", { type: "reviewQueue", id });
+      return this.#readReviewQueue(scope.projectId, id);
+    });
+  }
+  deleteReviewQueue(context: ProjectContext, id: string): void {
+    this.#write(() => { const scope = this.#project(context, "admin"); this.#readReviewQueue(scope.projectId, id);
+      this.#run("DELETE FROM team_review_queues WHERE project_id=? AND id=?", scope.projectId, id); this.#audit(scope, "review_queue.deleted", { type: "reviewQueue", id }); });
+  }
+  #readReviewItem(project: string, queue: TeamReviewQueue, id: string): TeamReviewItem {
+    requiredHash(id);
+    const row = this.#get<{data: string | null;data_hash: string;ordinal: number;revision: number;state: string;source_run_id: string;source_span_key: string}>(`SELECT
+      CASE WHEN length(CAST(data AS BLOB))<=${TEAM_REVIEW_ITEM_BYTES} THEN data END AS data,data_hash,ordinal,revision,state,source_run_id,source_span_key
+      FROM team_review_items WHERE project_id=? AND queue_id=? AND id=?`, project, queue.id, id);
+    if (!row) throw missing();
+    try {
+      const item = parseTeamReviewStored(row.data, TEAM_REVIEW_ITEM_BYTES) as TeamReviewItem;
+      assertTeamReviewItem(project, item, queue.schema);
+      if (reviewHash(item) !== row.data_hash || item.id !== id || item.queueId !== queue.id || item.ordinal !== row.ordinal
+        || item.revision !== row.revision || item.state !== row.state || item.source.runId !== row.source_run_id
+        || (item.source.requestedOutputSpanId ?? "") !== row.source_span_key) return this.#reviewIntegrity(); return item;
+    } catch { return this.#reviewIntegrity(); }
+  }
+  insertReviewItem(context: ProjectContext, queueId: string, body: unknown): TeamReviewItem {
+    return this.#write(() => {
+      const scope = this.#project(context, "editor"), queue = this.#readReviewQueue(scope.projectId, queueId), selected = parseTeamReviewInsert(body);
+      const id = reviewItemId(queue.id, selected.runId, selected.outputSpanId);
+      if (this.#get("SELECT id FROM team_review_items WHERE project_id=? AND queue_id=? AND id=?", scope.projectId, queue.id, id)) return this.#readReviewItem(scope.projectId, queue, id);
+      this.#reviewRetention(scope.projectId);
+      if (this.#reviewCounts(scope.projectId, queue.id).total >= R.MAX_ITEMS_PER_QUEUE
+        || this.#count("SELECT count(*) AS n FROM team_review_items WHERE project_id=?", scope.projectId) >= R.MAX_ITEMS) throw quota();
+      const run = this.#get<{size: number}>("SELECT length(CAST(data AS BLOB)) AS size FROM runs WHERE project_id=? AND id=?", scope.projectId, selected.runId);
+      if (!run) throw missing();
+      const spans = this.#get<{size: number;n: number}>("SELECT COALESCE(sum(length(CAST(data AS BLOB))),0) AS size,count(*) AS n FROM spans WHERE project_id=? AND run_id=?", scope.projectId, selected.runId)!;
+      if (this.#reviewCount(run.size) + this.#reviewCount(spans.size) > L.CHECK_ACQUISITION_BYTES || this.#reviewCount(spans.n) > L.CHECK_ACQUISITION_SPANS) throw new TeamError("too_large", "Selected evidence exceeds the review acquisition limit");
+      const evidence = this.#snapshotEvidence(scope.projectId, selected.runId), now = this.#now();
+      const source = freezeReviewSource(snapshotRun(evidence.run, evidence.spans, selected.outputSpanId ?? undefined), selected.outputSpanId);
+      const ordinal = parseVersion(this.#count("SELECT next_ordinal AS n FROM team_review_queues WHERE project_id=? AND id=?", scope.projectId, queue.id));
+      if (ordinal === Number.MAX_SAFE_INTEGER) throw new TeamError("conflict", "Review revision allocator limit reached");
+      const item = createTeamReviewItem(scope.projectId, queue.id, queue.schema, source, ordinal, now), data = canonicalReviewJson(item);
+      if (bytes(data) > TEAM_REVIEW_ITEM_BYTES) throw new TeamError("too_large", "Frozen review item exceeds its row limit");
+      this.#run("INSERT INTO team_review_items VALUES(?,?,?,?,?,?,?,?,?,?)", scope.projectId, queue.id, id, ordinal, source.runId, selected.outputSpanId ?? "", item.revision, item.state, data, reviewHash(item));
+      this.#run("UPDATE team_review_queues SET next_ordinal=? WHERE project_id=? AND id=?", ordinal + 1, scope.projectId, queue.id);
+      this.#reviewRetention(scope.projectId); this.#audit(scope, "review_item.inserted", { type: "reviewItem", id }); return item;
+    });
+  }
+  #persistReviewItem(scope: ProjectContext, item: TeamReviewItem, expectedRevision: number): void {
+    if (item.revision >= Number.MAX_SAFE_INTEGER) throw new TeamError("conflict", "Review revision allocator limit reached");
+    const counter = parseVersion(this.#count("SELECT next_ordinal AS n FROM team_review_queues WHERE project_id=? AND id=?", scope.projectId, item.queueId));
+    const data = canonicalReviewJson(item);
+    if (bytes(data) > TEAM_REVIEW_ITEM_BYTES) throw new TeamError("too_large", "Frozen review item exceeds its row limit");
+    const changed = this.#get("UPDATE team_review_items SET revision=?,state=?,data=?,data_hash=? WHERE project_id=? AND queue_id=? AND id=? AND revision=? RETURNING id",
+      item.revision, item.state, data, reviewHash(item), scope.projectId, item.queueId, item.id, expectedRevision);
+    if (!changed) throw new TeamError("conflict", "Project review changed; retain your draft and reload its current revision");
+    this.#run("UPDATE team_review_queues SET next_ordinal=? WHERE project_id=? AND id=?", Math.max(counter, item.revision + 1), scope.projectId, item.queueId);
+  }
+  mutateReviewItem(context: ProjectContext, queueId: string, id: string, kind: "save" | "approve" | "reopen", body: unknown): TeamReviewItem {
+    return this.#write(() => {
+      const scope = this.#project(context, "editor"), queue = this.#readReviewQueue(scope.projectId, queueId), item = this.#readReviewItem(scope.projectId, queue, id);
+      const changed = mutateTeamReviewItem(scope.projectId, item, queue.schema, kind, body, { accountId: scope.user.id, role: scope.role }, Math.max(this.#now(), item.updatedAt));
+      if (changed === item) return item;
+      this.#persistReviewItem(scope, changed, item.revision); this.#reviewRetention(scope.projectId);
+      this.#audit(scope, kind === "save" ? "review_item.saved" : kind === "approve" ? "review_item.approved" : "review_item.reopened", { type: "reviewItem", id }); return changed;
+    });
+  }
+  deleteReviewItem(context: ProjectContext, queueId: string, id: string, expectedRevision: number): void {
+    this.#write(() => {
+      const scope = this.#project(context, "admin"), queue = this.#readReviewQueue(scope.projectId, queueId), item = this.#readReviewItem(scope.projectId, queue, id);
+      if (parseVersion(expectedRevision) !== item.revision) throw new TeamError("conflict", "Project review changed before deletion");
+      this.#run("DELETE FROM team_review_items WHERE project_id=? AND queue_id=? AND id=? AND revision=?", scope.projectId, queue.id, id, expectedRevision);
+      this.#audit(scope, "review_item.deleted", { type: "reviewItem", id });
+    });
+  }
+  listReviewItems(context: ProjectContext, queueId: string, query?: PageQuery): Page<ReviewItemSummary> & {counts: ReviewCounts} {
+    return this.#db.transaction(() => {
+      const scope = this.#project(context), queue = this.#readReviewQueue(scope.projectId, queueId), paging = this.#paging(query, scope.projectId, `review-items:${queue.id}`);
+      if (paging.limit > R.MAX_PAGE) throw new TeamError("invalid_request", "Review pages contain at most 50 items");
+      const args: SQLQueryBindings[] = [], after = paging.anchor ? " AND (ordinal>? OR (ordinal=? AND id>?))" : "";
+      if (paging.anchor) { const ordinal = parseVersion(paging.anchor[0]); requiredHash(paging.anchor[1]); args.push(ordinal, ordinal, paging.anchor[1]); }
+      const rows = this.#all<ReviewItemSummary>(`SELECT id,ordinal,revision,state,
+        CASE WHEN length(CAST(data AS BLOB))<=${TEAM_REVIEW_ITEM_BYTES} AND json_type(data,'$.draft.name')='text'
+          AND length(CAST(json_extract(data,'$.draft.name') AS BLOB))<=512 THEN json_extract(data,'$.draft.name') END AS name
+        FROM team_review_items WHERE project_id=? AND queue_id=?${after} ORDER BY ordinal,id LIMIT ?`, scope.projectId, queue.id, ...args, paging.limit + 1);
+      for (const row of rows) {
+        try { requiredHash(row.id); parseVersion(row.ordinal); parseVersion(row.revision); parseTeamReviewQueue({ name: row.name });
+          if (!["draft", "approved", "promoted"].includes(row.state)) return this.#reviewIntegrity(); } catch { return this.#reviewIntegrity(); }
+      }
+      return { ...pageResult(rows, paging, row => [row.ordinal, row.id]), counts: this.#reviewCounts(scope.projectId, queue.id) };
+    }).immediate();
+  }
+  reviewWindow(context: ProjectContext, queueId: string, centerId: string): TeamReviewItem[] {
+    return this.#db.transaction(() => {
+      const scope = this.#project(context), queue = this.#readReviewQueue(scope.projectId, queueId), center = this.#readReviewItem(scope.projectId, queue, centerId);
+      const before = this.#all<{id: string}>("SELECT id FROM team_review_items WHERE project_id=? AND queue_id=? AND ordinal<? ORDER BY ordinal DESC,id DESC LIMIT 2", scope.projectId, queue.id, center.ordinal).reverse();
+      const after = this.#all<{id: string}>("SELECT id FROM team_review_items WHERE project_id=? AND queue_id=? AND ordinal>? ORDER BY ordinal,id LIMIT 2", scope.projectId, queue.id, center.ordinal);
+      return [...before.map(row => this.#readReviewItem(scope.projectId, queue, row.id)), center, ...after.map(row => this.#readReviewItem(scope.projectId, queue, row.id))];
+    }).immediate();
+  }
+  #readReviewRevision(project: string, id: string, version: number): TeamReviewDatasetRevision {
+    requiredId(id); parseVersion(version);
+    const row = this.#get<{name: string;cases_json: string | null;hash: string;created_at: number}>(`SELECT d.name,
+      CASE WHEN length(CAST(r.cases_json AS BLOB))<=${TEAM_REVIEW_REVISION_BYTES} THEN r.cases_json END AS cases_json,r.hash,r.created_at
+      FROM team_review_datasets d JOIN team_review_dataset_revisions r ON r.project_id=d.project_id AND r.dataset_id=d.id WHERE d.project_id=? AND d.id=? AND r.version=?`, project, id, version);
+    if (!row) throw missing();
+    try {
+      const cases = parseTeamReviewCases(parseTeamReviewStored(row.cases_json, TEAM_REVIEW_REVISION_BYTES));
+      if (digest(canonicalCaseDefinitions(cases)) !== row.hash || version > 20) return this.#reviewIntegrity();
+      return { projectId: project, datasetId: id, datasetName: parseTeamReviewDataset({name: row.name}).name, version, cases, hash: row.hash, createdAt: reviewTimestamp(row.created_at) };
+    } catch { return this.#reviewIntegrity(); }
+  }
+  createReviewDataset(context: ProjectContext, body: unknown): TeamReviewDatasetRevision {
+    return this.#write(() => {
+      const scope = this.#project(context, "editor"), {name} = parseTeamReviewDataset(body), id = randomUUID(), now = this.#now(); this.#reviewRetention(scope.projectId);
+      if (this.#count("SELECT count(*) AS n FROM team_review_datasets WHERE project_id=?", scope.projectId) >= 50) throw quota();
+      this.#run("INSERT INTO team_review_datasets VALUES(?,?,?,1,?)", scope.projectId, id, name, now);
+      this.#run("INSERT INTO team_review_dataset_revisions VALUES(?,?,1,'[]',?,?)", scope.projectId, id, digest(canonicalCaseDefinitions([])), now);
+      this.#reviewRetention(scope.projectId); this.#audit(scope, "review_dataset.created", {type:"reviewDataset", id}); return this.#readReviewRevision(scope.projectId, id, 1);
+    });
+  }
+  listReviewDatasets(context: ProjectContext): TeamReviewDataset[] {
+    return this.#db.transaction(() => {
+      const scope = this.#project(context); this.#reviewRetention(scope.projectId);
+      return this.#all<{id: string;latest_version: number}>("SELECT id,latest_version FROM team_review_datasets WHERE project_id=? ORDER BY created_at DESC,id DESC LIMIT 50", scope.projectId).map(row => {
+        const revision = this.#readReviewRevision(scope.projectId, row.id, row.latest_version);
+        return {projectId:scope.projectId,id:row.id,name:revision.datasetName,latestVersion:revision.version,caseCount:revision.cases.length,createdAt:revision.createdAt};
+      });
+    }).immediate();
+  }
+  getReviewDatasetRevision(context: ProjectContext, id: string, version: number): TeamReviewDatasetRevision {
+    return this.#db.transaction(() => { const scope = this.#project(context); return this.#readReviewRevision(scope.projectId, id, version); }).immediate();
+  }
+  deleteReviewDataset(context: ProjectContext, id: string): void {
+    this.#write(() => { const scope = this.#project(context, "admin"); requiredId(id);
+      if (!this.#get("SELECT id FROM team_review_datasets WHERE project_id=? AND id=?", scope.projectId, id)) throw missing();
+      this.#run("DELETE FROM team_review_datasets WHERE project_id=? AND id=?", scope.projectId, id); this.#audit(scope, "review_dataset.deleted", {type:"reviewDataset",id}); });
+  }
+  #reviewPromotion(project: string, queue: string, key: string): {request: import("../review-queues/protocol").PromotionRequest;receipt: TeamReviewReceipt} | null {
+    requiredId(queue); requiredId(key);
+    const row = this.#get<{request_json: string | null;request_hash: string;result_json: string | null;result_hash: string}>(`SELECT
+      CASE WHEN length(CAST(request_json AS BLOB))<=${R.MAX_RECEIPT_BYTES} THEN request_json END AS request_json,request_hash,
+      CASE WHEN length(CAST(result_json AS BLOB))<=${R.MAX_RECEIPT_BYTES} THEN result_json END AS result_json,result_hash FROM team_review_promotions WHERE project_id=? AND queue_id=? AND idempotency_key=?`, project, queue, key);
+    if (!row) return null;
+    try {
+      const request = parseTeamReviewPromotion(parseTeamReviewStored(row.request_json, R.MAX_RECEIPT_BYTES)), receipt = parseTeamReviewReceipt(parseTeamReviewStored(row.result_json, R.MAX_RECEIPT_BYTES));
+      if (request.queueId !== queue || request.idempotencyKey !== key || receipt.projectId !== project || receipt.queueId !== queue
+        || reviewHash(request) !== row.request_hash || reviewHash(receipt) !== row.result_hash || receipt.promotionId !== reviewHash([project, queue, key])
+        || receipt.datasetId !== request.datasetId || receipt.datasetVersion !== request.expectedDatasetVersion + 1
+        || canonicalReviewJson(receipt.itemIds) !== canonicalReviewJson(request.items.map(item => item.itemId))
+        || canonicalReviewJson(receipt.caseIds) !== canonicalReviewJson(receipt.itemIds.map(item => reviewCaseId(queue, item)))) return this.#reviewIntegrity();
+      const revision = this.#readReviewRevision(project, receipt.datasetId, receipt.datasetVersion);
+      if (receipt.datasetHash !== revision.hash || receipt.caseIds.some(id => !revision.cases.some(item => item.id === id))) return this.#reviewIntegrity(); return {request,receipt};
+    } catch { return this.#reviewIntegrity(); }
+  }
+  getReviewPromotion(context: ProjectContext, queueId: string, key: string): TeamReviewReceipt {
+    return this.#db.transaction(() => { const scope = this.#project(context); return this.#reviewPromotion(scope.projectId, queueId, key)?.receipt ?? (() => {throw missing();})(); }).immediate();
+  }
+  promoteReviewItems(context: ProjectContext, body: unknown): TeamReviewReceipt {
+    return this.#write(() => {
+      const scope = this.#project(context, "editor"), request = parseTeamReviewPromotion(body), requestHash = reviewHash(request);
+      const previous = this.#reviewPromotion(scope.projectId, request.queueId, request.idempotencyKey);
+      if (previous) {
+        if (reviewHash(previous.request) !== requestHash) throw new TeamError("conflict", "Promotion retry differs from its original request"); return previous.receipt;
+      }
+      this.#reviewRetention(scope.projectId);
+      const queue = this.#readReviewQueue(scope.projectId, request.queueId), head = this.#get<{latest_version: number}>("SELECT latest_version FROM team_review_datasets WHERE project_id=? AND id=?", scope.projectId, request.datasetId);
+      if (!head) throw missing();
+      if (head.latest_version !== request.expectedDatasetVersion) throw new TeamError("conflict", "Dataset changed; reload its current revision");
+      if (head.latest_version >= 20) throw new TeamError("conflict", "Dataset revision limit reached");
+      const revision = this.#readReviewRevision(scope.projectId, request.datasetId, head.latest_version), version = head.latest_version + 1;
+      const items = request.items.map(selected => {
+        const item = this.#readReviewItem(scope.projectId, queue, selected.itemId);
+        if (item.revision !== selected.expectedRevision || item.state !== "approved" || item.approvedHash !== approvalHash(queue.schema, item.sourceHash, item.draftHash)) throw new TeamError("conflict", "Project review changed; approve its current revision before promotion"); return item;
+      });
+      const added = items.map(item => compileTeamReviewCase(scope.projectId, item, queue.schema)), cases = [...revision.cases, ...added];
+      if (cases.length > 50 || new Set(cases.map(item => item.id)).size !== cases.length) throw new TeamError("conflict", "Dataset case limit or duplicate case identity prevents promotion");
+      parseTeamReviewCases(cases); const data = canonicalReviewJson(cases), now = this.#now(), hash = digest(canonicalCaseDefinitions(cases));
+      if (bytes(data) > TEAM_REVIEW_REVISION_BYTES) throw new TeamError("too_large", "Frozen dataset revision exceeds its row limit");
+      if (this.#count("SELECT count(*) AS n FROM team_review_promotions WHERE project_id=?", scope.projectId) >= R.MAX_PROMOTIONS) throw quota();
+      this.#run("INSERT INTO team_review_dataset_revisions VALUES(?,?,?,?,?,?)", scope.projectId, revision.datasetId, version, data, hash, now);
+      this.#run("UPDATE team_review_datasets SET latest_version=? WHERE project_id=? AND id=? AND latest_version=?", version, scope.projectId, revision.datasetId, head.latest_version);
+      for (const item of items) this.#persistReviewItem(scope, promoteTeamReviewItem(scope.projectId, item, queue.schema, item.revision, {datasetId:revision.datasetId,datasetVersion:version}, Math.max(now,item.updatedAt)), item.revision);
+      const receipt: TeamReviewReceipt = {projectId:scope.projectId,queueId:queue.id,promotionId:reviewHash([scope.projectId,queue.id,request.idempotencyKey]),datasetId:revision.datasetId,datasetVersion:version,datasetHash:hash,
+        itemIds:items.map(item=>item.id),caseIds:added.map(item=>item.id),createdAt:now,actor:{accountId:scope.user.id,role:scope.role}};
+      const result = canonicalReviewJson(receipt), requested = canonicalReviewJson(request);
+      if (bytes(result) > R.MAX_RECEIPT_BYTES || bytes(requested) > R.MAX_RECEIPT_BYTES) throw new TeamError("too_large", "Promotion receipt exceeds its row limit");
+      this.#run("INSERT INTO team_review_promotions VALUES(?,?,?,?,?,?,?)", scope.projectId,queue.id,request.idempotencyKey,requested,requestHash,result,reviewHash(receipt));
+      this.#reviewRetention(scope.projectId); this.#audit(scope,"review_items.promoted",{type:"reviewDataset",id:revision.datasetId}); return receipt;
+    });
   }
 
   #audit(scope: ProjectContext | IngestContext, action: AuditEvent["action"], target: AuditEvent["target"], details: AuditEvent["details"] = {}): void {

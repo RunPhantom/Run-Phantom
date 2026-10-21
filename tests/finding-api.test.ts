@@ -175,9 +175,13 @@ test("real compared file groups preserve severity and moved locations without co
 
 test("comparison and immutable review table counts enforce the approved thousand-record limits", async () => {
   const baseline = await upload(producer()), candidate = await upload(producer()), database = getDrizzleDb().$client, store = new FindingStore(createLocalEvidenceOwner(database));
-  for (let index = 0; index < 1_000; index++) store.reviewMapping({ baseline, candidate, paths: [], reason: "Exact same checker and snapshots reviewed locally" });
+  database.transaction(() => {
+    for (let index = 0; index < 1_000; index++) store.reviewMapping({ baseline, candidate, paths: [], reason: "Exact same checker and snapshots reviewed locally" });
+  }).immediate();
   expect(() => store.reviewMapping({ baseline, candidate, paths: [], reason: "One record beyond capacity" })).toThrow("storage is full");
-  for (let index = 0; index < 1_000; index++) store.compare({ baseline, candidate, operationKey: `bounded-comparison-${index}` });
+  database.transaction(() => {
+    for (let index = 0; index < 1_000; index++) store.compare({ baseline, candidate, operationKey: `bounded-comparison-${index}` });
+  }).immediate();
   expect(() => store.compare({ baseline, candidate, operationKey: "one-beyond-comparison-capacity" })).toThrow("storage is full");
   for (const table of ["evaluation_finding_comparisons", "evaluation_finding_mappings"]) expect((database.query(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n).toBe(1_000);
   expect((await json(path + "/comparisons", "POST", { baseline, candidate, operationKey: "control-limit", padding: "x".repeat(65_536) })).status).toBe(413);

@@ -10,6 +10,7 @@ import { closeDb, getDrizzleDb } from "../src/db";
 import { CodingHookStore, type HookAdmission, type InstallationBinding } from "../src/coding-hooks/store";
 import { ClaudeHookManagement, installationIdForSettings, readClaudeCapability } from "../src/coding-hooks/management";
 import { HOOK_PROTOCOL, hookDigest, parseHookAdmission } from "../src/coding-hooks/protocol";
+import { CATALOG_VERSION, encodeInstallationCatalog, validateCatalog } from "../src/coding-hooks/catalog";
 import { normalizeClaudeHook } from "../src/coding-hooks/claude";
 import { hookFixture, transcriptRecord, transcriptSnapshot } from "./fixtures/coding-hooks-claude";
 
@@ -53,7 +54,7 @@ test("exact catalog reinstall is idempotent and conflicting workspace/project ma
 test("same actual project global metadata/local full shares once-only usage without sharing capture policy", async () => {
   await install(binding, registrations); const globalToken = await token(), global = admit(globalToken, registrations[0]), first = registrations[0], settingsPath = path.join(first.registeredWorkspace, ".claude/settings.local.json"), local = { ...binding, installationId: installationIdForSettings("local", settingsPath), scope: "local" as const, captureMode: "full" as const, workspace: first.registeredWorkspace, settingsPath };
   await install(local, [first]); const fullToken = await token(local.installationId), full = admit(fullToken, first); expect(full.sourceKey).toBe(global.sourceKey);
-  store.publish(fullToken, full, batch(full)); store.publish(globalToken, global, batch(global)); expect(store.db.query("SELECT input_tokens,output_tokens FROM spans WHERE run_id=? AND span_type='llm'").all(full.runId)).toEqual([{ input_tokens: 10, output_tokens: 4 }]);
+  store.publish(fullToken, full, batch(full)); store.publish(globalToken, global, batch(global)); expect(store.db.query("SELECT input_tokens,output_tokens FROM spans WHERE run_id=? AND span_type='LLM_GENERATION'").all(full.runId)).toEqual([{ input_tokens: 10, output_tokens: 4 }]);
   const other = admit(globalToken, registrations[1]); store.publish(globalToken, other, batch(other)); expect(JSON.stringify(store.db.query("SELECT * FROM spans WHERE run_id=?").all(other.runId))).not.toContain("safe exact business result"); expect(() => store.publish(fullToken, other, batch(other))).toThrow();
 });
 
@@ -77,8 +78,18 @@ test("symlink/overlapping registration and forged source path cannot grant acqui
 });
 test("complete encoded catalog row and aggregate disabled/local occurrences enforce actual SQLite quotas", async () => {
   await install(binding, registrations); const before = JSON.stringify(store.db.query("SELECT * FROM coding_hook_installations").all()), tokenBefore = await token();
-  const oversized = Array.from({ length: 40 }, (_, index) => { const registeredWorkspace = path.join(directory, "quota-workspace-" + index), projectDirectory = path.join(binding.transcriptRoot, "quota-project-" + index); return { ...registrations[0], registeredWorkspace, projectDirectory, registrationId: hookDigest(JSON.stringify(["runphantom.claude.root/v1", registeredWorkspace, binding.transcriptRoot, projectDirectory])) }; });
-  expect(() => store.prepareInstallation(binding, "d".repeat(64), "c".repeat(64), [registrations[0], ...oversized])).toThrow(); expect(JSON.stringify(store.db.query("SELECT * FROM coding_hook_installations").all())).toBe(before);
+  const catalogData = (roots: Registration[]) => JSON.stringify({ version: CATALOG_VERSION, binding, registrations: roots });
+  const oversized = [...registrations];
+  // Short CI temp roots still cross the byte quota before the 64-registration cap.
+  while (Buffer.byteLength(catalogData(oversized)) <= 16384 && oversized.length < 64) {
+    const index = oversized.length, registeredWorkspace = path.join(directory, "quota-workspace-" + index + "-" + "x".repeat(100)), projectDirectory = path.join(binding.transcriptRoot, "quota-project-" + index);
+    oversized.push({ ...registrations[0], registeredWorkspace, projectDirectory, registrationId: hookDigest(JSON.stringify(["runphantom.claude.root/v1", registeredWorkspace, binding.transcriptRoot, projectDirectory])) });
+  }
+  const underLimit = validateCatalog(binding, oversized.slice(0, -1)), overLimit = validateCatalog(binding, oversized);
+  expect(Buffer.byteLength(catalogData(underLimit))).toBeLessThanOrEqual(16384); expect(encodeInstallationCatalog(binding, underLimit)).toBe(catalogData(underLimit));
+  expect(overLimit).toHaveLength(oversized.length); expect(Buffer.byteLength(JSON.stringify(overLimit))).toBeLessThanOrEqual(16384); expect(Buffer.byteLength(catalogData(overLimit))).toBeGreaterThan(16384);
+  expect(() => store.prepareInstallation(binding, "d".repeat(64), "c".repeat(64), overLimit)).toThrow("quota"); expect(JSON.stringify(store.db.query("SELECT * FROM coding_hook_installations").all())).toBe(before);
+  expect(() => admit(tokenBefore, registrations[0])).not.toThrow();
   const low = new CodingHookStore(store.db, { registrations: 2 }, () => true), local = { ...binding, installationId: "d".repeat(32), scope: "local" as const, workspace: binding.registeredWorkspace, settingsPath: path.join(binding.registeredWorkspace, ".claude/settings.local.json") }; expect(() => low.prepareInstallation(local, "d".repeat(64), "c".repeat(64))).toThrow(); expect(() => admit(tokenBefore, registrations[1])).not.toThrow();
   store.disableInstallation(binding.installationId); expect(() => low.prepareInstallation(local, "d".repeat(64), "c".repeat(64))).toThrow(); expect(store.db.query("SELECT id FROM coding_hook_installations").all()).toHaveLength(1);
 });
@@ -117,5 +128,5 @@ test("both actual registered workspace descriptors admit their own source bytes 
     const normalized = normalizeClaudeHook(rawHook, { sourceKey: admission.sourceKey, captureMode: admission.captureMode }, snapshot.value); if (normalized.status !== "accepted") throw new Error("fixture normalization");
     expect(JSON.stringify(normalized.value)).not.toContain("safe exact business result"); expect(store.publish(capability, admission, normalized.value).status).toBe("accepted");
   }
-  expect(store.db.query("SELECT id FROM runs").all()).toHaveLength(2); expect(store.db.query("SELECT input_tokens,output_tokens FROM spans WHERE span_type='llm'").all()).toEqual([{ input_tokens: 10, output_tokens: 4 }, { input_tokens: 10, output_tokens: 4 }]);
+  expect(store.db.query("SELECT id FROM runs").all()).toHaveLength(2); expect(store.db.query("SELECT input_tokens,output_tokens FROM spans WHERE span_type='LLM_GENERATION'").all()).toEqual([{ input_tokens: 10, output_tokens: 4 }, { input_tokens: 10, output_tokens: 4 }]);
 });

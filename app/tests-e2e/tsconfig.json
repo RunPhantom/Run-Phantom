@@ -14,5 +14,5 @@
     "types": ["node"]
   },
   "include": ["**/*.ts"],
-  "exclude": ["review-queue-component-server.ts"]
+  "exclude": ["review-queue-component-server.ts", "review-queue-connected-server.ts"]
 }

@@ -11,11 +11,11 @@ import {
   SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { Activity, Bookmark, Search, Settings, CheckCircle2, FlaskConical, FileCode2 } from "lucide-react";
+import { Activity, Bookmark, Search, Settings, CheckCircle2, FlaskConical, ClipboardCheck, FileCode2 } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { RunPhantomMark } from "./RunPhantomMark";
 
-export type Page = "runs" | "search" | "saved" | "settings" | "verification" | "evaluations" | "prompts";
+export type Page = "runs" | "search" | "saved" | "settings" | "verification" | "evaluations" | "review-queues" | "prompts";
 
 export const NAV_ITEMS: { id: Page; label: string; path: string; icon: typeof Activity }[] = [
   { id: "runs", label: "Runs", path: "/runs", icon: Activity },
@@ -23,6 +23,7 @@ export const NAV_ITEMS: { id: Page; label: string; path: string; icon: typeof Ac
   { id: "saved", label: "Saved", path: "/saved", icon: Bookmark },
   { id: "verification", label: "Verification", path: "/verification", icon: CheckCircle2 },
   { id: "evaluations", label: "Evaluations", path: "/evaluations", icon: FlaskConical },
+  { id: "review-queues", label: "Review queues", path: "/review-queues", icon: ClipboardCheck },
   { id: "prompts", label: "Prompts", path: "/prompts", icon: FileCode2 },
 ];
 
@@ -45,7 +46,7 @@ export function NavSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton asChild size="lg" className="!bg-transparent hover:!bg-[color:var(--rp-ink-wash)] active:!bg-[color:var(--rp-ink-wash)]">
               <NavLink to="/runs" aria-label="Run Phantom — trace workspace" replace={isNavPathActive(location.pathname, "/runs")} onClick={closeMobile}>
-                <RunPhantomMark decorative size={24} className="shrink-0 text-[color:var(--rp-accent)]" />
+                <RunPhantomMark decorative size={28} className="!size-7 shrink-0" />
                 <span className="min-w-0 leading-none">
                   <span className="block text-[18px] font-semibold tracking-[-0.02em] text-[color:var(--rp-ink-strong)]" style={{ fontFamily: "var(--font-display)" }}>
                     Run Phantom

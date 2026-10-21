@@ -34,7 +34,7 @@ function fixture(name: string, change: (cache: string) => void, run: (invoke: (a
   change(cache);
   const invoke = (action = "read") => {
     const result = Bun.spawnSync([executable, action], { cwd: path.dirname(executable), timeout: 10_000,
-      env: { ...process.env, HOME: home, RUNPHANTOM_DB_PATH: path.join(home, "workspace.db"), ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "" } });
+      env: { ...process.env, HOME: home, USERPROFILE: home, RUNPHANTOM_DB_PATH: path.join(home, "workspace.db"), ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "" } });
     const output = new TextDecoder().decode(result.stdout).trim();
     return { result, body: output ? JSON.parse(output) : {} };
   };
@@ -89,7 +89,9 @@ test("copied canonical runtime upgrades the actual legacy F07 schema and preserv
     legacyHistory = db.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all(); db.close(true);
   }, invoke => {
     const first = invoke(); expect(first.result.exitCode).toBe(0);
-    expect(first.body.history).toHaveLength(journal.entries.length); expect(first.body.findingRows).toEqual(retainedRows);
+    expect(first.body.history).toHaveLength(journal.entries.length);
+    expect(first.body.history).toEqual(journal.entries.map((entry: { tag: string; when: number }) => ({ hash: createHash("sha256").update(fs.readFileSync(path.join(migrations, entry.tag + ".sql"))).digest("hex"), created_at: entry.when })));
+    expect(first.body.findingRows).toEqual(retainedRows);
     for (const row of legacyHistory) expect(first.body.history).toContainEqual(row);
     expect((first.body.columns as { name: string }[]).some(column => column.name === "otlp_evidence")).toBe(true);
     const second = invoke(); expect(second.result.exitCode).toBe(0);

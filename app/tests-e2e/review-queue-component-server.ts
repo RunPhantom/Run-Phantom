@@ -1,4 +1,4 @@
-// Ephemeral same-DB SQLite/HTTP/browser fixture. This does not activate a central migration.
+// Ephemeral same-DB SQLite/HTTP/browser fixture using the normal central migrations.
 import express from "express";
 import http from "node:http";
 import { mkdtempSync, rmSync, realpathSync, readFileSync } from "node:fs";

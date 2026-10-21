@@ -20,6 +20,14 @@ export function parseHookAdmission(raw: unknown): HookSourceClaims & { sourceSes
   if (value.version !== HOOK_PROTOCOL || !isHex(value.sourceSessionIdentity, 64) || !isHex(value.workspaceClaim, 64) || !isHex(value.projectClaim, 64)) refuse("malformed", 400);
   return { sourceSessionIdentity: value.sourceSessionIdentity, workspaceClaim: value.workspaceClaim, projectClaim: value.projectClaim };
 }
+/** Read-only protocol selection cannot create a source or choose capture policy. */
+export function parseHookTransport(raw: unknown): { ownerGeneration: string; installationGeneration: string } {
+  const value = parseBoundedHookJson(raw, 16384);
+  if (value.status !== "accepted" || !object(value.value)) refuse("malformed", 400);
+  closed(value.value, ["version", "ownerGeneration", "installationGeneration"]);
+  if (value.value.version !== HOOK_PROTOCOL || !isHex(value.value.ownerGeneration, 32) || !isHex(value.value.installationGeneration, 32)) refuse("malformed", 400);
+  return { ownerGeneration: value.value.ownerGeneration, installationGeneration: value.value.installationGeneration };
+}
 export function parseHookPublication(raw: unknown): { ownerGeneration: string; installationGeneration: string; sourceKey: string; batch: NormalizedClaudeBatch } {
   const value = parse(raw); closed(value, ["version", "ownerGeneration", "installationGeneration", "sourceKey", "batch"]);
   if (value.version !== HOOK_PROTOCOL || !isHex(value.ownerGeneration, 32) || !isHex(value.installationGeneration, 32) || !isHex(value.sourceKey, 64)) refuse("malformed", 400);
@@ -27,6 +35,7 @@ export function parseHookPublication(raw: unknown): { ownerGeneration: string; i
 }
 
 const reasons = (value: HookJson): value is string[] => Array.isArray(value) && value.length <= 64 && value.every(reason => typeof reason === "string" && COVERAGE_REASONS.has(reason));
+export const validCoverageReasons = reasons;
 function validateClaudeEntity(candidate: HookJson, sourceKey: string, context: { incarnationKey: HookJson; transcriptCursor: HookJson }): NormalizedClaudeEntity {
   if (!object(candidate) || Buffer.byteLength(JSON.stringify(candidate)) > NORMALIZATION_LIMITS.entityBytes) refuse("malformed", 400);
   closed(candidate, ["entityKey", "kind", "phase", "name", "model", "sourceKind", "incarnationKey", "sourceOffset", "reportedAt", "reportedDurationMs", "runtimeDurationMs", "runtimeVerified", "producerVerified", "usage", "body", "coverageReasons"]);
