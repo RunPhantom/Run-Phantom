@@ -1,141 +1,121 @@
 # Claude session hooks
 
-Run Phantom's Claude hook components are under development. The source tree has
-bounded hook admission, transcript acquisition, normalization, exact-owned
-settings operations and unregistered store/controller/management helpers. Daemon
-publication and application owner capture consent are not active.
-An installed settings entry alone does not establish captured evidence.
+Run Phantom can collect bounded Claude session observations through ordinary
+hooks. Setup installs metadata capture by default. Full body capture requires
+explicit consent for a local workspace:
 
-The callback command is:
-
-```text
-runphantom hooks handle claude --installation-id <32 lowercase hexadecimal characters> --capability-file <canonical absolute private file>
+```sh
+runphantom setup --global
+runphantom hooks install claude --global --cwd /absolute/project
+runphantom hooks install claude --local --cwd /absolute/project --full --consent-full
+runphantom hooks doctor claude --local --cwd /absolute/project
+runphantom hooks unregister claude --global --cwd /absolute/project
+runphantom hooks uninstall claude --local --cwd /absolute/project
 ```
 
-Settings use a direct absolute executable plus an argument vector, a three-second
-vendor timeout and `onFailure: "continue"`. The callback exits zero with empty
-stdout and stderr. It does not start a daemon or provider, inspect credentials or
-choose a database. Extra arguments are refused before stdin acquisition. While
-authority is inactive, even a valid callback publishes no evidence.
+A global settings target covers the workspaces explicitly registered through
+management. Repeating global installation for another workspace adds it to that
+catalog. It does not discover or grant an unregistered workspace. One global
+metadata capability and each separately consented local full capability remain
+distinct. Global full capture is unavailable. Doctor reports the settings target,
+registered coverage, current policy, private capability and transport separately.
+`captureVerified` remains false: installed configuration and an available transport
+do not prove an actual model session was captured.
 
-The installed capability path is supplied by trusted management and remains one
-argument, including spaces or shell metacharacters. It carries no credential in
-settings or argv. There is no ambient profile lookup or fallback to another
-workspace's file. The separate private descriptor component requires an owned
-0600 regular file in an owned 0700 parent, nonsymlink canonical ancestors,
-O_NOFOLLOW and exact descriptor/current-path checks. Acquisition has a 250 ms
-deadline and a 16 KiB byte cap. Its closed descriptor binds the exact filename,
-installation ID, actual owner identity, current token and generations, and a
-trusted fixed numeric-loopback origin. A disabled descriptor has null token,
-generations and origin. File configuration alone grants no capture; the actual
-server must authenticate current policy and generations. The inactive callback
-does not read this descriptor or initiate transport yet.
+The installed callback vector contains an absolute executable and these arguments:
 
-Management without a trusted transport or active owner installs inert settings
-and reports disabled policy, inactive coverage and zero active registrations.
-It creates no fake owner generation. Trusted known-binding doctor and uninstall
-can inspect/remove this inert configuration without promoting policy. Current
-owner restart refreshes the descriptor generation while preserving an identical
-catalog and installation token. Default and custom profiles use distinct private
-paths; a copied descriptor or same-ID vector for another owner is refused.
+```text
+hooks handle claude --installation-id <opaque ID> --capability-file <absolute private file>
+```
 
-The callback acquires at most 256 KiB of actual stdin bytes and requires EOF within
-250 ms. Its overall deadline is 1.5 seconds. Invalid UTF-8, malformed JSON,
-duplicate object members, excessive depth and unsupported hook events cannot
-become admitted evidence. The early CLI branch loads only the callback's parser
-closure; the existing local and team command branches retain their own runtime
-selection.
+There is no credential in argv or settings. The private descriptor binds the
+installation, canonical owner identity, token, current generations and one fixed
+numeric loopback origin. It must be an owned 0600 regular file in an owned 0700
+parent, with canonical nonsymlink ancestors, O_NOFOLLOW and descriptor/current-path
+checks. Its acquisition is limited to 16 KiB and 250 ms. A disabled descriptor has
+null token, generations and origin. Management while the daemon is unavailable
+installs inert configuration; full flags alone cannot activate daemon consent.
+Management refuses a daemon belonging to another actual database profile.
 
-Trusted installer code can merge and remove its exact callback vector through
-`updateClaudeSettings`. It preserves unrelated handlers and unknown settings,
-refuses edited ownership, uses a cooperative lock, checks the observed settings
-snapshot and replaces the target in the same directory. This detects observed
-concurrent changes; it cannot promise an atomic filesystem/database transaction
-or prevent an arbitrary writer racing the final rename. Malformed settings remain
-untouched. Global and local targets must be resolved by trusted management code.
+Callbacks always exit zero with empty stdout and stderr. Malformed extra arguments
+are refused before stdin or filesystem acquisition. Stdin must reach EOF within
+250 ms and fit 256 KiB; the complete callback lifetime is 1.5 seconds. The callback
+never starts a daemon/provider, selects a database/profile, uses an ambient URL,
+follows redirects or borrows another workspace's capability.
 
-`inspectClaudeHookSettings` reports configuration and executable availability
-separately. Its capture policy is `inactive`, transport is `unavailable`, installed
-vendor version is unavailable and `captureVerified` is false. It never launches
-the executable. Install/uninstall/doctor management dispatch and consent activation
-remain pending the same-owner daemon integration.
+The actual daemon authenticates the current capability and selects exactly one
+registered workspace/project pair before transcript bytes are acquired. Hook cwd
+and path values are matching claims, not registrations or full policy grants. The
+transcript must be a current bounded regular descriptor under that trusted project
+root; symlinks, replaced descriptors and another project's path refuse capture.
+Transcripts are capped at 8 MiB, lines at 256 KiB, records at 5,000, entities at 128,
+each entity at 16 KiB and transport at 256 KiB. Raw transcript text stays private
+and ephemeral. Mandatory sensitive-key and known-secret redaction runs before
+transport, including under full consent and ambient redaction exemptions.
 
-Transcript acquisition accepts only a bounded regular file under the registered
-Claude projects root, with an exact session or subagent filename. Descriptor and
-path identity, frozen prefix digest and cursor checks prevent a replaced or
-truncated source from silently correcting an earlier observation. The maximum
-file is 8 MiB. Long lines, excess records/entities and incomplete tails remain
-explicit partial coverage. Mac descriptor controls do not qualify Windows ACLs
-or Linux behavior.
+Metadata retains no prompt, argument, result or assistant body. Exact message
+identities retain usage once, without root rollups. Stop is a turn claim;
+SessionEnd is a separate session closure claim. New installations use main-only
+capture: SubagentStop advances only the registered main transcript and retains an
+advisory producer-reported subagent terminal claim.
 
-Normalization always labels observations as producer-reported and unverified.
-`Stop` closes a response claim; `SessionEnd` is a separate session closure claim.
-Exact API message IDs own standalone usage observations; session roots have no
-usage rollup. Absent counts remain unavailable. Conflicting terminal claims,
-unmerged fragments and missing source identity remain explicit.
+Independent agent transcripts require a separate manual activation while the
+current daemon is running. Use the installation ID returned by installation:
 
-Metadata mode retains no prompt, argument, result or assistant bodies. Full mode
-requires separate explicit local owner installation consent; a payload or settings
-flag cannot grant it. The normalizer enforces sensitive-key and known-secret value
-redaction before any batch could cross transport, including under ambient allow
-exemptions. Raw transcript text is private ephemeral parser input and is never an
-export artifact.
+```sh
+runphantom hooks activate-context-v2 claude --installation-id <opaque ID>
+```
 
-The synthetic fixtures and native callback controls qualify these components.
-They do not establish a real installed model session, retained Runs output,
-daemon restart/delete/import fencing or full application acceptance. Those checks
-remain pending activation and the separately authorized provider session.
+If global and local installations share a registered root, select every sharing
+installation with another `--installation-id` argument. An incomplete sharing
+selection refuses without changing authority. The current owner, installation,
+settings and catalog versions must still match. Activation pauses and drains old
+callbacks before refreshing private credentials; it preserves existing metadata
+or explicit full consent, unknown settings handlers, source identities and old
+evidence. It grants no new workspace or body policy. An unchanged repeated
+activation preserves current credentials. A failed transition remains disabled
+or paused and requires current-owner recovery; it never restores an old token.
 
-The unregistered management helper prepares a disabled installation before private
-capability and settings writes, then commits active policy only under the same
-owner and installation generations. Meaningful policy changes and uninstall revoke
-the earlier token; an identical installation preserves it. A private capability
-uses mode 0600 under a mode 0700 directory. Full policy is available only for an
-explicitly consented local installation. Missing capability, installed settings,
-stored policy and unavailable transport are separate diagnostic facts.
+For a newly observed source identity after activation, the main transcript and up
+to 32 independent agent transcripts keep separate bounded file identities and
+cursors. A child transcript cannot advance the main cursor or close the session.
+An assistant identity appearing in multiple contexts retains usage once; conflicting
+observations refuse instead of replacing prior evidence. Existing main-only
+sessions remain main-only, and deleted identities remain suppressed. Callback
+JSON cannot choose the transport: the current authenticated server catalog does.
+The selection response is read-only and checked against both current generations
+before transcript acquisition. No failed selection falls back to another protocol.
 
-The unregistered global management helper accepts an explicit catalog of trusted
-existing workspaces and exact vendor project transcript directories. One global
-metadata capability covers those registrations; each local full capability stays
-separate. Admission requires two consistent hashed matching claims and refuses
-unregistered or ambiguous pairs. Those claims register no path and grant no full
-policy. The same registered project shares source and usage identities across
-global metadata and local full; another project has a distinct source identity.
+Observations remain producer reported, runtime unverified and explicitly partial.
+Conflicts and absent source identity or counts remain visible rather than inferred
+as success or zero.
 
-Catalog data uses a closed versioned object in the existing installation row. Each
-entire encoded row is capped at 16 KiB; at most 64 registration occurrences across
-all rows count disabled and local authorities as well. Exact duplicate catalog
-entries are idempotent. A meaningful catalog change or unregister rotates token
-and generation during disabled prepare before capability/settings write awaits.
-Read-only canonical registration and settings preflight happens before prepare.
-Unregister revokes earlier queued callbacks and preserves retained full evidence
-and tombstones. Diagnostics report registration count and `registered_workspaces`
-only for explicit catalog coverage, alongside unavailable transport and false
-`captureVerified`. No unregistered workspace is discovered automatically.
+Startup migrates the actual owner SQLite connection before acquiring one exclusive
+loopback lifetime lease derived from its canonical path. The lease port lies in
+40000–49999, returns no endpoint data and never falls back to another port. An
+occupied port or hash collision refuses ownership before generation rotation or
+public listening. PID files and health responses are not ownership authority.
+Raw callback routes precede general JSON parsing. Two requests may acquire bodies
+and eight may queue; every reservation has finite byte and time limits.
 
-The store uses an injected owner SQLite connection, synchronous immediate
-transactions and actual encoded-state quotas. It checks current token, policy,
-owner and installation generations again at publication. Actual canonical span
-changes cause refusal rather than restoration from cached hook data. The standalone
-HTTP controller admits two active and eight queued requests with finite body and
-request lifetimes; closing it aborts and drains owned reservations. It is not
-registered in the application server. Tests bootstrap the exact reviewed proposal
-DDL in temporary owner databases; that fixture is not an installed migration.
+Publication rechecks token, catalog membership, owner/installation generations,
+source cursor and canonical projection inside the same synchronous SQLite
+transaction. Modified canonical spans refuse cached restoration. Meaningful
+policy/catalog changes and unregister revoke queued old callbacks before settings
+write awaits. Identical installation preserves its token. Catalog rows are each
+limited to 16 KiB and all active/disabled/global/local rows together allow at most
+64 registration occurrences; SQL encoded state is capped at 32 MiB.
 
-Native owner-database, HTTP and filesystem tests cover these helper boundaries,
-including external writer contention, current-policy redaction, quota rollback,
-tombstone refusal, paused-body owner changes and settings failure reconciliation.
-Application startup ownership, migration integration, callback transport, installed global
-metadata coverage and real installed session acceptance remain pending.
-The owned lifetime coordination component binds one exclusive listener on
-127.0.0.1 at a deterministic port in 40000–49999 derived from the canonical
-actual SQLite path. It holds that listener for the owner lifetime and closes
-incoming connections without returning data. An occupied port or hash collision
-refuses ownership; it never tries another port or consults PID/health hints.
-Startup must supply the migrated actual SQLite connection to the coordinator,
-which acquires the lease before rotating the owner generation. A released lease
-also fences installation commits and capture transactions. An ordinary store
-constructed without a live owner guard stays inactive; test-only SQL fixtures
-explicitly supply their own guard. Central startup/routes are still inactive.
-Shutdown must drain the controller and close the database before releasing the
-lease; the lease helper alone does not coordinate those application resources.
+Clear revokes before asynchronous work, drains hook requests and preserves source
+epochs and suppression tombstones. Its deletion transaction rotates the generation
+before deleting canonical rows. Late callbacks cannot recreate cleared/deleted
+runs. Shutdown revokes current authority, drains owned requests and management,
+closes the server and actual database, then releases the lifetime lease. Uninstall
+revokes stored policy before removing exact owned vectors; unknown handlers are
+preserved. Cleanup failure preserves the binary and state for retry.
+
+Native filesystem/HTTP/installed-vector tests exercise these source components,
+including two actual database boots and global metadata/local full isolation.
+They use synthetic transcript records and do not establish real paid-session
+acceptance. The separate real installed session check and copied release
+qualification remain pending.

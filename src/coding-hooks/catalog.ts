@@ -3,6 +3,8 @@ import { hookDigest, isHex, refuse, type HookSourceClaims } from "./protocol";
 import type { InstallationBinding } from "./store";
 
 export const CATALOG_VERSION = "runphantom.claude-catalog/v1";
+export const CATALOG_CONTEXT_VERSION = "runphantom.claude-catalog/v2";
+export type CatalogVersion = typeof CATALOG_VERSION | typeof CATALOG_CONTEXT_VERSION;
 export interface SourceRegistration { registrationId: string; registeredWorkspace: string; transcriptRoot: string; projectDirectory: string; homeDirectory: string; }
 export const sourceRootKey = (registration: Omit<SourceRegistration, "registrationId">): string => hookDigest(JSON.stringify(["runphantom.claude.root/v1", registration.registeredWorkspace, registration.transcriptRoot, registration.projectDirectory]));
 export const registrationForBinding = (binding: InstallationBinding): SourceRegistration => ({ registrationId: sourceRootKey(binding), registeredWorkspace: binding.registeredWorkspace, transcriptRoot: binding.transcriptRoot, projectDirectory: binding.projectDirectory, homeDirectory: binding.homeDirectory });
@@ -28,8 +30,8 @@ export function validateCatalog(binding: InstallationBinding, input: SourceRegis
   if (!registrations.some(value => JSON.stringify(value) === JSON.stringify(registrationForBinding(binding))) || binding.scope === "local" && registrations.length !== 1) refuse("unknown_scope", 409);
   return registrations;
 }
-export function encodeInstallationCatalog(binding: InstallationBinding, registrations: SourceRegistration[]): string {
-  const data = JSON.stringify({ version: CATALOG_VERSION, binding, registrations }); if (Buffer.byteLength(data) > 16384) refuse("quota", 507); return data;
+export function encodeInstallationCatalog(binding: InstallationBinding, registrations: SourceRegistration[], version: CatalogVersion = CATALOG_VERSION): string {
+  const data = JSON.stringify({ version, binding, registrations }); if (Buffer.byteLength(data) > 16384) refuse("quota", 507); return data;
 }
 export function selectRegistration(registrations: SourceRegistration[], claims: HookSourceClaims): SourceRegistration {
   if (!claims || Object.keys(claims).sort().join(",") !== "projectClaim,workspaceClaim" || !isHex(claims.workspaceClaim, 64) || !isHex(claims.projectClaim, 64)) refuse("unknown_scope", 409);

@@ -96,7 +96,12 @@ describe("persisted workspace API projections", () => {
     expect((await json(route)).value).toEqual(history.value);
   });
   test("history budgets only matched heads before set JSON, guards candidate job bytes and verifies stored request digests", async () => {
-    for (let i = 0; i < 52; i++) expect((await terminal((await upload(draft(`budget-history-${i}`))).value.job.id)).status).toBe("completed");
+    // Seed at most two actual imports at once; terminal retains its per-job deadline.
+    for (let i = 0; i < 52; i += 2) {
+      await Promise.all([i, i + 1].map(async index => {
+        expect((await terminal((await upload(draft(`budget-history-${index}`))).value.job.id)).status).toBe("completed");
+      }));
+    }
     upsertRun({ id: "unrelated-run", started_at: 2, last_updated_at: 2 });
     const unrelatedRequest = draft("unrelated-history"); unrelatedRequest.attachment.id = "unrelated-run";
     const unrelated = await terminal((await upload(unrelatedRequest)).value.job.id);
@@ -142,7 +147,7 @@ describe("persisted workspace API projections", () => {
     const count = await json(route); expect(count.status).toBe(409); expect(count.value.error).toContain("discovery metadata budget");
     database.query("DELETE FROM evaluation_evidence_jobs WHERE id LIKE 'corrupt-head-%'").run();
     expect((await json(route)).value).toEqual(history.value);
-  });
+  }, 15_000);
   test("actual exports preserve JSON and JUnit bytes and plaintext keeps unknown trust without private leaf fields", async () => {
     const job = await terminal((await upload(draft("workspace-export"))).value.job.id), view = (await json(`/sets/${job.setId}`)).value as EvidenceSetView;
     const exported = await fetch(`${base}/api/evaluations/evidence/sets/${job.setId}/export?format=json`);

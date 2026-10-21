@@ -45,10 +45,10 @@ export function createReviewQueueRouter(): express.Router {
   }));
   router.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     const known = error instanceof EvaluationError;
-    const parser = error && typeof error === "object" ? error as { type?: string; status?: number; code?: string } : {};
-    const status = known ? error.status : parser.type === "entity.too.large" ? 413 : parser.type === "entity.parse.failed" || parser.type === "entity.verify.failed" ? 400 : parser.code === "SQLITE_BUSY" ? 503 : 500;
-    res.status(status).json({ error: { code: error instanceof ReviewQueueError ? error.code : status === 503 ? "store_busy" : status === 413 ? "size_limit" : status === 400 ? "invalid_request" : "request_failed",
-      message: known ? error.message : status === 503 ? "Local review store is busy; retry the original request" : status === 413 ? "Review request exceeds its byte limit" : status === 400 ? "Invalid review request JSON" : "Review queue request failed" } });
+    const parser = error && typeof error === "object" ? error as { type?: string; code?: string } : {};
+    const status = known ? error.status : parser.type === "charset.unsupported" || parser.type === "encoding.unsupported" ? 415 : parser.type === "entity.too.large" ? 413 : parser.type === "entity.parse.failed" || parser.type === "entity.verify.failed" ? 400 : parser.code === "SQLITE_BUSY" ? 503 : 500;
+    res.status(status).json({ error: { code: error instanceof ReviewQueueError ? error.code : status === 503 ? "store_busy" : status === 413 ? "size_limit" : status === 415 ? "unsupported_media_type" : status === 400 ? "invalid_request" : "request_failed",
+      message: known ? error.message : status === 503 ? "Local review store is busy; retry the original request" : status === 413 ? "Review request exceeds its byte limit" : status === 415 ? "Unsupported review request charset or content encoding" : status === 400 ? "Invalid review request JSON" : "Review queue request failed" } });
   });
   return router;
 }

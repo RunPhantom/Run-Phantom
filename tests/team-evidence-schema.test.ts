@@ -26,7 +26,7 @@ function scope(db: Database, id: string) {
 
 test("fresh Team initialization creates only existing-project evidence scopes and enforces safe generations", () => {
   const db = connection(); initializeTeamSchema(db);
-  expect(TEAM_SCHEMA_VERSION).toBe(3);
+  expect(TEAM_SCHEMA_VERSION).toBe(5);
   expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: TEAM_SCHEMA_VERSION });
   expect(db.query("SELECT * FROM evaluation_evidence_scopes").all()).toEqual([]);
   db.query("INSERT INTO projects(id,name,created_at) VALUES(?,?,?)").run("project-a", "A", 1);

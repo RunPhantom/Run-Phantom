@@ -3,13 +3,14 @@ import { useBlocker, useSearchParams } from "react-router-dom";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Button } from "../ui/button";
 import { ReviewQueues } from "./ReviewQueues";
+import { EvaluationNavigation } from "../evaluations/EvaluationNavigation";
 
-/** Production route adapter; registration remains coordinator owned. */
 export function ReviewQueuesRoute() {
   const [params] = useSearchParams();
   const [pending, setPending] = useState({ retained: 0, inFlight: 0 });
   const blocker = useBlocker(pending.retained > 0 || pending.inFlight > 0);
   return <>
+    <EvaluationNavigation active="queues" />
     <ReviewQueues initialQueueId={params.get("queueId") ?? ""} initialItemId={params.get("itemId") ?? ""} onRetainedChange={setPending} />
     <Dialog.Root open={blocker.state === "blocked"} onOpenChange={open => { if (!open && blocker.state === "blocked") blocker.reset(); }}>
       <Dialog.Portal>

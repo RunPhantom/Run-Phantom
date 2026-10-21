@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveBuiltAppDir } from "../ui-assets";
 import { parseJsonEvidence } from "../evaluations/json-evidence";
+import { hasDuplicateJsonKeys } from "../json-keys";
 import { TeamStore, type SessionContext, type ProjectContext } from "./store";
 import { TeamCheckService } from "./checks";
 import type { TeamEvidenceRead, TeamEvidenceWrite, TeamEvidenceResponse } from "./evidence";
@@ -18,6 +19,13 @@ import { strictEvidenceJson } from "../evaluations/evidence-reader/json";
 import { readerLimits } from "../evaluations/evidence-reader/limits";
 import { normalizeTeamIngest } from "./ingest";
 import { TeamError } from "./errors";
+import type { TeamComparisonRead, TeamComparisonWrite, TeamComparisonResponse } from "./comparisons";
+import type { ComparisonFence } from "../prompts/comparison-store";
+import { COMPARISON_LIMITS } from "../prompts/comparison-protocol";
+import type { ComparisonRuntimeOptions } from "../prompts/comparison-runtime";
+import { EvaluationError, parseVersion } from "../evaluations/validation";
+import { REVIEW_LIMITS } from "../review-queues/protocol";
+import { exportTeamReviewRevision } from "./review-queues";
 import { TEAM_LIMITS as L, type PageQuery, type RunFilters, type Role, type InviteCreate, type KeyCreate, type NoteCreate } from "./protocol";
 import { loadTeamConfig, validateTeamConfig, prepareTeamDirectory, loadBootstrapHash, normalizedAddress, loopbackAddress, type TeamConfig } from "./config";
 import { TeamAuth, RateBuckets, rawHeader, readSessionSecret, checkCsrf, tokenHash, sessionResponse, setSessionCookie, fields, emailValue, hasControlCharacters } from "./auth";
@@ -101,7 +109,7 @@ async function expandedBody(body: Buffer, encoding: string): Promise<Buffer> {
   }));
 }
 
-export async function createTeamServer(input: TeamConfig = loadTeamConfig(), options: { uiDir?: string } = {}) {
+export async function createTeamServer(input: TeamConfig = loadTeamConfig(), options: { uiDir?: string; comparisons?: ComparisonRuntimeOptions } = {}) {
   const config = validateTeamConfig(input);
   config.dataDir = prepareTeamDirectory(config.dataDir);
   const bootstrap = loadBootstrapHash(config);
@@ -111,6 +119,7 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
     if (stat && (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || typeof process.getuid === "function" && stat.uid !== process.getuid())) throw new TeamError("invalid_request", "Team database files must be regular private files");
   }
   const store = new TeamStore(dbPath, { bootstrapHash: bootstrap.hash });
+  await store.startComparisons(options.comparisons);
   if (process.platform !== "win32") for (const file of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) if (fs.existsSync(file)) fs.chmodSync(file, 0o600);
   const checks = new TeamCheckService(store), auth = new TeamAuth(store);
   const app = express();
@@ -218,6 +227,62 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
   app.post("/api/team/projects", wrap(async (req, res) => { const { context } = authenticate(req), body = fields(await jsonBody(req), ["name"]); send(res, store.createProject(context, { name: body.name as string }), 201); }));
   const p = "/api/team/projects/:projectId";
   app.get(p, wrap((req, res) => send(res, store.getProject(scope(req)))));
+  const reviewRoute = (method: string, role: Role, query: string[], work: (req: Request, context: ProjectContext) => unknown, status = 200) =>
+    (req: Request, res: Response, next: NextFunction) => {
+      void (async () => {
+        if (req.method !== method || req.path.endsWith("/") || req.path.includes("%") || req.originalUrl.includes("#") || req.originalUrl.includes("\\")
+          || new URL(req.originalUrl, "http://team.invalid").pathname !== req.originalUrl.split("?")[0]) throw new TeamError("invalid_request", "Project review route is invalid");
+        for (const [name, value] of Object.entries(req.params)) {
+          const valid = name === "itemId" ? /^[a-f0-9]{64}$/.test(value) : name === "key" ? /^[A-Za-z0-9_-]{1,128}$/.test(value)
+            : name === "version" ? /^[1-9][0-9]*$/.test(value) && Number(value) <= 20
+            : /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
+          if (!valid) throw new TeamError("invalid_request", "Project review identifier is invalid");
+        }
+        const context = scope(req, role), seen = new Set<string>();
+        for (const [key] of new URL(req.originalUrl, "http://team.invalid").searchParams) {
+          if (!query.includes(key) || seen.has(key)) throw new TeamError("invalid_request", "Project review query fields are invalid"); seen.add(key);
+        }
+        if (states.get(req)!.signal.aborted) throw new TeamError("conflict", "Project review request was interrupted");
+        const result = await work(req, context);
+        store.projectScope(context, context.projectId, role);
+        if (states.get(req)!.signal.aborted) throw new TeamError("conflict", "Project review request was interrupted");
+        if (status === 204) res.sendStatus(204); else send(res, result, status);
+      })().catch(next);
+    };
+  const reviewBody = async (req: Request) => {
+    if (!/^application\/json(?:\s*;\s*charset=(?:utf-8|"utf-8"))?$/i.test(rawHeader(req, "content-type") ?? "")
+      || ![undefined, "identity"].includes(rawHeader(req, "content-encoding"))) throw new TeamError("unsupported_media_type", "Project review controls require uncompressed UTF-8 JSON");
+    const body = await readBody(req, REVIEW_LIMITS.MAX_REQUEST_BYTES);
+    const value = parseJson(body);
+    if (hasDuplicateJsonKeys(body.toString("utf8"))) throw new TeamError("invalid_request", "Project review JSON contains duplicate fields");
+    return value;
+  };
+  const reviewRevision = (value: unknown) => {
+    if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) throw new TeamError("invalid_request", "Project review revision is invalid"); return parseVersion(Number(value));
+  };
+  const queues = `${p}/review-queues`, items = `${queues}/:queueId/items`, datasets = `${p}/review-datasets`;
+  app.get(queues, reviewRoute("GET", "viewer", [], (_req, context) => store.listReviewQueues(context)));
+  app.post(queues, reviewRoute("POST", "editor", [], async (req, context) => store.createReviewQueue(context, await reviewBody(req)), 201));
+  app.delete(`${queues}/:queueId`, reviewRoute("DELETE", "admin", [], (req, context) => store.deleteReviewQueue(context, req.params.queueId), 204));
+  app.get(items, reviewRoute("GET", "viewer", ["limit", "cursor"], (req, context) => store.listReviewItems(context, req.params.queueId, pageQuery(req))));
+  app.post(items, reviewRoute("POST", "editor", [], async (req, context) => store.insertReviewItem(context, req.params.queueId, await reviewBody(req)), 201));
+  app.get(`${queues}/:queueId/window`, reviewRoute("GET", "viewer", ["centerId"], (req, context) => {
+    if (typeof req.query.centerId !== "string" || !/^[a-f0-9]{64}$/.test(req.query.centerId)) throw new TeamError("invalid_request", "Project review window identity is invalid");
+    return store.reviewWindow(context, req.params.queueId, req.query.centerId);
+  }));
+  app.put(`${items}/:itemId`, reviewRoute("PUT", "editor", [], async (req, context) => store.mutateReviewItem(context, req.params.queueId, req.params.itemId, "save", await reviewBody(req))));
+  for (const kind of ["approve", "reopen"] as const) app.post(`${items}/:itemId/${kind}`, reviewRoute("POST", "editor", [], async (req, context) => store.mutateReviewItem(context, req.params.queueId, req.params.itemId, kind, await reviewBody(req))));
+  app.delete(`${items}/:itemId`, reviewRoute("DELETE", "admin", ["expectedRevision"], (req, context) => store.deleteReviewItem(context, req.params.queueId, req.params.itemId, reviewRevision(req.query.expectedRevision)), 204));
+  app.post(`${queues}/:queueId/promotions`, reviewRoute("POST", "editor", [], async (req, context) => {
+    const body = fields(await reviewBody(req), ["datasetId", "expectedDatasetVersion", "idempotencyKey", "items"]);
+    return store.promoteReviewItems(context, {...body, queueId:req.params.queueId});
+  }, 201));
+  app.get(`${queues}/:queueId/promotions/:key`, reviewRoute("GET", "viewer", [], (req, context) => store.getReviewPromotion(context, req.params.queueId, req.params.key)));
+  app.get(datasets, reviewRoute("GET", "viewer", [], (_req, context) => store.listReviewDatasets(context)));
+  app.post(datasets, reviewRoute("POST", "editor", [], async (req, context) => store.createReviewDataset(context, await reviewBody(req)), 201));
+  app.delete(`${datasets}/:datasetId`, reviewRoute("DELETE", "admin", [], (req, context) => store.deleteReviewDataset(context, req.params.datasetId), 204));
+  app.get(`${datasets}/:datasetId/revisions/:version`, reviewRoute("GET", "viewer", [], (req, context) => store.getReviewDatasetRevision(context, req.params.datasetId, Number(req.params.version))));
+  app.get(`${datasets}/:datasetId/revisions/:version/export`, reviewRoute("GET", "viewer", [], (req, context) => exportTeamReviewRevision(store.getReviewDatasetRevision(context, req.params.datasetId, Number(req.params.version)))));
   const evidence = `${p}/evidence`;
   const evidenceRoute = (method: string, query: string[], capability: EvidenceCapability, fn: (req: Request, context: ProjectContext, generation: number) => TeamEvidenceResponse | Promise<TeamEvidenceResponse>) =>
     (req: Request, res: Response, next: NextFunction) => {
@@ -297,6 +362,39 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
   app.delete(`${evidence}/all`, evidenceRoute("DELETE", [], "delete", (_req, context) => store.writeEvidence(context, { kind: "clear" })));
 
   const prompts = `${p}/prompts`;
+  const comparisonPath = `${prompts}/comparisons`;
+  const comparisonRoute = (method: string, query: string[], capability: PromptCapability,
+    work: (req: Request, context: ProjectContext, fence: ComparisonFence) => TeamComparisonResponse | Promise<TeamComparisonResponse>) =>
+    (req: Request, res: Response, next: NextFunction) => {
+      void (async () => {
+        const canonical = `/api/team/projects/${req.params.projectId}/prompts/comparisons${req.params.id ? `/${req.params.id}${req.path.endsWith("/cancel") ? "/cancel" : req.path.endsWith("/export") ? "/export" : ""}` : req.path.endsWith("/capabilities") ? "/capabilities" : req.path.endsWith("/clear") ? "/clear" : ""}`;
+        if (req.method !== method || req.originalUrl.split("?")[0] !== canonical || req.originalUrl.includes("#") || req.originalUrl.includes("\\")) throw new TeamError("invalid_request", "Comparison route is invalid");
+        promptId(req.params.projectId); if (req.params.id !== undefined) promptId(req.params.id);
+        const seen = new Set<string>();
+        for (const [key] of new URL(req.originalUrl, "http://team.invalid").searchParams) { if (!query.includes(key) || seen.has(key)) throw new TeamError("invalid_request", "Comparison query fields are invalid"); seen.add(key); }
+        const context = scope(req), fence = store.comparisonGeneration(context, capability);
+        if (states.get(req)!.signal.aborted) throw new TeamError("conflict", "Comparison request was interrupted");
+        const response = await work(req, context, fence), current = store.comparisonGeneration(context, capability), expected = response.fence;
+        if (current.comparisonGeneration !== expected.comparisonGeneration || current.promptGeneration !== expected.promptGeneration || current.evidenceGeneration !== expected.evidenceGeneration
+          || current.owner.birth !== expected.owner.birth || current.owner.generation !== expected.owner.generation || states.get(req)!.signal.aborted) throw new TeamError("conflict", "Comparison authority changed. Retry with current access.");
+        send(res, response.value, response.status, COMPARISON_LIMITS.responseBytes);
+      })().catch(next);
+    };
+  const comparisonBody = async (req: Request): Promise<unknown> => {
+    const contentType = rawHeader(req, "content-type"), encoding = rawHeader(req, "content-encoding");
+    if (!contentType || !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(contentType) || encoding !== undefined && encoding !== "identity") throw new TeamError("unsupported_media_type", "Comparisons require identity UTF-8 JSON");
+    try { return strictEvidenceJson(new TextDecoder("utf-8", { fatal: true }).decode(await readBody(req, COMPARISON_LIMITS.requestBytes)), readerLimits({ maxDepth: 8 })); }
+    catch (error) { if (error instanceof TeamError) throw error; throw new TeamError("invalid_request", "Comparison JSON is invalid"); }
+  };
+  const comparisonRead = (input: (req: Request) => TeamComparisonRead) => (req: Request, context: ProjectContext, fence: ComparisonFence) => store.readComparison(context, input(req), fence);
+  const comparisonWrite = (input: (req: Request, body: unknown) => TeamComparisonWrite) => async (req: Request, context: ProjectContext, fence: ComparisonFence) => store.writeComparison(context, input(req, await comparisonBody(req)), fence);
+  app.get(`${comparisonPath}/capabilities`, comparisonRoute("GET", [], "read", comparisonRead(() => ({ kind: "capabilities" }))));
+  app.get(comparisonPath, comparisonRoute("GET", ["cursor"], "read", comparisonRead(req => ({ kind: "list", cursor: req.query.cursor }))));
+  app.post(comparisonPath, comparisonRoute("POST", [], "edit", comparisonWrite((_req, value) => ({ kind: "submit", value }))));
+  app.post(`${comparisonPath}/clear`, comparisonRoute("POST", [], "delete", comparisonWrite((_req, value) => ({ kind: "clear", value }))));
+  app.get(`${comparisonPath}/:id/export`, comparisonRoute("GET", [], "read", comparisonRead(req => ({ kind: "export", id: req.params.id }))));
+  app.get(`${comparisonPath}/:id`, comparisonRoute("GET", [], "read", comparisonRead(req => ({ kind: "get", id: req.params.id }))));
+  app.post(`${comparisonPath}/:id/cancel`, comparisonRoute("POST", [], "edit", comparisonWrite((req, value) => ({ kind: "cancel", id: req.params.id, value }))));
   const promptRoute = (method: string, query: string[], capability: PromptCapability, work: (req: Request, context: ProjectContext, generation: PromptFence) => TeamPromptResponse | Promise<TeamPromptResponse>) =>
     (req: Request, res: Response, next: NextFunction) => {
       void (async () => {
@@ -390,7 +488,7 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
   app.use((_req, _res, next) => next(new TeamError("not_found", "Resource not found")));
   app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
     if (res.headersSent || res.destroyed) return;
-    const safe = error instanceof TeamError ? error : error instanceof EvidenceError || error instanceof PromptRegistryError
+    const safe = error instanceof TeamError ? error : error instanceof EvidenceError || error instanceof PromptRegistryError || error instanceof EvaluationError
       ? new TeamError(error.status === 403 ? "forbidden" : error.status === 404 ? "not_found" : error.status === 409 ? "conflict" : error.status === 413 ? "too_large" : "invalid_request", error.message)
       : new TeamError("internal_error", "Request failed");
     if (safe.retryAfter !== undefined) res.setHeader("Retry-After", String(Math.min(3600, Math.max(1, Math.ceil(safe.retryAfter)))));
@@ -403,13 +501,16 @@ export async function createTeamServer(input: TeamConfig = loadTeamConfig(), opt
     if (!req.complete) { res.setHeader("Connection", "close"); res.once("finish", () => req.destroy()); }
     send(res, { error: { code: safe.code, message: Buffer.byteLength(safe.message) <= 512 ? safe.message : "Request failed", requestId: states.get(req)?.requestId ?? randomUUID(), ...(safe.field && ERROR_FIELDS.has(safe.field) ? { field: safe.field } : {}) } }, safe.status);
   });
-  let closed = false;
-  const close = async () => {
-    if (closed) return; closed = true;
-    checks.close();
-    await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); });
-    await store.shutdownEvidence();
-    socketRates.clear(); globalRates.clear(); sessionRates.clear(); keyRates.clear(); store.close();
+  let closeTask: Promise<void> | undefined;
+  const close = (): Promise<void> => {
+    closeTask ??= (async () => {
+      checks.close();
+      await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); });
+      await store.shutdownEvidence();
+      await store.shutdownComparisons();
+      socketRates.clear(); globalRates.clear(); sessionRates.clear(); keyRates.clear(); store.close();
+    })();
+    return closeTask;
   };
   return { app, server, store, config, bootstrapFile: bootstrap.file, close };
 }
