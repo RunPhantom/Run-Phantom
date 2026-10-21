@@ -4,6 +4,16 @@ import { VerificationInputError } from "./validation";
 import type { VerificationService } from "./service";
 import { deleteFlow, listFlows, listReports, saveFlow } from "./store";
 import { VERIFICATION_LIMITS as L } from "./protocol";
+import { isLoopbackRemoteAddress } from "../local-access";
+import { ChangeContextReader, verifyChangeContextJson } from "./change-context";
+
+const verifiedChangeRequests = new WeakSet<Request>();
+export function verifyVerificationChangeRequest(req: Request, _res: Response, raw: Buffer): void {
+  if (req.method === "POST" && /^\/api\/verification\/reports\/[^/?]+\/change-context\/?(?:\?|$)/i.test(req.originalUrl)) {
+    verifyChangeContextJson(raw);
+    verifiedChangeRequests.add(req);
+  }
+}
 import { compareSnapshots, deleteSnapshot, exportSnapshots, getSnapshot, importSnapshots, listSnapshots } from "./snapshot-store";
 import { SnapshotInputError } from "./snapshot-contract";
 
@@ -26,11 +36,31 @@ function cursor(value: unknown, latest: number): number | undefined {
   return number;
 }
 
-export function createVerificationRouter(service: VerificationService): express.Router {
+export function createVerificationRouter(service: VerificationService, options: { changeContext?: ChangeContextReader } = {}): express.Router {
   const router = express.Router();
   const route = (handler: (req: Request, res: Response) => unknown) => (req: Request, res: Response, next: NextFunction) => {
     Promise.resolve().then(() => handler(req, res)).catch(next);
   };
+  if (options.changeContext) {
+    const changes = options.changeContext;
+    const local = (req: Request) => { if (!isLoopbackRemoteAddress(req.socket.remoteAddress)) throw new VerificationHttpError(403, "Current local workspace owner required"); };
+    router.get("/change-workspace", route((req, res) => {
+      local(req); if (Object.keys(req.query).length) throw new VerificationHttpError(400, "Workspace paths and options are not accepted");
+      res.json(changes.offer());
+    }));
+    router.post("/reports/:id/change-context", route(async (req, res) => {
+      local(req); if (Object.keys(req.query).length) throw new VerificationHttpError(400, "Workspace paths and options are not accepted");
+      // A parsed object cannot prove that original JSON had no duplicate keys.
+      if (!verifiedChangeRequests.has(req)) throw new VerificationHttpError(400, "Change context requires verified original JSON bytes");
+      const body = object(req.body, ["workspaceId"]);
+      if (typeof body.workspaceId !== "string") throw new VerificationHttpError(400, "Invalid workspace selection");
+      const id = text(req.params.id, "reportId");
+      const controller = new AbortController();
+      const abort = () => controller.abort(); res.once("close", abort);
+      try { res.json(await changes.capture(body.workspaceId, id, controller.signal)); }
+      finally { res.removeListener("close", abort); }
+    }));
+  }
   router.get("/sessions", route((_req, res) => res.json([...service.bridge.sessions.values()].map((s) => service.bridge.summary(s)))));
   router.post("/sessions", route((req, res) => {
     const body = object(req.body, ["origin", "runId"]);

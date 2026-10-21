@@ -239,6 +239,40 @@ export interface VerificationReport extends Verdict {
   createdAt: number;
   context?: VerificationReportContext;
 }
+/** Current workspace diagnostics remain advisory and cannot change a saved verdict. */
+export interface ChangeWorkspaceOffer { workspaceId: string; label: string; expiresAt: number }
+export interface FailureHandoff {
+  reportId: string;
+  name: string;
+  status: VerificationStatus;
+  reason: string;
+  origin: string | null;
+  reproduction: "partial";
+  reproductionNote: string;
+  checks: Array<{ step: number; predicate: unknown; status: VerificationStatus; actual: string;
+    since: number; through: number; generation: number; complete: boolean; dropped: number; settled: boolean;
+    coverage: Coverage; controlSource?: RetainedControlSource; controlSourceOmitted?: "context-limit"; causal?: RetainedCausalContext }>;
+  checksOmitted: number;
+  redacted: boolean;
+  truncated: boolean;
+}
+export interface VerificationChangeContext {
+  version: 1;
+  observedAt: number;
+  head: string | null;
+  testedRevision: null;
+  fingerprint: string | null;
+  fingerprintCoverage: "metadata-only";
+  complete: boolean;
+  reasons: string[];
+  withheldPaths: number;
+  omittedRows: number;
+  changes: Array<{ path: string; previousPath?: string; index: string; worktree: string; binary: boolean | null;
+    added: number | null; deleted: number | null; content: "unavailable"; bytes?: number; modifiedAt?: number }>;
+  relatedTests: Array<{ path: string; reason: "filename"; advisory: true }>;
+  suggestions: Array<{ kind: "happy-path" | "persistence" | "negative-path"; advisory: true; text: string }>;
+  handoff: FailureHandoff;
+}
 export interface SessionSummary {
   id: string;
   origin: string;

@@ -59,7 +59,7 @@ function Report({ report }: { report: VerificationReport }) {
     <div className="flex flex-wrap items-start justify-between gap-2"><h3 className="min-w-0 break-words text-sm font-semibold text-[color:var(--rp-ink-strong)]">{report.name}</h3><Status status={report.status} /></div>
     <p className="break-words text-xs leading-relaxed text-[color:var(--rp-ink-soft)]">{report.reason}</p>
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-[color:var(--rp-ink-muted)]"><time dateTime={new Date(report.createdAt).toISOString()}>{new Date(report.createdAt).toLocaleString()}</time>{report.runId && <Link className="underline underline-offset-2" to={`/runs/${encodeURIComponent(report.runId)}`}>View linked run</Link>}</div>
-    <ReportContext context={report.context} />
+    <ReportContext context={report.context} report={report} />
     {report.evidence.some(event => event.type === "network.body") && <BusinessEvidence events={report.evidence} enabled connected={false} retained />}
     {report.evidence.length > 0 && <details><summary className="cursor-pointer text-xs text-[color:var(--rp-ink-soft)]">Evidence ({report.evidence.length})</summary><ul className="mt-2 space-y-2 text-xs text-[color:var(--rp-ink)]">{report.evidence.map((event, index) => <li className="break-words" key={`${event.t}-${index}`}>{eventSummary(event)}{event.truncated && <span className="ml-1 text-[color:var(--rp-warning)]">(partial capture)</span>}</li>)}</ul></details>}
   </article>;

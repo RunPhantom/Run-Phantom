@@ -91,7 +91,7 @@ import { loadInstallRegistry } from "./install/registry";
 import {
   ACTIVE_WORKSPACE_MISSING_MESSAGE,
   type ActiveWorkspace,
-  getActiveWorkspace, getActiveWorkspaceSelection,
+  getActiveWorkspace, getActiveWorkspaceSelection, getSelectedActiveWorkspace,
   setActiveWorkspace,
 } from "./active-workspace";
 import {
@@ -115,7 +115,9 @@ import {
 } from "./annotations";
 import { replayDefaultDemoTraces } from "./demo-traces";
 import { createVerificationService } from "./verification/service";
-import { createVerificationRouter } from "./verification/router";
+import { createVerificationRouter, verifyVerificationChangeRequest } from "./verification/router";
+import { ChangeContextReader } from "./verification/change-context";
+import { listReports } from "./verification/store";
 import { parseAppOrigin } from "./verification/bridge";
 import verificationSdk from "./verification/browser-sdk.js" with { type: "text" };
 import { VERIFICATION_LIMITS } from "./verification/protocol";
@@ -782,6 +784,10 @@ export async function createServer(port: number, options: { comparisons?: Compar
   hookController = new CodingHookController(hookOwner.store, runId => broadcast("spans", { runIds: [runId] }));
 
   const verification = createVerificationService({ broadcast, allowedSourceIps, allowedHosts });
+  const changeOwner = randomUUID();
+  const changes = new ChangeContextReader({ workspace: getSelectedActiveWorkspace,
+    authority: () => ({ id: changeOwner, role: "owner", generation: 1 }),
+    report: id => listReports().find(report => report.id === id) });
   const browserAutomation = new BrowserAutomation(browserHostConfig(), broadcast);
   const evaluations = createEvaluationService();
   const evidenceDatabase = getDrizzleDb().$client;
@@ -822,6 +828,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
     acpTransitioning = true;
     acpWorkspaceEpoch++;
     acpProviderEpoch++;
+    changes.close();
     // Fence hook publication synchronously alongside the ACP authority transition.
     let revocationError: Error | undefined;
     try { hookOwner.store.rotateOwner(); } catch (error) { revocationError = error instanceof Error ? error : new Error("Hook revocation unavailable"); } finally { hookOwner.revoke(); }
@@ -1136,7 +1143,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
     }
   });
   app.use(["/api/evaluations/evidence", "/api/evaluations/findings", "/api/evaluations/claims"], evidenceJsonBody());
-  app.use("/api/verification", express.json({ limit: VERIFICATION_LIMITS.MAX_FRAME_BYTES }));
+  app.use("/api/verification", express.json({ limit: VERIFICATION_LIMITS.MAX_FRAME_BYTES, verify: verifyVerificationChangeRequest }));
   app.use("/api/evaluations", express.json({
     limit: EVALUATION_LIMITS.MAX_REQUEST,
     verify: (_req, _res, body, encoding) => { parseJsonEvidence(new TextDecoder(encoding).decode(body)); },
@@ -1171,7 +1178,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
   // The owned close promise above joins ACP before disposing these shared services.
 
   app.use("/api/verification/browser", localOriginGuard, createBrowserRouter(browserAutomation, () => currentServerPort() ?? port));
-  app.use("/api/verification", createVerificationRouter(verification));
+  app.use("/api/verification", createVerificationRouter(verification, { changeContext: changes }));
   app.use("/api/evaluations", createEvaluationRouter(evaluations, { service: evidenceImports, owner: evidenceOwner }));
 
   // Health check endpoint — used by SDKs to auto-detect a running debugger
