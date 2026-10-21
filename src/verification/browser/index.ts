@@ -8,7 +8,7 @@
  * rather than failing the session, which is what lets an assertion return
  * inconclusive instead of a false pass when its evidence was never being collected.
  */
-import { SEMANTIC_PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_PROTOCOL_VERSION, SOURCE_CAPABILITY, TREE_PROTOCOL_VERSION, TREE_CAPABILITY, CAUSAL_CAPABILITY, VERIFICATION_LIMITS, type Coverage, type AppCommand, type RelativeTarget } from "../protocol.js";
+import { BUSINESS_PROTOCOL_VERSION, BUSINESS_CAPABILITY, SEMANTIC_PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_PROTOCOL_VERSION, SOURCE_CAPABILITY, TREE_PROTOCOL_VERSION, TREE_CAPABILITY, CAUSAL_CAPABILITY, VERIFICATION_LIMITS, type Coverage, type AppCommand, type RelativeTarget } from "../protocol.js";
 import { parseCommand, validateOrigin } from "../validation.js";
 import { sanitizeWithReport } from "../serialization.js";
 import { installConsole } from "./observers/console.js";
@@ -24,7 +24,7 @@ import { snapshotSemanticTree } from "./dom/tree.js";
 import { PERFORMANCE_PROTOCOL_VERSION, PERFORMANCE_CAPABILITY } from "../protocol.js";
 import { installPerformance, type PerformanceCollector } from "./observers/performance.js";
 
-export interface ConnectionOptions { url: string; sessionId: string; token: string; causalReadings?: boolean; semanticRefs?: boolean; semanticSnapshots?: boolean; sourceProvenance?: { enabled: boolean; repoRoot?: string }; performanceEvidence?: { enabled: boolean; metadata?: "none" | "origin-path" } }
+export interface ConnectionOptions { url: string; sessionId: string; token: string; causalReadings?: boolean; semanticRefs?: boolean; semanticSnapshots?: boolean; sourceProvenance?: { enabled: boolean; repoRoot?: string }; businessResponses?: boolean; performanceEvidence?: { enabled: boolean; metadata?: "none" | "origin-path" } }
 export interface RuntimeConnection {
   disconnect(): void;
   signal(name: string, data?: unknown): void;
@@ -112,6 +112,7 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
     // Protocol discriminants and request/store/signal identities are generated metadata.
     // A fill equal to "error" or "GET" must not rewrite that metadata or its field names.
     const fields = type === "console" ? ["message", "stack"]
+      : type === "network.body" ? ["body"]
       : type === "network" || type === "network.start" ? ["url", "error"]
       : type === "route" ? ["url"]
       : type === "signal" ? ["data"]
@@ -178,14 +179,14 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
   const onOpen = (): void => {
     if (!active) return;
     install("console", () => installConsole(emit, prepare));
-    install("network", () => installNetwork(emit, () => currentActionId));
+    install("network", () => installNetwork(emit, () => currentActionId, options.businessResponses === true ? prepare : undefined));
     install("route", () => installRoute(emit));
     if (performanceEnabled) {
       try { performanceCollector = installPerformance(options.performanceEvidence?.metadata ?? "none", value => String(prepare(value).value)); teardown.push(() => performanceCollector?.disconnect()); }
       catch { /* Pairing remains available; performance commands disclose unavailable installation. */ }
     }
-    observeSafely(() => send({ type: "hello", version: performanceEnabled ? PERFORMANCE_PROTOCOL_VERSION : options.semanticSnapshots !== false ? TREE_PROTOCOL_VERSION : sourceEnabled ? SOURCE_PROTOCOL_VERSION : SEMANTIC_PROTOCOL_VERSION, token: options.token, coverage,
-      capabilities: [...(options.causalReadings === false ? [] : [CAUSAL_CAPABILITY]), ...(options.semanticRefs === false ? [] : [SEMANTIC_CAPABILITY]), ...(sourceEnabled ? [SOURCE_CAPABILITY] : []), ...(options.semanticSnapshots === false ? [] : [TREE_CAPABILITY]), ...(performanceEnabled ? [PERFORMANCE_CAPABILITY] : [])] }), disconnect);
+    observeSafely(() => send({ type: "hello", version: performanceEnabled ? PERFORMANCE_PROTOCOL_VERSION : options.semanticSnapshots !== false ? TREE_PROTOCOL_VERSION : sourceEnabled ? SOURCE_PROTOCOL_VERSION : options.businessResponses === true ? BUSINESS_PROTOCOL_VERSION : SEMANTIC_PROTOCOL_VERSION, token: options.token, coverage,
+      capabilities: [...(options.causalReadings === false ? [] : [CAUSAL_CAPABILITY]), ...(options.semanticRefs === false ? [] : [SEMANTIC_CAPABILITY]), ...(sourceEnabled ? [SOURCE_CAPABILITY] : []), ...(options.semanticSnapshots === false ? [] : [TREE_CAPABILITY]), ...(performanceEnabled ? [PERFORMANCE_CAPABILITY] : []), ...(options.businessResponses === true ? [BUSINESS_CAPABILITY] : [])] }), disconnect);
   };
   const actionReading = (id: string, phase: "before" | "after", target: RelativeTarget): void => {
     let available = false;

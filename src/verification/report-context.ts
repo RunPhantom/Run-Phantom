@@ -46,6 +46,12 @@ export function boundReportContext(input: VerificationReportContext, scrub: Scru
       case "network": return { kind: parsed.kind, urlContains: clean(parsed.urlContains),
         ...(parsed.method === undefined ? {} : { method: clean(parsed.method) }),
         ...(parsed.status === undefined ? {} : { status: parsed.status }) };
+      case "business-response": return { kind: parsed.kind, urlContains: clean(parsed.urlContains),
+        ...(parsed.method === undefined ? {} : { method: clean(parsed.method) }), operationId: clean(parsed.operationId),
+        operationPath: clean(parsed.operationPath), path: clean(parsed.path), equals: clean(parsed.equals), phase: parsed.phase,
+        ...(parsed.witness ? { witness: { kind: parsed.witness.kind,
+          ...(parsed.witness.kind === "state" ? { store: clean(parsed.witness.store) } : { name: clean(parsed.witness.name) }),
+          operationPath: clean(parsed.witness.operationPath), path: clean(parsed.witness.path) } } : {}) };
       case "signal": return { kind: parsed.kind, name: clean(parsed.name) };
       case "state": return { kind: parsed.kind, store: clean(parsed.store), path: clean(parsed.path), equals: clean(parsed.equals) };
       case "element": return { kind: parsed.kind, selector: clean(parsed.selector), state: parsed.state };

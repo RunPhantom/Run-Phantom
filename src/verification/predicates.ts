@@ -4,7 +4,7 @@
  * truncation or redaction produce an inconclusive verdict rather than a false
  * pass, because an assertion that cannot see its evidence has not been proven.
  */
-import { relativeTargetKey, VERIFICATION_LIMITS as L, type Coverage, type Predicate, type PredicateContext, type RuntimeEvent, type Verdict } from "./protocol";
+import { BUSINESS_CAPABILITY, relativeTargetKey, VERIFICATION_LIMITS as L, type Coverage, type Predicate, type PredicateContext, type RuntimeEvent, type Verdict } from "./protocol";
 import { selectPath } from "./state-select";
 import { isSensitiveKey } from "./redaction";
 import { sanitizeWithReport } from "./serialization";
@@ -99,6 +99,61 @@ export function evaluatePredicate(predicate: Predicate, context: EvaluationConte
     const incomplete = results.find((r) => r.status === "inconclusive");
     if (incomplete) return incomplete;
     return verdict("fail", "No declared alternative held within the observed interval.", results.flatMap((r) => r.evidence));
+  }
+
+  if (predicate.kind === "business-response") {
+    if (!context.capabilities?.includes(BUSINESS_CAPABILITY)) return unknown("Response evidence is off or unavailable. Pair with response capture enabled.");
+    if (!context.coverage.network || !context.complete || context.events.some(event => event.type === "capture.loss" || event.type === "observer.error" && event.data.observer === "network")) {
+      return unknown("Response capture was incomplete; missing bytes or requests cannot establish a business contract.");
+    }
+    if (hasUnavailableValue(predicate.equals) || hasUnavailableValue(predicate.operationId)) return unknown("Unavailable expectations cannot establish a business contract.");
+    const relevant = context.events.filter(event => context.actionId === undefined || event.actionId === context.actionId || event.type === "state");
+    const matchingStarts = relevant.filter(event => event.type === "network.start"
+      && typeof event.data.url === "string" && !hasUnavailableValue(event.data.url) && event.data.url.includes(predicate.urlContains)
+      && (predicate.method === undefined || event.data.method === predicate.method));
+    if (new Set(matchingStarts.map(event => event.data.requestId)).size !== matchingStarts.length) return unknown("Response request identities were reused; an older body cannot identify a later request.", matchingStarts);
+    const starts = new Map(matchingStarts.filter(event => !event.truncated).map(event => [event.data.requestId, event]));
+    const responses = relevant.filter(event => event.type === "network" && !event.truncated && starts.has(event.data.requestId));
+    const identities = new Set(responses.map(event => event.data.requestId));
+    const bodies = relevant.filter(event => event.type === "network.body" && identities.has(event.data.requestId));
+    const candidates = bodies.filter(event => event.data.state !== "pending");
+    const matched = candidates.filter(event => event.data.state === "complete" && Object.hasOwn(event.data, "body")
+      && selectPath(event.data.body, predicate.operationPath).value === predicate.operationId);
+    const body = matched.at(-1);
+    if (!body) return unknown("No complete response with the declared operation identity was observed. Headers and idle streams do not establish completion.", bodies);
+    if (body.truncated || body.data.redacted === true || hasUnavailableValue(body.data.body)) return unknown("The response body was redacted or truncated; the business contract remains unknown.", [body]);
+    const start = starts.get(body.data.requestId)!;
+    const laterLifecycles = relevant.filter(event => (event.type === "network.start" || event.type === "network")
+      && event.t > start.t && event.data.requestId !== body.data.requestId
+      && (starts.has(event.data.requestId) || typeof event.data.url === "string" && event.data.url.includes(predicate.urlContains)
+        && (predicate.method === undefined || event.data.method === predicate.method)));
+    if (laterLifecycles.length) return unknown("A later matching request has unresolved identity or completion; an older response cannot establish its business contract.", [body, ...laterLifecycles]);
+    // A later incomplete request for this URL can carry the same operation. It cannot be silently ignored.
+    if (bodies.some(event => event.t > body.t && event.data.requestId !== body.data.requestId)) return unknown("A later matching response has unresolved identity or completion.", bodies);
+    const response = responses.find(event => event.data.requestId === body.data.requestId)!;
+    const selected = selectPath(body.data.body, predicate.path);
+    if (!selected.found || hasUnavailableValue(selected.value)) return unknown("The declared response path was missing or unavailable.", [body]);
+    if (!structurallyEqual(selected.value, predicate.equals)) return verdict("fail", "The complete SDK-reported response differs from the declared business value.", [body]);
+    if (predicate.phase === "acceptance" && !(typeof response.data.status === "number" && response.data.status >= 200 && response.data.status < 300)) {
+      return verdict("fail", "The declared acceptance response did not have a successful HTTP status.", [response, body]);
+    }
+    const evidence = [response, body];
+    if (predicate.witness) {
+      const witness = predicate.witness;
+      const observed = relevant.filter(event => witness.kind === "state" ? event.type === "state" && event.data.store === witness.store
+        : event.type === "signal" && event.data.name === witness.name).at(-1);
+      if (!context.coverage[witness.kind] || !observed || observed.truncated) return unknown("The declared cross-channel witness was unavailable; absence cannot mean agreement.", evidence);
+      const value = witness.kind === "state" ? observed.data.value : observed.data.data;
+      const operation = selectPath(value, witness.operationPath);
+      const reading = selectPath(value, witness.path);
+      if (!operation.found || operation.value !== predicate.operationId || !reading.found || hasUnavailableValue(reading.value)) return unknown("The witness did not expose a readable value for the same declared operation.", [...evidence, observed]);
+      evidence.push(observed);
+      if (!structurallyEqual(reading.value, selected.value)) return verdict("fail", "The declared response and cross-channel witness disagree for the same operation.", evidence);
+    }
+    if (predicate.phase === "final") return unknown("SDK-reported response and app witnesses cannot authenticate final business server persistence. An independent server witness is unavailable.", evidence);
+    return verdict("pass", predicate.phase === "acceptance"
+      ? "The complete SDK-reported response met the declared acceptance contract; final persistence is still unverified."
+      : "The complete SDK-reported response met the declared response contract; this does not authenticate business server persistence.", evidence);
   }
 
   const observer = predicate.kind === "element" ? "dom" : predicate.kind;

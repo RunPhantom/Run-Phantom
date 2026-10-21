@@ -186,7 +186,7 @@ export class VerificationService {
       if (!session.ws || session.generation !== generation) return finish({ status: "inconclusive", reason: "Application connection changed while collecting evidence", evidence: [] });
       const observed = this.bridge.observe(session, since);
       const settled = session.coverage.network && !session.pending && session.requests.size === 0 && Date.now() - Math.max(started, session.lastActivity) >= L.QUIET_MS;
-      latest = evaluatePredicate(predicate, { events: observed.events, coverage: session.coverage, complete: observed.complete, settled, actionId,
+      latest = evaluatePredicate(predicate, { capabilities: session.capabilities, events: observed.events, coverage: session.coverage, complete: observed.complete, settled, actionId,
         ...(reads.some(read => read.type === "performance") && session.lastPerformance?.generation === generation ? { performance: { snapshot: session.lastPerformance.snapshot, fresh: fresh && session.lastPerformance.cursor >= since } } : {}),
         relative: this.relativeContext(session, predicate, since, generation, observed.cursor, observed.complete, settled) });
       if (latest.status === "pass" && settled) return finish({ ...latest, reason: `${latest.reason} Verified during an observed interval with ${L.QUIET_MS}ms quiet and no tracked requests pending.` });
@@ -255,6 +255,7 @@ export class VerificationService {
     if (predicate.kind === "performance") return [{ type: "performance", phase: "capture" }];
     if (predicate.kind === "state") return [{ type: "state", store: predicate.store }];
     if (predicate.kind === "element") return [{ type: "snapshot", selector: predicate.selector }];
+    if (predicate.kind === "business-response" && predicate.witness?.kind === "state") return [{ type: "state", store: predicate.witness.store }];
     if (predicate.kind === "allOf" || predicate.kind === "anyOf") return predicate.predicates.flatMap((entry) => this.reads(entry));
     return [];
   }

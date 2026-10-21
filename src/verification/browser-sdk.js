@@ -4,6 +4,9 @@
 var CAUSAL_CAPABILITY = "causal-readings";
 var SEMANTIC_PROTOCOL_VERSION = 3;
 var SEMANTIC_CAPABILITY = "semantic-refs";
+var BUSINESS_PROTOCOL_VERSION = 4;
+var BUSINESS_CAPABILITY = "business-response-evidence";
+var BUSINESS_LIMITS = { RAW_BYTES: 32768, BODY_BYTES: 8192, READERS: 4, CHUNKS: 128, DEADLINE_MS: 1500 };
 var SOURCE_PROTOCOL_VERSION = 4;
 var SOURCE_CAPABILITY = "control-source";
 var TREE_PROTOCOL_VERSION = 5;
@@ -914,6 +917,174 @@ function installConsole(emit, sanitize2 = (value) => {
   return teardown;
 }
 
+// src/verification/browser/observers/network-body.ts
+function formatOf(mime) {
+  const value = mime.split(";", 1)[0]?.trim().toLowerCase();
+  return value === "application/json" || /^application\/[a-z0-9.+-]+\+json$/.test(value ?? "") ? "json" : value === "text/event-stream" ? "sse" : value === "application/x-ndjson" ? "ndjson" : "none";
+}
+function decodeBody(raw, format) {
+  if (format === "json")
+    return JSON.parse(raw);
+  if (format === "ndjson")
+    return raw.split(/\r?\n/).filter((line) => line.trim()).map((line) => JSON.parse(line));
+  const records = [];
+  const blocks = raw.replace(/\r\n|\r/g, `
+`).split(`
+
+`);
+  const tail = blocks.pop() ?? "";
+  if (tail.split(`
+`).some((line) => line === "data" || line.startsWith("data:")))
+    throw new Error("Incomplete SSE record");
+  for (const block of blocks) {
+    const data = block.split(`
+`).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).replace(/^ /, "")).join(`
+`);
+    if (data)
+      records.push(JSON.parse(data));
+  }
+  return records;
+}
+function createBodyObserver(emit, prepare) {
+  let active = true;
+  const readers = new Map;
+  const encoder2 = new TextEncoder;
+  const send = (identity, state, format, bytes = 0, chunks = 0, content) => {
+    if (!active)
+      return;
+    const data = { requestId: identity.requestId, source: "sdk-reported", state, format, bytes, chunks };
+    let incomplete = false;
+    if (state === "complete") {
+      const clean = sanitizeWithReport(content);
+      const safe = prepare(clean.value);
+      incomplete = Boolean(clean.truncation || safe.truncated && !clean.redacted);
+      if (clean.truncation || encoder2.encode(JSON.stringify(safe.value)).byteLength > BUSINESS_LIMITS.BODY_BYTES) {
+        data.state = "truncated";
+      } else {
+        data.body = safe.value;
+        if (clean.redacted || safe.truncated)
+          data.redacted = true;
+      }
+    }
+    emit("network.body", data, identity.actionId ?? null, incomplete || data.redacted === true || data.state === "truncated");
+  };
+  const fetchBody = (response, identity) => {
+    const format = formatOf(response.headers.get("content-type") ?? "");
+    send(identity, "pending", format);
+    if (response.type === "opaque" || response.type === "opaqueredirect") {
+      send(identity, "opaque", format);
+      return;
+    }
+    if (format === "none") {
+      send(identity, "unsupported", format);
+      return;
+    }
+    if (readers.size >= BUSINESS_LIMITS.READERS) {
+      send(identity, "unavailable", format);
+      return;
+    }
+    let reader;
+    try {
+      const copy = response.clone();
+      if (!copy.body) {
+        send(identity, "unavailable", format);
+        return;
+      }
+      reader = copy.body.getReader();
+    } catch {
+      send(identity, "unavailable", format);
+      return;
+    }
+    let finished = false;
+    let bytes = 0;
+    let chunks = 0;
+    let raw = "";
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    const finish = (state, content) => {
+      if (finished)
+        return;
+      finished = true;
+      clearTimeout(timer);
+      readers.delete(reader);
+      raw = "";
+      send(identity, state, format, bytes, chunks, content);
+      if (state !== "complete")
+        reader.cancel().catch(() => {});
+      try {
+        reader.releaseLock();
+      } catch {}
+    };
+    const timer = setTimeout(() => finish("timeout"), BUSINESS_LIMITS.DEADLINE_MS);
+    readers.set(reader, () => finish("aborted"));
+    (async () => {
+      try {
+        while (!finished && active) {
+          const part = await reader.read();
+          if (finished || !active)
+            return;
+          if (part.done) {
+            raw += decoder.decode();
+            let value;
+            try {
+              value = decodeBody(raw, format);
+            } catch {
+              finish("unavailable");
+              return;
+            }
+            finish("complete", value);
+            return;
+          }
+          if (chunks >= BUSINESS_LIMITS.CHUNKS || bytes + part.value.byteLength > BUSINESS_LIMITS.RAW_BYTES) {
+            finish("truncated");
+            return;
+          }
+          chunks++;
+          bytes += part.value.byteLength;
+          raw += decoder.decode(part.value, { stream: true });
+        }
+      } catch (error) {
+        finish(error instanceof DOMException && error.name === "AbortError" ? "aborted" : "unavailable");
+      }
+    })();
+  };
+  const xhrBody = (xhr, identity) => {
+    const format = formatOf(xhr.getResponseHeader("content-type") ?? "");
+    send(identity, "pending", format);
+    if (xhr.status === 0) {
+      send(identity, "aborted", format);
+      return;
+    }
+    if (format === "none" || !["", "text"].includes(xhr.responseType)) {
+      send(identity, "unsupported", format);
+      return;
+    }
+    const raw = xhr.responseText;
+    if (raw.length > BUSINESS_LIMITS.RAW_BYTES) {
+      send(identity, "truncated", format);
+      return;
+    }
+    const bytes = encoder2.encode(raw).byteLength;
+    if (bytes > BUSINESS_LIMITS.RAW_BYTES) {
+      send(identity, "truncated", format);
+      return;
+    }
+    try {
+      send(identity, "complete", format, bytes, bytes ? 1 : 0, decodeBody(raw, format));
+    } catch {
+      send(identity, "unavailable", format, bytes);
+    }
+  };
+  return { fetch: fetchBody, xhr: xhrBody, failed(identity) {
+    send(identity, "pending", "none");
+    send(identity, "aborted", "none");
+  }, teardown() {
+    for (const cancel of readers.values())
+      cancel();
+    readers.clear();
+    active = false;
+  } };
+}
+
 // src/verification/browser/observers/network.ts
 function statusIsOk(status) {
   return status >= 200 && status < 400;
@@ -932,7 +1103,7 @@ function methodOf(input, init) {
     return input.method.toUpperCase();
   return "GET";
 }
-function installNetwork(emit, getActionId) {
+function installNetwork(emit, getActionId, bodyPrepare) {
   const origFetch = captureMethod(window, "fetch");
   const callFetch = origFetch.bind(window);
   const proto = XMLHttpRequest.prototype;
@@ -941,6 +1112,7 @@ function installNetwork(emit, getActionId) {
   const callOpen = origOpen;
   let active = true;
   let sequence = 0;
+  const bodies = bodyPrepare ? createBodyObserver(emit, bodyPrepare) : undefined;
   const failure = observerFailure(emit, "network");
   const makeMeta = (url2, method) => ({
     requestId: `n${++sequence}`,
@@ -983,21 +1155,27 @@ function installNetwork(emit, getActionId) {
       result = callFetch(input, init);
     } catch (error) {
       observeSafely(() => {
-        if (meta2)
+        if (meta2) {
           finish(meta2, "fetch", 0);
+          bodies?.failed(meta2);
+        }
       }, failure);
       throw error;
     }
     return result.then((response) => {
       observeSafely(() => {
-        if (meta2)
+        if (meta2) {
           finish(meta2, "fetch", response.status);
+          bodies?.fetch(response, meta2);
+        }
       }, failure);
       return response;
     }, (error) => {
       observeSafely(() => {
-        if (meta2)
+        if (meta2) {
           finish(meta2, "fetch", 0);
+          bodies?.failed(meta2);
+        }
       }, failure);
       throw error;
     });
@@ -1030,7 +1208,10 @@ function installNetwork(emit, getActionId) {
       const current = request;
       const onLoadEnd = () => {
         cleanup?.();
-        observeSafely(() => finish(current, "xhr", this.status), failure);
+        observeSafely(() => {
+          finish(current, "xhr", this.status);
+          bodies?.xhr(this, current);
+        }, failure);
       };
       cleanup = () => {
         this.removeEventListener("loadend", onLoadEnd);
@@ -1052,6 +1233,7 @@ function installNetwork(emit, getActionId) {
     }
   };
   const teardown = () => {
+    bodies?.teardown();
     active = false;
     if (window.fetch === patchedFetch)
       window.fetch = origFetch;
@@ -2771,7 +2953,7 @@ function connect(options) {
     return true;
   };
   const prepareEvent = (type, data) => {
-    const fields = type === "console" ? ["message", "stack"] : type === "network" || type === "network.start" ? ["url", "error"] : type === "route" ? ["url"] : type === "signal" ? ["data"] : type === "observer.error" ? ["message"] : type === "action.reading" ? ["value"] : [];
+    const fields = type === "console" ? ["message", "stack"] : type === "network.body" ? ["body"] : type === "network" || type === "network.start" ? ["url", "error"] : type === "route" ? ["url"] : type === "signal" ? ["data"] : type === "observer.error" ? ["message"] : type === "action.reading" ? ["value"] : [];
     const value = {};
     let truncated = false;
     for (const [field, item] of Object.entries(data)) {
@@ -2852,7 +3034,7 @@ function connect(options) {
     if (!active)
       return;
     install("console", () => installConsole(emit, prepare));
-    install("network", () => installNetwork(emit, () => currentActionId));
+    install("network", () => installNetwork(emit, () => currentActionId, options.businessResponses === true ? prepare : undefined));
     install("route", () => installRoute(emit));
     if (performanceEnabled) {
       try {
@@ -2862,10 +3044,10 @@ function connect(options) {
     }
     observeSafely(() => send({
       type: "hello",
-      version: performanceEnabled ? PERFORMANCE_PROTOCOL_VERSION : options.semanticSnapshots !== false ? TREE_PROTOCOL_VERSION : sourceEnabled ? SOURCE_PROTOCOL_VERSION : SEMANTIC_PROTOCOL_VERSION,
+      version: performanceEnabled ? PERFORMANCE_PROTOCOL_VERSION : options.semanticSnapshots !== false ? TREE_PROTOCOL_VERSION : sourceEnabled ? SOURCE_PROTOCOL_VERSION : options.businessResponses === true ? BUSINESS_PROTOCOL_VERSION : SEMANTIC_PROTOCOL_VERSION,
       token: options.token,
       coverage: coverage2,
-      capabilities: [...options.causalReadings === false ? [] : [CAUSAL_CAPABILITY], ...options.semanticRefs === false ? [] : [SEMANTIC_CAPABILITY], ...sourceEnabled ? [SOURCE_CAPABILITY] : [], ...options.semanticSnapshots === false ? [] : [TREE_CAPABILITY], ...performanceEnabled ? [PERFORMANCE_CAPABILITY] : []]
+      capabilities: [...options.causalReadings === false ? [] : [CAUSAL_CAPABILITY], ...options.semanticRefs === false ? [] : [SEMANTIC_CAPABILITY], ...sourceEnabled ? [SOURCE_CAPABILITY] : [], ...options.semanticSnapshots === false ? [] : [TREE_CAPABILITY], ...performanceEnabled ? [PERFORMANCE_CAPABILITY] : [], ...options.businessResponses === true ? [BUSINESS_CAPABILITY] : []]
     }), disconnect);
   };
   const actionReading = (id2, phase, target) => {
