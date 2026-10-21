@@ -1,11 +1,13 @@
 import {
-  PROTOCOL_VERSION, CAUSAL_PROTOCOL_VERSION, CAUSAL_CAPABILITY, SEMANTIC_PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_PROTOCOL_VERSION, SOURCE_CAPABILITY, SEMANTIC_REF_PATTERN, normalizeSemanticText, relativeTargetKey, relativeTargets, VERIFICATION_LIMITS as L,
+  PROTOCOL_VERSION, BUSINESS_CAPABILITY, BUSINESS_LIMITS, CAUSAL_PROTOCOL_VERSION, CAUSAL_CAPABILITY, SEMANTIC_PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_PROTOCOL_VERSION, SOURCE_CAPABILITY, TREE_PROTOCOL_VERSION, TREE_CAPABILITY, SEMANTIC_REF_PATTERN, normalizeSemanticText, relativeTargetKey, relativeTargets, VERIFICATION_LIMITS as L,
   type AppCommand, type BrowserMessage, type Coverage, type FlowStep, type Predicate, type RelativeTarget, type SemanticQuery, type VerificationCapability,
 } from "./protocol";
 import { parseFlowAnchor } from "./flow-anchors";
 import { isSensitiveKey } from "./redaction";
 import { sanitizeWithReport } from "./serialization";
 import { parseControlSourceObservation } from "./build/source";
+import { parsePerformancePredicate } from "./performance";
+import { PERFORMANCE_PROTOCOL_VERSION, PERFORMANCE_CAPABILITY } from "./protocol";
 
 export class VerificationInputError extends Error {
   readonly status = 400;
@@ -91,6 +93,10 @@ export function validateOrigin(value: unknown): string {
 export function parseCommand(value: unknown): AppCommand {
   const obj = record(value, "command");
   switch (obj.type) {
+    case "performance":
+      keys(obj, ["type", "phase"], "performance command");
+      if (obj.phase !== "begin" && obj.phase !== "capture") invalid("performance phase must be begin or capture");
+      return { type: "performance", phase: obj.phase };
     case "snapshot": {
       keys(obj, ["type", "selector"], "snapshot command");
       const selector = optionalString(obj, "selector", L.MAX_SELECTOR_LENGTH);
@@ -111,6 +117,9 @@ export function parseCommand(value: unknown): AppCommand {
     case "semantic-snapshot":
       keys(obj, ["type"], "semantic snapshot command");
       return { type: "semantic-snapshot" };
+    case "semantic-tree":
+      keys(obj, ["type"], "semantic tree command");
+      return { type: "semantic-tree" };
     case "ref-click": case "ref-fill": {
       keys(obj, obj.type === "ref-fill" ? ["type", "ref", "value"] : ["type", "ref"], "live reference command");
       const ref = text(obj.ref, "live reference", 38);
@@ -187,6 +196,8 @@ export function parsePredicate(value: unknown): Predicate {
     if (depth > L.MAX_PREDICATE_DEPTH || ++nodes > L.MAX_PREDICATE_NODES) invalid("predicate exceeds its complexity limit");
     const obj = record(raw, "predicate");
     switch (obj.kind) {
+      case "performance":
+        try { return parsePerformancePredicate(obj); } catch { return invalid("unsupported or invalid numeric performance lab predicate"); }
       case "relative": {
         keys(obj, ["kind", "target", "relation", "equals"], "relative predicate");
         const target = parseRelativeTarget(obj.target);
@@ -206,6 +217,36 @@ export function parsePredicate(value: unknown): Predicate {
         return { kind: "network", urlContains: text(obj.urlContains, "urlContains", L.MAX_TEXT_LENGTH),
           ...(method === undefined ? {} : { method: method.toUpperCase() }),
           ...(Object.hasOwn(obj, "status") ? { status: integer(obj.status, "status", 100, 599) } : {}) };
+      }
+      case "business-response": {
+        keys(obj, ["kind", "urlContains", "method", "operationId", "operationPath", "path", "equals", "phase", "witness"], "business response predicate");
+        const path = (value: unknown, label: string): string => {
+          const result = text(value, label, 256, true);
+          const parts = result === "" ? [] : result.split(".");
+          if (parts.length > 16 || parts.some(part => !part || forbiddenKeys.has(part) || isSensitiveKey(part))) invalid("business paths cannot contain unsupported or credential-bearing segments");
+          return result;
+        };
+        if (!Object.hasOwn(obj, "equals")) invalid("business response requires equals");
+        size(obj.equals, BUSINESS_LIMITS.BODY_BYTES, "business expectation");
+        if (!["response", "acceptance", "final"].includes(String(obj.phase))) invalid("unsupported business contract phase");
+        const method = optionalString(obj, "method", 16);
+        if (method !== undefined && !/^[A-Za-z]+$/.test(method)) invalid("business method must contain only letters");
+        let witness;
+        if (Object.hasOwn(obj, "witness")) {
+          const w = record(obj.witness, "business witness");
+          if (w.kind !== "state" && w.kind !== "signal") invalid("business witness must be a declared state or signal");
+          keys(w, ["kind", w.kind === "state" ? "store" : "name", "operationPath", "path"], "business witness");
+          const identity = text(w.kind === "state" ? w.store : w.name, "witness identity", L.MAX_NAME_LENGTH);
+          if (isSensitiveKey(identity)) invalid("business witness cannot read credentials");
+          witness = { kind: w.kind, ...(w.kind === "state" ? { store: identity } : { name: identity }), operationPath: path(w.operationPath, "witness operation path"), path: path(w.path, "witness value path") } as import("./protocol").BusinessWitness;
+        }
+        const parsed = { kind: "business-response" as const, urlContains: text(obj.urlContains, "urlContains", L.MAX_TEXT_LENGTH),
+          ...(method === undefined ? {} : { method: method.toUpperCase() }), operationId: text(obj.operationId, "operation identity", L.MAX_NAME_LENGTH),
+          operationPath: path(obj.operationPath, "operation path"), path: path(obj.path, "business value path"), equals: obj.equals,
+          phase: obj.phase as "response" | "acceptance" | "final", ...(witness ? { witness } : {}) };
+        const safe = sanitizeWithReport(parsed);
+        if (safe.redacted || safe.truncation) invalid("business contracts cannot contain credentials or unavailable values");
+        return parsed;
       }
       case "console":
         keys(obj, ["kind", "level", "absent"], "console predicate");
@@ -264,7 +305,7 @@ export function parseFlowSteps(value: unknown): FlowStep[] {
     const predicate = parsePredicate(obj.predicate);
     assertSafePredicate(predicate);
     const command = Object.hasOwn(obj, "command") ? parseCommand(obj.command) : undefined;
-    if (command && ["find", "semantic-snapshot", "ref-click", "ref-fill"].includes(command.type)) invalid("semantic discovery and live references cannot be saved in flows; refresh them in the current session");
+    if (command && ["find", "semantic-snapshot", "semantic-tree", "ref-click", "ref-fill"].includes(command.type)) invalid("semantic discovery and live references cannot be saved in flows; refresh them in the current session");
     const targets = relativeTargets(predicate);
     if (targets.length && command?.type !== "click" && command?.type !== "causal-click") invalid("saved relative checks require an explicit click action");
     if (targets.length && command?.type === "causal-click"
@@ -294,6 +335,7 @@ export function parseCoverage(value: unknown): Coverage {
 }
 
 const eventFields: Record<string, string[]> = {
+  "network.body": ["requestId", "source", "state", "format", "bytes", "chunks", "body", "redacted"],
   "network.start": ["requestId", "url", "method", "initiator"],
   network: ["requestId", "url", "method", "status", "ok", "durationMs", "initiator", "error", "requestBody", "responseBody"],
   console: ["level", "message", "stack"], route: ["url"], signal: ["name", "data"],
@@ -309,7 +351,19 @@ function parseEvent(raw: unknown): Extract<BrowserMessage, { type: "event" }>["e
   if (!Object.hasOwn(eventFields, type)) invalid("unsupported event type");
   const data = record(obj.data, "event data");
   keys(data, eventFields[type], "event data");
-  if (type === "network.start" || type === "network") {
+  if (type === "network.body") {
+    text(data.requestId, "requestId", L.MAX_NAME_LENGTH);
+    if (data.source !== "sdk-reported") invalid("body source must be SDK-reported");
+    if (!["pending", "complete", "truncated", "timeout", "aborted", "opaque", "unsupported", "unavailable"].includes(String(data.state))) invalid("unsupported body lifecycle");
+    if (!["json", "sse", "ndjson", "none"].includes(String(data.format))) invalid("unsupported body format");
+    integer(data.bytes, "body bytes", 0, BUSINESS_LIMITS.RAW_BYTES);
+    integer(data.chunks, "body chunks", 0, BUSINESS_LIMITS.CHUNKS);
+    if (Object.hasOwn(data, "redacted")) bool(data.redacted, "body redaction");
+    if (data.state === "pending" && (data.bytes !== 0 || data.chunks !== 0 || Object.hasOwn(data, "body"))) invalid("pending body cannot claim retained content");
+    if (data.state !== "complete" && Object.hasOwn(data, "body")) invalid("incomplete body cannot retain partial content");
+    if (data.state === "complete" && (!Object.hasOwn(data, "body") || data.format === "none")) invalid("complete body requires structured content");
+    if (Object.hasOwn(data, "body")) size(data.body, BUSINESS_LIMITS.BODY_BYTES, "response body");
+  } else if (type === "network.start" || type === "network") {
     text(data.requestId, "requestId", L.MAX_NAME_LENGTH);
     text(data.url, "network URL", L.MAX_TEXT_LENGTH);
     text(data.method, "network method", 16);
@@ -361,10 +415,23 @@ export function parseBrowserMessage(value: unknown): BrowserMessage {
   const obj = record(value, "browser message");
   switch (obj.type) {
     case "hello": {
+      if (obj.version === TREE_PROTOCOL_VERSION) {
+        keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello message");
+        if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 5 || !obj.capabilities.includes(TREE_CAPABILITY)
+          || new Set(obj.capabilities).size !== obj.capabilities.length || obj.capabilities.some(entry => ![CAUSAL_CAPABILITY, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, TREE_CAPABILITY, BUSINESS_CAPABILITY].includes(entry))) invalid("unsupported or duplicate tree capabilities");
+        return { type: "hello", version: TREE_PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
+      }
+      if (obj.version === PERFORMANCE_PROTOCOL_VERSION) {
+        keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello");
+        if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 6 || !obj.capabilities.includes(PERFORMANCE_CAPABILITY)
+          || new Set(obj.capabilities).size !== obj.capabilities.length || obj.capabilities.some(entry => ![CAUSAL_CAPABILITY, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, TREE_CAPABILITY, PERFORMANCE_CAPABILITY, BUSINESS_CAPABILITY].includes(entry))) invalid("unsupported or duplicate performance capabilities");
+        return { type: "hello", version: PERFORMANCE_PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
+      }
+      // Version 4 is shared by source and response evidence; each stays explicitly opt-in.
       if (obj.version === SOURCE_PROTOCOL_VERSION) {
         keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello");
-        if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 3 || !obj.capabilities.includes(SOURCE_CAPABILITY)
-          || new Set(obj.capabilities).size !== obj.capabilities.length || obj.capabilities.some(entry => ![CAUSAL_CAPABILITY, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY].includes(entry))) invalid("unsupported or duplicate source capabilities");
+        if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 4 || (!obj.capabilities.includes(SOURCE_CAPABILITY) && !obj.capabilities.includes(BUSINESS_CAPABILITY))
+          || new Set(obj.capabilities).size !== obj.capabilities.length || obj.capabilities.some(entry => ![CAUSAL_CAPABILITY, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, BUSINESS_CAPABILITY].includes(entry))) invalid("unsupported or duplicate version 4 capabilities");
         return { type: "hello", version: SOURCE_PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
       }
       if (obj.version === PROTOCOL_VERSION) {
@@ -375,7 +442,7 @@ export function parseBrowserMessage(value: unknown): BrowserMessage {
         keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello");
         if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 2 || new Set(obj.capabilities).size !== obj.capabilities.length
           || obj.capabilities.some((entry) => entry !== CAUSAL_CAPABILITY && entry !== SEMANTIC_CAPABILITY)) invalid("unsupported or duplicate verification capabilities");
-        return { type: "hello", version: SEMANTIC_PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
+        return { type: "hello", version: obj.version, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
       }
       if (obj.version !== CAUSAL_PROTOCOL_VERSION) invalid("unsupported verification protocol version");
       keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello");

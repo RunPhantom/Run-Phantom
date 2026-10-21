@@ -1,35 +1,10 @@
-@font-face {
-  font-family: "Syne";
-  src: url("/fonts/syne-variable.ttf") format("truetype");
-  font-style: normal;
-  font-weight: 400 800;
-  font-display: swap;
-}
-
-.flow-repair {
-  --rp-canvas: #F9FAFC;
-  --rp-surface: #F9FAFC;
-  --rp-border: #DCE1EC;
-  --rp-ink: #202A43;
-  --rp-ink-soft: #3D4964;
-  --rp-ink-muted: #5F6B85;
-  --rp-ink-strong: #16213A;
-  --rp-ink-wash: #E9EDFA;
-  --rp-ink-wash-strong: #DBE2F7;
-  --rp-accent: #0021CC;
-  --sidebar-ring: #0021CC;
-  color: var(--rp-ink);
-  font-family: "Inter", sans-serif;
-}
-
 .flow-repair-heading {
-  font-family: "Syne", "Inter", sans-serif;
+  font-family: var(--font-display);
   font-weight: 700;
 }
 
-.flow-repair .flow-repair-primary {
-  background: var(--rp-accent);
-  color: #FFFFFF;
+.flow-repair button {
+  min-height: 44px;
 }
 
 .flow-repair input[type="radio"] {

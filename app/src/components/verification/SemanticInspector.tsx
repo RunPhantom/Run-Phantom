@@ -41,6 +41,7 @@ export function SemanticInspector({ sessionId, connected, capable, disabled = fa
   const [error, setError] = useState("");
   const sequence = useRef(0);
   const running = useRef(false);
+  useEffect(() => () => { sequence.current++; running.current = false; }, []);
   const scope = `${sessionId}:${connected}:${capable}`;
   const currentScope = useRef(scope);
   currentScope.current = scope;

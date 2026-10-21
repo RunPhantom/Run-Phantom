@@ -14,6 +14,8 @@ export function verifyVerificationChangeRequest(req: Request, _res: Response, ra
     verifiedChangeRequests.add(req);
   }
 }
+import { compareSnapshots, deleteSnapshot, exportSnapshots, getSnapshot, importSnapshots, listSnapshots } from "./snapshot-store";
+import { SnapshotInputError } from "./snapshot-contract";
 
 function object(value: unknown, allowed: string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new VerificationHttpError(400, "JSON object required");
@@ -74,6 +76,20 @@ export function createVerificationRouter(service: VerificationService, options: 
     res.json(service.bridge.observe(session, since));
   }));
   router.post("/sessions/:id/command", route(async (req, res) => res.json(await service.act(String(req.params.id), req.body))));
+  router.post("/sessions/:id/snapshots", route(async (req, res) => {
+    const body = object(req.body, ["name"]);
+    res.status(201).json(await service.captureSnapshot(String(req.params.id), text(body.name, "snapshot name")));
+  }));
+  router.get("/snapshots", route((req, res) => {
+    const query = object(req.query, ["runId", "origin"]);
+    if (query.origin !== undefined && typeof query.origin !== "string") throw new VerificationHttpError(400, "Snapshot origin must be text");
+    res.json(listSnapshots({ ...(query.runId === undefined ? {} : { runId: text(query.runId, "runId") }), ...(query.origin === undefined ? {} : { origin: query.origin as string }) }));
+  }));
+  router.get("/snapshots/:id", route((req, res) => res.json(getSnapshot(req.params.id))));
+  router.delete("/snapshots/:id", route((req, res) => { deleteSnapshot(req.params.id); res.json({ ok: true }); }));
+  router.post("/snapshot-diff", route((req, res) => { const body = object(req.body, ["beforeId", "afterId"]); res.json(compareSnapshots(body.beforeId, body.afterId)); }));
+  router.post("/snapshots/export", route((req, res) => { const body = object(req.body, ["ids"]); res.json(exportSnapshots(body.ids)); }));
+  router.post("/snapshots/import", route((req, res) => { const body = object(req.body, ["artifact", "runId"]); res.status(201).json(importSnapshots(body.artifact, body.runId)); }));
   router.post("/sessions/:id/assert", route(async (req, res) => {
     const body = object(req.body, ["predicate", "since", "name"]);
     const session = service.bridge.get(String(req.params.id));
@@ -98,7 +114,7 @@ export function createVerificationRouter(service: VerificationService, options: 
   }));
   router.delete("/flows/:id", route((req, res) => { deleteFlow(String(req.params.id)); res.json({ ok: true }); }));
   router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-    if (err instanceof VerificationHttpError || err instanceof VerificationInputError) return res.status(err.status).json({ error: err.message });
+    if (err instanceof VerificationHttpError || err instanceof VerificationInputError || err instanceof SnapshotInputError) return res.status(err.status).json({ error: err.message });
     res.status(500).json({ error: "Application verification failed" });
   });
   return router;

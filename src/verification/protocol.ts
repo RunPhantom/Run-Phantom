@@ -4,10 +4,18 @@ export const CAUSAL_PROTOCOL_VERSION = 2 as const;
 export const CAUSAL_CAPABILITY = "causal-readings" as const;
 export const SEMANTIC_PROTOCOL_VERSION = 3 as const;
 export const SEMANTIC_CAPABILITY = "semantic-refs" as const;
+export const BUSINESS_PROTOCOL_VERSION = 4 as const;
+export const BUSINESS_CAPABILITY = "business-response-evidence" as const;
+export const BUSINESS_LIMITS = { RAW_BYTES: 32768, BODY_BYTES: 8192, READERS: 4, CHUNKS: 128, DEADLINE_MS: 1500 } as const;
 export const SOURCE_PROTOCOL_VERSION = 4 as const;
 export const SOURCE_CAPABILITY = "control-source" as const;
+export const TREE_PROTOCOL_VERSION = 5 as const;
+export const TREE_CAPABILITY = "semantic-tree" as const;
+export const PERFORMANCE_PROTOCOL_VERSION = 6 as const;
+export const PERFORMANCE_CAPABILITY = "performance-evidence" as const;
+import type { PerformancePredicate, RetainedPerformanceEvidence } from "./performance";
 export const SEMANTIC_REF_PATTERN = /^rpref_[0-9a-f]{32}$/;
-export type VerificationCapability = typeof CAUSAL_CAPABILITY | typeof SEMANTIC_CAPABILITY | typeof SOURCE_CAPABILITY;
+export type VerificationCapability = typeof BUSINESS_CAPABILITY | typeof CAUSAL_CAPABILITY | typeof SEMANTIC_CAPABILITY | typeof SOURCE_CAPABILITY | typeof TREE_CAPABILITY | typeof PERFORMANCE_CAPABILITY;
 
 export type ControlSourceObservation = {
   source: "sdk-reported"; framework: "react"; status: "captured";
@@ -125,12 +133,30 @@ export function relativeTargets(predicate: Predicate): RelativeTarget[] {
   return [...new Map(predicate.predicates.flatMap(relativeTargets).map((target) => [relativeTargetKey(target), target])).values()];
 }
 export type AppCommand =
+  | { type: "semantic-tree" }
   | { type: "snapshot"; selector?: string }
   | { type: "click"; selector: string }
   | { type: "fill"; selector: string; value: string }
   | { type: "state"; store: string }
   | { type: "causal-click"; selector: string; targets: RelativeTarget[] }
+  | { type: "performance"; phase: "begin" | "capture" }
   | SemanticCommand;
+export type BusinessWitness =
+  | { kind: "state"; store: string; operationPath: string; path: string }
+  | { kind: "signal"; name: string; operationPath: string; path: string };
+export interface BusinessPredicate {
+  kind: "business-response";
+  urlContains: string;
+  method?: string;
+  operationId: string;
+  operationPath: string;
+  path: string;
+  equals: unknown;
+  phase: "response" | "acceptance" | "final";
+  witness?: BusinessWitness;
+}
+export type BodyState = "pending" | "complete" | "truncated" | "timeout" | "aborted" | "opaque" | "unsupported" | "unavailable";
+export type BodyFormat = "json" | "sse" | "ndjson" | "none";
 export type Predicate =
   | { kind: "network"; urlContains: string; method?: string; status?: number }
   | { kind: "console"; level: "error" | "warn"; absent: boolean }
@@ -138,6 +164,8 @@ export type Predicate =
   | { kind: "state"; store: string; path: string; equals: unknown }
   | { kind: "element"; selector: string; state: "present" | "absent" }
   | { kind: "allOf" | "anyOf"; predicates: Predicate[] }
+  | PerformancePredicate
+  | BusinessPredicate
   | RelativePredicate;
 export type FlowAnchor = { kind: "css"; selector: string } | {
   kind: "semantic"; query: SemanticQuery;
@@ -181,6 +209,8 @@ export interface VerificationCheckContext {
   causal?: RetainedCausalContext;
   controlSource?: RetainedControlSource;
   controlSourceOmitted?: "context-limit";
+  performance?: RetainedPerformanceEvidence;
+  performanceOmitted?: "context-limit" | "invalid-stored-evidence";
 }
 export interface RetainedReading { cursor: number; availability: "complete" | "partial" | "unavailable"; value: unknown }
 export interface RetainedCausalContext {
@@ -196,6 +226,9 @@ export interface VerificationReportContext {
   quietMs: number;
   redacted: boolean;
   truncated: boolean;
+  /** Daemon-generated execution observation; never a live page authority. */
+  execution?: import("./browser-types").ExecutionContext;
+  executionOmitted?: "context-limit" | "invalid";
 }
 export interface VerificationReport extends Verdict {
   id: string;
@@ -261,13 +294,16 @@ export type BrowserMessage =
   | { type: "hello"; version: typeof PROTOCOL_VERSION; token: string; coverage: Coverage }
   | { type: "hello"; version: typeof CAUSAL_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: Array<typeof CAUSAL_CAPABILITY> }
   | { type: "hello"; version: typeof SEMANTIC_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
-  | { type: "hello"; version: typeof SOURCE_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
+  | { type: "hello"; version: typeof SOURCE_PROTOCOL_VERSION | typeof BUSINESS_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
+  | { type: "hello"; version: typeof TREE_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
+  | { type: "hello"; version: typeof PERFORMANCE_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
   | { type: "event"; event: Omit<RuntimeEvent, "t"> }
   | { type: "result"; id: string; ok: boolean; result?: unknown; error?: string; truncated?: boolean };
 export type DaemonMessage =
   | { type: "ready" }
   | { type: "command"; id: string; command: AppCommand };
 export interface PredicateContext {
+  capabilities?: readonly VerificationCapability[];
   events: RuntimeEvent[];
   coverage: Coverage;
   complete: boolean;

@@ -68,9 +68,11 @@ test("actual app review selects, commits, reloads and separately replays a CSS p
           const rect = element.getBoundingClientRect(); const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
           return { label: element.textContent, top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, unobstructed: !!hit && element.contains(hit), inViewport: rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth };
         });
+        expect(await control.evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
         expect(observed.unobstructed, `${width}: ${observed.label} unobstructed`).toBe(true); expect(observed.inViewport, `${width}: ${observed.label} reachable after scrolling`).toBe(true); controls.push(observed);
       }
-      const background = await review.evaluate(element => getComputedStyle(element).backgroundColor); expect(background).toBe("rgb(249, 250, 252)");
+      const background = await review.evaluate(element => getComputedStyle(element).backgroundColor); expect(background).toBe("rgb(255, 255, 255)");
+      expect(await review.evaluate(element => getComputedStyle(element).color)).toBe("rgb(14, 18, 27)");
       const accent = await commitButton.evaluate(element => getComputedStyle(element).backgroundColor); expect(accent).toBe("rgb(0, 33, 204)");
       viewportProof.push({ width, height: 900, fonts, headingFont, background, accent, controls });
       const filename = path.join(screenshotRoot, `flow-repair-${width}.png`); await ui.screenshot({ path: filename, fullPage: true }); await testInfo.attach(`Flow repair ${width}`, { path: filename, contentType: "image/png" });
@@ -162,4 +164,47 @@ for (const mode of ["changed", "throwing", "mutating"] as const) test(`${mode} s
     }
     expect((await observe(request, runPhantom, session.id)).events.filter(event => event.type === "action.boundary")).toHaveLength(0);
     await page.evaluate(() => window.runtime.disconnect());
+});
+
+test("repair reply held across disconnect and reconnect cannot restore an obsolete proposal", async ({ page, context, request, runPhantom, flowApp }) => {
+  const session = await pair(page, request, runPhantom, flowApp.origin);
+  const flow = await save(request, runPhantom, flowApp.origin);
+  const ui = await context.newPage();
+  const pattern = `**/api/verification/flows/${flow.id}/repair-proposals`;
+  let release!: () => void, admitted!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const ready = new Promise<void>(resolve => { admitted = resolve; });
+  const pending = new Set<Promise<void>>();
+  const handler = (route: import("@playwright/test").Route) => {
+    const work = (async () => {
+      const response = await route.fetch(); expect(response.status()).toBe(201); admitted();
+      await gate; await route.fulfill({ response });
+    })();
+    pending.add(work); void work.then(() => pending.delete(work), () => pending.delete(work)); return work;
+  };
+  try {
+    await ui.goto(`${runPhantom.url}/verification?section=flows`);
+    await ui.getByRole("button", { name: "Review repair for Order review flow", exact: true }).click();
+    const review = ui.getByRole("region", { name: "Repair Order review flow", exact: true });
+    await ui.route(pattern, handler);
+    await review.getByRole("button", { name: "Propose repair", exact: true }).click(); await ready;
+    await page.evaluate(() => window.runtime.disconnect());
+    await expect(ui.getByText("Disconnected", { exact: true })).toBeVisible();
+    await page.evaluate(async ({ url, sdkUrl, id, token }) => {
+      const sdk = await import(sdkUrl); window.runtime = sdk.connect({ url, sessionId: id, token, sourceProvenance: { enabled: true } });
+    }, { url: runPhantom.url, sdkUrl: session.sdkUrl, id: session.id, token: session.token });
+    await expect(review.getByRole("button", { name: "Propose repair", exact: true })).toBeEnabled();
+    const delivered = ui.waitForResponse(response => response.url().endsWith(`/flows/${flow.id}/repair-proposals`));
+    release(); await delivered; await Promise.all(pending);
+    await ui.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+    await expect(review.getByLabel("Original anchor", { exact: true })).toHaveCount(0);
+    await ui.unroute(pattern, handler);
+    await review.getByRole("button", { name: "Propose repair", exact: true }).click();
+    await expect(review.getByLabel("Original anchor", { exact: true })).toBeVisible();
+    expect(await effects(page)).toEqual({ clicks: 0, focus: 0, inputs: 0 });
+    const saved: VerificationFlow[] = await (await request.get(`${runPhantom.url}/api/verification/flows`)).json();
+    expect(saved.find(item => item.id === flow.id)?.revision).toBe(flow.revision);
+  } finally {
+    release(); await Promise.allSettled(pending); await ui.unroute(pattern, handler); await ui.close();
+  }
 });

@@ -9,8 +9,16 @@ import { relativeTargets, relativeTargetKey, VERIFICATION_LIMITS as L, type Pred
 import { FlowRepairReviews } from "./flow-repair";
 import { parseFlowDiscovery, resolveFlowAnchor } from "./flow-anchors";
 import { baselineScopeForTarget, type BaselineReading } from "./baseline";
+import { saveCapturedSnapshot } from "./snapshot-store";
+import type { AppCommand } from "./protocol";
+import { evaluatePerformancePredicate } from "./performance";
 
 export interface VerificationServiceOptions extends VerificationBridgeOptions { checkTimeoutMs?: number }
+
+export function flowPassReason(steps: number): string {
+  const scope = steps === 1 ? "1 step verified during its observed interval; it" : `${steps} steps verified during their observed intervals; each`;
+  return `${scope} completed with no tracked requests pending and at least ${L.QUIET_MS}ms quiet.`;
+}
 
 export class VerificationService {
   readonly bridge: VerificationBridge;
@@ -29,6 +37,17 @@ export class VerificationService {
     return this.lock(session, async () => {
       const { unavailable: _unavailable, ...result } = await this.bridge.command(session, command);
       return result;
+    });
+  }
+
+  captureSnapshot(id: string, name: unknown) {
+    const session = this.bridge.get(id);
+    return this.lock(session, async () => {
+      const socket = session.ws; const generation = session.generation;
+      if (!socket) throw new VerificationHttpError(409, "Connect the application before capturing a snapshot");
+      const result = await this.bridge.command(session, { type: "semantic-tree" });
+      if (!result.ok || this.bridge.sessions.get(id) !== session || !session.ws || session.ws !== socket || session.generation !== generation) throw new VerificationHttpError(409, result.error ?? "Application connection changed during snapshot capture");
+      return saveCapturedSnapshot({ sessionId: session.id, runId: session.runId, origin: session.origin, name: this.bridge.sanitize(session, name).value, tree: result.result, connectionGeneration: generation, capturedAt: Date.now() });
     });
   }
 
@@ -128,7 +147,10 @@ export class VerificationService {
         if (verdict.status !== "pass") return this.report(session, flow.name, flow.id,
           { ...verdict, reason: `Step ${index + 1}: ${verdict.reason}`, evidence }, checks);
       }
-      return this.report(session, flow.name, flow.id, { status: "pass", reason: `${flow.steps.length} steps verified during their observed intervals; each completed with no tracked requests pending and at least ${L.QUIET_MS}ms quiet.`, evidence }, checks);
+      const performanceChecks = flow.steps.some(step => this.reads(step.predicate).some(read => read.type === "performance"));
+      return this.report(session, flow.name, flow.id, { status: "pass", reason: performanceChecks
+        ? `${flow.steps.length} declared steps met their checks. Native numeric checks describe selected lab populations; other checks retain their bounded quiet requirements.`
+        : flowPassReason(flow.steps.length), evidence }, checks);
     });
   }
 
@@ -142,6 +164,11 @@ export class VerificationService {
     const actionId = session.currentActionId;
     let latest: Verdict = { status: "inconclusive", reason: "No fresh observations available", evidence: [] };
     const reads = this.reads(predicate);
+    if (predicate.kind === "performance") {
+      const response = await this.bridge.command(session, { type: "performance", phase: "capture" }, Math.max(1, deadline - Date.now()));
+      fresh = response.ok && session.generation === generation && session.lastPerformance?.cursor === response.cursor;
+      return finish(evaluatePerformancePredicate(predicate, session.lastPerformance?.snapshot, fresh));
+    }
     // A fresh reply proves the document processed ready and flushed its earlier queued observations.
     // Hello alone cannot establish absence while a blocked page has not yet delivered captured errors.
     if (reads.length === 0) {
@@ -159,7 +186,8 @@ export class VerificationService {
       if (!session.ws || session.generation !== generation) return finish({ status: "inconclusive", reason: "Application connection changed while collecting evidence", evidence: [] });
       const observed = this.bridge.observe(session, since);
       const settled = session.coverage.network && !session.pending && session.requests.size === 0 && Date.now() - Math.max(started, session.lastActivity) >= L.QUIET_MS;
-      latest = evaluatePredicate(predicate, { events: observed.events, coverage: session.coverage, complete: observed.complete, settled, actionId,
+      latest = evaluatePredicate(predicate, { capabilities: session.capabilities, events: observed.events, coverage: session.coverage, complete: observed.complete, settled, actionId,
+        ...(reads.some(read => read.type === "performance") && session.lastPerformance?.generation === generation ? { performance: { snapshot: session.lastPerformance.snapshot, fresh: fresh && session.lastPerformance.cursor >= since } } : {}),
         relative: this.relativeContext(session, predicate, since, generation, observed.cursor, observed.complete, settled) });
       if (latest.status === "pass" && settled) return finish({ ...latest, reason: `${latest.reason} Verified during an observed interval with ${L.QUIET_MS}ms quiet and no tracked requests pending.` });
       // An atomic relative result is an immutable owned turn. Waiting cannot convert an
@@ -183,6 +211,7 @@ export class VerificationService {
       generation, coverage: { ...session.coverage }, complete: fresh && current && observed.complete,
       dropped: observed.session.dropped,
       ...(controlSource?.commandCursor === since && controlSource.generation === generation ? { controlSource } : {}),
+      ...(fresh && current && session.lastPerformance?.generation === generation && session.lastPerformance.cursor >= since && this.reads(predicate).some(read => read.type === "performance") ? { performance: session.lastPerformance } : {}),
       settled: fresh && current && session.coverage.network && !session.pending && session.requests.size === 0
         && Date.now() - Math.max(started, session.lastActivity) >= L.QUIET_MS,
       ...(relativeTargets(predicate).length ? { causal: this.retainedCausalContext(session, predicate, since, generation) } : {}) };
@@ -222,9 +251,11 @@ export class VerificationService {
       ...(dispatch ? { actionId: dispatch.actionId } : {}), readings };
   }
 
-  private reads(predicate: Predicate): Array<{ type: "snapshot"; selector: string } | { type: "state"; store: string }> {
+  private reads(predicate: Predicate): AppCommand[] {
+    if (predicate.kind === "performance") return [{ type: "performance", phase: "capture" }];
     if (predicate.kind === "state") return [{ type: "state", store: predicate.store }];
     if (predicate.kind === "element") return [{ type: "snapshot", selector: predicate.selector }];
+    if (predicate.kind === "business-response" && predicate.witness?.kind === "state") return [{ type: "state", store: predicate.witness.store }];
     if (predicate.kind === "allOf" || predicate.kind === "anyOf") return predicate.predicates.flatMap((entry) => this.reads(entry));
     return [];
   }

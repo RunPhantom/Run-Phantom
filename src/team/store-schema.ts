@@ -1,17 +1,14 @@
 import type { Database } from "bun:sqlite";
+import { EVIDENCE_STORAGE_SQL } from "../evaluations/evidence-store";
+import { PROMPT_STORAGE_SQL } from "../prompts/storage";
+import { TEAM_REVIEW_STORAGE_SQL } from "./review-queue-schema";
+import { COMPARISON_STORAGE_SQL } from "../prompts/comparison-storage";
 import { TeamError } from "./errors";
+import { TEAM_LIMITS } from "./protocol";
 
-export const TEAM_SCHEMA_VERSION = 1;
+export const TEAM_SCHEMA_VERSION = 5;
 
-/** A separate schema: the team listener never opens or migrates the local database. */
-export function initializeTeamSchema(db: Database): void {
-  const version = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
-  if (version !== 0 && version !== TEAM_SCHEMA_VERSION) throw new TeamError("conflict", "Unsupported team database version");
-  if (version === TEAM_SCHEMA_VERSION) return;
-  const tables = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
-  if (tables.length) throw new TeamError("conflict", "The selected database is not an initialized team database");
-  db.transaction(() => {
-    db.exec(`
+const TEAM_V1_SQL = `
       CREATE TABLE team_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       INSERT INTO team_meta VALUES ('initialized','0');
       CREATE TABLE accounts (
@@ -96,6 +93,93 @@ export function initializeTeamSchema(db: Database): void {
         account_id TEXT, action TEXT NOT NULL, request_id TEXT NOT NULL
       );
       PRAGMA user_version = 1;
-    `);
+`;
+
+const TEAM_EVIDENCE_SQL = `${EVIDENCE_STORAGE_SQL}
+CREATE TABLE team_evidence_scopes (
+  project_id TEXT PRIMARY KEY NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  scope_key TEXT NOT NULL UNIQUE REFERENCES evaluation_evidence_scopes(scope_key) ON DELETE CASCADE,
+  CHECK(scope_key='project:'||project_id)
+);
+CREATE TRIGGER team_evidence_scope_insert BEFORE INSERT ON evaluation_evidence_scopes
+WHEN typeof(NEW.generation)!='integer' OR NEW.generation<1 OR NEW.generation>9007199254740991
+  OR NOT EXISTS(SELECT 1 FROM projects WHERE 'project:'||id=NEW.scope_key)
+BEGIN SELECT RAISE(ABORT,'invalid project evidence scope'); END;
+CREATE TRIGGER team_evidence_scope_update BEFORE UPDATE ON evaluation_evidence_scopes
+WHEN NEW.scope_key!=OLD.scope_key OR typeof(NEW.generation)!='integer' OR NEW.generation<OLD.generation
+  OR NEW.generation>9007199254740991
+BEGIN SELECT RAISE(ABORT,'invalid project evidence generation'); END;
+CREATE TRIGGER team_evidence_project_insert AFTER INSERT ON projects
+BEGIN
+  INSERT INTO evaluation_evidence_scopes(scope_key,generation,active) VALUES('project:'||NEW.id,1,1);
+  INSERT INTO team_evidence_scopes(project_id,scope_key) VALUES(NEW.id,'project:'||NEW.id);
+END;
+CREATE TRIGGER team_evidence_project_delete AFTER DELETE ON projects
+BEGIN DELETE FROM evaluation_evidence_scopes WHERE scope_key='project:'||OLD.id; END;
+`;
+
+type SchemaObject = { name: string; type: string; sql: string };
+const normalizedSql = (sql: string) => sql.replace(/\s+/g, " ").trim().replace(/;$/, "");
+function expectedSchema(sql: string): Map<string, SchemaObject> {
+  const objects = new Map<string, SchemaObject>();
+  for (const match of sql.matchAll(/CREATE (TABLE|(?:UNIQUE )?INDEX) (\w+) [\s\S]*?;/g)) {
+    objects.set(match[2], { name: match[2], type: match[1] === "TABLE" ? "table" : "index", sql: normalizedSql(match[0]) });
+  }
+  for (const match of sql.matchAll(/CREATE TRIGGER (\w+) [\s\S]*?\bEND;/g)) {
+    objects.set(match[1], { name: match[1], type: "trigger", sql: normalizedSql(match[0]) });
+  }
+  return objects;
+}
+const v1Schema = expectedSchema(TEAM_V1_SQL);
+const v2Schema = expectedSchema(`${TEAM_V1_SQL}\n${TEAM_EVIDENCE_SQL}`);
+const v3Schema = expectedSchema(`${TEAM_V1_SQL}\n${TEAM_EVIDENCE_SQL}\n${PROMPT_STORAGE_SQL}`);
+const v4Schema = expectedSchema(`${TEAM_V1_SQL}\n${TEAM_EVIDENCE_SQL}\n${PROMPT_STORAGE_SQL}\n${TEAM_REVIEW_STORAGE_SQL}`);
+const v5Schema = expectedSchema(`${TEAM_V1_SQL}\n${TEAM_EVIDENCE_SQL}\n${PROMPT_STORAGE_SQL}\n${TEAM_REVIEW_STORAGE_SQL}\n${COMPARISON_STORAGE_SQL}`);
+function knownTeamSchema(db: Database, version: number): void {
+  const expected = version === 1 ? v1Schema : version === 2 ? v2Schema : version === 3 ? v3Schema : version === 4 ? v4Schema : v5Schema;
+  const actual = db.query("SELECT name,type,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'").all() as SchemaObject[];
+  if (actual.length !== expected.size || actual.some(row => {
+    const object = expected.get(row.name);
+    return !object || row.type !== object.type || typeof row.sql !== "string" || normalizedSql(row.sql) !== object.sql;
+  })) throw new TeamError("conflict", "The selected database is not a supported team schema");
+  const initialized = db.query("SELECT value FROM team_meta WHERE key='initialized'").get() as { value: string } | null;
+  if (!initialized || !["0", "1"].includes(initialized.value)) throw new TeamError("conflict", "The selected database is not an initialized team database");
+}
+
+/** Only the Team migration coordinator installs tables; request handlers never create them. */
+export function initializeTeamSchema(db: Database): void {
+  db.transaction(() => {
+    const version = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
+    if (![0, 1, 2, 3, 4, TEAM_SCHEMA_VERSION].includes(version)) throw new TeamError("conflict", "Unsupported team database version");
+    if (version === 0) {
+      const objects = db.query("SELECT name FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'").all();
+      if (objects.length) throw new TeamError("conflict", "The selected database is not an initialized team database");
+    } else knownTeamSchema(db, version);
+    if (version === TEAM_SCHEMA_VERSION) return;
+    if ((db.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys !== 1) {
+      throw new TeamError("conflict", "Team evidence storage requires foreign key enforcement");
+    }
+    if (version === 0) db.exec(TEAM_V1_SQL);
+    if (version < 2) {
+      db.exec(TEAM_EVIDENCE_SQL);
+      db.exec("INSERT INTO evaluation_evidence_scopes(scope_key,generation,active) SELECT 'project:'||id,1,1 FROM projects; INSERT INTO team_evidence_scopes(project_id,scope_key) SELECT id,'project:'||id FROM projects; PRAGMA user_version=2;");
+    }
+    if (version < 3) {
+      const projects = (db.query("SELECT count(*) AS n FROM projects").get() as { n: number }).n;
+      const scopes = (db.query("SELECT count(*) AS n FROM team_evidence_scopes").get() as { n: number }).n;
+      const referenced = (db.query("SELECT count(*) AS n FROM team_evidence_scopes t JOIN evaluation_evidence_scopes e ON e.scope_key=t.scope_key").get() as { n: number }).n;
+      if (projects > TEAM_LIMITS.PROJECTS || scopes !== projects || referenced !== scopes) throw new TeamError("conflict", "Team prompt scopes are unavailable");
+      db.exec(PROMPT_STORAGE_SQL);
+      db.exec("INSERT INTO prompt_scope_controls(scope_key,generation) SELECT t.scope_key,1 FROM team_evidence_scopes t JOIN evaluation_evidence_scopes e ON e.scope_key=t.scope_key");
+      db.exec("PRAGMA user_version=3");
+    }
+    if (version < 4) { db.exec(TEAM_REVIEW_STORAGE_SQL); db.exec("PRAGMA user_version=4"); }
+    const projects = (db.query("SELECT count(*) n FROM projects").get() as { n: number }).n;
+    const parents = (db.query("SELECT count(*) n FROM team_evidence_scopes t JOIN evaluation_evidence_scopes e USING(scope_key) JOIN prompt_scope_controls p USING(scope_key) WHERE e.active=1").get() as { n: number }).n;
+    if (projects > TEAM_LIMITS.PROJECTS || parents !== projects) throw new TeamError("conflict", "Team comparison scopes are unavailable");
+    db.exec(COMPARISON_STORAGE_SQL);
+    db.exec("INSERT INTO comparison_scope_controls(scope_key,generation) SELECT t.scope_key,1 FROM team_evidence_scopes t JOIN evaluation_evidence_scopes e USING(scope_key) JOIN prompt_scope_controls p USING(scope_key) WHERE e.active=1");
+    if (db.query("PRAGMA foreign_key_check").all().length) throw new TeamError("conflict", "Team comparison migration failed its integrity check");
+    db.exec("PRAGMA user_version=5");
   }).immediate();
 }

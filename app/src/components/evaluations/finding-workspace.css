@@ -1,0 +1,5 @@
+.finding-workspace { padding-bottom: 100px; }
+.finding-workspace .finding-path { overflow-wrap: anywhere; }
+.finding-workspace .evidence-grid > * { min-width: 0; }
+.finding-workspace button.evidence-primary:focus-visible { outline: 2px solid #fff !important; outline-offset: -4px !important; box-shadow: 0 0 0 3px #0021cc !important; }
+@media (pointer: coarse) { .finding-workspace :is(input:not([type="checkbox"]), select, textarea) { font-size: 16px; } }

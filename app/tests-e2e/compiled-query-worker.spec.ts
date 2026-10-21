@@ -1,4 +1,5 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
+import { definitionTrace, definitionInput, definitionOutput } from "../../tests/fixtures/agent-definitions";
 
 // The native qualifier owns the copied artifact and two process boots. A URL alone is not native provenance.
 const copiedUrl = process.env.RUNPHANTOM_COMPILED_URL;
@@ -10,20 +11,7 @@ if (copiedUrl) {
     throw new Error("compiled_query_url_invalid");
   }
 }
-const definitionInput = "Owned compiled query input β";
-const definitionOutput = "Owned compiled query output ✓";
-const capture = {
-  id: "00000000000000000000000000f32001",
-  body: { resourceSpans: [{ scopeSpans: [{ spans: [{
-    traceId: "00000000000000000000000000f32001", spanId: "0000000000f32001", name: "Owned compiled query capture", kind: 1,
-    startTimeUnixNano: "1780000000000000000", endTimeUnixNano: "1780000000100000000", status: { code: 1 },
-    attributes: [
-      { key: "runphantom.span.kind", value: { stringValue: "agent_root" } },
-      { key: "runphantom.input", value: { stringValue: definitionInput } },
-      { key: "runphantom.output", value: { stringValue: definitionOutput } },
-    ],
-  }] }] }] },
-};
+const capture = definitionTrace(1798);
 async function query(request: APIRequestContext, sql: string) {
   return request.post(`${copiedUrl}/api/traces/query`, { data: { sql } });
 }
