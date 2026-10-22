@@ -12,7 +12,14 @@ export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
 }
 
 export interface CheckDraft {
-  kind: "element" | "network" | "console" | "signal" | "state" | "relative";
+  kind: "element" | "network" | "console" | "signal" | "state" | "relative" | "business-response";
+  operationId: string;
+  operationPath: string;
+  phase: "response" | "acceptance" | "final";
+  witness: "none" | "state" | "signal";
+  witnessIdentity: string;
+  witnessPath: string;
+  witnessOperationPath: string;
   relativeTarget: "element" | "state";
   relation: "changed" | "increased" | "decreased" | "becomes";
   selector: string;
@@ -30,7 +37,7 @@ export interface CheckDraft {
 }
 
 export function emptyCheck(): CheckDraft {
-  return { kind: "element", relativeTarget: "state", relation: "changed", selector: "", elementState: "present", url: "", method: "", status: "200", level: "error", absent: true, signal: "", store: "", path: "", valueType: "string", value: "" };
+  return { operationId: "", operationPath: "operationId", phase: "response", witness: "none", witnessIdentity: "", witnessPath: "result", witnessOperationPath: "operationId", kind: "element", relativeTarget: "state", relation: "changed", selector: "", elementState: "present", url: "", method: "", status: "200", level: "error", absent: true, signal: "", store: "", path: "", valueType: "string", value: "" };
 }
 
 export function buildPredicate(draft: CheckDraft): Predicate {
@@ -47,7 +54,7 @@ export function buildPredicate(draft: CheckDraft): Predicate {
     }
     case "console": return { kind: "console", level: draft.level, absent: draft.absent };
     case "signal": return { kind: "signal", name: required(draft.signal, "Signal name") };
-    case "state": case "relative": {
+    case "business-response": case "state": case "relative": {
       const target = draft.kind === "relative" && draft.relativeTarget === "element"
         ? { kind: "element" as const, selector: required(draft.selector, "Element selector") }
         : { kind: "state" as const, store: draft.kind === "relative" ? required(draft.store, "Registered store") : draft.store.trim(), path: draft.path.trim() };
@@ -62,6 +69,12 @@ export function buildPredicate(draft: CheckDraft): Predicate {
       if (draft.valueType === "json") {
         try { equals = JSON.parse(draft.value); } catch { throw new Error("Expected JSON value is invalid."); }
       }
+      if (draft.kind === "business-response") return { kind: "business-response", urlContains: required(draft.url, "Request URL contains"),
+        ...(draft.method ? { method: draft.method } : {}), operationId: required(draft.operationId, "Operation identity"),
+        operationPath: draft.operationPath.trim(), path: draft.path.trim(), equals, phase: draft.phase,
+        ...(draft.witness === "none" ? {} : { witness: { kind: draft.witness,
+          ...(draft.witness === "state" ? { store: required(draft.witnessIdentity, "Witness store") } : { name: required(draft.witnessIdentity, "Witness signal") }),
+          operationPath: draft.witnessOperationPath.trim(), path: draft.witnessPath.trim() } as import("../../../../src/verification/protocol").BusinessWitness }) };
       if (draft.kind === "relative" && target.kind === "element" && (typeof equals !== "number" || !Number.isSafeInteger(equals) || equals < 0)) throw new Error("Matching element counts require a nonnegative whole number.");
       return draft.kind === "relative" ? { kind: "relative", target, relation: "becomes", equals }
         : { kind: "state", store: required(draft.store, "Registered store"), path: draft.path.trim(), equals };
@@ -74,6 +87,7 @@ export function describePredicate(predicate: Predicate): string {
     case "performance": return `Native lab ${predicate.metric} ${predicate.op === "lte" ? "at most" : "at least"} ${predicate.value}`;
     case "element": return `${predicate.selector} is ${predicate.state}`;
     case "network": return `${predicate.method ?? "Any method"} ${predicate.urlContains}${predicate.status === undefined ? "" : ` returns ${predicate.status}`}`;
+    case "business-response": return `${predicate.phase === "acceptance" ? "Acceptance" : predicate.phase === "final" ? "Final persistence" : "Response"} contract for ${predicate.operationId} at ${predicate.urlContains}${predicate.witness ? " with declared witness" : ""}`;
     case "console": return `${predicate.absent ? "No" : "Observed"} console ${predicate.level === "error" ? "errors" : "warnings"}`;
     case "signal": return `Signal “${predicate.name}” observed`;
     case "state": return `${predicate.store}${predicate.path ? `.${predicate.path}` : ""} equals expected ${predicate.equals === null ? "null" : typeof predicate.equals}`;
@@ -92,13 +106,21 @@ export function PredicateEditor({ draft, onChange, index, onRemove }: { draft: C
   const change = <K extends keyof CheckDraft>(key: K, value: CheckDraft[K]) => onChange({ ...draft, [key]: value });
   return <fieldset aria-labelledby={id} className="space-y-3 border-t border-[color:var(--rp-border)] pt-4">
     <div className="flex items-center justify-between gap-3"><span id={id} className="text-xs font-semibold text-[color:var(--rp-ink)]">Expected outcome {index + 1}</span>{onRemove && <Button type="button" variant="ghost" size="sm" onClick={onRemove} aria-label={`Remove outcome ${index + 1}`}>Remove</Button>}</div>
-    <Field label="Check type"><Select value={draft.kind} onChange={event => change("kind", event.target.value as CheckDraft["kind"])}><option value="element">Element</option><option value="network">Network response</option><option value="console">Console</option><option value="signal">Application signal</option><option value="state">Registered state</option><option value="relative">Action transition</option></Select></Field>
+    <Field label="Check type"><Select value={draft.kind} onChange={event => change("kind", event.target.value as CheckDraft["kind"])}><option value="element">Element</option><option value="network">Network response</option><option value="business-response">Business response contract</option><option value="console">Console</option><option value="signal">Application signal</option><option value="state">Registered state</option><option value="relative">Action transition</option></Select></Field>
     {draft.kind === "relative" && <><div className="grid gap-3 sm:grid-cols-2"><Field label="Transition target"><Select value={draft.relativeTarget} onChange={event => onChange({ ...draft, relativeTarget: event.target.value as CheckDraft["relativeTarget"], ...(event.target.value === "element" ? { valueType: "number", value: "1" } : {}) })}><option value="state">Registered state</option><option value="element">Matching element count</option></Select></Field><Field label="Required change"><Select value={draft.relation} onChange={event => change("relation", event.target.value as CheckDraft["relation"])}><option value="changed">Changed</option><option value="increased">Increased</option><option value="decreased">Decreased</option><option value="becomes">Became expected value</option></Select></Field></div><p className="text-[11px] leading-relaxed text-[color:var(--rp-ink-muted)]">Select Click, configure this outcome, then run the action. This compares synchronous before and after readings; an already satisfied expectation is inconclusive.</p>{draft.relativeTarget === "element" && <Field label="Element selector" hint="Compares the number of matching elements."><Input value={draft.selector} onChange={event => change("selector", event.target.value)} placeholder='[data-testid="confirmation"]' /></Field>}</>}
     {draft.kind === "element" && <div className="grid gap-3 sm:grid-cols-2"><Field label="Element selector"><Input value={draft.selector} onChange={event => change("selector", event.target.value)} placeholder='[data-testid="confirmation"]' /></Field><Field label="Expected presence"><Select value={draft.elementState} onChange={event => change("elementState", event.target.value as CheckDraft["elementState"])}><option value="present">Present</option><option value="absent">Absent</option></Select></Field></div>}
     {draft.kind === "network" && <><Field label="Request URL contains"><Input value={draft.url} onChange={event => change("url", event.target.value)} placeholder="/api/checkout" /></Field><div className="grid gap-3 sm:grid-cols-2"><Field label="Request method"><Select value={draft.method} onChange={event => change("method", event.target.value)}><option value="">Any method</option>{["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map(method => <option key={method}>{method}</option>)}</Select></Field><Field label="Response status" hint="Leave blank to accept any response status."><Input type="number" min={100} max={599} value={draft.status} onChange={event => change("status", event.target.value)} /></Field></div></>}
+    {draft.kind === "business-response" && <>
+      <p className="text-[11px] leading-relaxed text-[color:var(--rp-ink-muted)]">Requires response capture enabled in the connected app. Match a complete response to an explicit operation; app evidence cannot authenticate final server persistence.</p>
+      <div className="grid gap-3 sm:grid-cols-2"><Field label="Request URL contains"><Input value={draft.url} onChange={event => change("url", event.target.value)} placeholder="/api/orders" /></Field><Field label="Request method"><Select value={draft.method} onChange={event => change("method", event.target.value)}><option value="">Any method</option>{["GET", "POST", "PUT", "PATCH", "DELETE"].map(method => <option key={method}>{method}</option>)}</Select></Field></div>
+      <div className="grid gap-3 sm:grid-cols-2"><Field label="Operation identity"><Input value={draft.operationId} onChange={event => change("operationId", event.target.value)} placeholder="order-21" /></Field><Field label="Operation identity path" hint="A dot-separated path in the response."><Input value={draft.operationPath} onChange={event => change("operationPath", event.target.value)} /></Field></div>
+      <div className="grid gap-3 sm:grid-cols-2"><Field label="Response value path"><Input value={draft.path} onChange={event => change("path", event.target.value)} placeholder="result" /></Field><Field label="Contract phase"><Select value={draft.phase} onChange={event => change("phase", event.target.value as CheckDraft["phase"])}><option value="response">Observed response</option><option value="acceptance">Accepted request</option><option value="final">Final server persistence</option></Select></Field></div>
+      <Field label="Cross-channel witness"><Select value={draft.witness} onChange={event => change("witness", event.target.value as CheckDraft["witness"])}><option value="none">No witness declared</option><option value="state">Registered state</option><option value="signal">Application signal</option></Select></Field>
+      {draft.witness !== "none" && <><Field label={draft.witness === "state" ? "Witness store" : "Witness signal"}><Input value={draft.witnessIdentity} onChange={event => change("witnessIdentity", event.target.value)} /></Field><div className="grid gap-3 sm:grid-cols-2"><Field label="Witness operation identity path"><Input value={draft.witnessOperationPath} onChange={event => change("witnessOperationPath", event.target.value)} /></Field><Field label="Witness value path"><Input value={draft.witnessPath} onChange={event => change("witnessPath", event.target.value)} /></Field></div><p className="text-[11px] text-[color:var(--rp-ink-muted)]">Both channels must expose the same operation identity. An unreadable or missing witness stays inconclusive.</p></>}
+    </>}
     {draft.kind === "console" && <div className="grid gap-3 sm:grid-cols-2"><Field label="Console level"><Select value={draft.level} onChange={event => change("level", event.target.value as CheckDraft["level"])}><option value="error">Errors</option><option value="warn">Warnings</option></Select></Field><Field label="Expected console activity"><Select value={draft.absent ? "absent" : "present"} onChange={event => change("absent", event.target.value === "absent")}><option value="absent">None observed</option><option value="present">At least one observed</option></Select></Field></div>}
     {draft.kind === "signal" && <Field label="Signal name" hint="Emit this signal with the SDK handle in your app."><Input value={draft.signal} onChange={event => change("signal", event.target.value)} placeholder="checkout.complete" /></Field>}
     {(draft.kind === "state" || draft.kind === "relative" && draft.relativeTarget === "state") && <div className="grid gap-3 sm:grid-cols-2"><Field label="Registered store"><Input value={draft.store} onChange={event => change("store", event.target.value)} placeholder="cart" /></Field><Field label="State path" hint="Dot-separated own properties; blank checks the full store."><Input value={draft.path} onChange={event => change("path", event.target.value)} placeholder="items.length" /></Field></div>}
-    {(draft.kind === "state" || draft.kind === "relative" && draft.relation === "becomes") && <div className="grid gap-3 sm:grid-cols-2"><Field label="Expected value type"><Select value={draft.valueType} onChange={event => onChange({ ...draft, valueType: event.target.value as CheckDraft["valueType"], value: event.target.value === "boolean" ? "true" : "" })}><option value="string">Text</option><option value="number">Number</option><option value="boolean">Boolean</option><option value="null">Null</option><option value="json">JSON object or array</option></Select></Field>{draft.valueType === "boolean" ? <Field label="Expected value"><Select value={draft.value} onChange={event => change("value", event.target.value)}><option value="true">True</option><option value="false">False</option></Select></Field> : draft.valueType !== "null" && <Field label="Expected value"><Input type={draft.valueType === "number" ? "number" : "text"} autoComplete="off" value={draft.value} onChange={event => change("value", event.target.value)} /></Field>}</div>}
+    {(draft.kind === "business-response" || draft.kind === "state" || draft.kind === "relative" && draft.relation === "becomes") && <div className="grid gap-3 sm:grid-cols-2"><Field label="Expected value type"><Select value={draft.valueType} onChange={event => onChange({ ...draft, valueType: event.target.value as CheckDraft["valueType"], value: event.target.value === "boolean" ? "true" : "" })}><option value="string">Text</option><option value="number">Number</option><option value="boolean">Boolean</option><option value="null">Null</option><option value="json">JSON object or array</option></Select></Field>{draft.valueType === "boolean" ? <Field label="Expected value"><Select value={draft.value} onChange={event => change("value", event.target.value)}><option value="true">True</option><option value="false">False</option></Select></Field> : draft.valueType !== "null" && <Field label="Expected value"><Input type={draft.valueType === "number" ? "number" : "text"} autoComplete="off" value={draft.value} onChange={event => change("value", event.target.value)} /></Field>}</div>}
   </fieldset>;
 }

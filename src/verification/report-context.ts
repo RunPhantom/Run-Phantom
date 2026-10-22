@@ -1,8 +1,9 @@
-import type { Predicate, VerificationReportContext } from "./protocol";
+import type { FailureHandoff, Predicate, VerificationReport, VerificationReportContext } from "./protocol";
 import { VERIFICATION_LIMITS as L } from "./protocol";
 import { parseFlowSteps, parseRelativeTarget } from "./validation";
 import { sanitizeWithReport } from "./serialization";
 import { boundControlSource } from "./build/source";
+import { parseExecutionContext } from "./browser-contract";
 import { parsePerformanceSnapshot, scrubPerformanceMetadata } from "./performance";
 
 interface Sanitized { value: unknown; redacted: boolean; truncated: boolean }
@@ -16,6 +17,10 @@ const persistenceScrub: Scrub = (value) => {
 export function boundReportContext(input: VerificationReportContext, scrub: Scrub = persistenceScrub): VerificationReportContext {
   const context: VerificationReportContext = { origin: input.origin, checks: [], quietMs: input.quietMs,
     redacted: input.redacted, truncated: input.truncated || input.checks.length > L.MAX_STEPS };
+  if (input.execution) {
+    try { context.execution = parseExecutionContext(input.execution); }
+    catch { context.executionOmitted = "invalid"; context.truncated = true; }
+  } else if (input.executionOmitted === "context-limit" || input.executionOmitted === "invalid") { context.executionOmitted = input.executionOmitted; context.truncated = true; }
   const clean = (value: unknown): unknown => {
     const result = scrub(value);
     context.redacted ||= result.redacted;
@@ -41,6 +46,12 @@ export function boundReportContext(input: VerificationReportContext, scrub: Scru
       case "network": return { kind: parsed.kind, urlContains: clean(parsed.urlContains),
         ...(parsed.method === undefined ? {} : { method: clean(parsed.method) }),
         ...(parsed.status === undefined ? {} : { status: parsed.status }) };
+      case "business-response": return { kind: parsed.kind, urlContains: clean(parsed.urlContains),
+        ...(parsed.method === undefined ? {} : { method: clean(parsed.method) }), operationId: clean(parsed.operationId),
+        operationPath: clean(parsed.operationPath), path: clean(parsed.path), equals: clean(parsed.equals), phase: parsed.phase,
+        ...(parsed.witness ? { witness: { kind: parsed.witness.kind,
+          ...(parsed.witness.kind === "state" ? { store: clean(parsed.witness.store) } : { name: clean(parsed.witness.name) }),
+          operationPath: clean(parsed.witness.operationPath), path: clean(parsed.witness.path) } } : {}) };
       case "signal": return { kind: parsed.kind, name: clean(parsed.name) };
       case "state": return { kind: parsed.kind, store: clean(parsed.store), path: clean(parsed.path), equals: clean(parsed.equals) };
       case "element": return { kind: parsed.kind, selector: clean(parsed.selector), state: parsed.state };
@@ -95,6 +106,7 @@ export function boundReportContext(input: VerificationReportContext, scrub: Scru
   }
   // Preserve every executed check's outcome/window even when large expected values do not fit.
   while (Buffer.byteLength(JSON.stringify(context)) > L.MAX_CONTEXT_BYTES) {
+    if (context.execution) { delete context.execution; context.executionOmitted = "context-limit"; context.truncated = true; continue; }
     const performance = context.checks.filter(check => check.performance).sort((a, b) =>
       Buffer.byteLength(JSON.stringify(b.performance)) - Buffer.byteLength(JSON.stringify(a.performance)));
     if (performance.length) {
@@ -143,6 +155,49 @@ export function boundReportContext(input: VerificationReportContext, scrub: Scru
     throw new Error("Saved verification context exceeds its required outcome budget");
   }
   return context;
+}
+
+/** Advice describes an already retained report; it never interprets agent completion prose. */
+export function buildFailureHandoff(report: VerificationReport): FailureHandoff {
+  const validStatus = (value: unknown) => value === "pass" || value === "fail" || value === "inconclusive";
+  if (!validStatus(report.status)) throw new Error("Retained report outcome unavailable");
+  let redacted = report.context?.redacted ?? false;
+  let truncated = report.context?.truncated ?? false;
+  const clean = (value: unknown) => {
+    const result = sanitizeWithReport(value);
+    redacted ||= !!result.redacted;
+    truncated ||= !!result.truncation;
+    return result.value;
+  };
+  const text = (value: string) => { const result = clean(value); return typeof result === "string" ? result : "[REDACTED]"; };
+  const context = report.context ? boundReportContext(report.context) : undefined;
+  redacted ||= context?.redacted ?? false;
+  truncated ||= context?.truncated ?? false;
+  const checks = (context?.checks ?? []).map(check => {
+    if (!validStatus(check.status) || ![check.step, check.since, check.through, check.generation, check.dropped].every(Number.isSafeInteger)
+      || check.step < 1 || check.since < 0 || check.through < check.since || check.generation < 0 || check.dropped < 0
+      || typeof check.complete !== "boolean" || typeof check.settled !== "boolean") throw new Error("Retained check outcome unavailable");
+    return { step: check.step, predicate: clean(check.predicate), status: check.status, actual: text(check.reason),
+      since: check.since, through: check.through, generation: check.generation, complete: check.complete, dropped: check.dropped,
+      settled: check.settled, coverage: { ...check.coverage }, ...(check.controlSource ? { controlSource: check.controlSource } : {}),
+      ...(check.controlSourceOmitted ? { controlSourceOmitted: check.controlSourceOmitted } : {}), ...(check.causal ? { causal: check.causal } : {}) };
+  });
+  const handoff: FailureHandoff = { reportId: report.id, name: text(report.name), status: report.status, reason: text(report.reason),
+    origin: context ? text(context.origin) : null, reproduction: "partial",
+    reproductionNote: "This is retained outcome evidence, not a replay script. Original actions and entered values were not retained in this report. Reproduce explicitly in the recorded application and recheck the declared expectation; no command has been run by this handoff.",
+    checks, checksOmitted: Math.max(0, (report.context?.checks.length ?? 0) - checks.length), redacted, truncated };
+  while (Buffer.byteLength(JSON.stringify(handoff)) > 16384 && handoff.checks.length) {
+    handoff.checks.pop(); handoff.checksOmitted++; handoff.truncated = true;
+  }
+  if (Buffer.byteLength(JSON.stringify(handoff)) > 16384) throw new Error("Retained handoff exceeds its byte bound");
+  return handoff;
+}
+
+/** Reopen validates optional browser context without rewriting original SDK report fields. */
+export function reopenExecutionContext(context: VerificationReportContext): VerificationReportContext {
+  if (!Object.hasOwn(context, "execution")) return context;
+  try { return { ...context, execution: parseExecutionContext(context.execution) }; }
+  catch { const { execution: _execution, ...rest } = context; return { ...rest, executionOmitted: "invalid", truncated: true }; }
 }
 
 /** Reopened optional native evidence is validated; it is never current-session evidence. */

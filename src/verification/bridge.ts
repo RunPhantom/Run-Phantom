@@ -8,10 +8,11 @@ import { parseBrowserMessage, validateOrigin, parseFlowSteps } from "./validatio
 import { sanitizeWithReport } from "./serialization";
 import { isSensitiveKey } from "./redaction";
 import { RingBuffer } from "./ring-buffer";
-import { CAUSAL_CAPABILITY, PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, relativeTargetKey, VERIFICATION_LIMITS as L,
+import { CAUSAL_CAPABILITY, BUSINESS_CAPABILITY, PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, TREE_CAPABILITY, relativeTargetKey, VERIFICATION_LIMITS as L,
   type AppCommand, type Coverage, type RelativeTarget, type RuntimeEvent, type SessionSummary, type VerificationCapability, type RetainedControlSource } from "./protocol";
 import { sanitizeControlSource } from "./build/source";
 import { baselineScopeForTarget, captureBaselineReading, captureCausalAttribution, type BaselineReading, type CausalAttribution } from "./baseline";
+import { parseSemanticTree, sanitizeSemanticTree, treeIncomplete } from "./snapshot-contract";
 import { PERFORMANCE_CAPABILITY } from "./protocol";
 import { parsePerformanceSnapshot, scrubPerformanceMetadata, type RetainedPerformanceEvidence, type PerformanceSnapshot } from "./performance";
 
@@ -68,6 +69,8 @@ export interface VerificationSession {
   lastActivity: number;
   pending: Pending | null;
   requests: Map<string, { actionId?: string }>;
+  bodyRequests: Map<string, { actionId?: string; url: unknown; method: unknown; status?: number; pending: boolean }>;
+  responseRequestIds: Set<string>;
   currentActionId?: string;
   lastCausalResult?: CapturedCausalDispatch;
   lastControlSource?: RetainedControlSource;
@@ -117,7 +120,7 @@ export class VerificationBridge {
     const session: VerificationSession = { id, origin: appOrigin, runId: runId as string | null ?? null,
       token: randomBytes(32).toString("hex"), createdAt: Date.now(), expires, ws: null, generation: 0,
       coverage: emptyCoverage(), capabilities: [], cursor: 0, events: new RingBuffer(), dropped: 0, lossCursor: 0, captureLost: false, generationCursor: 0,
-      lastActivity: Date.now(), pending: null, requests: new Map(), lastCommandCursor: 0, busy: false, secrets: [] };
+      lastActivity: Date.now(), pending: null, requests: new Map(), bodyRequests: new Map(), responseRequestIds: new Set(), lastCommandCursor: 0, busy: false, secrets: [] };
     session.secrets.push(session.token);
     this.sessions.set(id, session);
     this.options.broadcast("verification_session", this.summary(session));
@@ -147,6 +150,8 @@ export class VerificationBridge {
     session.coverage = emptyCoverage();
     session.capabilities = [];
     session.requests.clear();
+    session.bodyRequests.clear();
+    session.responseRequestIds.clear();
     session.currentActionId = undefined;
     session.lastCausalResult = undefined;
     session.lastControlSource = undefined;
@@ -219,6 +224,12 @@ export class VerificationBridge {
           // Validate before resolving: a malformed causal reply must invalidate the owned turn,
           // not leave its promise detached from the generation being closed.
           if (pending.command.type === "causal-click" && msg.ok) this.captureDispatch(session, pending, !!msg.truncated);
+          // A malformed typed tree must invalidate the still-owned pending promise.
+          const treeResult = pending.command.type === "semantic-tree" && msg.ok ? this.sanitizeReadResult(session, pending.command, msg.result) : undefined;
+          if (treeResult && msg.truncated) {
+            const tree = parseSemanticTree(treeResult.value); treeIncomplete(tree, "transport-budget-limit");
+            treeResult.value = sanitizeSemanticTree(tree, text => ({ value: text, truncated: false })); treeResult.incomplete = true;
+          }
           if (pending.command.type === "performance" && msg.ok) {
             const snapshot = parsePerformanceSnapshot(msg.result);
             if (msg.truncated || snapshot.phase !== pending.command.phase) throw new Error("Invalid performance phase or partial response");
@@ -236,7 +247,8 @@ export class VerificationBridge {
             pending.resolve({ ok: false, cursor: pending.cursor, error: "Application did not acknowledge the action boundary" });
             return;
           }
-          const cleaned = pending.command.type === "performance" ? { value: performanceResult, incomplete: false } : this.sanitizeReadResult(session, pending.command, msg.result);
+          const cleaned = pending.command.type === "performance" ? { value: performanceResult, incomplete: false }
+            : treeResult ?? (pending.command.type === "semantic-tree" ? { value: undefined, incomplete: false } : this.sanitizeReadResult(session, pending.command, msg.result));
           const result = cleaned.value;
           const truncated = msg.truncated || cleaned.incomplete;
           if (pending.command.type === "performance") {
@@ -327,20 +339,45 @@ export class VerificationBridge {
       if (typeof requestId !== "string" || !requestId || requestId.length > 128 || session.requests.has(requestId)) throw new Error("invalid request identity");
       if (session.requests.size >= L.MAX_EVENTS) { this.loss(session, "Pending network capture limit reached"); return; }
       if (event.actionId !== session.currentActionId) { this.loss(session, "Network request action attribution did not match its observed start boundary"); return; }
+      if (session.capabilities.includes(BUSINESS_CAPABILITY)) {
+        if (session.responseRequestIds.has(requestId)) {
+          // Retain the bounded observed lifecycle for inspection; this generation has permanently lost proof authority.
+          this.loss(session, "Response request identity was reused within its connection generation");
+        } else {
+          if (session.responseRequestIds.size >= L.MAX_EVENTS) { this.loss(session, "Response identity history limit reached"); return; }
+          session.responseRequestIds.add(requestId);
+        }
+      }
       session.requests.set(requestId, { actionId: event.actionId });
+      if (session.capabilities.includes(BUSINESS_CAPABILITY)) {
+        if (session.bodyRequests.has(requestId) || session.bodyRequests.size >= L.MAX_EVENTS) { this.loss(session, "Response identity capture limit or duplicate start"); return; }
+        session.bodyRequests.set(requestId, { actionId: event.actionId, url: event.data.url, method: event.data.method, pending: false });
+      }
     } else if (event.type === "network") {
       const requestId = event.data.requestId;
       const request = typeof requestId === "string" ? session.requests.get(requestId) : undefined;
       if (!request) { this.loss(session, "Network completion arrived without a recorded request start"); return; }
       session.requests.delete(requestId as string);
+      const body = session.bodyRequests.get(requestId as string);
+      if (body) body.status = event.data.status as number;
       event = { ...event, actionId: request.actionId };
+    } else if (event.type === "network.body") {
+      const requestId = String(event.data.requestId);
+      const body = session.bodyRequests.get(requestId);
+      if (!session.capabilities.includes(BUSINESS_CAPABILITY) || !body || body.status === undefined
+        || (event.data.state === "pending" ? body.pending : !body.pending)) {
+        this.loss(session, "Response lifecycle lacked its negotiated owned request and headers"); return;
+      }
+      if (event.data.state === "pending") body.pending = true;
+      else session.bodyRequests.delete(requestId);
+      event = { ...event, actionId: body.actionId, data: { ...event.data, url: body.url, method: body.method, status: body.status } };
     } else if (event.type === "observer.error") {
       const observer = event.data.observer;
       if (typeof observer === "string" && Object.hasOwn(session.coverage, observer)) session.coverage[observer as keyof Coverage] = false;
     }
     // Console and application signals describe the observed interval after the acknowledged boundary.
     // They cannot opt out of a negative assertion by omitting or changing a page-supplied action id.
-    if (!["network", "network.start", "action.boundary"].includes(event.type)) event = { ...event, actionId: session.currentActionId };
+    if (!["network", "network.start", "network.body", "action.boundary"].includes(event.type)) event = { ...event, actionId: session.currentActionId };
     if (event.type === "capture.loss") { session.lossCursor = this.tick(session); session.captureLost = true; }
     const captured = this.append(session, event);
     if (event.type === "action.boundary" && session.pending) session.pending.actionCursor = captured?.t;
@@ -401,6 +438,7 @@ export class VerificationBridge {
       return Promise.resolve({ ok: false, cursor, unavailable: true,
         error: "Application does not support semantic references; no action was executed" });
     }
+    if (command.type === "semantic-tree" && !session.capabilities.includes(TREE_CAPABILITY)) return Promise.resolve({ ok: false, cursor, unavailable: true, error: "Application does not support semantic tree snapshots; no observation was captured" });
     if (["click", "fill", "causal-click", "ref-click", "ref-fill"].includes(command.type)) { session.lastCausalResult = undefined; session.lastControlSource = undefined; }
     if (command.type === "causal-click" && !session.capabilities.includes(CAUSAL_CAPABILITY)) {
       return Promise.resolve({ ok: false, cursor, unavailable: true,
@@ -458,7 +496,8 @@ export class VerificationBridge {
       // These are validated protocol discriminators, not page text. Losing an error level can invert an absence verdict.
       if (raw.type === "console" && key === "level" || raw.type === "observer.error" && key === "observer"
         || raw.type === "action.reading" && ["phase", "available"].includes(key)
-        || ["network", "network.start"].includes(raw.type) && (["initiator", "status", "ok", "durationMs"].includes(key)
+        || raw.type === "network.body" && ["source", "state", "format", "bytes", "chunks", "redacted", "status"].includes(key)
+        || ["network", "network.start", "network.body"].includes(raw.type) && (["initiator", "status", "ok", "durationMs"].includes(key)
           || key === "method" && ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"].includes(String(value).toUpperCase()))) {
         data[key] = value;
       } else {
@@ -467,10 +506,16 @@ export class VerificationBridge {
         incomplete ||= clean.incomplete;
       }
     }
-    return { ...raw, data, ...(incomplete ? { truncated: true } : {}) };
+    const event = { ...raw, data, ...(incomplete ? { truncated: true } : {}) };
+    if (event.actionId === undefined) delete event.actionId;
+    return event;
   }
 
   private sanitizeReadResult(session: VerificationSession, command: AppCommand, raw: unknown): { value: unknown; incomplete: boolean } {
+    if (command.type === "semantic-tree") {
+      const tree = sanitizeSemanticTree(raw, text => { const safe = this.sanitize(session, text); return { value: safe.value, truncated: safe.incomplete }; });
+      return { value: tree, incomplete: tree.availability === "partial" };
+    }
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return this.sanitize(session, raw);
     let incomplete = false;
     const value: Record<string, unknown> = {};

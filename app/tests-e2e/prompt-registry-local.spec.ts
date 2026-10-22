@@ -1,0 +1,54 @@
+import { createHash, randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { test, expect } from "./fixtures";
+import type { PromptPage, PromptRevision } from "../../src/prompts/protocol";
+const artifacts = path.resolve(process.env.F33_LOCAL_UI_ARTIFACT_ROOT ?? path.resolve(import.meta.dirname, `../../.omx/evidence/F33/connected-ui-${Date.now()}-${process.pid}/local`));
+
+test("actual local workspace saves immutable history, exports literal text and clears only prompts while retaining visible reports", async ({ page, request, runPhantom }) => {
+  test.setTimeout(120000); const errors: string[] = [], foreign: string[] = [];
+  page.on("pageerror", error => errors.push(error.message)); page.on("request", event => { if (new URL(event.url()).origin !== runPhantom.url && !event.url().startsWith("blob:")) foreign.push(event.url()); });
+  const health = await (await request.get(runPhantom.url + "/health")).json(); expect(health).toMatchObject({ ok: true, port: runPhantom.port }); expect(health.pid).toBeGreaterThan(0);
+  await page.goto(runPhantom.url); await page.getByRole("link", { name: "Prompts", exact: true }).click(); await expect(page).toHaveURL(/\/prompts$/);
+  await expect(page.getByRole("button", { name: "New prompt", exact: true })).toBeEnabled();
+  const template = 'Local {{topic}}.\n{"outer":{"literal":true}}', literal = '$& $$ {{later}} <img src="https://untrusted.invalid/pixel">';
+  await page.getByLabel("Prompt name", { exact: true }).fill("Local immutable review"); await page.getByLabel("Template", { exact: true }).fill(template);
+  await page.getByRole("button", { name: "Save prompt", exact: true }).click(); await expect(page.getByRole("button", { name: "Compile revision 1", exact: true })).toBeEnabled();
+  const roster = await (await request.get(runPhantom.url + "/api/prompts")).json() as PromptPage, id = roster.items[0].id;
+  const source = await (await request.get(`${runPhantom.url}/api/prompts/${id}/revisions/1`)).json() as PromptRevision;
+  expect(source.template).toBe(template); expect(source.templateSha256).toBe(createHash("sha256").update(template).digest("hex"));
+  await page.getByLabel("topic", { exact: true }).fill(literal); await page.getByRole("button", { name: "Compile revision 1", exact: true }).click(); await expect(page.getByTestId("prompt-compiled")).toHaveText(`Local ${literal}.\n{"outer":{"literal":true}}`); await expect(page.locator("img[src*='untrusted.invalid']")).toHaveCount(0);
+  await page.getByLabel("Template", { exact: true }).fill("Changed {{topic}}"); await page.getByRole("button", { name: "Save new revision", exact: true }).click(); await expect(page.getByRole("button", { name: "Compile revision 2", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Revision 1", exact: true }).click(); await expect(page.getByLabel("Template", { exact: true })).toHaveValue(template); await expect(page.getByLabel("Template", { exact: true })).toBeDisabled();
+  const download = page.waitForEvent("download"); await page.getByRole("button", { name: "Export revision 1", exact: true }).click(); expect(JSON.parse(readFileSync((await (await download).path())!, "utf8")).prompt).toEqual(source);
+  await page.reload(); await page.getByRole("button", { name: "Local immutable review Revision 2", exact: true }).click(); await page.getByRole("button", { name: "Revision 1", exact: true }).click(); await expect(page.getByLabel("Template", { exact: true })).toHaveValue(template);
+  await page.evaluate(async () => { await document.fonts.ready; await document.fonts.load("650 30px Syne"); }); expect(await page.evaluate(() => document.fonts.check("650 30px Syne"))).toBe(true);
+  mkdirSync(artifacts, { recursive: true }); const measurements = [];
+  for (const [width, height] of [[1440,900],[1280,800],[1024,768],[768,1024],[390,844],[320,740]]) {
+    await page.setViewportSize({ width, height }); await page.locator(".prompt-heading").scrollIntoViewIfNeeded(); await page.screenshot({ path: path.join(artifacts, `local-prompts-${width}.png`), fullPage: true });
+    const measured = await page.evaluate(() => ({ width: innerWidth, scrollWidth: document.documentElement.scrollWidth, bodyFont: getComputedStyle(document.querySelector(".prompt-workspace")!).fontFamily, headingFont: getComputedStyle(document.querySelector(".prompt-heading h1")!).fontFamily, minControlHeight: Math.min(...Array.from(document.querySelectorAll(".prompt-workspace button")).map(element => element.getBoundingClientRect().height)) }));
+    expect(measured.scrollWidth).toBeLessThanOrEqual(width); expect(measured.minControlHeight).toBeGreaterThanOrEqual(44); expect(measured.bodyFont).toContain("Inter"); expect(measured.headingFont).toContain("Syne"); measurements.push(measured);
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const runId = "7".repeat(32), spanId = "8".repeat(16);
+  expect((await request.post(runPhantom.url + "/v1/traces", { data: { resourceSpans: [{ scopeSpans: [{ spans: [{ traceId: runId, spanId, name: "Retained UI report anchor", startTimeUnixNano: "1800000000000000000", endTimeUnixNano: "1800000001000000000", status: { code: 1 } }] }] }] } })).status()).toBe(200);
+  const bytes = Buffer.from('<testsuite tests="1"><testcase name="Retained visible report"/></testsuite>'), attachment = { kind: "run", id: runId };
+  const capabilities = await (await request.get(runPhantom.url + "/api/evaluations/evidence/capabilities")).json();
+  const header = Buffer.from(JSON.stringify({ version: 1, request: { ...capabilities.reader, operationKey: "local-ui-prompts-retained-report", attachment, target: null, inventory: null, retention: "raw_and_normalized", sources: [{ sourceId: "visible-report", shardId: "unit", kind: "junit", dialect: "junit-xml/v1", artifactSha256: createHash("sha256").update(bytes).digest("hex"), byteLength: bytes.byteLength }] } }));
+  const length = Buffer.alloc(4); length.writeUInt32BE(header.byteLength);
+  const imported = await request.post(runPhantom.url + "/api/evaluations/evidence/imports", { headers: { "Content-Type": capabilities.transport.contentType }, data: Buffer.concat([length, header, bytes]) }); expect(imported.status()).toBe(202);
+  let job = (await imported.json()).job; await expect.poll(async () => { job = (await (await request.get(`${runPhantom.url}/api/evaluations/evidence/imports/${job.id}`)).json()).job; return job.status; }).toBe("completed");
+  const discovery = `${runPhantom.url}/api/evaluations/evidence/sets?${new URLSearchParams({ attachment: JSON.stringify(attachment) })}`, detail = `${runPhantom.url}/api/evaluations/evidence/sets/${job.setId}?revision=1`;
+  const before = await (await request.get(discovery)).json(), originalReport = await (await request.get(detail)).json(); expect(before.items).toHaveLength(1);
+  const generation = (await (await request.get(runPhantom.url + "/api/prompts/capabilities")).json()).generation;
+  await page.getByRole("button", { name: "Clear all prompts", exact: true }).click(); await expect(page.getByRole("alertdialog")).toContainText("Other captured work is retained"); await expect(page.getByRole("button", { name: "Keep working", exact: true })).toBeFocused(); await page.keyboard.press("Escape"); await expect(page.getByRole("button", { name: "Clear all prompts", exact: true })).toBeFocused();
+  await page.getByRole("button", { name: "Clear all prompts", exact: true }).click(); await page.getByRole("button", { name: "Permanently remove", exact: true }).click(); await expect(page.getByText("No prompts yet. Save your first template to start its history.", { exact: true })).toBeVisible();
+  expect((await (await request.get(runPhantom.url + "/api/prompts/capabilities")).json()).generation).toBe(generation + 1); expect((await (await request.get(discovery)).json())).toEqual(before); expect((await (await request.get(detail)).json())).toEqual(originalReport);
+  await page.goto(`${runPhantom.url}/evaluations`); await page.getByRole("button", { name: "External reports", exact: true }).click();
+  await page.getByRole("combobox", { name: "Evidence attachment", exact: true }).selectOption(runId);
+  await page.getByRole("combobox", { name: "Saved external report", exact: true }).selectOption(job.setId);
+  await page.getByRole("article", { name: "Source visible-report", exact: true }).locator("summary").click(); await expect(page.getByTestId("evidence-workspace").getByText("Retained visible report", { exact: true })).toBeVisible();
+  await page.screenshot({ path: path.join(artifacts, "retained-report-after-prompt-clear.png"), fullPage: true });
+  writeFileSync(path.join(artifacts, "measurements.json"), JSON.stringify({ health, measurements, errors, foreign, immutableSource: source, reportDiscoveryBefore: before, reportDiscoveryAfter: await (await request.get(discovery)).json(), reportDetailEqual: JSON.stringify(await (await request.get(detail)).json()) === JSON.stringify(originalReport), provenance: "Current actual local source daemon and canonical12 SQLite; browser UI clear preserves actual imported completed report." }, null, 2)); expect(errors).toEqual([]); expect(foreign).toEqual([]);
+  expect((await request.post(runPhantom.url + "/api/prompts", { data: { operationKey: randomUUID(), name: "Fresh capacity", template: "After clear" } })).status()).toBe(201);
+});

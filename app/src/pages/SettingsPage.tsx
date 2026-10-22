@@ -20,6 +20,7 @@ import {
 } from "../api/secrets";
 import { useRunPhantomEvent } from "../hooks/use-runphantom-ws";
 import { C } from "../utils/colors";
+import "./settings.css";
 import { fetchPrices, modelPricingConsentEnabled, setModelPricingConsent } from "../utils/costs";
 
 type Tab = "agents" | "keys" | "debug";
@@ -49,14 +50,14 @@ function SectionBlock({
       role="tabpanel"
       aria-labelledby={labelledBy}
       tabIndex={0}
-      className="rounded-xl border p-5 sm:p-6"
-      style={{ borderColor: C.border, background: C.surface, boxShadow: "var(--rp-e1)" }}
+      className="settings-panel"
+      style={{ borderColor: C.border, background: C.surface }}
     >
-      <h2 className="text-[14px] font-medium mb-1" style={{ color: C.fg4 }}>
+      <h2 className="settings-panel-title" style={{ color: C.fg4 }}>
         {title}
       </h2>
       {description && (
-        <p className="mb-5 text-[11px] leading-relaxed" style={{ color: C.fg1 }}>
+        <p className="settings-description" style={{ color: C.fg1 }}>
           {description}
         </p>
       )}
@@ -116,11 +117,12 @@ export function SettingsPage() {
   }, [moveTabFocus]);
 
   return (
-    <div className="flex h-full flex-col lg:flex-row">
+    <div className="settings-workspace flex h-full min-h-0 flex-col lg:flex-row">
       <div className="border-b p-5 lg:w-64 lg:flex-shrink-0 lg:border-b-0 lg:border-r lg:p-6" style={{ borderColor: C.border }}>
-        <h1 id={tablistLabelId} className="mb-4 pl-10 text-[22px] lg:pl-0" style={{ color: C.fg4 }}>
+        <h1 id={tablistLabelId} className="settings-title mb-2 pl-10 lg:pl-0" style={{ color: C.fg4 }}>
           Settings
         </h1>
+        <p className="settings-subtitle pl-10 lg:pl-0">Your local workspace</p>
         <nav
           role="tablist"
           aria-labelledby={tablistLabelId}
@@ -158,7 +160,7 @@ export function SettingsPage() {
         </nav>
       </div>
 
-      <div className="flex-1 overflow-auto p-5 lg:p-6">
+      <div className="min-h-0 min-w-0 flex-1 overflow-auto p-5 lg:p-8">
         <div className="mx-auto w-full max-w-2xl pb-16 lg:mx-0 lg:max-w-3xl">
           <SectionBlock
             title={currentTabConfig.label}
@@ -186,60 +188,99 @@ function AgentEndpointsSection() {
   const [newName, setNewName] = useState("");
   const [newUrl, setNewUrl] = useState("");
 
+  const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState("");
+  const active = useRef(true);
+  const pending = useRef(false);
+  const generation = useRef(0);
+
   const reload = useCallback(async () => {
+    const owner = ++generation.current;
+    setLoading(true);
+    setError(null);
     try {
       const [nextAgents, nextHealth] = await Promise.all([getAgents(), getAgentsHealth()]);
+      if (!active.current || owner !== generation.current) return;
       setAgents(nextAgents);
       setHealth(nextHealth);
-    } catch {
-      /* ignore */
+      setLoaded(true);
+    } catch (cause) {
+      if (active.current && owner === generation.current) setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (active.current && owner === generation.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    active.current = true;
     void reload();
+    return () => { active.current = false; };
   }, [reload]);
 
   useRunPhantomEvent("agents_updated", (data: { agents?: AgentsRegistry }) => {
     if (data?.agents) setAgents(data.agents);
   });
 
-  const persistAgents = useCallback(
-    async (nextAgents: AgentsRegistry) => {
+  const persistAgents = useCallback(async (nextAgents: AgentsRegistry, message: string, confirmed: (actual: AgentsRegistry) => boolean) => {
+    if (pending.current || loading || !loaded) return false;
+    pending.current = true;
+    const owner = ++generation.current;
+    setBusy(true);
+    setError(null);
+    setNotice("");
+    let sent = false;
+    try {
       await saveAgents(nextAgents);
-      setAgents(nextAgents);
-      try {
-        setHealth(await getAgentsHealth());
-      } catch {
-        /* ignore */
+      sent = true;
+      if (!active.current || owner !== generation.current) return false;
+      const actual = await getAgents();
+      if (!active.current || owner !== generation.current) return false;
+      setAgents(actual);
+      if (!confirmed(actual)) {
+        setError("The daemon did not retain this endpoint change. Review the endpoint and try again.");
+        return false;
       }
-    },
-    [],
-  );
+      setNotice(message);
+      void getAgentsHealth().then(next => {
+        if (active.current && owner === generation.current) setHealth(next);
+      }).catch(() => {});
+      return true;
+    } catch (cause) {
+      if (active.current && owner === generation.current) {
+        if (sent) setLoaded(false);
+        setError(sent ? "Change sent, but the saved registry could not be checked. Load it again before making more changes." : cause instanceof Error ? cause.message : String(cause));
+      }
+      return false;
+    } finally {
+      pending.current = false;
+      if (active.current && owner === generation.current) setBusy(false);
+    }
+  }, [loaded, loading]);
 
   const addAgent = useCallback(async () => {
     const name = newName.trim();
     const url = newUrl.trim();
     if (!name || !url) return;
-
-    const nextAgents: AgentsRegistry = {
-      ...agents,
-      [name]: { url, prefillFromTrace: {} satisfies NonNullable<AgentEntry["prefillFromTrace"]> },
-    };
-
-    await persistAgents(nextAgents);
-    setNewName("");
-    setNewUrl("");
+    if (Object.prototype.hasOwnProperty.call(agents, name)) { setError("An endpoint with this name already exists. Choose another name."); return; }
+    let normalized: string;
+    try {
+      const parsed = new URL(url);
+      if (url.length > 4096 || url.includes("#") || !["http:", "https:"].includes(parsed.protocol)
+        || !["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname.toLowerCase()) || parsed.username || parsed.password) throw new Error();
+      normalized = parsed.toString();
+    } catch { setError("Use a local HTTP or HTTPS replay URL without credentials or fragments (up to 4096 characters)."); return; }
+    const saved = await persistAgents({ ...agents, [name]: { url: normalized, prefillFromTrace: {} satisfies NonNullable<AgentEntry["prefillFromTrace"]> } }, `Endpoint ${name} registered.`, actual => actual[name]?.url === normalized);
+    if (saved && active.current) { setNewName(""); setNewUrl(""); }
   }, [agents, newName, newUrl, persistAgents]);
 
-  const removeAgent = useCallback(
-    async (name: string) => {
-      const nextAgents = { ...agents };
-      delete nextAgents[name];
-      await persistAgents(nextAgents);
-    },
-    [agents, persistAgents],
-  );
+  const removeAgent = useCallback(async (name: string) => {
+    const nextAgents = { ...agents };
+    delete nextAgents[name];
+    await persistAgents(nextAgents, `Endpoint ${name} removed.`, actual => !Object.prototype.hasOwnProperty.call(actual, name));
+  }, [agents, persistAgents]);
 
   return (
     <>
@@ -248,10 +289,14 @@ function AgentEndpointsSection() {
         description="Use the local replay setup flow for your coding tool, then review or edit the registered endpoint here."
       />
 
+      {loading && <p role="status" className="settings-description">Loading registered endpoints…</p>}
+      {error && <div role="alert" className="settings-feedback settings-error"><p>{error}</p>{!loaded ? <button type="button" onClick={() => void reload()} disabled={busy}>Try loading again</button> : null}</div>}
+      {notice && <p role="status" className="settings-feedback">{notice}</p>}
+      {!loading && !error && Object.keys(agents).length === 0 && <p className="settings-description">No replay endpoints registered. Start with the setup prompt or add an existing endpoint below.</p>}
       {Object.keys(agents).length > 0 && (
         <div className="overflow-hidden rounded-2xl" style={{ border: `1px solid ${C.border}` }}>
           {Object.entries(agents).map(([name, config], index) => {
-            const status = health[name] ?? "offline";
+            const status = health[name] ?? "unavailable";
             return (
               <div
                 key={name}
@@ -277,6 +322,7 @@ function AgentEndpointsSection() {
                 <button
                   type="button"
                   className="min-h-[44px] rounded-xl px-3 py-2 text-left transition-colors hover:bg-[color:var(--rp-ink-wash)] sm:justify-self-end sm:px-2 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                  disabled={busy || loading || !loaded}
                   onClick={() => void removeAgent(name)}
                   aria-label={`Remove ${name}`}
                 >
@@ -304,6 +350,9 @@ function AgentEndpointsSection() {
             id="runphantom-agent-name"
             className="min-h-[44px] w-full min-w-0 rounded-xl border px-3 py-2 font-mono text-[12px] outline-none transition-colors"
             style={{ background: C.surface, color: C.fg3, borderColor: C.border }}
+            required
+            disabled={busy || loading || !loaded}
+            maxLength={128}
             placeholder="agent-name"
             value={newName}
             onChange={(event) => setNewName(event.target.value)}
@@ -317,6 +366,8 @@ function AgentEndpointsSection() {
             id="runphantom-agent-url"
             className="min-h-[44px] w-full min-w-0 rounded-xl border px-3 py-2 font-mono text-[12px] outline-none transition-colors"
             style={{ background: C.surface, color: C.fg3, borderColor: C.border }}
+            required
+            disabled={busy || loading || !loaded}
             placeholder="http://localhost:5860/replay"
             value={newUrl}
             onChange={(event) => setNewUrl(event.target.value)}
@@ -325,12 +376,13 @@ function AgentEndpointsSection() {
         <button
           type="submit"
           aria-label="Add agent endpoint"
+          disabled={busy || loading || !loaded || !newName.trim() || !newUrl.trim()}
           className="min-h-[44px] rounded-xl border px-4 py-2 transition-colors rp-hover-wash"
           style={{ background: C.surface, color: C.fg2, borderColor: C.border }}
         >
           <span className="flex items-center justify-center gap-2 text-[12px] font-medium">
             <Plus className="h-3 w-3" />
-            Add
+            {busy ? "Saving…" : "Add"}
           </span>
         </button>
       </form>
@@ -345,22 +397,29 @@ function KeysSection() {
     openai: "",
   });
   const [statuses, setStatuses] = useState<SecretStatuses | null>(null);
+  const active = useRef(true);
+  const pending = useRef(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [statusAttempt, setStatusAttempt] = useState(0);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savingKey, setSavingKey] = useState<SecretKey | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    active.current = true;
+    setStatusError(null);
     getSecretStatuses()
       .then((next) => {
         if (!cancelled) setStatuses(next);
       })
       .catch(() => {
-        if (!cancelled) setStatuses(null);
+        if (!cancelled) { setStatuses(null); setStatusError("Saved key status is unavailable. Try loading it again before changing keys."); }
       });
     return () => {
       cancelled = true;
+      active.current = false;
     };
-  }, []);
+  }, [statusAttempt]);
 
   useRunPhantomEvent("secrets_updated", (data: { key?: SecretKey; status?: SecretStatus }) => {
     if (!data?.key || !data.status) return;
@@ -375,36 +434,42 @@ function KeysSection() {
 
   const persist = useCallback(async (key: SecretKey, rawValue: string) => {
     const value = rawValue.trim();
-    if (!value) return;
-
+    if (!value || pending.current || !statuses) return;
+    pending.current = true;
     setSaveError(null);
     setSavingKey(key);
     try {
       const nextStatus = await saveSecret(key, value);
+      if (!active.current) return;
       setStatuses((current) => (current ? { ...current, [key]: nextStatus } : current));
       setDrafts((current) => ({ ...current, [key]: "" }));
       window.dispatchEvent(new CustomEvent("runphantom:api-key-change", { detail: { secret: key } }));
     } catch (error) {
-      setSaveError(error instanceof Error ? error.message : String(error));
+      if (active.current) setSaveError(error instanceof Error ? error.message : String(error));
     } finally {
-      setSavingKey(null);
+      pending.current = false;
+      if (active.current) setSavingKey(null);
     }
-  }, []);
+  }, [statuses]);
 
   const clearSecret = useCallback(async (key: SecretKey) => {
+    if (pending.current || !statuses) return;
+    pending.current = true;
     setSaveError(null);
     setSavingKey(key);
     try {
       const nextStatus = await deleteSecret(key);
+      if (!active.current) return;
       setStatuses((current) => (current ? { ...current, [key]: nextStatus } : current));
       setDrafts((current) => ({ ...current, [key]: "" }));
       window.dispatchEvent(new CustomEvent("runphantom:api-key-change", { detail: { secret: key } }));
     } catch (error) {
-      setSaveError(error instanceof Error ? error.message : String(error));
+      if (active.current) setSaveError(error instanceof Error ? error.message : String(error));
     } finally {
-      setSavingKey(null);
+      pending.current = false;
+      if (active.current) setSavingKey(null);
     }
-  }, []);
+  }, [statuses]);
 
   const sourceText = useCallback(
     (key: SecretKey, fallback: string) => {
@@ -447,6 +512,8 @@ function KeysSection() {
           </span>
         </span>
       </label>
+      {!statuses && !statusError && <p role="status" className="settings-description">Checking saved key status…</p>}
+      {statusError && <div role="alert" className="settings-feedback settings-error"><p>{statusError}</p><button type="button" onClick={() => setStatusAttempt(value => value + 1)}>Try loading key status again</button></div>}
       <SecretInput
         label="Anthropic"
         placeholder="sk-ant-..."
@@ -454,7 +521,7 @@ function KeysSection() {
         value={drafts.anthropic}
         saved={secretSaved("anthropic")}
         sourceIsEnv={secretFromEnv("anthropic")}
-        saving={savingKey === "anthropic"}
+        saving={!statuses || savingKey !== null}
         onChange={(value) => setDraft("anthropic", value)}
         onSave={(value) => void persist("anthropic", value)}
         onClear={canClearSecret("anthropic") ? () => void clearSecret("anthropic") : undefined}
@@ -463,11 +530,11 @@ function KeysSection() {
       <SecretInput
         label="OpenAI"
         placeholder="sk-..."
-        description={sourceText("openai", "Used for Ask Agent and demo chat when those features call OpenAI.")}
+        description={sourceText("openai", "Used for Ask Agent and chat when those features call OpenAI.")}
         value={drafts.openai}
         saved={secretSaved("openai")}
         sourceIsEnv={secretFromEnv("openai")}
-        saving={savingKey === "openai"}
+        saving={!statuses || savingKey !== null}
         onChange={(value) => setDraft("openai", value)}
         onSave={(value) => void persist("openai", value)}
         onClear={canClearSecret("openai") ? () => void clearSecret("openai") : undefined}
@@ -488,6 +555,8 @@ function KeysSection() {
 
 function DebugSection() {
   const [reset, setReset] = useState(false);
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(resetTimer.current), []);
 
   const resetChatOnboarding = useCallback(() => {
     try {
@@ -495,7 +564,8 @@ function DebugSection() {
     } catch {}
     window.dispatchEvent(new CustomEvent("runphantom:messagePane:resetOnboarding"));
     setReset(true);
-    window.setTimeout(() => setReset(false), 1400);
+    clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => setReset(false), 1400);
   }, []);
 
   return (
