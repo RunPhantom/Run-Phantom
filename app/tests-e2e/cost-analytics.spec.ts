@@ -1,15 +1,12 @@
 import { test as base, type APIRequestContext, type Page } from "@playwright/test";
-import { expect, test as sourceTest } from "./fixtures";
+import { readFileSync } from "node:fs";
+import { expect, test } from "./fixtures";
 import { clearRunPhantom } from "./helpers";
 import { startTeamFixture, type TeamFixture } from "../../tests/helpers/team-server";
 import { rateFixture } from "../../tests/fixtures/pricing";
+import type { CostAnalyticsReport } from "../../src/pricing/analytics";
 
-const compiledUrl = process.env.RUNPHANTOM_COMPILED_URL;
-if (compiledUrl) {
-  const url = new URL(compiledUrl);
-  if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !url.port) throw new Error("Cost analytics compiled journeys require an isolated loopback daemon");
-}
-const test = compiledUrl ? sourceTest.extend({ runPhantom: async ({}, use) => { await use({ url: compiledUrl, port: Number(new URL(compiledUrl).port), dbPath: "isolated-compiled-runtime" }); } }) : sourceTest;
+if (process.env.RUNPHANTOM_COMPILED_URL !== undefined) throw new Error("RUNPHANTOM_COMPILED_URL cannot establish runtime provenance. Use RUNPHANTOM_E2E_RUNTIME=installed with RUNPHANTOM_E2E_BINARY and RUNPHANTOM_E2E_SHA256.");
 const teamTest = base.extend<{ team: TeamFixture }>({ team: async ({}, use) => { const team = await startTeamFixture("cost-analytics-browser", process.env.RUNPHANTOM_TEAM_TEST_BINARY); try { await use(team); } finally { await team.close(); } } });
 const traceId = "0000000000000000000000000000f150";
 const catalogueUrl = "https://openrouter.ai/api/v1/models";
@@ -31,6 +28,12 @@ async function applyManual(page: Page) {
   await page.getByRole("button", { name: "Apply frozen rates", exact: true }).click();
   await expect(page.getByTestId("estimated-cost")).toContainText("$0.0051");
 }
+async function downloadAnalytics(page: Page): Promise<{ filename: string; report: CostAnalyticsReport }> {
+  const pending = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export JSON", exact: true }).click();
+  const download = await pending;
+  return { filename: download.suggestedFilename(), report: JSON.parse(readFileSync((await download.path())!, "utf8")) };
+}
 async function outputAssertions(page: Page) {
   await expect(page.getByTestId("reported-cost")).toContainText("$0.123");
   await expect(page.getByTestId("reported-cost")).toContainText("2 known · 1 unavailable");
@@ -44,10 +47,10 @@ async function outputAssertions(page: Page) {
 test.describe("local cost analytics journeys", () => {
 test.beforeEach(async ({ runPhantom }, info) => {
   await clearRunPhantom(runPhantom.url);
-  await info.attach("Cost analytics runtime", { body: JSON.stringify({ runtime: compiledUrl ? "copied-compiled" : "source", capture: "synthetic-stored-OTLP", rates: "synthetic-frozen", providerSpendUsd: 0 }), contentType: "application/json" });
+  await info.attach("Cost analytics runtime", { body: JSON.stringify({ runtime: runPhantom.runtime.mode, capture: "synthetic-stored-OTLP", rates: "synthetic-frozen", providerSpendUsd: 0 }), contentType: "application/json" });
 });
 
-test("cost analytics: actual navigation/manual rates preserve reported snapshots and unknown rows", async ({ page, runPhantom }, info) => {
+test("cost analytics: navigation, reload and JSON export preserve reported snapshots and unknown rows", async ({ page, runPhantom }, info) => {
   await seed(page.request, runPhantom.url);
   const detailResponse = await page.request.get(`${runPhantom.url}/api/runs/detail/${traceId}`); expect(detailResponse.ok()).toBe(true); const beforeDetail = await detailResponse.json();
   const snapshotResponse = await page.request.get(`${runPhantom.url}/api/evaluations/runs/${traceId}/snapshot`); expect(snapshotResponse.ok()).toBe(true); const beforeSnapshot = await snapshotResponse.json(); expect(beforeSnapshot.metrics.costUsd).toBeNull(); expect(beforeDetail.spans).toHaveLength(3);
@@ -57,16 +60,79 @@ test("cost analytics: actual navigation/manual rates preserve reported snapshots
   await page.getByRole("link", { name: "Cost & usage", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Cost & usage", exact: true })).toBeVisible();
   await expect(page.getByTestId("estimated-cost")).toContainText("Unavailable");
+  const manualResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/api/pricing/analytics" && response.request().method() === "POST" && response.request().postDataJSON().rates.length === 1);
   await applyManual(page); await outputAssertions(page);
+  const displayed: CostAnalyticsReport = await (await manualResponse).json();
+  const exported = await downloadAnalytics(page);
+  expect(exported.filename).toBe(`runphantom-cost-analytics-local-${displayed.window.to}.json`);
+  expect(exported.report).toEqual(displayed);
+  expect(exported.report.reportedUsd).toMatchObject({ knownSum: .123, knownCount: 2, unavailableCount: 1, zeroCount: 1, completeTotal: null });
+  expect(exported.report.rateRevisions).toEqual([rateFixture()]);
+  expect(exported.report.rateAuthority).toBe("request-declared");
   await page.getByRole("combobox", { name: "Group by", exact: true }).selectOption("byProvider");
   await expect(page.getByRole("region", { name: "Cost breakdown table" }).getByRole("rowheader", { name: "fixture-provider", exact: true })).toBeVisible();
   await page.getByText("Rate and capture provenance", { exact: true }).click();
   await expect(page.getByText("Revision fixture-rate-1 · runphantom-pricing/1", { exact: true })).toBeVisible();
   expect(externalRequests).toBe(0);
+  await page.getByTestId("reported-cost").scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath("cost-analytics-manual-desktop.png"), fullPage: true });
+  const reloadedResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/api/pricing/analytics" && response.request().method() === "POST" && response.request().postDataJSON().rates.length === 0);
+  await page.reload();
+  await expect(page.getByRole("combobox", { name: "Estimate source", exact: true })).toHaveValue("reported");
+  await expect(page.getByTestId("reported-cost")).toContainText("$0.123");
+  await expect(page.getByTestId("estimated-cost")).toContainText("Unavailable");
+  const reloaded: CostAnalyticsReport = await (await reloadedResponse).json();
+  expect((await downloadAnalytics(page)).report).toEqual(reloaded);
+  expect(reloaded.reportedUsd).toEqual(displayed.reportedUsd);
+  expect(reloaded.rateRevisions).toEqual([]);
   const afterDetailResponse = await page.request.get(`${runPhantom.url}/api/runs/detail/${traceId}`); expect(afterDetailResponse.ok()).toBe(true); const afterDetail = await afterDetailResponse.json();
   const afterSnapshotResponse = await page.request.get(`${runPhantom.url}/api/evaluations/runs/${traceId}/snapshot`); expect(afterSnapshotResponse.ok()).toBe(true); const afterSnapshot = await afterSnapshotResponse.json();
   expect(afterDetail.spans).toEqual(beforeDetail.spans); expect(afterSnapshot.metrics).toEqual(beforeSnapshot.metrics); expect(afterSnapshot.models).toEqual(beforeSnapshot.models);
-  await page.getByTestId("reported-cost").scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath("cost-analytics-manual-desktop.png"), fullPage: true });
+});
+
+test("cost analytics: export refuses draft rates, pending calculations and changed captures", async ({ page, runPhantom }) => {
+  const original = capture();
+  const seeded = await page.request.post(`${runPhantom.url}/v1/traces`, { data: original }); expect(seeded.ok()).toBe(true);
+  await page.goto(`${runPhantom.url}/costs`); await applyManual(page);
+  const exportButton = page.getByRole("button", { name: "Export JSON", exact: true });
+  await expect(exportButton).toBeEnabled();
+  await page.getByLabel("Frozen rate JSON", { exact: true }).fill("invalid draft");
+  await expect(exportButton).toBeDisabled();
+  await page.getByRole("button", { name: "Apply frozen rates", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Nothing was applied.");
+  await expect(exportButton).toBeDisabled();
+  const changedRates = JSON.stringify([{ ...rateFixture(), revision: "fixture-rate-2" }]);
+  await page.getByLabel("Frozen rate JSON", { exact: true }).fill(changedRates);
+  let release!: () => void;
+  let entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const pending = new Promise<void>(resolve => { entered = resolve; });
+  await page.route(`${runPhantom.url}/api/pricing/analytics`, async route => {
+    const response = await route.fetch();
+    entered(); await held;
+    await route.fulfill({ response });
+  }, { times: 1 });
+  await page.getByRole("button", { name: "Apply frozen rates", exact: true }).click();
+  await pending;
+  try {
+    await expect(page.getByText("Loading captured cost and usage…", { exact: true })).toBeVisible();
+    await expect(page.locator("button:enabled").filter({ hasText: /^Export JSON$/ })).toHaveCount(0);
+  } finally { release(); }
+  await expect(exportButton).toBeEnabled();
+  const downloads: string[] = [];
+  page.on("download", download => { downloads.push(download.suggestedFilename()); });
+  const reported = original.resourceSpans[0].scopeSpans[0].spans[0].attributes.find(attribute => attribute.key === "gen_ai.usage.cost_usd");
+  if (!reported) throw new Error("Synthetic capture must contain a reported cost");
+  reported.value = { doubleValue: .234 };
+  const changed = await page.request.post(`${runPhantom.url}/v1/traces`, { data: original }); expect(changed.ok()).toBe(true);
+  await exportButton.click();
+  await expect(page.getByRole("alert")).toHaveText("Captured cost and usage changed. Refresh this view before exporting.");
+  expect(downloads).toEqual([]);
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(page.getByTestId("reported-cost")).toContainText("$0.234");
+  const refreshed = await downloadAnalytics(page);
+  expect(refreshed.report.reportedUsd.knownSum).toBe(.234);
+  expect(refreshed.report.rateRevisions[0].revision).toBe("fixture-rate-2");
+  expect(downloads).toHaveLength(1);
 });
 
 test("cost analytics: unavailable ancestry is labelled as timed generation candidates", async ({ page, runPhantom }, info) => {
@@ -129,6 +195,9 @@ teamTest("cost analytics: actual private project/UI and revoked viewer never fal
   const ingest = await page.request.post(`${team.url}/api/team/ingest/v1/traces`, { headers: { Authorization: `Bearer ${key}` }, data: capture() }); expect(ingest.ok()).toBe(true);
   await page.getByRole("link", { name: "Cost & usage", exact: true }).click(); await applyManual(page); await outputAssertions(page);
   await page.getByRole("combobox", { name: "Group by", exact: true }).selectOption("byProject"); await expect(page.getByRole("rowheader", { name: projectId, exact: true })).toBeVisible();
+  const ownerExport = await downloadAnalytics(page);
+  expect(ownerExport.report.scope).toEqual({ kind: "team", projectId });
+  expect(ownerExport.report.rateRevisions).toEqual([rateFixture()]);
   await page.screenshot({ path: info.outputPath("cost-analytics-team-project.png"), fullPage: true });
   const invitation = await mutate(`/projects/${projectId}/invites`, { email: "cost-viewer@example.test", role: "viewer" }); expect(invitation.ok()).toBe(true); const invitationToken = (await invitation.json()).token;
   const viewerContext = await browser.newContext(); const viewer = await viewerContext.newPage();
@@ -139,14 +208,20 @@ teamTest("cost analytics: actual private project/UI and revoked viewer never fal
     await viewer.route(`${team.url}${detectorProbe}`, route => route.fulfill({ contentType: "application/json", body: "{}" }));
     const accepted = await viewerContext.request.post(`${team.url}/api/team/invites/accept`, { headers: { Origin: team.url }, data: { token: invitationToken, email: "cost-viewer@example.test", password: "Synthetic viewer password 2026" } }); expect(accepted.ok()).toBe(true); const viewerSession = await accepted.json();
     await viewer.goto(`${team.url}/team/projects/${projectId}/costs`); await expect(viewer.getByTestId("reported-cost")).toContainText("$0.123");
+    const viewerExport = await downloadAnalytics(viewer);
+    expect(viewerExport.report.scope).toEqual({ kind: "team", projectId });
+    expect(viewerExport.report.reportedUsd).toEqual(ownerExport.report.reportedUsd);
+    expect(viewerExport.report.rateRevisions).toEqual([]);
     await viewer.evaluate(async path => { await fetch(path); }, detectorProbe);
     expect(viewerLocalRequests).toEqual([detectorProbe]);
     viewerLocalRequests.length = 0; await viewer.unroute(`${team.url}${detectorProbe}`);
+    const revokedDownloads: string[] = [];
+    viewer.on("download", download => { revokedDownloads.push(download.suggestedFilename()); });
     const revoked = await mutate(`/projects/${projectId}/members/${viewerSession.session.user.id}`, undefined, "DELETE"); expect(revoked.status()).toBe(204);
     const refusal = viewer.waitForResponse(response => new URL(response.url()).pathname === `/api/team/projects/${projectId}/pricing/analytics` && response.request().method() === "POST");
-    await viewer.getByRole("button", { name: "Refresh", exact: true }).click(); expect((await refusal).status()).toBe(404);
+    await viewer.getByRole("button", { name: "Export JSON", exact: true }).click(); expect((await refusal).status()).toBe(404);
     await expect(viewer.getByRole("heading", { name: "Cost & usage", exact: true })).toHaveCount(0);
-    await expect(viewer.getByTestId("reported-cost")).toHaveCount(0); expect(localRequests).toEqual([]); expect(viewerLocalRequests).toEqual([]);
+    await expect(viewer.getByTestId("reported-cost")).toHaveCount(0); expect(revokedDownloads).toEqual([]); expect(localRequests).toEqual([]); expect(viewerLocalRequests).toEqual([]);
     await viewer.screenshot({ path: info.outputPath("cost-analytics-revoked-viewer.png"), fullPage: true });
     await info.attach("Scoped request observers", { body: JSON.stringify({ probeCaughtOnActualViewer: true, ownerLocalRequests: localRequests, viewerLocalRequests, revokedAnalyticsStatus: 404, revokedCapturedContentRemoved: true }), contentType: "application/json" });
   } finally { await viewerContext.close(); }

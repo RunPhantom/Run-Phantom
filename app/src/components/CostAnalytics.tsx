@@ -1,4 +1,4 @@
-import { useId, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { ANALYTICS_LIMITS, parseCostAnalyticsRequest, type AnalyticsPopulation, type CostAnalyticsReport, type CostAnalyticsRequest, type MetricPopulation } from "../../../src/pricing/analytics";
@@ -46,11 +46,15 @@ export function CostAnalyticsWorkspace({ scopeKey, title, load }: { scopeKey: re
   const [to, setTo] = useState(Date.now);
   const [mode, setMode] = useState<"reported" | "manual" | "nominal">("reported");
   const [manualText, setManualText] = useState("");
+  const [appliedManualText, setAppliedManualText] = useState<string | null>(null);
   const [manualRates, setManualRates] = useState<readonly FrozenRateRevision[]>([]);
   const [manualError, setManualError] = useState<string | null>(null);
+  const [exportState, setExportState] = useState({ key: "", pending: false, error: "" });
+  const exportController = useRef<AbortController | null>(null);
   const from = to - WINDOW_MS[selection];
   const request = { from, to, bucket: selection === "1h" || selection === "24h" ? "hour" as const : "day" as const, estimateMode: mode === "nominal" ? "nominal-input-output" as const : "captured" as const, rates: mode === "manual" ? manualRates : [] };
-  const result = useQuery({ queryKey: [...scopeKey, "cost-analytics", selection, to, mode, manualRates, mode === "nominal" ? pricing.catalogue?.revision ?? pricing.status : null], retry: false,
+  const queryKey = [...scopeKey, "cost-analytics", selection, to, mode, manualRates, mode === "nominal" ? pricing.catalogue?.revision ?? pricing.status : null];
+  const result = useQuery({ queryKey, retry: false,
     enabled: mode !== "nominal" || pricing.status === "ready", queryFn: async ({ signal }) => {
       if (mode !== "nominal") return load(request, signal);
       const roster = await load({ ...request, estimateMode: "captured", rates: [] }, signal);
@@ -60,12 +64,49 @@ export function CostAnalyticsWorkspace({ scopeKey, title, load }: { scopeKey: re
       return load({ ...request, rates }, signal);
     } });
   const unavailableNominal = mode === "nominal" && pricing.status !== "ready";
+  const unappliedManualRates = mode === "manual" && (appliedManualText === null || manualText !== appliedManualText || manualError !== null);
+  const exportKey = JSON.stringify(queryKey);
+  const exportAvailable = !!result.data && !result.error && !result.isFetching && !unavailableNominal && !unappliedManualRates;
+  const currentExport = useRef({ key: exportKey, report: result.data, available: exportAvailable });
+  currentExport.current = { key: exportKey, report: result.data, available: exportAvailable };
+  useEffect(() => () => { exportController.current?.abort(); }, [exportKey, exportAvailable]);
+  const exporting = exportState.key === exportKey && exportState.pending;
+  const exportReport = async () => {
+    const { key, report, available } = currentExport.current;
+    if (!available || !report || exportController.current) return;
+    const controller = new AbortController();
+    exportController.current = controller;
+    setExportState({ key, pending: true, error: "" });
+    const current = () => !controller.signal.aborted && currentExport.current.key === key
+      && currentExport.current.report === report && currentExport.current.available;
+    try {
+      // Recheck the owning store's current authority without replacing the displayed snapshot.
+      const authorized = await load({ from: report.window.from, to: report.window.to, bucket: report.window.bucket,
+        estimateMode: report.estimateMode, rates: report.rateRevisions }, controller.signal);
+      if (!current()) return;
+      if (authorized.sourceRevision !== report.sourceRevision) throw new Error("Captured cost and usage changed. Refresh this view before exporting.");
+      const url = URL.createObjectURL(new Blob([JSON.stringify(report)], { type: "application/json" }));
+      try {
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `runphantom-cost-analytics-${report.scope.kind}-${report.window.to}.json`;
+        anchor.click();
+      } finally { window.setTimeout(() => URL.revokeObjectURL(url), 1000); }
+    } catch (error) {
+      if (current()) setExportState({ key, pending: false, error: error instanceof Error ? error.message : "Cost analytics could not be exported." });
+    } finally {
+      if (exportController.current === controller) exportController.current = null;
+      if (currentExport.current.key === key) setExportState(value => value.key === key ? { ...value, pending: false } : value);
+    }
+  };
   return <section className="min-h-full bg-[#F9FAFC] p-4 text-[#0E121B] sm:p-6 lg:p-8"><div className="mx-auto max-w-[1180px] space-y-5"><header><p className="text-[12px] font-medium uppercase tracking-[.08em] text-[#525866]">{title}</p><h1 className="mt-2 text-[28px] font-semibold leading-9" style={{ fontFamily: "var(--font-display)" }}>Cost &amp; usage</h1><p className="mt-2 max-w-[720px] text-[14px] leading-5 text-[#525866]">Inspect what was measured, what was reported, and what can be estimated. Missing evidence stays visible.</p></header>
     <div className="flex flex-wrap items-end gap-3"><label className="grid gap-1 text-[12px] text-[#525866]">Time window<select className={CONTROL} value={selection} onChange={event => { setSelection(event.target.value as WindowSelection); setTo(Date.now()); }}>{Object.keys(WINDOW_MS).map(value => <option key={value} value={value}>{value === "1h" ? "Last hour" : value === "24h" ? "Last 24 hours" : value === "7d" ? "Last 7 days" : "Last 30 days"} (UTC)</option>)}</select></label><label className="grid gap-1 text-[12px] text-[#525866]">Estimate source<select className={CONTROL} value={mode} onChange={event => setMode(event.target.value as typeof mode)}><option value="reported">Reported only</option><option value="manual">Manual frozen rates</option><option value="nominal">Nominal public input/output catalogue</option></select></label><Button type="button" variant="outline" className={`${CONTROL} shadow-none transition-colors duration-[180ms] motion-reduce:transition-none hover:bg-[#EEF2FF]`} disabled={result.isFetching} onClick={() => setTo(Date.now())}><RefreshCw aria-hidden="true" />Refresh</Button></div>
-    {mode === "manual" && <form className={PANEL} onSubmit={event => { event.preventDefault(); try { if (new TextEncoder().encode(manualText).byteLength > ANALYTICS_LIMITS.requestBytes || hasDuplicateJsonKeys(manualText)) throw new Error(); const parsed = parseCostAnalyticsRequest({ ...request, rates: parseJsonEvidence(manualText) }); setManualRates(parsed.rates); setManualError(null); } catch { setManualError("Frozen rates must be a valid bounded USD rate revision array. Nothing was applied."); } }}><label className="grid gap-2 text-[14px]">Frozen rate JSON<textarea className="min-h-[120px] rounded-[5px] border border-[#7C8494] bg-white p-3 font-mono text-[12px] focus-visible:outline-2 focus-visible:outline-[#0021CC]" value={manualText} onChange={event => setManualText(event.target.value)} placeholder="Paste a frozen rate revision array" spellCheck={false} /></label><p className="my-3 text-[12px] text-[#525866]">Rates apply to this view. Exact provider, model, tier, source, version and category policies are required. Captured reported costs remain unchanged.</p><Button type="submit" className="min-h-11 rounded-[5px] bg-[#0021CC] px-4 text-white shadow-none transition-colors duration-[180ms] motion-reduce:transition-none hover:bg-[#001AA3]">Apply frozen rates</Button>{manualError && <p role="alert" className="mt-3">{manualError}</p>}</form>}
+    {mode === "manual" && <form className={PANEL} onSubmit={event => { event.preventDefault(); try { if (new TextEncoder().encode(manualText).byteLength > ANALYTICS_LIMITS.requestBytes || hasDuplicateJsonKeys(manualText)) throw new Error(); const parsed = parseCostAnalyticsRequest({ ...request, rates: parseJsonEvidence(manualText) }); setManualRates(parsed.rates); setAppliedManualText(manualText); setManualError(null); } catch { setManualError("Frozen rates must be a valid bounded USD rate revision array. Nothing was applied."); } }}><label className="grid gap-2 text-[14px]">Frozen rate JSON<textarea className="min-h-[120px] rounded-[5px] border border-[#7C8494] bg-white p-3 font-mono text-[12px] focus-visible:outline-2 focus-visible:outline-[#0021CC]" value={manualText} onChange={event => setManualText(event.target.value)} placeholder="Paste a frozen rate revision array" spellCheck={false} /></label><p className="my-3 text-[12px] text-[#525866]">Rates apply to this view. Exact provider, model, tier, source, version and category policies are required. Captured reported costs remain unchanged.</p><Button type="submit" className="min-h-11 rounded-[5px] bg-[#0021CC] px-4 text-white shadow-none transition-colors duration-[180ms] motion-reduce:transition-none hover:bg-[#001AA3]">Apply frozen rates</Button>{manualError && <p role="alert" className="mt-3">{manualError}</p>}</form>}
     {unavailableNominal && <p role="status" className={PANEL}>{pricing.status === "disabled" ? "Public pricing is disabled. Enable model pricing in Settings to load consented catalogue quotes, or use manual frozen rates." : pricing.error ?? "Waiting for consented public pricing…"}</p>}
     {result.error && <div role="alert" className={PANEL}><p>{result.error instanceof Error ? result.error.message : "Cost analytics unavailable"}</p><Button className={`mt-3 ${CONTROL}`} variant="outline" onClick={() => void result.refetch()}>Try again</Button></div>}
     {result.isFetching && <p role="status" aria-live="polite">Loading captured cost and usage…</p>}
+    {result.data && !result.error && !unavailableNominal && <div className="flex flex-wrap items-center gap-3"><Button type="button" variant="outline" className={CONTROL} disabled={!exportAvailable || exporting} onClick={() => void exportReport()}>Export JSON</Button><p className="text-[12px] text-[#525866]">{unappliedManualRates ? "Apply the current frozen rates before exporting." : "Download the displayed report with its frozen rates, source revision and UTC window."}</p>{exporting && <p role="status">Checking current access before export…</p>}</div>}
+    {exportState.key === exportKey && exportState.error && <p role="alert" className={PANEL}>{exportState.error}</p>}
     {result.data && !result.error && !unavailableNominal && <CostAnalytics data={result.data} />}
   </div></section>;
 }
