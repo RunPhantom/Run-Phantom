@@ -24,7 +24,7 @@ async function seed(request: APIRequestContext, url: string) {
 }
 async function applyManual(page: Page) {
   await page.getByRole("combobox", { name: "Estimate source", exact: true }).selectOption("manual");
-  await page.getByLabel("Frozen rate JSON", { exact: true }).fill(rates);
+  await page.getByRole("textbox", { name: "Frozen rate JSON", exact: true }).fill(rates);
   await page.getByRole("button", { name: "Apply frozen rates", exact: true }).click();
   await expect(page.getByTestId("estimated-cost")).toContainText("$0.0051");
 }
@@ -95,13 +95,13 @@ test("cost analytics: export refuses draft rates, pending calculations and chang
   await page.goto(`${runPhantom.url}/costs`); await applyManual(page);
   const exportButton = page.getByRole("button", { name: "Export JSON", exact: true });
   await expect(exportButton).toBeEnabled();
-  await page.getByLabel("Frozen rate JSON", { exact: true }).fill("invalid draft");
+  await page.getByRole("textbox", { name: "Frozen rate JSON", exact: true }).fill("invalid draft");
   await expect(exportButton).toBeDisabled();
   await page.getByRole("button", { name: "Apply frozen rates", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("Nothing was applied.");
   await expect(exportButton).toBeDisabled();
   const changedRates = JSON.stringify([{ ...rateFixture(), revision: "fixture-rate-2" }]);
-  await page.getByLabel("Frozen rate JSON", { exact: true }).fill(changedRates);
+  await page.getByRole("textbox", { name: "Frozen rate JSON", exact: true }).fill(changedRates);
   let release!: () => void;
   let entered!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
