@@ -2,8 +2,11 @@ import { describe, expect, test } from "bun:test";
 import fs from "fs";
 import path from "path";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
+import type { Server } from "node:http";
+import { tmpdir } from "node:os";
 import request from "supertest";
-import { getDbPath } from "../src/db";
+import { closeDb, getDbPath } from "../src/db";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const DISTRIBUTABLE_TARGETS = [
@@ -87,6 +90,39 @@ function collectForbiddenIdentityMatches(): string[] {
   return findings;
 }
 
+async function withIdentityServer(check: (server: Server) => Promise<void>): Promise<void> {
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), "runphantom-product-identity-")));
+  const dbPath = path.join(directory, "identity.db");
+  const keys = ["RUNPHANTOM_DB_PATH", "RUNPHANTOM_SECRET_STORE_PATH"] as const;
+  const previous = keys.map(key => process.env[key]);
+  const errors: unknown[] = [];
+  let shutdown: (() => Promise<void>) | undefined;
+  try {
+    closeDb();
+    process.env.RUNPHANTOM_DB_PATH = dbPath;
+    process.env.RUNPHANTOM_SECRET_STORE_PATH = path.join(directory, "secrets.json");
+    const { createServer } = await import("../src/server");
+    const handle = await createServer(0);
+    shutdown = handle.close;
+    // Supertest must not close the daemon and its store between these requests.
+    handle.server.listen(0, "127.0.0.1");
+    await once(handle.server, "listening");
+    expect(getDbPath()).toBe(dbPath);
+    await check(handle.server);
+  } catch (error) { errors.push(error); }
+  finally {
+    try { await shutdown?.(); } catch (error) { errors.push(error); }
+    try { closeDb(); } catch (error) { errors.push(error); }
+    keys.forEach((key, index) => {
+      if (previous[index] === undefined) delete process.env[key];
+      else process.env[key] = previous[index];
+    });
+    try { fs.rmSync(directory, { recursive: true, force: true }); } catch (error) { errors.push(error); }
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, "Product identity fixture failed", { cause: errors[0] });
+}
+
 describe("Run Phantom product identity contract", () => {
   test("package manifests expose the product slug", () => {
     const rootPackage = readJson<{ name: string; description?: string; bin?: Record<string, string>; maintainers?: Array<{ name?: string }> }>("package.json");
@@ -124,59 +160,41 @@ describe("Run Phantom product identity contract", () => {
     expect(dbPath.endsWith("/runphantom.db")).toBe(true);
   });
 
-  test("health reports runphantom identity, actual port, and rejects non-local hosts", async () => {
-    let createServer: ((port: number) => Promise<{ server: Parameters<typeof request>[0] }>) | undefined;
-    try {
-      ({ createServer } = await import("../src/server"));
-    } catch (error) {
-      throw new Error(`server module failed to load for health verification: ${(error as Error).message}`);
-    }
+  test("health reports runphantom identity, actual port, and rejects non-local hosts", () => withIdentityServer(async server => {
+    const health = await request(server).get("/health").set("Host", "localhost");
+    expect(health.status).toBe(200);
+    expect(health.body?.ok).toBe(true);
+    expect(health.body?.service).toBe("runphantom");
+    expect(health.body?.port).toBeGreaterThan(0);
 
-    const { server } = await createServer(0);
-    try {
-      const health = await request(server).get("/health").set("Host", "localhost");
-      expect(health.status).toBe(200);
-      expect(health.body?.ok).toBe(true);
-      expect(health.body?.service).toBe("runphantom");
-      expect(health.body?.port).toBeGreaterThan(0);
+    const forbidden = await request(server).get("/health").set("Host", "evil.example");
+    expect(forbidden.status).toBe(403);
+    expect(forbidden.body).toEqual({ error: "forbidden" });
+  }));
 
-      const forbidden = await request(server).get("/health").set("Host", "evil.example");
-      expect(forbidden.status).toBe(403);
-      expect(forbidden.body).toEqual({ error: "forbidden" });
-    } finally {
-      await new Promise<void>((resolve, reject) => server.close((error?: Error) => error ? reject(error) : resolve()));
-    }
-  });
-
-  test("all browser API mutations require an approved UI origin", async () => {
-    const { createServer } = await import("../src/server");
-    const { server } = await createServer(0);
-    try {
-      for (const method of ["post", "put", "patch", "delete"] as const) {
-        const blocked = await request(server)[method]("/api/__origin_probe")
-          .set("Host", "localhost")
-          .set("Origin", "http://localhost:65530");
-        expect(blocked.status).toBe(403);
-        expect(blocked.body).toEqual({ error: "origin not allowed" });
-      }
-
-      const originless = await request(server).post("/api/__origin_probe").set("Host", "localhost");
-      expect(originless.status).toBe(404);
-
-      const uiOrigin = await request(server).post("/api/__origin_probe")
+  test("all browser API mutations require an approved UI origin", () => withIdentityServer(async server => {
+    for (const method of ["post", "put", "patch", "delete"] as const) {
+      const blocked = await request(server)[method]("/api/__origin_probe")
         .set("Host", "localhost")
-        .set("Origin", "http://localhost:5948");
-      expect(uiOrigin.status).toBe(404);
-
-      const health = await request(server).get("/health").set("Host", "localhost");
-      const daemonOrigin = await request(server).post("/api/__origin_probe")
-        .set("Host", "localhost")
-        .set("Origin", `http://localhost:${health.body.port}`);
-      expect(daemonOrigin.status).toBe(404);
-    } finally {
-      await new Promise<void>((resolve, reject) => server.close((error?: Error) => error ? reject(error) : resolve()));
+        .set("Origin", "http://localhost:65530");
+      expect(blocked.status).toBe(403);
+      expect(blocked.body).toEqual({ error: "origin not allowed" });
     }
-  });
+
+    const originless = await request(server).post("/api/__origin_probe").set("Host", "localhost");
+    expect(originless.status).toBe(404);
+
+    const uiOrigin = await request(server).post("/api/__origin_probe")
+      .set("Host", "localhost")
+      .set("Origin", "http://localhost:5948");
+    expect(uiOrigin.status).toBe(404);
+
+    const health = await request(server).get("/health").set("Host", "localhost");
+    const daemonOrigin = await request(server).post("/api/__origin_probe")
+      .set("Host", "localhost")
+      .set("Origin", `http://localhost:${health.body.port}`);
+    expect(daemonOrigin.status).toBe(404);
+  }));
 
   test("distributable source contains no forbidden identity strings", () => {
     const findings = collectForbiddenIdentityMatches();
