@@ -55,8 +55,27 @@ async function scrollWithDeliveredTouch(
 ) {
   const region = (await vertical.boundingBox())!, box = (await target.boundingBox())!, viewport = page.viewportSize()!;
   expect(region).not.toBeNull(); expect(box).not.toBeNull(); expect(viewport).not.toBeNull();
-  const left = Math.max(0, region.x, box.x) + 24, right = Math.min(viewport.width, region.x + region.width, box.x + box.width) - 24;
-  const top = Math.max(0, region.y, box.y) + 24, bottom = Math.min(viewport.height, region.y + region.height, box.y + box.height) - 24;
+  const visibleClientRect = (element: Element) => {
+    const clientRect = (node: Element) => {
+      const rect = node.getBoundingClientRect();
+      const left = rect.left + node.clientLeft, top = rect.top + node.clientTop;
+      return { left, top, right: left + node.clientWidth, bottom: top + node.clientHeight };
+    };
+    const visible = clientRect(element);
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent), clip = clientRect(parent);
+      if (["auto", "scroll", "hidden", "clip"].includes(style.overflowX)) {
+        visible.left = Math.max(visible.left, clip.left); visible.right = Math.min(visible.right, clip.right);
+      }
+      if (["auto", "scroll", "hidden", "clip"].includes(style.overflowY)) {
+        visible.top = Math.max(visible.top, clip.top); visible.bottom = Math.min(visible.bottom, clip.bottom);
+      }
+    }
+    return visible;
+  };
+  const [visibleRegion, visibleBox] = await Promise.all([vertical.evaluate(visibleClientRect), target.evaluate(visibleClientRect)]);
+  const left = Math.max(0, visibleRegion.left, visibleBox.left) + 24, right = Math.min(viewport.width, visibleRegion.right, visibleBox.right) - 24;
+  const top = Math.max(0, visibleRegion.top, visibleBox.top) + 24, bottom = Math.min(viewport.height, visibleRegion.bottom, visibleBox.bottom) - 24;
   expect(right - left).toBeGreaterThan(32); expect(bottom - top).toBeGreaterThan(32);
   const start = direction === "vertical" ? { x: left, y: bottom } : { x: right, y: top };
   const end = direction === "vertical" ? { x: start.x, y: Math.max(top, start.y - 120) } : { x: Math.max(left, start.x - 120), y: start.y };
@@ -102,7 +121,7 @@ async function scrollWithDeliveredTouch(
   expect(receipt.starts).toBe(1); expect(receipt.moves).toBeGreaterThan(0);
   expect(receipt.untrusted).toBe(0); expect(receipt.singleFinger).toBe(true);
   await info.attach(`delivered-touch-${direction}-${viewport.width}`, { contentType: "application/json", body: JSON.stringify({
-    source: "CDP single-finger browser input", direction, region, box, viewport, start, end, hitTestedPoints: points.length,
+    source: "CDP single-finger browser input", direction, region, box, visibleRegion, visibleBox, viewport, start, end, hitTestedPoints: points.length,
     receipt, before, after: await target.evaluate(element => ({ top: element.scrollTop, left: element.scrollLeft })),
   }) });
 }
