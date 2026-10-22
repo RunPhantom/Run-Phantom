@@ -18,6 +18,9 @@ import { observeSafely, type Emit, type Teardown } from "./observers/types.js";
 import { runDomCommand, runSemanticDomCommand } from "./actions/index.js";
 import { LiveElementRefs } from "./dom/refs.js";
 import { selectPath } from "../state-select.js";
+import { storeAdapterDetails, type StoreAdapter, type AdapterSnapshot } from "./store-adapters.js";
+export { queryStore, piniaStore, shapeStore, canonicalQueryKey } from "./store-adapters.js";
+export type { StoreAdapter, StateAdapterOptions, QueryAdapterOptions } from "./store-adapters.js";
 import { identifyReactControl } from "./framework/react.js";
 import { sanitizeControlSource } from "../build/source.js";
 import { snapshotSemanticTree } from "./dom/tree.js";
@@ -28,7 +31,7 @@ export interface ConnectionOptions { url: string; sessionId: string; token: stri
 export interface RuntimeConnection {
   disconnect(): void;
   signal(name: string, data?: unknown): void;
-  registerStore(name: string, read: () => unknown): () => void;
+  registerStore(name: string, read: (() => unknown) | StoreAdapter): () => void;
 }
 const ACTIVE_RUNTIME = Symbol.for("runphantom.verification.active");
 const encoder = new TextEncoder();
@@ -63,7 +66,17 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
     delete globals[ACTIVE_RUNTIME];
     throw error;
   }
-  const stores = new Map<string, () => unknown>();
+  interface RegisteredStore {
+    read(): { value: unknown; truncated: boolean; availability?: AdapterSnapshot["availability"]; reason?: AdapterSnapshot["reason"] };
+    remove(): void;
+    readonly source?: object;
+    readonly configuration?: string;
+    readonly leases: Set<object>;
+    active: boolean;
+  }
+  const stores = new Map<string, RegisteredStore>();
+  let storeLeaseCount = 0;
+  const owners = new WeakMap<object, RegisteredStore>();
   const teardown: Teardown[] = [];
   const coverage: Coverage = { network: false, console: false, route: false, dom: true, state: true, signal: true };
   const secrets = new Set<string>([options.token]);
@@ -116,7 +129,7 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
       : type === "network" || type === "network.start" ? ["url", "error"]
       : type === "route" ? ["url"]
       : type === "signal" ? ["data"]
-      : type === "observer.error" ? ["message"] : type === "action.reading" ? ["value"] : [];
+      : type === "observer.error" ? ["message"] : type === "action.reading" || type === "state" ? ["value"] : [];
     const value: Record<string, unknown> = {};
     let truncated = false;
     for (const [field, item] of Object.entries(data)) {
@@ -160,7 +173,9 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
     clearTimeout(handshakeTimer);
     for (const cleanup of teardown.reverse()) observeSafely(cleanup);
     teardown.length = 0;
+    for (const store of stores.values()) store.remove();
     stores.clear();
+    window.removeEventListener("pagehide", disconnect);
     refs.invalidate();
     secrets.clear();
     secretSpellings.clear();
@@ -202,11 +217,12 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
       } else {
         const read = stores.get(target.store);
         if (read) {
-          const safe = prepare(read());
+          const reading = read.read();
+          const safe = prepare(reading.value);
           const selected = selectPath(safe.value, target.path);
-          available = !safe.truncated && selected.found;
+          truncated = safe.truncated || reading.truncated;
+          available = !truncated && selected.found;
           value = selected.value;
-          truncated = safe.truncated;
         }
       }
     } catch { available = false; }
@@ -248,9 +264,12 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
       } else if (command.type === "state") {
         const read = stores.get(command.store);
         if (!read) throw new Error("Requested store is not registered");
-        const safe = prepare(read());
+        const reading = read.read();
+        const safe = prepare(reading.value);
         const store = sanitizeWithReport(command.store);
-        output = { result: { store: store.value, value: safe.value }, truncated: Boolean(safe.truncated || store.truncation || store.redacted) };
+        output = { result: { store: store.value, value: safe.value,
+          ...(reading.availability ? { availability: reading.availability } : {}), ...(reading.reason ? { reason: reading.reason } : {}) },
+          truncated: Boolean(reading.truncated || safe.truncated || store.truncation || store.redacted) };
       } else if (command.type === "causal-click") {
         output = runDomCommand({ type: "click", selector: command.selector }, prepare, sourceEnabled ? boundary : undefined);
         for (const target of command.targets) actionReading(id, "after", target);
@@ -292,6 +311,7 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
       act(message.id, command);
     } catch { disconnect(); }
   };
+  window.addEventListener("pagehide", disconnect);
   socket.addEventListener("open", onOpen);
   socket.addEventListener("message", onMessage);
   socket.addEventListener("close", disconnect);
@@ -303,13 +323,92 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
       if (!nameValid(name)) throw new Error("Signal name must be 1–128 letters, digits or ._:-");
       emit("signal", { name, ...(data === undefined ? {} : { data }) });
     },
-    registerStore(name, read): () => void {
+    registerStore(name, source): () => void {
       if (!active) throw new Error("Verification runtime is disconnected");
-      if (!nameValid(name) || typeof read !== "function") throw new Error("A valid store name and reader function are required");
-      if (stores.has(name)) throw new Error("Store name is already registered");
-      if (stores.size >= 100) throw new Error("Registered store limit reached");
-      stores.set(name, read);
-      return () => { if (stores.get(name) === read) stores.delete(name); };
+      if (!nameValid(name)) throw new Error("A valid store name is required");
+      if (storeLeaseCount >= 100) throw new Error("Registered store lease limit reached");
+      const adapter = storeAdapterDetails(source);
+      if (!adapter && typeof source !== "function") throw new Error("A reader or explicit store adapter is required");
+      const existing = stores.get(name);
+      const owner = adapter && owners.get(adapter.source);
+      if (owner && owner !== existing) throw new Error("The explicit source is already registered under another name");
+      if (existing && (!adapter || existing.source !== adapter.source || existing.configuration !== adapter.configuration)) {
+        throw new Error("Store name is already registered with another source or projection");
+      }
+      if (!existing && stores.size >= 100) throw new Error("Registered store limit reached");
+      // Reserve before source subscription/read: reentrant registration shares this same cap.
+      const lease = {};
+      storeLeaseCount++;
+      let acquired = false;
+      try {
+        let registration = existing;
+        if (!registration) {
+          let releaseSubscription: (() => void) | undefined;
+          let lastComplete: string | undefined;
+          let acquiring = true, observing = false;
+          const entry: RegisteredStore = {
+            active: true, leases: new Set(), ...(adapter ? { source: adapter.source, configuration: adapter.configuration } : {}),
+            read: () => {
+              if (!entry.active || !active) throw new Error("Registered store is unavailable");
+              if (!adapter) return { value: (source as () => unknown)(), truncated: false };
+              const snapshot = adapter.read();
+              return { value: snapshot.value, truncated: snapshot.availability !== "complete", availability: snapshot.availability,
+                ...(snapshot.reason ? { reason: snapshot.reason } : {}) };
+            },
+            remove: () => {
+              if (!entry.active) return;
+              entry.active = false;
+              storeLeaseCount -= entry.leases.size;
+              entry.leases.clear();
+              if (stores.get(name) === entry) stores.delete(name);
+              if (adapter && owners.get(adapter.source) === entry) owners.delete(adapter.source);
+              const release = releaseSubscription;
+              releaseSubscription = undefined;
+              if (release) observeSafely(release);
+            },
+          };
+          stores.set(name, entry);
+          if (adapter) owners.set(adapter.source, entry);
+          if (adapter) {
+            const changed = (): void => observeSafely(() => {
+              if (acquiring || !active || !entry.active || stores.get(name) !== entry) return;
+              if (observing) { disconnect(); return; }
+              observing = true;
+              try {
+                const reading = entry.read(), safe = prepare(reading.value);
+                const partial = reading.truncated || safe.truncated;
+                const presented = JSON.stringify(safe.value);
+                if (!partial && presented === lastComplete) return;
+                lastComplete = partial ? undefined : presented;
+                emit("state", { store: name, value: safe.value }, currentActionId, partial);
+              } finally { observing = false; }
+            }, disconnect);
+            try {
+              releaseSubscription = adapter.subscribe(changed);
+              acquiring = false;
+              if (!active || !entry.active) { if (releaseSubscription) observeSafely(releaseSubscription); releaseSubscription = undefined; throw new Error("Registration lost its connection"); }
+              // Snapshot the registration baseline without fabricating a state-change event.
+              const initial = entry.read(), safe = prepare(initial.value);
+              if (!active || !entry.active) throw new Error("Registration lost its connection");
+              if (!initial.truncated && !safe.truncated) lastComplete = JSON.stringify(safe.value);
+            } catch {
+              entry.remove();
+              throw new Error("Explicit store subscription is unavailable");
+            }
+          }
+          registration = entry;
+        }
+        registration.leases.add(lease);
+        acquired = true;
+        const registered = registration;
+        return () => {
+          if (!registered.leases.delete(lease)) return;
+          storeLeaseCount--;
+          if (!registered.leases.size) registered.remove();
+        };
+      } finally {
+        if (!acquired) storeLeaseCount--;
+      }
     },
   };
 }
