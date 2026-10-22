@@ -1,0 +1,1 @@
+ALTER TABLE `spans` ADD `otlp_evidence` text;

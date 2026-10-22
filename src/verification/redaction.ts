@@ -314,9 +314,12 @@ export function wireRedactionKeys(config?: RedactionConfig): string[] {
 //  - `sk-<product>-` covers the LLM-provider keys (OpenAI `sk-proj-`, Anthropic `sk-ant-`). The
 //    product segment is required: bare `sk-` is two characters and would catch prose.
 const KNOWN_SECRET =
-  /eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,}|sk-(?:ant|proj|svcacct|admin)-[A-Za-z0-9_-]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[A-Za-z0-9-]{10,}|ya29\.[A-Za-z0-9._-]{20,}/g;
+  /eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,}|sk-(?:ant|proj|svcacct|admin)-[A-Za-z0-9_-]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[A-Za-z0-9-]{10,}|ya29\.[A-Za-z0-9._-]{20,}|\bnpm_[A-Za-z0-9_-]{30,}|\bhf_[A-Za-z0-9_-]{20,}/g;
+// A missing terminator is still credential content. Withhold the remainder
+// instead of letting a transport cap publish the beginning of a private key.
+const PRIVATE_KEY_BLOCK = /-----BEGIN ((?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY)-----[\s\S]*?(?:-----END \1-----|$)/g;
 
 /** Redact high-confidence secret shapes anywhere in a text/value, independent of any surrounding key. */
 export function scrubKnownSecrets(text: string): string {
-  return text.replace(KNOWN_SECRET, REDACTED_VALUE);
+  return text.replace(PRIVATE_KEY_BLOCK, REDACTED_VALUE).replace(KNOWN_SECRET, REDACTED_VALUE);
 }

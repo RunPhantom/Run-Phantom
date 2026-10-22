@@ -1,4 +1,6 @@
-import { SEMANTIC_REF_PATTERN } from "../../protocol.js";
+import { collectSemanticElements, type SemanticCollection } from "./query.js";
+import { SEMANTIC_REF_PATTERN, type ControlSourceObservation } from "../../protocol.js";
+import { parseControlSourceObservation } from "../../build/source.js";
 
 export const MAX_LIVE_REFS = 1000;
 export const LIVE_REF_TTL_MS = 60_000;
@@ -7,7 +9,8 @@ export const LIVE_REF_PATTERN = SEMANTIC_REF_PATTERN;
 export class LiveRefError extends Error {
   constructor(message: string, readonly code: "unavailable" | "capacity" = "unavailable") { super(message); this.name = "LiveRefError"; }
 }
-interface Entry { element: WeakRef<Element>; document: WeakRef<Document>; expires: number }
+interface SourceWitness { observation: ControlSourceObservation; read: (element: Element) => ControlSourceObservation }
+interface Entry { element: WeakRef<Element>; document: WeakRef<Document>; expires: number; revision?: number; source?: { signature: string; read: SourceWitness["read"] } }
 interface Options { now?: () => number; random?: () => string }
 
 function nonce(): string {
@@ -37,6 +40,24 @@ export class LiveElementRefs {
   readonly #now: () => number;
   readonly #random: () => string;
   #active = true;
+  #revision = 0;
+  #listFingerprint: string | undefined;
+  readonly #elementIds = new WeakMap<Element, number>();
+  #elementSequence = 0;
+
+  #fingerprint(collection: SemanticCollection): string {
+    return JSON.stringify([collection.coverage, collection.elements.map(item => {
+      let identity = this.#elementIds.get(item.element);
+      if (identity === undefined) { identity = ++this.#elementSequence; this.#elementIds.set(item.element, identity); }
+      return [identity, item.role, item.name, item.label, item.testId, item.nameTruncated, item.disabled, item.readonly];
+    })]);
+  }
+
+  /** A rediscovered list issues new handles; old selections cannot revive after mutation. */
+  beginDiscovery(collection: SemanticCollection): void {
+    const fingerprint = this.#fingerprint(collection);
+    if (fingerprint !== this.#listFingerprint) { this.#revision++; this.#listFingerprint = fingerprint; }
+  }
 
   constructor(readonly sessionId: string, readonly document: Document, options: Options = {}) {
     if (!/^[A-Za-z0-9._:-]{1,128}$/.test(sessionId)) throw new LiveRefError("Invalid reference session");
@@ -79,11 +100,13 @@ export class LiveElementRefs {
     }
   }
 
-  refFor(element: Element): string {
+  refFor(element: Element, source?: SourceWitness): string {
     if (!this.#owns(element, element.ownerDocument)) throw new LiveRefError("Element is outside the active document scope");
     this.#prune();
+    const witness = source ? { signature: JSON.stringify(parseControlSourceObservation(source.observation)), read: source.read } : undefined;
     const existing = this.#reverse.get(element);
-    if (existing && this.#entries.has(existing)) return existing;
+    const old = existing ? this.#entries.get(existing) : undefined;
+    if (existing && old && old.revision === (this.#listFingerprint === undefined ? undefined : this.#revision) && old.source?.signature === witness?.signature) return existing;
     if (this.#issued.size >= MAX_LIVE_REFS) throw new LiveRefError("Live reference capacity exhausted; reconnect before discovering new references", "capacity");
     let ref = "";
     for (let attempt = 0; attempt < 8; attempt++) {
@@ -92,7 +115,7 @@ export class LiveElementRefs {
     }
     if (!ref) throw new LiveRefError("Secure reference collision could not be resolved");
     this.#issued.add(ref);
-    this.#entries.set(ref, { element: new WeakRef(element), document: new WeakRef(element.ownerDocument), expires: this.#now() + LIVE_REF_TTL_MS });
+    this.#entries.set(ref, { element: new WeakRef(element), document: new WeakRef(element.ownerDocument), expires: this.#now() + LIVE_REF_TTL_MS, ...(witness ? { source: witness } : {}), ...(this.#listFingerprint === undefined ? {} : { revision: this.#revision }) });
     this.#reverse.set(element, ref);
     return ref;
   }
@@ -105,6 +128,23 @@ export class LiveElementRefs {
     if (!entry || !element || !owner || this.#now() >= entry.expires || !this.#owns(element, owner)) {
       this.#entries.delete(ref);
       throw new LiveRefError("Live reference is stale, expired, disconnected, or belongs to another session/document");
+    }
+    if (entry.revision !== undefined && (entry.revision !== this.#revision || this.#fingerprint(collectSemanticElements(this.document)) !== this.#listFingerprint)) {
+      this.#entries.delete(ref);
+      throw new LiveRefError("Live reference discovery list changed; discover and review a new selection");
+    }
+    if (entry.source) {
+      let unchanged = false;
+      try { unchanged = JSON.stringify(parseControlSourceObservation(entry.source.read(element))) === entry.source.signature; } catch { /* Unavailable source never refreshes a selection. */ }
+      if (!unchanged) {
+        this.#entries.delete(ref);
+        throw new LiveRefError("Live reference source identity changed or became unavailable; discover and review a new selection");
+      }
+      // Page-owned reflection can mutate the DOM; check again after the probe and before any boundary.
+      if (!this.#owns(element, owner) || this.#now() >= entry.expires || (entry.revision !== undefined && (entry.revision !== this.#revision || this.#fingerprint(collectSemanticElements(this.document)) !== this.#listFingerprint))) {
+        this.#entries.delete(ref);
+        throw new LiveRefError("Live reference discovery list changed during source validation");
+      }
     }
     return element;
   }

@@ -6,14 +6,25 @@ import * as store from "./store";
 import { redactText } from "../verification/serialization";
 import { createEvaluationReport, evaluationReportJUnit } from "./report";
 import { analyzeTrials, parseTrialSelection } from "./trials";
+import { analyzeScoreDistribution, parseDistributionRequest } from "./distributions";
+import { createEvidenceRouter } from "./evidence-router";
+import type { EvidenceImportService } from "./evidence-import";
+import type { EvidenceOwner } from "./evidence-inventory";
+import { createFindingRouter } from "./finding-router";
+import { createCompletionRouter } from "../claims/router";
 
 function version(value: unknown): number | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) throw new EvaluationError("version must be a positive integer");
   return parseVersion(Number(value));
 }
-export function createEvaluationRouter(service: EvaluationService): express.Router {
+export function createEvaluationRouter(service: EvaluationService, evidence?: { service: EvidenceImportService; owner: EvidenceOwner }): express.Router {
   const router = express.Router();
+  if (evidence) router.use("/evidence", createEvidenceRouter(evidence.service, evidence.owner));
+  if (evidence?.owner.scope.kind === "local") {
+    router.use("/findings", createFindingRouter(evidence.owner));
+    router.use("/claims", createCompletionRouter(evidence.owner));
+  }
   const route = (handler: (req: Request, res: Response) => unknown) => (req: Request, res: Response, next: NextFunction) => {
     Promise.resolve().then(() => handler(req, res)).catch(next);
   };
@@ -30,6 +41,10 @@ export function createEvaluationRouter(service: EvaluationService): express.Rout
   router.post("/analyses/repeated-trials", route((req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.json(analyzeTrials(parseTrialSelection(req.body), store.readExperimentSelection));
+  }));
+  router.post("/analyses/score-distributions", route((req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(analyzeScoreDistribution(parseDistributionRequest(req.body), store.readDistributionSelection));
   }));
   router.post("/experiments", route((req, res) => res.status(202).json(service.start(req.body))));
   router.get("/compare", route((req, res) => res.json(service.compare(parseId(req.query.baseline), parseId(req.query.candidate)))));
