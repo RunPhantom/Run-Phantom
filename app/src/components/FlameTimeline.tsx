@@ -184,6 +184,7 @@ function SpanTooltip({
 export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { spans: Span[]; subAgents?: SubAgent[]; onDiveIn?: (rootSpanId: string) => void }) {
   const colorMap = useMemo(() => new Map<string, string>(), []);
   const vizSpans = useMemo(() => spans.filter(s => s.span_type === "TRACE" || s.span_type === "TOOL_CALL" || s.span_type?.includes("LLM")), [spans]);
+  const subAgentSpanIds = useMemo(() => new Set(subAgents.flatMap(a => a.span_ids)), [subAgents]);
   const layout = useMemo(() => buildCondensedTimeline(vizSpans, subAgents), [vizSpans, subAgents]);
   const hasVizSpans = layout.entries.length > 0;
   const [compact, setCompact] = useState(false);
@@ -460,7 +461,7 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
             const isLLM = span.span_type?.includes("LLM");
             const focusBarTool = () => {
               setSelected({ key: entry.key, id: span.id });
-              if (entry.identityAvailable && span.span_type === "TOOL_CALL") {
+              if (entry.identityAvailable && (span.span_type === "TOOL_CALL" || subAgentSpanIds.has(span.id))) {
                 focusTool(span.id);
               }
             };

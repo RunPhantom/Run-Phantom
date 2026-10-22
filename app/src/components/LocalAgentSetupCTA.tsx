@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Copy, Check, X } from "lucide-react";
 import { C } from "../utils/colors";
 import { buildSkillPrompt } from "../utils/skill-content";
@@ -17,33 +17,44 @@ export function LocalAgentSetupCTA({ eventName, title, description }: LocalAgent
   );
 }
 
-function InlineSetupCTA({ eventName, title, description }: { eventName?: string; title?: string; description?: React.ReactNode }) {
+function useSetupPromptCopy() {
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const active = useRef(true);
   const skillPrompt = useMemo(() => buildSkillPrompt("setup-agent-replay"), []);
-
+  useEffect(() => { active.current = true; return () => { active.current = false; clearTimeout(timer.current); }; }, []);
   const copy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(skillPrompt);
-    } catch {
-      const ta = document.createElement("textarea");
-      ta.value = skillPrompt;
-      ta.style.position = "fixed";
-      ta.style.left = "-9999px";
-      document.body.appendChild(ta);
-      ta.select();
-      try { document.execCommand("copy"); } catch {}
-      document.body.removeChild(ta);
+    let success = false;
+    try { await navigator.clipboard.writeText(skillPrompt); success = true; }
+    catch {
+      const focus = document.activeElement as HTMLElement | null;
+      const text = document.createElement("textarea");
+      text.value = skillPrompt;
+      text.style.position = "fixed";
+      text.style.left = "-9999px";
+      document.body.appendChild(text);
+      text.select();
+      try { success = document.execCommand("copy"); } catch { /* Browser denied clipboard access. */ }
+      finally { text.remove(); focus?.focus(); }
     }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    if (!active.current) return;
+    setCopied(success);
+    setCopyError(!success);
+    clearTimeout(timer.current);
+    if (success) timer.current = setTimeout(() => setCopied(false), 1500);
   }, [skillPrompt]);
+  return { copied, copyError, copy };
+}
 
+function InlineSetupCTA({ eventName, title, description }: { eventName?: string; title?: string; description?: React.ReactNode }) {
+  const { copied, copyError, copy } = useSetupPromptCopy();
   const resolvedTitle = title ?? `Set Up Agent Replay${eventName ? ` for "${eventName}"` : ""}`;
   const resolvedDescription = description ?? "Copy the setup prompt and paste it into your AI coding tool to wire up replay.";
 
   return (
-    <div className="rounded-lg p-3 space-y-2"
-      style={{ background: "var(--rp-ink-a04)", border: "1px solid var(--rp-ink-a08)" }}>
+    <div className="rounded-lg p-4 space-y-3"
+      style={{ background: "var(--rp-accent-soft)", border: `1px solid ${C.border}` }}>
       <div className="text-[11px] font-medium" style={{ color: C.fg3 }}>
         {resolvedTitle}
       </div>
@@ -51,7 +62,8 @@ function InlineSetupCTA({ eventName, title, description }: { eventName?: string;
         {resolvedDescription}
       </div>
       <button
-        className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md text-[11px] font-medium transition-colors"
+        type="button"
+        className="min-h-[44px] w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md text-[11px] font-medium transition-colors"
         style={{
           background: copied ? "color-mix(in srgb, var(--rp-success) 12%, white 88%)" : "var(--rp-ink-wash)",
           border: `1px solid ${copied ? "color-mix(in srgb, var(--rp-success) 26%, white 74%)" : C.border}`,
@@ -62,6 +74,7 @@ function InlineSetupCTA({ eventName, title, description }: { eventName?: string;
         {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
         {copied ? "Copied!" : "Copy Setup Prompt"}
       </button>
+      <p role={copyError ? "alert" : copied ? "status" : undefined} className="text-[12px] leading-relaxed" style={{ color: copyError ? C.red : C.fg1 }}>{copyError ? "Clipboard access was denied. Allow clipboard access and try again." : copied ? "Setup prompt copied. Paste it into your coding tool." : "The prompt configures replay in your agent’s repository."}</p>
     </div>
   );
 }
@@ -74,28 +87,10 @@ export interface SetupReplayModalProps {
 
 export function SetupReplayModal({ open, onClose, eventName }: SetupReplayModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const [copied, setCopied] = useState(false);
-  const skillPrompt = useMemo(() => buildSkillPrompt("setup-agent-replay"), []);
+  const { copied, copyError, copy } = useSetupPromptCopy();
   const cleanName = (eventName ?? "").replace(/^replay:/, "").trim();
 
   useDialogFocus(open, dialogRef, onClose);
-
-  const copy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(skillPrompt);
-    } catch {
-      const ta = document.createElement("textarea");
-      ta.value = skillPrompt;
-      ta.style.position = "fixed";
-      ta.style.left = "-9999px";
-      document.body.appendChild(ta);
-      ta.select();
-      try { document.execCommand("copy"); } catch {}
-      document.body.removeChild(ta);
-    }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }, [skillPrompt]);
 
   if (!open) return null;
 
@@ -162,6 +157,7 @@ export function SetupReplayModal({ open, onClose, eventName }: SetupReplayModalP
             {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
             {copied ? "Copied to clipboard!" : "Copy Setup Prompt"}
           </button>
+          {copyError && <p role="alert" className="text-[12px]" style={{ color: C.red }}>Clipboard access was denied. Allow clipboard access and try again.</p>}
 
           <div className="text-[11px] text-center" style={{ color: C.fg0 }}>
             Using Claude Code? Just run <code className="font-mono px-1.5 py-0.5 rounded" style={{ background: "var(--rp-ink-a08)", color: C.fg2 }}>/setup-agent-replay</code>

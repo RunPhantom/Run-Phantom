@@ -61,7 +61,8 @@ test("verification MCP tools compose with trace tools and advertise the complete
   const schema = result.tools.find(tool => tool.name === "app_assert")!.inputSchema;
   const definitions = schema.$defs as { predicate: { oneOf: Array<{ properties: Record<string, unknown> }> } };
   const kinds = definitions.predicate.oneOf.map(variant => variant.properties.kind);
-  expect(kinds).toEqual([{ const: "network" }, { const: "console" }, { const: "signal" }, { const: "state" }, { const: "element" }, { enum: ["allOf", "anyOf"] }]);
+  expect(kinds).toEqual([{ const: "performance" }, { const: "performance" }, { const: "network" }, { const: "console" }, { const: "signal" }, { const: "state" }, { const: "element" },
+    { const: "relative" }, { const: "relative" }, { enum: ["allOf", "anyOf"] }]);
   await client.callTool({ name: "query_traces", arguments: { sql: "SELECT id FROM runs" } });
   expect(requests[0]).toEqual({ method: "POST", path: "/api/traces/query", body: { sql: "SELECT id FROM runs" } });
 });
@@ -81,11 +82,14 @@ test("observation and app actions carry exact cursors and all supported commands
   await client.callTool({ name: "app_observe", arguments: { sessionId: "session", since: 1700 } });
   expect(requests[0].path).toBe("/api/verification/sessions/session/events?since=1700");
   const commands = [
+    { type: "performance", phase: "begin" },
+    { type: "performance", phase: "capture" },
     { type: "snapshot" },
     { type: "snapshot", selector: "#result" },
     { type: "click", selector: "#checkout" },
     { type: "fill", selector: "#name", value: "Live only" },
     { type: "state", store: "cart" },
+    { type: "causal-click", selector: "#checkout", targets: [{ kind: "state", store: "cart", path: "items.length" }] },
   ];
   for (const command of commands) {
     await client.callTool({ name: "app_act", arguments: { sessionId: "session", command } });
@@ -96,6 +100,7 @@ test("observation and app actions carry exact cursors and all supported commands
 test("assertions expose all predicates, composites and immutable report results", async () => {
   const predicate = { kind: "allOf", predicates: [
     { kind: "network", urlContains: "/api/checkout", method: "post", status: 200 },
+    { kind: "performance", metric: "clsMaxSessionScore", op: "lte", value: 0.100000001 },
     { kind: "console", level: "error", absent: true },
     { kind: "signal", name: "checkout.complete" },
     { kind: "state", store: "cart", path: "items.length", equals: 0 },
@@ -138,6 +143,10 @@ test("MCP rejects malformed arguments and all saved fill actions before HTTP", a
     { name: "app_act", arguments: { sessionId: "session", command: { type: "eval", code: "alert(1)" } } },
     { name: "app_assert", arguments: { sessionId: "session", predicate: { kind: "network", urlContains: "/api", status: 0 } } },
     { name: "app_assert", arguments: { sessionId: "session", predicate: { kind: "allOf", predicates: [] } } },
+    { name: "app_assert", arguments: { sessionId: "session", predicate: { kind: "relative", target: { kind: "state", store: "cart", path: "count" }, relation: "changed", causal: true } } },
+    { name: "app_assert", arguments: { sessionId: "session", predicate: { kind: "relative", target: { kind: "state", store: "cart", path: "count", generation: 1 }, relation: "changed" } } },
+    { name: "app_assert", arguments: { sessionId: "session", predicate: { kind: "relative", target: { kind: "state", store: "cart", path: "count" }, relation: "changed" }, proof: { source: "sdk-reported" } } },
+    { name: "app_act", arguments: { sessionId: "session", command: { type: "causal-click", selector: "#checkout", targets: [] } } },
     { name: "app_flow", arguments: { action: "save", name: "Bad", origin: "http://localhost:3000", steps: [{ command: { type: "fill", selector: "#name", value: "Non-secret is also forbidden" }, predicate: { kind: "element", selector: "#done", state: "present" } }] } },
     { name: "app_flow", arguments: { action: "save", name: "Bad", origin: "http://localhost:3000", steps: [{ predicate: { kind: "state", store: "auth", path: "password", equals: "example" } }] } },
     { name: "app_flow", arguments: { action: "run", flowId: "flow" } },
