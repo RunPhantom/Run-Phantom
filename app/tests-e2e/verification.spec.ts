@@ -72,16 +72,16 @@ test("runtime verification: user pairs an app, runs a check, and saves and repla
     const screenshotDir = path.join(REPO_ROOT_PATH, "output");
     mkdirSync(screenshotDir, { recursive: true });
     await page.getByRole("heading", { name: "Verification", exact: true }).scrollIntoViewIfNeeded();
-    await page.screenshot({ path: path.join(screenshotDir, "verification-desktop.png"), fullPage: true, mask: [snippet] });
+    await page.screenshot({ path: path.join(screenshotDir, "verification-desktop.png"), fullPage: false, mask: [snippet] });
     await page.getByRole("heading", { name: "Verification reports", exact: true }).scrollIntoViewIfNeeded();
-    await page.screenshot({ path: path.join(screenshotDir, "verification-desktop-reports.png"), fullPage: true, mask: [snippet] });
+    await page.screenshot({ path: path.join(screenshotDir, "verification-desktop-reports.png"), fullPage: false, mask: [snippet] });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole("heading", { name: "Verification", exact: true }).scrollIntoViewIfNeeded();
     await expect(page.getByRole("button", { name: "Pair app", exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
-    await page.screenshot({ path: path.join(screenshotDir, "verification-mobile.png"), fullPage: true, mask: [snippet] });
+    await page.screenshot({ path: path.join(screenshotDir, "verification-mobile.png"), fullPage: false, mask: [snippet] });
     await page.getByRole("heading", { name: "Verification reports", exact: true }).scrollIntoViewIfNeeded();
-    await page.screenshot({ path: path.join(screenshotDir, "verification-mobile-reports.png"), fullPage: true, mask: [snippet] });
+    await page.screenshot({ path: path.join(screenshotDir, "verification-mobile-reports.png"), fullPage: false, mask: [snippet] });
     await page.locator(`a[href="/runs/${FIXTURE_PRIMARY_RUN_ID}"]`).first().click();
     await expect(page).toHaveURL(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
     await expect(page.getByRole("tab", { name: "Overview", exact: true })).toBeVisible();
@@ -144,6 +144,17 @@ test("runtime verification: real cross-origin SDK observes actions, fails broken
   } finally {
     await ui.close();
   }
+});
+
+test("runtime verification: a flow saved by another client appears in the open page without a reload", async ({ page, request, runPhantom }) => {
+  await page.goto(`${runPhantom.url}/verification`);
+  await expect(page.getByText(/^No saved flows\./)).toBeVisible();
+  const response = await request.post(`${runPhantom.url}/api/verification/flows`, { data: {
+    name: "Agent-saved checkout", origin: "http://127.0.0.1:4173",
+    steps: [{ command: { type: "click", selector: "#checkout" }, predicate: { kind: "network", urlContains: "/api/checkout", method: "POST", status: 200 } }],
+  } });
+  expect(response.ok()).toBe(true);
+  await expect(page.getByRole("button", { name: "Replay Agent-saved checkout", exact: true })).toBeVisible({ timeout: 10_000 });
 });
 
 test("runtime verification: capture includes XHR, routes, signals, and console errors; quiet checks await delayed errors", async ({ page, request, runPhantom, targetApp }) => {
@@ -272,5 +283,35 @@ test("runtime verification: compiled SDK serves the exact embedded module and co
   } finally {
     await page.evaluate(() => window.runtime.disconnect());
     await request.delete(`${daemon.url}/api/verification/sessions/${session.id}`);
+  }
+});
+
+test("runtime verification: a refused action is reported beside the form that caused it", async ({ page, context, request, runPhantom, targetApp }) => {
+  const app = await context.newPage();
+  try {
+    await connectTarget(app, request, runPhantom, targetApp.origin);
+    await page.goto(`${runPhantom.url}/verification`);
+    await expect(page.getByText("Connected", { exact: true }).first()).toBeVisible();
+
+    const exercise = page.getByRole("region", { name: "1. Exercise the app", exact: true });
+    await exercise.getByRole("combobox", { name: "Action", exact: true }).selectOption("click");
+    await exercise.getByLabel(/^Action selector/).fill("button");
+    await exercise.getByRole("button", { name: "Run action", exact: true }).click();
+    const refusal = exercise.getByRole("alert");
+    await expect(refusal).toHaveText("Selector matched multiple elements; use a unique selector");
+    await expect(refusal).toBeFocused();
+    await expect(page.getByRole("alert")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Retry refresh", exact: true })).toHaveCount(0);
+
+    await exercise.getByRole("combobox", { name: "Action", exact: true }).selectOption("fill");
+    const draft = page.getByRole("region", { name: "3. Save a repeatable flow", exact: true });
+    await draft.getByLabel("Include current action in step", { exact: true }).check();
+    await draft.getByRole("button", { name: "Add step to flow", exact: true }).click();
+    const flowRefusal = draft.getByRole("alert");
+    await expect(flowRefusal).toHaveText(/^Saved flows cannot contain fill actions/);
+    await expect(flowRefusal).toBeFocused();
+    await expect(page.getByRole("alert")).toHaveCount(1);
+  } finally {
+    await app.close();
   }
 });

@@ -20,7 +20,7 @@ function memoryStore() {
   const db = new Database(":memory:");
   db.exec(`CREATE TABLE runs (id TEXT PRIMARY KEY, name TEXT, display_name TEXT, event_name TEXT);
     CREATE TABLE spans (id TEXT, run_id TEXT, parent_span_id TEXT, name TEXT, span_type TEXT, status TEXT, input_payload TEXT, output_payload TEXT,
-      model TEXT, provider TEXT, attributes TEXT, start_time_ms REAL, end_time_ms REAL, duration_ms REAL, input_tokens INTEGER, output_tokens INTEGER);
+      model TEXT, provider TEXT, attributes TEXT, otlp_evidence TEXT, start_time_ms REAL, end_time_ms REAL, duration_ms REAL, input_tokens INTEGER, output_tokens INTEGER);
     CREATE TABLE saved_run_cache (id TEXT PRIMARY KEY, data TEXT);`);
   for (const id of ["before", "after"]) {
     db.prepare("INSERT INTO runs(id,name) VALUES (?,?)").run(id, id);
@@ -168,7 +168,7 @@ describe("comparison SQL acquisition", () => {
       expect(() => getRunComparison(db, { baseline: "before", candidate: "missing" })).toThrow("no longer exists");
     } finally { db.close(); }
   });
-  test.each(["name", "status", "input_payload", "attributes", "id", "parent_span_id", "model", "provider"])("preflights oversized span %s before loading rows", field => {
+  test.each(["name", "status", "input_payload", "attributes", "otlp_evidence", "id", "parent_span_id", "model", "provider"])("preflights oversized span %s before loading rows", field => {
     const db = memoryStore();
     let materialized = false;
     try {

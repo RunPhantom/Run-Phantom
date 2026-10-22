@@ -1,9 +1,11 @@
 import express, { type Request, type Response, type NextFunction } from "express";
-import { EVIDENCE_LIMITS, EvidenceError, type EvidenceSetView } from "./evidence-protocol";
-import { EvidenceInventories, type EvidenceOwner } from "./evidence-inventory";
+import { EVIDENCE_LIMITS, EvidenceError } from "./evidence-protocol";
+import { EvidenceInventories, listEvidenceSets, type EvidenceOwner } from "./evidence-inventory";
 import { EvidenceImportService, EVIDENCE_HEADER_BYTES, EVIDENCE_FRAME_BYTES, EVIDENCE_IMPORT_CONTENT_TYPE, EVIDENCE_READER_IDENTITY, EvidenceUploadError } from "./evidence-import";
 import { evidenceInteger, evidenceObject, evidenceText, parseEvidenceImportRequest } from "./evidence-validation";
 import { strictEvidenceJson } from "./evidence-reader/json";
+import { evidenceExport, evidenceExportJUnit, evidenceExportText, boundedEvidenceExport } from "./evidence-export";
+export { evidenceExport, evidenceExportJUnit } from "./evidence-export";
 import { readerLimits } from "./evidence-reader/limits";
 
 function errorResponse(error: unknown, res: Response): void {
@@ -30,29 +32,6 @@ function revision(value: unknown, required = false): number | undefined {
   if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) throw new EvidenceError("Evidence revision must be a positive integer");
   return evidenceInteger(Number(value), "evidence revision", Number.MAX_SAFE_INTEGER, 1);
 }
-/** Publication DTOs contain no raw bytes. Exports additionally omit leaf detail, files and producer test-name assertions. */
-export function evidenceExport(view: EvidenceSetView) {
-  return { format: "runphantom-evidence-report/v1", revision: view.revision, sources: view.sources.map(source => ({
-    sourceId: source.sourceId, rawAvailable: source.rawAvailable, normalizedAvailable: source.normalizedAvailable,
-    observation: source.normalized ? { parseState: source.normalized.parseState, reportOutcome: source.normalized.reportOutcome,
-      interpretationComplete: source.normalized.interpretationComplete, leafCounts: source.normalized.leafCounts,
-      observedExecutedLowerBound: source.normalized.observedExecutedLowerBound, producerCounts: source.normalized.producerCounts,
-      countsConsistent: source.normalized.countsConsistent, reasonCodes: source.normalized.reasonCodes,
-      leaves: source.normalized.leaves.map(leaf => ({ id: leaf.id, status: leaf.status, durationMs: leaf.durationMs })) } : null,
-  })) };
-}
-const escapeXml = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[char]!);
-export function evidenceExportJUnit(view: EvidenceSetView): string {
-  if (view.sources.some(source => !source.normalized || source.normalized.parseState !== "parsed" || !source.normalized.interpretationComplete || source.normalized.leaves.some(leaf => leaf.status === "unknown"))) throw new EvidenceError("JUnit export requires complete classified observations; use JSON for unavailable evidence", 409);
-  const leaves = view.sources.flatMap(source => source.normalized!.leaves);
-  const property = (name: string, value: string) => `<property name="${escapeXml(name)}" value="${escapeXml(value)}"/>`;
-  const cases = view.sources.flatMap(source => source.normalized!.leaves.map(leaf => {
-    const status = leaf.status === "failed" ? '<failure message="Observed failure"/>' : leaf.status === "errored" ? '<error message="Observed error"/>' :
-      ["skipped", "disabled"].includes(leaf.status) ? `<skipped message="${escapeXml(leaf.status)}"/>` : "";
-    return `<testcase classname="${escapeXml(source.sourceId)}" name="${escapeXml(leaf.id)}"${leaf.durationMs === null ? "" : ` time="${leaf.durationMs / 1_000}"`}>${status}</testcase>`;
-  }));
-  return `<?xml version="1.0" encoding="UTF-8"?><testsuite name="Run Phantom evidence" tests="${leaves.length}" failures="${leaves.filter(leaf => leaf.status === "failed").length}" errors="${leaves.filter(leaf => leaf.status === "errored").length}" skipped="${leaves.filter(leaf => ["skipped", "disabled"].includes(leaf.status)).length}"><properties>${property("runphantom.coverage", view.revision.coverage)}${property("runphantom.reportOutcomes", view.revision.sources.map(source => `${source.sourceId}:${source.reportOutcome}`).join(","))}${property("runphantom.verification", "not_checked")}${property("runphantom.revision", String(view.revision.revision))}</properties>${cases.join("")}</testsuite>`;
-}
 export function createEvidenceRouter(service: EvidenceImportService, owner: EvidenceOwner): express.Router {
   const router = express.Router(), inventories = new EvidenceInventories(owner);
   router.use((_req, res, next) => { res.setHeader("Cache-Control", "no-store"); next(); });
@@ -62,13 +41,14 @@ export function createEvidenceRouter(service: EvidenceImportService, owner: Evid
   router.get("/capabilities", route((_req, res) => {
     owner.database.transaction(() => owner.authorize("normalized_read", null)).immediate();
     res.json({ transport: { version: 1, contentType: EVIDENCE_IMPORT_CONTENT_TYPE, maxHeaderBytes: EVIDENCE_HEADER_BYTES, maxFrameBytes: EVIDENCE_FRAME_BYTES },
-      reader: EVIDENCE_READER_IDENTITY, dialects: ["junit-xml/v1", "in-toto-statement/v1", "dsse-envelope/v1", "dsse-envelope-jsonl/v1"], limits: EVIDENCE_LIMITS });
+      reader: EVIDENCE_READER_IDENTITY, dialects: ["junit-xml/v1", "in-toto-statement/v1", "dsse-envelope/v1", "dsse-envelope-jsonl/v1", "runphantom-findings-json/v1"], limits: EVIDENCE_LIMITS });
   }));
   router.post("/inventories", route((req, res) => res.status(201).json(inventories.save(req.body))));
   router.put("/inventories", route((req, res) => res.status(201).json(inventories.save(req.body))));
   router.get("/inventories", route((req, res) => {
+    evidenceObject(req.query, ["anchor", "revision"], "inventory query");
     const anchor = strictEvidenceJson(evidenceText(req.query.anchor, "inventory anchor", 1_024), readerLimits({ maxDepth: 4 }));
-    res.json(inventories.get(anchor, revision(req.query.revision, true)!));
+    res.json(inventories.get(anchor, revision(req.query.revision)));
   }));
   router.get("/imports/:id", route((req, res) => {
     const id = evidenceText(req.params.id, "job ID");
@@ -93,12 +73,18 @@ export function createEvidenceRouter(service: EvidenceImportService, owner: Evid
     res.json({ job });
   }));
   router.post("/imports/:id/cancel", route(async (req, res) => { evidenceObject(req.body ?? {}, [], "cancellation"); res.json({ cancelled: await service.cancel(owner, evidenceText(req.params.id, "job ID")) }); }));
+  router.get("/sets", route((req, res) => {
+    evidenceObject(req.query, ["attachment"], "evidence history query");
+    const attachment = strictEvidenceJson(evidenceText(req.query.attachment, "evidence attachment", 1_024), readerLimits({ maxDepth: 4 }));
+    res.json(listEvidenceSets(owner, attachment));
+  }));
   router.get("/sets/:id", route((req, res) => res.json(owner.store.getSet(evidenceText(req.params.id, "set ID"), revision(req.query.revision)))));
   router.get("/sets/:id/export", route((req, res) => {
     const view = owner.store.getSet(evidenceText(req.params.id, "set ID"), revision(req.query.revision));
-    if (req.query.format === "junit") res.type("application/xml").send(evidenceExportJUnit(view));
-    else if (req.query.format === undefined || req.query.format === "json") res.json(evidenceExport(view));
-    else throw new EvidenceError("Evidence export format must be json or junit");
+    if (req.query.format === "junit") res.type("application/xml").send(boundedEvidenceExport(evidenceExportJUnit(view)));
+    else if (req.query.format === undefined || req.query.format === "json") res.type("application/json").send(boundedEvidenceExport(JSON.stringify(evidenceExport(view))));
+    else if (req.query.format === "text") res.type("text/plain").send(evidenceExportText(view));
+    else throw new EvidenceError("Evidence export format must be json, junit or text");
   }));
   router.get("/sets/:id/raw/:sourceId", route((req, res) => {
     const bytes = owner.store.exportRaw(evidenceText(req.params.id, "set ID"), revision(req.query.revision, true)!, evidenceText(req.params.sourceId, "source ID"));

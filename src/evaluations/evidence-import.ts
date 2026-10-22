@@ -14,7 +14,7 @@ export const EVIDENCE_IMPORT_CONTENT_TYPE = "application/vnd.runphantom.evidence
 export const EVIDENCE_HEADER_BYTES = 64 * 1024;
 export const EVIDENCE_FRAME_BYTES = 4 + EVIDENCE_HEADER_BYTES + L.MAX_IMPORT_BYTES;
 export const EVIDENCE_READER_IDENTITY = Object.freeze({ parserVersion: EXTERNAL_EVIDENCE_PARSER_VERSION, policyVersion: "redaction/v1",
-  configurationSha256: evidenceDigest(canonicalEvidenceJson({ limits: readerLimits(), statement: "in-toto-statement/v1", envelope: "dsse-envelope/v1", junit: "junit-xml/v1", policy: "redaction/v1" })) });
+  configurationSha256: evidenceDigest(canonicalEvidenceJson({ limits: readerLimits(), statement: "in-toto-statement/v1", envelope: "dsse-envelope/v1", junit: "junit-xml/v1", findings: "runphantom-findings-json/v1", policy: "redaction/v1" })) });
 export class EvidenceUploadError extends EvidenceError {
   constructor(public readonly code: "upload_aborted" | "upload_timeout" | "source_integrity", status: 400 | 409 | 413 = 400) {
     super(code === "upload_timeout" ? "Evidence upload deadline exceeded" : code === "upload_aborted" ? "Evidence upload was interrupted" : "Evidence frame does not match its declared source bytes", status);
@@ -75,8 +75,8 @@ export class EvidenceImportService {
   #find(owner: EvidenceOwner, id: string): ImportEntry | undefined {
     return [...this.#entries].find(entry => entry.owner.database === owner.database && canonicalEvidenceJson(entry.owner.scope) === canonicalEvidenceJson(owner.scope) && entry.admission?.job.id === id);
   }
-  #failure(entry: ImportEntry, code: EvidenceImportFailureCode): void {
-    try { if (entry.admission && !entry.admission.reused) entry.owner.store.fail(entry.admission.job.id, entry.admission.publicationToken, code); }
+  #failure(entry: ImportEntry, code: EvidenceImportFailureCode, authority: EvidenceOwner = entry.owner): void {
+    try { if (entry.admission && !entry.admission.reused) authority.store.fail(entry.admission.job.id, entry.admission.publicationToken, code); }
     finally { entry.controller.abort(code); entry.worker?.cancel(); entry.ready?.reject(new EvidenceUploadError(code === "upload_timeout" ? "upload_timeout" : "upload_aborted", 409)); entry.ready = undefined; }
   }
   #release(entry: ImportEntry): void {
@@ -166,11 +166,11 @@ export class EvidenceImportService {
           sourceId: source.sourceId, kind: source.kind, dialect: source.dialect, shardId: source.shardId, artifactSha256: source.artifactSha256, byteLength: source.byteLength,
         })), inventory: Object.hasOwn(input, "inventory") ? input.inventory : previous.inventory ? { id: previous.inventory.id, revision: previous.inventory.revision } : null,
         retention: input.retention ?? previous.initialRetention });
-      owner.database.transaction(() => owner.authorize("raw_export", previous.attachment)).immediate();
+      owner.database.transaction(() => owner.authorize("import", previous.attachment)).immediate();
       entry.draft = draft; entry.admission = new EvidenceInventories(owner).admit(draft);
       if (entry.admission.reused) { const job = owner.store.getJob(entry.admission.job.id); this.#release(entry); return { job, reused: true, timings: this.timings(owner, job.id) }; }
       await this.#wait(entry, entry.controller.signal);
-      const acquired = performance.now(), sources = previous.sources.map(source => ({ sourceId: source.sourceId, bytes: owner.store.exportRaw(previous.id, revision, source.sourceId) }));
+      const acquired = performance.now(), sources = previous.sources.map(source => ({ sourceId: source.sourceId, bytes: owner.store.readRawForReparse(previous.id, revision, source.sourceId) }));
       entry.captured = true;
       entry.acquisitionWallMs = performance.now() - acquired;
       entry.worker = this.#supervisor.submit({ jobId: entry.admission.job.id, publicationToken: entry.admission.publicationToken, scopeGeneration: entry.admission.job.scopeGeneration,
@@ -213,9 +213,11 @@ export class EvidenceImportService {
     await this.#stopEntries(entries);
     return removed;
   }
-  async #invalidate(entries: ImportEntry[]): Promise<void> {
+  async #invalidate(entries: ImportEntry[], authority: EvidenceOwner): Promise<void> {
+    if (entries.some(entry => entry.owner.database !== authority.database || canonicalEvidenceJson(entry.owner.scope) !== canonicalEvidenceJson(authority.scope))) throw new EvidenceError("Evidence invalidation scope changed", 409);
+    authority.database.transaction(() => authority.authorize("import", null)).immediate();
     let failure: unknown;
-    for (const entry of entries) { try { this.#failure(entry, "attachment_unavailable"); } catch (error) { failure ??= error; } }
+    for (const entry of entries) { try { this.#failure(entry, "attachment_unavailable", authority); } catch (error) { failure ??= error; } }
     await Promise.all(entries.map(entry => entry.done));
     if (failure) throw failure instanceof Error ? failure : new EvidenceError("Evidence invalidation failed", 409);
   }
@@ -224,14 +226,14 @@ export class EvidenceImportService {
     keys.forEach(key => blocks.add(key)); this.#blocked.set(owner.database, blocks);
     const entries = [...this.#entries].filter(entry => entry.owner.database === owner.database && canonicalEvidenceJson(entry.owner.scope) === canonicalEvidenceJson(owner.scope) &&
       entry.draft && attachments.some(attachment => canonicalEvidenceJson(attachment) === canonicalEvidenceJson(entry.draft!.attachment)));
-    try { await this.#invalidate(entries); }
+    try { await this.#invalidate(entries, owner); }
     finally { keys.forEach(key => blocks.delete(key)); }
   }
   async clear(owner: EvidenceOwner): Promise<void> {
     const blocks = this.#blocked.get(owner.database) ?? new Set<string>(), key = canonicalEvidenceJson(owner.scope);
     blocks.add(key); this.#blocked.set(owner.database, blocks);
     const entries = [...this.#entries].filter(entry => entry.owner.database === owner.database && canonicalEvidenceJson(entry.owner.scope) === canonicalEvidenceJson(owner.scope));
-    try { await this.#invalidate(entries); owner.store.purgeScope(); }
+    try { await this.#invalidate(entries, owner); owner.store.purgeScope(); }
     finally { blocks.delete(key); }
   }
   async shutdown(): Promise<void> {

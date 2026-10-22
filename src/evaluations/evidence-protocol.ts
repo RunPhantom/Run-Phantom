@@ -20,10 +20,10 @@ export const EVIDENCE_PREDICATE_TYPE = "https://in-toto.io/attestation/test-resu
 export const EVIDENCE_PAYLOAD_TYPES = ["application/vnd.in-toto+json"] as const;
 
 export type EvidenceScope = { kind: "local"; id: "local" } | { kind: "project"; id: string };
-export type EvidenceCapability = "normalized_read" | "import" | "inventory_edit" | "raw_export" | "delete";
+export type EvidenceCapability = "normalized_read" | "import" | "inventory_edit" | "raw_export" | "delete" | "compare";
 export type EvidenceAttachment = { kind: "inspection" | "experiment" | "check" | "run"; id: string };
-export type EvidenceKind = "junit" | "json" | "jsonl" | "attestation";
-export type EvidenceDialect = "junit-xml/v1" | "in-toto-statement/v1" | "dsse-envelope/v1" | "dsse-envelope-jsonl/v1";
+export type EvidenceKind = "junit" | "json" | "jsonl" | "attestation" | "finding";
+export type EvidenceDialect = "junit-xml/v1" | "in-toto-statement/v1" | "dsse-envelope/v1" | "dsse-envelope-jsonl/v1" | "runphantom-findings-json/v1";
 export type EvidenceParseState = "parsed" | "unparsed" | "rejected";
 export type EvidenceOutcome = "reports_pass" | "reports_fail" | "no_tests" | "unknown";
 export type EvidenceCoverage = "complete" | "incomplete" | "not_declared";
@@ -121,6 +121,7 @@ export interface NormalizedEvidenceSource {
   attestation: EvidenceAttestationSummary | null;
   reasonCodes: EvidenceReason[];
   leaves: EvidenceLeaf[];
+  findingBatch?: import("./finding-protocol").FindingBatch;
 }
 export interface EvidenceSourceObservation {
   sourceId: string;
