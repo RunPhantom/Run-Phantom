@@ -57,10 +57,13 @@ for (const prior of [false, true]) test(`evidence migration: ${prior ? "upgrade 
       baseline.exec("PRAGMA legacy_alter_table=ON; PRAGMA foreign_keys=OFF");
       migrate(drizzle(baseline), { migrationsFolder: priorMigrations });
       baseline.exec("PRAGMA foreign_keys=ON; PRAGMA legacy_alter_table=OFF");
-      baseline.exec("INSERT INTO runs(id,name,started_at,last_updated_at) VALUES('prior-run','Prior captured run',1,2)");
-      baseline.query("INSERT INTO spans(run_id,id,name,status,output_payload) VALUES(?,?,?,?,?)").run("prior-run", "prior-span", "Prior output", "OK", '{"result":"unchanged"}');
-      baseline.exec("INSERT INTO evaluation_datasets(id,name,latest_version,case_count,created_at) VALUES('prior-dataset','Frozen prior revision',1,0,3)");
-      baseline.query("INSERT INTO evaluation_revisions(dataset_id,version,hash,cases,created_at) VALUES(?,?,?,?,?)").run("prior-dataset", 1, evidenceDigest("[]"), "[]", 3);
+      const priorDb = baseline;
+      priorDb.transaction(() => {
+        priorDb.exec("INSERT INTO runs(id,name,started_at,last_updated_at) VALUES('prior-run','Prior captured run',1,2)");
+        priorDb.query("INSERT INTO spans(run_id,id,name,status,output_payload) VALUES(?,?,?,?,?)").run("prior-run", "prior-span", "Prior output", "OK", '{"result":"unchanged"}');
+        priorDb.exec("INSERT INTO evaluation_datasets(id,name,latest_version,case_count,created_at) VALUES('prior-dataset','Frozen prior revision',1,0,3)");
+        priorDb.query("INSERT INTO evaluation_revisions(dataset_id,version,hash,cases,created_at) VALUES(?,?,?,?,?)").run("prior-dataset", 1, evidenceDigest("[]"), "[]", 3);
+      }).immediate();
       originals = { runs: baseline.query("SELECT * FROM runs").all(), spans: baseline.query("SELECT * FROM spans").all(),
         revisions: baseline.query("SELECT * FROM evaluation_revisions").all(), history: baseline.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all() };
       baseline.close(true); baseline = undefined;
@@ -77,7 +80,9 @@ for (const prior of [false, true]) test(`evidence migration: ${prior ? "upgrade 
     expect(history).toHaveLength(journal.entries.length);
     if (originals) {
       expect(installed.query("SELECT * FROM runs").all()).toEqual(originals.runs);
-      expect(installed.query("SELECT * FROM spans").all()).toEqual(originals.spans);
+      const upgradedSpans = installed.query("SELECT * FROM spans").all() as Record<string, unknown>[];
+      for (const span of upgradedSpans) expect(span.otlp_evidence).toBeNull();
+      expect(upgradedSpans.map(({ otlp_evidence: _newEvidence, ...priorColumns }) => priorColumns)).toEqual(originals.spans);
       expect(installed.query("SELECT * FROM evaluation_revisions").all()).toEqual(originals.revisions);
       expect(history.slice(0, 7)).toEqual(originals.history);
     }

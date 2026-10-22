@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { Search, X } from "lucide-react";
@@ -6,15 +6,26 @@ import { projectApi, projectPath, teamQuery, type Note, type RunDetail, type Run
 import { useAccount, usePagePolling, useProject, useTeam, useTeamPages, useTeamQuery } from "./context";
 import { Action, Badge, DateTime, Empty, ErrorNotice, Evidence, Field, Heading, Input, Loading, More, Select, Textarea, duration, useTask } from "./common";
 import { IngestGuide } from "./projects";
+import { SearchFilters } from "../components/SearchFilters";
+import { SearchSpanHits } from "../components/SearchSpanHits";
+import { teamSearchScope } from "../utils/search-state";
+import type { SearchSpanHit, SearchSuggestionResult } from "../../../src/search-protocol";
 
 export function TracesPage() { return <Routes><Route index element={<TraceList />} /><Route path=":runId" element={<TraceDetailPage />} /><Route path=":runId/spans/:spanId" element={<TraceDetailPage />} /></Routes>; }
 
 function TraceList() {
   const project = useProject(); const [params, setParams] = useSearchParams(); const [q, setQ] = useState(params.get("q") ?? ""); const input = useRef<HTMLInputElement>(null);
+  const navigate=useNavigate();
+  const account=useAccount(), {client,permissionRevisions}=useTeam(), revision=permissionRevisions[project.id]??0;
+  const resource=params.get("resource")==="span-hits"?"span-hits":"runs", stamp=JSON.stringify([account.session.id,project.id,resource,revision]);
+  const [scope,setScope]=useState({stamp:"",key:""});
+  useEffect(()=>{let active=true;void teamSearchScope(account.session.id,project.id,resource).then(key=>{if(active)setScope({stamp,key:`runphantom:search:team:${key}`});});return ()=>{active=false;};},[account.session.id,project.id,resource,stamp]);
+  const suggestions=useCallback((field:"model"|"provider"|"tag",prefix:string,signal:AbortSignal)=>client.request<SearchSuggestionResult>(`${projectApi(project.id)}/search-suggestions${teamQuery({field,prefix})}`,{signal}),[client,project.id]);
   const urlQuery = params.get("q") ?? ""; const previousQuery = useRef(urlQuery);
+  const draftParams=new URLSearchParams(params);if(q)draftParams.set("q",q);else draftParams.delete("q");
   useEffect(() => { if (previousQuery.current !== urlQuery) { previousQuery.current = urlQuery; setQ(urlQuery); } }, [urlQuery]);
-  const filter: RunFilters = { q: params.get("q") ?? "", status: (params.get("status") || undefined) as RunFilters["status"], model: params.get("model") ?? "", provider: params.get("provider") ?? "" };
-  const result = useTeamPages<RunSummary>([project.id, "runs"], `${projectApi(project.id)}/runs`, filter, 5000);
+  const filter: RunFilters = { q: params.get("q") ?? "", status: (params.get("status") || undefined) as RunFilters["status"], model: params.get("model") ?? "", provider: params.get("provider") ?? "",filter:params.get("filter")??undefined };
+  const result = useTeamPages<RunSummary|SearchSpanHit>([project.id,resource,revision], `${projectApi(project.id)}/${resource==="span-hits"?"search-hits":"runs"}`, filter, 5000);
   const items = result.data?.pages.flatMap(page => page.items) ?? [];
   const change = (key: string, value: string) => setParams(previous => { const next = new URLSearchParams(previous); if (value) next.set(key, value); else next.delete(key); return next; }, { replace: true });
   useEffect(() => { const timer = window.setTimeout(() => { if (q !== (params.get("q") ?? "")) setParams(previous => { const next = new URLSearchParams(previous); if (q) next.set("q", q); else next.delete("q"); return next; }, { replace: true }); }, 250); return () => clearTimeout(timer); }, [q, params, setParams]);
@@ -25,8 +36,8 @@ function TraceList() {
     <Field label="Status"><Select value={filter.status ?? ""} onChange={event => change("status", event.target.value)}><option value="">All statuses</option><option value="running">Running</option><option value="completed">Completed</option><option value="failed">Failed</option></Select></Field>
     <Field label="Model"><Input value={filter.model} maxLength={256} placeholder="Exact model" onChange={event => change("model", event.target.value)} /></Field>
     <Field label="Provider"><Input value={filter.provider} maxLength={256} placeholder="Exact provider" onChange={event => change("provider", event.target.value)} /></Field>
-  </div><ErrorNotice error={result.error} retry={() => void result.refetch()} />{result.isPending && <Loading text="Searching project traces…" />}
-    {!result.error && !result.isPending && <><p className="team-muted" role="status">{items.length} {items.length === 1 ? "trace" : "traces"} loaded · Refreshes while this page is open</p>{items.length ? <div className="team-list">{items.map(run => <Link className="team-row team-row-link" key={run.id} to={`${projectPath(project.id)}/traces/${encodeURIComponent(run.id)}${params.size ? `?${params}` : ""}`}><div><strong>{run.displayName || run.name}</strong><p className="team-muted"><DateTime value={run.startedAt} /> · {run.spanCount} spans · {run.model ?? "Model unavailable"}</p></div><div className="team-inline"><span className="team-muted">{duration(run.durationMs)}</span><Badge value={run.status} /></div></Link>)}</div> : filtered ? <Empty title="No matching traces"><p>Try a different phrase or clear the filters.</p><Action onClick={() => { setQ(""); setParams({}, { replace: true }); }}>Clear filters</Action></Empty> : <IngestGuide />}</>}
+  </div><SearchFilters query={draftParams.toString()} onChange={next=>setParams(next,{replace:true})} scopeKey={scope.stamp===stamp?scope.key:""} team suggestions={suggestions}/><ErrorNotice error={result.error} retry={() => void result.refetch()} />{result.isPending && <Loading text="Searching project traces…" />}
+    {!result.error && !result.isPending && <><p className="team-muted" role="status">{items.length} {resource==="span-hits"?"spans":items.length === 1 ? "trace" : "traces"} loaded · Refreshes while this page is open</p>{items.length ? resource==="span-hits"?<SearchSpanHits items={items as SearchSpanHit[]} open={hit=>navigate(`${projectPath(project.id)}/traces/${encodeURIComponent(hit.runId)}/spans/${encodeURIComponent(hit.spanId)}${params.size?`?${params}`:""}`)}/>:<div className="team-list">{(items as RunSummary[]).map(run => <Link className="team-row team-row-link" key={run.id} to={`${projectPath(project.id)}/traces/${encodeURIComponent(run.id)}${params.size ? `?${params}` : ""}`}><div><strong>{run.displayName || run.name}</strong><p className="team-muted"><DateTime value={run.startedAt} /> · {run.spanCount} spans · {run.model ?? "Model unavailable"}</p></div><div className="team-inline"><span className="team-muted">{duration(run.durationMs)}</span><Badge value={run.status} /></div></Link>)}</div> : filtered ? <Empty title="No matching traces"><p>Try a different phrase or clear the filters.</p><Action onClick={() => { setQ(""); setParams({}, { replace: true }); }}>Clear filters</Action></Empty> : <IngestGuide />}</>}
     <More available={result.hasNextPage} busy={result.isFetchingNextPage} onClick={() => void result.fetchNextPage()} />
   </div>;
 }

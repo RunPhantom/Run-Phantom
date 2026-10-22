@@ -89,12 +89,12 @@ function sanitize(value: unknown, state: SanitizeState, depth: number, key?: str
   if (null === value || 'boolean' === typeof value) return value;
   if ('string' === typeof value) {
     const scrubbed = scrubInput(value, state);
-    const scanned = scrubbed.slice(0, TRANSPORT_LIMITS.MAX_STRING_LENGTH * 4);
-    if (scanned.length !== scrubbed.length) state.truncatedValues += 1;
-    const redacted = redactText(scanned);
+    const redacted = redactText(scrubbed);
     if (redacted !== value) state.redacted = true;
+    const scanned = redacted.slice(0, TRANSPORT_LIMITS.MAX_STRING_LENGTH * 4);
+    if (scanned.length !== redacted.length) state.truncatedValues += 1;
     return boundedString(
-      redacted,
+      scanned,
       state,
       'error' === key?.toLowerCase()
         ? TRANSPORT_LIMITS.MAX_ERROR_LENGTH
@@ -150,7 +150,7 @@ function sanitize(value: unknown, state: SanitizeState, depth: number, key?: str
         n += 1;
         continue;
       }
-      const redactedKey = redactText(scrubInput(originalKey, state).slice(0, 4096));
+      const redactedKey = redactText(scrubInput(originalKey, state)).slice(0, 4096);
       if (redactedKey !== originalKey) state.redacted = true;
       const sk = boundedString(redactedKey, state, MAX_KEY_LENGTH);
       const sv = sanitize(v, state, depth + 1, sk);
@@ -303,7 +303,7 @@ function sanitize(value: unknown, state: SanitizeState, depth: number, key?: str
         state.droppedItems += 1;
         continue;
       }
-      const redactedKey = redactText(scrubInput(entry.key, state).slice(0, 4096));
+      const redactedKey = redactText(scrubInput(entry.key, state)).slice(0, 4096);
       if (redactedKey !== entry.key) state.redacted = true;
       const safeKey = boundedString(redactedKey, state, MAX_KEY_LENGTH);
       if (!entry.ok) {
@@ -407,17 +407,17 @@ export function safeStringify(value: unknown): string {
 export { isSensitiveKey, scrubKnownSecrets };
 
 /** Secret scrubbing runs before truncation, so cutting a token never defeats its recognizer. */
-export function redactText(text: string): string {
+export function redactText(text: string, isSensitive: (key: string) => boolean = isSensitiveKey): string {
   return scrubKnownSecrets(text)
     // Redact the complete scheme credential before the generic key/value pass, which
     // would otherwise remove only "Bearer" and leave an arbitrary token behind.
     .replace(/\bauthorization["']?\s*[:=]\s*["']?(?:bearer|basic)\s+[^\s"'&,;}]+/gi, `authorization: ${REDACTED_VALUE}`)
     .replace(/\b(Bearer|Basic)\s+(?=[A-Za-z0-9._~+/=-]{16,})(?=[A-Za-z0-9._~+/=-]*[\d._~+/=-])[A-Za-z0-9._~+/=-]+/gi,
       (_match, scheme: string) => `${scheme} ${REDACTED_VALUE}`)
-    .replace(/https?:\/\/[^\s<>"']+/gi, (url) => redactUrl(url))
+    .replace(/https?:\/\/[^\s<>"']+/gi, (url) => redactUrl(url, isSensitive))
     .replace(/(^|[\s?&#,;{"'])([A-Za-z][A-Za-z0-9_.-]{0,127})(\s*[=:]\s*["']?)([^&\s,;"'}]+)/g,
       (match, prefix: string, key: string, separator: string) =>
-        isSensitiveKey(key) ? `${prefix}${key}${separator}${REDACTED_VALUE}` : match);
+        isSensitive(key) ? `${prefix}${key}${separator}${REDACTED_VALUE}` : match);
 }
 
 /** Apply the same wire redaction again immediately before report/flow persistence. */
