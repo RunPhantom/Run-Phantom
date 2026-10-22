@@ -50,6 +50,7 @@ test("evaluations: user creates a regression case, compares frozen candidates, r
     return page.getByRole("combobox", { name: "View experiment", exact: true }).inputValue();
   };
   const baseline = await startFromUi("UI baseline", EVALUATION_RUNS.baseline, "pass");
+  await expect(results).toContainText("1 / 1 case passed");
   const rejected = await startFromUi("UI rejected candidate", EVALUATION_RUNS.rejected, "fail");
   const repaired = await startFromUi("UI repaired candidate", EVALUATION_RUNS.repaired, "pass");
   await startFromUi("UI missing measurements", EVALUATION_RUNS.missing, "inconclusive");

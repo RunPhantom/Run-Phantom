@@ -1,0 +1,18 @@
+.flow-repair-heading {
+  font-family: var(--font-display);
+  font-weight: 700;
+}
+
+.flow-repair button {
+  min-height: 44px;
+}
+
+.flow-repair input[type="radio"] {
+  accent-color: var(--rp-accent);
+}
+
+@media (max-width: 640px) {
+  .flow-repair-actions {
+    margin-bottom: 80px;
+  }
+}

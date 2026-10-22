@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
+import { FIXTURE_PRIMARY_RUN_ID, seedRunPhantomFixtures } from "./helpers";
 
 type ControlledSocket = {
   readyState: number;
@@ -160,4 +161,132 @@ test("never completing handshakes time out, retry once per attempt, and recover"
   await page.clock.runFor(12_000);
   await expectSocketCount(page, 3);
   await expect(offlineDialog(page)).toHaveCount(0);
+});
+
+function gate() {
+  let release!: () => void;
+  const promise = new Promise<void>(resolve => { release = resolve; });
+  return { promise, release };
+}
+
+async function holdProviderHandshake(page: Page) {
+  const received = gate();
+  let release!: () => void;
+  let droppedSpans = 0;
+  await page.routeWebSocket("**/ws", socket => {
+    const server = socket.connectToServer();
+    let held = true;
+    server.onMessage(message => {
+      const envelope = JSON.parse(message.toString()) as { event?: string };
+      if (held && envelope.event === "spans") { droppedSpans++; return; }
+      if (held && envelope.event === "agent_provider") {
+        release = () => { held = false; socket.send(message); };
+        received.release();
+        return;
+      }
+      socket.send(message);
+    });
+  });
+  return { received: received.promise, release: () => release(), droppedSpans: () => droppedSpans };
+}
+
+test("a delayed same-provider handshake preserves Debug's message and header", async ({ page, runPhantom }) => {
+  await seedRunPhantomFixtures(runPhantom.url);
+  const handshake = await holdProviderHandshake(page);
+  const detailUrl = `${runPhantom.url}/api/runs/detail/${FIXTURE_PRIMARY_RUN_ID}`;
+  await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
+  await handshake.received;
+  expect(await page.evaluate(() => localStorage.getItem("runphantom:messagePane:providerIntroSeen"))).toBeNull();
+  await page.getByRole("button", { name: "Debug", exact: true }).click();
+  const pane = page.getByRole("complementary", { name: "Coding-agent debug chat" });
+  const prompt = "What went wrong here?";
+  const disabled = page.waitForResponse(response => response.url().endsWith("/api/agent/messages") && response.request().method() === "POST");
+  await pane.getByRole("button", { name: prompt, exact: true }).click();
+  expect((await disabled).status()).toBe(409);
+  const firstMessage = pane.getByRole("log", { name: "Debug chat messages" }).locator(":scope > *").first().locator(":scope > *");
+  await expect(firstMessage).toHaveText(prompt);
+
+  const refreshed = page.waitForResponse(detailUrl);
+  handshake.release();
+  await refreshed;
+  await expect(firstMessage).toHaveText(prompt);
+  await expect(pane.locator("header")).toBeVisible();
+  await expect(pane.getByRole("button", { name: "Hide", exact: true })).toHaveCount(0);
+  await expect(pane.getByText("Connect your coding agent", { exact: true })).toHaveCount(0);
+});
+
+test("the connection handshake catches up spans whose broadcast was missed", async ({ page, request, runPhantom }) => {
+  await seedRunPhantomFixtures(runPhantom.url);
+  const detailUrl = `${runPhantom.url}/api/runs/detail/${FIXTURE_PRIMARY_RUN_ID}`;
+  const detail = await (await request.get(detailUrl)).json();
+  const expectedBars = detail.spans.filter((span: { span_type: string | null }) =>
+    span.span_type === "TRACE" || span.span_type === "TOOL_CALL" || span.span_type?.includes("LLM"),
+  ).length;
+  expect(expectedBars).toBeGreaterThan(0);
+  const handshake = await holdProviderHandshake(page);
+  let spansArrived = false;
+  const activity = "Waiting for the first completed span.";
+  await page.route(detailUrl, route => spansArrived ? route.continue() : route.fulfill({ json: {
+    ...detail, spans: [], subAgents: [],
+    liveEvents: [{ id: 1, trace_id: FIXTURE_PRIMARY_RUN_ID, span_id: null, type: "reasoning", content: activity,
+      timestamp: detail.run.started_at, metadata: null }],
+  } }));
+  await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
+  await handshake.received;
+  await expect(page.getByText(activity, { exact: true })).toBeVisible();
+  const bars = page.locator('button.timeline-bar, button[aria-label^="Jump to "]');
+  await expect(bars).toHaveCount(0);
+  spansArrived = true;
+  await seedRunPhantomFixtures(runPhantom.url);
+  await expect.poll(() => handshake.droppedSpans()).toBeGreaterThan(0);
+  await expect(bars).toHaveCount(0);
+
+  const refreshed = page.waitForResponse(detailUrl);
+  handshake.release();
+  expect((await refreshed).ok()).toBe(true);
+  await expect(bars).toHaveCount(expectedBars);
+});
+
+test("a genuine provider change clears chat state and supersedes the initial provider GET", async ({ page, request, runPhantom }) => {
+  await seedRunPhantomFixtures(runPhantom.url);
+  const initialProvider = gate();
+  const releaseInitialProvider = gate();
+  const handshake = await holdProviderHandshake(page);
+  await page.route("**/api/agent/provider", async route => {
+    if (route.request().method() !== "GET") return route.continue();
+    const response = await route.fetch();
+    initialProvider.release();
+    await releaseInitialProvider.promise;
+    await route.fulfill({ response });
+  });
+  try {
+    await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
+    await initialProvider.promise;
+    await handshake.received;
+    const initialRefresh = page.waitForResponse(`${runPhantom.url}/api/runs/detail/${FIXTURE_PRIMARY_RUN_ID}`);
+    handshake.release();
+    await initialRefresh;
+    await page.getByRole("button", { name: "Debug", exact: true }).click();
+    const pane = page.getByRole("complementary", { name: "Coding-agent debug chat" });
+    const disabled = page.waitForResponse(response => response.url().endsWith("/api/agent/messages") && response.request().method() === "POST");
+    await pane.getByRole("button", { name: "What went wrong here?", exact: true }).click();
+    expect((await disabled).status()).toBe(409);
+    await expect(pane.getByRole("log", { name: "Debug chat messages" })).toContainText("What went wrong here?");
+
+    const sessions = page.waitForResponse(response => new URL(response.url()).pathname === "/api/agent/sessions");
+    const changed = await request.post(`${runPhantom.url}/api/agent/provider`, { data: { provider: "codex" } });
+    expect(changed.ok()).toBe(true);
+    expect((await sessions).ok()).toBe(true);
+    await expect(pane.getByText("Your Recent Codex Chats", { exact: true })).toBeVisible();
+    await expect(pane.getByRole("log", { name: "Debug chat messages" })).toHaveCount(0);
+
+    const staleProvider = page.waitForResponse(`${runPhantom.url}/api/agent/provider`);
+    releaseInitialProvider.release();
+    await (await staleProvider).finished();
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+    await expect(pane.getByRole("button", { name: "Connect Codex", exact: true })).toBeVisible();
+    await expect(pane.getByText("Your Recent Claude Code Chats", { exact: true })).toHaveCount(0);
+  } finally {
+    releaseInitialProvider.release();
+  }
 });

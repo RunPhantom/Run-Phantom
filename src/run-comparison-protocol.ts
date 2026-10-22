@@ -1,3 +1,4 @@
+import type { CapturedAgentDefinitions } from "./agent-definitions-protocol";
 export const RUN_COMPARISON_LIMITS = {
   spansPerRun: 2000, acquiredBytes: 8 * 1024 * 1024, fieldBytes: 64 * 1024,
   scalarBytes: 4096, previewBytes: 512, depth: 64, pageRows: 200, responseBytes: 1024 * 1024,
@@ -10,7 +11,7 @@ export interface CapturedComparisonSpan {
   id: string; run_id: string; parent_span_id: string | null; name: string; span_type: string | null; status: string | null;
   input_payload: string | null; output_payload: string | null; model: string | null; provider: string | null;
   start_time_ms: number | null; end_time_ms: number | null; duration_ms: number | null; input_tokens: number | null; output_tokens: number | null;
-  attributes: string | null;
+  attributes: string | null; otlp_evidence?: string | null; otlp_evidence_oversized?: number;
   input_oversized?: number; output_oversized?: number; attributes_oversized?: number;
 }
 export interface CapturedComparisonRun { id: string; name: string | null; spans: CapturedComparisonSpan[] }
@@ -49,4 +50,5 @@ export interface RunComparison {
   nextOffset: number | null;
   warnings: string[];
   equality: "exact captured text";
+  agentDefinitions?: { baseline: CapturedAgentDefinitions | null; candidate: CapturedAgentDefinitions | null };
 }

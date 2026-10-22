@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Search, Upload, X } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { RunDetail } from "../components/RunDetail";
-import { RunListItem } from "../components/RunList";
-import { searchRuns, type RunSearchResult } from "../api/runs";
+import { RunListItem, useShortRunIds } from "../components/RunList";
+import { searchRuns, searchSpanHits, searchSuggestions, getSearchScope, type RunSearchResult, type SearchHitPage } from "../api/runs";
+import { SearchFilters } from "../components/SearchFilters";
+import { SearchSpanHits } from "../components/SearchSpanHits";
 import { useRunPhantomMessage } from "../hooks/use-runphantom-ws";
 import { C } from "../utils/colors";
 import { useScrollRestoration } from "../hooks/use-scroll-restoration";
@@ -18,29 +20,34 @@ export function SearchPage() {
   const { runId: routeRunId } = useParams<{ runId?: string }>();
   const selectedId = routeRunId ? safeDecodeParam(routeRunId) : null;
   const [params, setParams] = useSearchParams();
+  const latestParams=useRef(params), renderedQuery=useRef(params.toString());
+  if(renderedQuery.current!==params.toString()){renderedQuery.current=params.toString();latestParams.current=params;}
+  const submitParams=useCallback((next:URLSearchParams)=>{latestParams.current=next;setParams(next,{replace:true});},[setParams]);
   const query = params.get("q") ?? "";
   const status = params.get("status") ?? "";
   const model = params.get("model") ?? "";
   const provider = params.get("provider") ?? "";
-  const options = useMemo(() => ({ q: query.trim(), status, model: model.trim(), provider: provider.trim(), limit: PAGE_SIZE }), [query, status, model, provider]);
-  const filterKey = JSON.stringify(options);
-  const hasFilters = !!(options.q || status && status !== "all" || options.model || options.provider);
+  const typed = params.get("filter") ?? undefined;
+  const resource = params.get("resource") === "span-hits" ? "span-hits" : "runs";
+  const options = useMemo(() => ({ q: query, status, model, provider, filter: typed, limit: PAGE_SIZE }), [query, status, model, provider, typed]);
+  const filterKey = JSON.stringify([resource, options]);
+  const hasFilters = !!(options.q || status && status !== "all" || options.model || options.provider || typed);
   const querySuffix = params.size ? `?${params}` : "";
   const updateFilter = useCallback((key: string, value: string) => {
-    setParams((previous) => {
-      const next = new URLSearchParams(previous);
-      if (value) next.set(key, value);
-      else next.delete(key);
-      return next;
-    }, { replace: true });
-  }, [setParams]);
-  const clearFilters = () => setParams({}, { replace: true });
+    const next = new URLSearchParams(latestParams.current);
+    if (value) next.set(key,value);else next.delete(key);
+    submitParams(next);
+  }, [submitParams]);
+  const clearFilters = () => submitParams(new URLSearchParams());
   const searchListRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
   useScrollRestoration(searchListRef, "searchpage-list");
   const isMobile = useIsMobile();
   const [result, setResult] = useState<(RunSearchResult & { key: string }) | null>(null);
+  const [hitResult, setHitResult] = useState<(SearchHitPage & { key: string }) | null>(null);
+  const [scope, setScope] = useState({resource:"",key:""});
+  const scopeKey=scope.resource===resource?scope.key:"";
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,8 +59,14 @@ export function SearchPage() {
   const generationRef = useRef(0);
   const busyRef = useRef(false);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const currentResult = result?.key === filterKey ? result : null;
-  const runs = currentResult?.runs ?? [];
+  const currentRunResult = resource === "runs" && result?.key === filterKey ? result : null;
+  const currentHitResult = resource === "span-hits" && hitResult?.key === filterKey ? hitResult : null;
+  const currentResult = currentRunResult ?? currentHitResult;
+  const runs = currentRunResult?.runs ?? [];
+  const hits = error ? [] : currentHitResult?.items ?? [];
+  const count = resource === "span-hits" ? hits.length : runs.length;
+  useEffect(() => {const controller=new AbortController();void getSearchScope(resource,controller.signal).then(value=>{if(!controller.signal.aborted)setScope({resource,key:`runphantom:search:local:${value.scope}`});},()=>{});return ()=>controller.abort();},[resource]);
+  const shortRunIds = useShortRunIds(currentRunResult?.runs);
 
   useEffect(() => {
     const generation = ++generationRef.current;
@@ -65,9 +78,8 @@ export function SearchPage() {
     setError(null);
     const timer = setTimeout(async () => {
       try {
-        const next = await searchRuns(options, controller.signal);
-        if (generation !== generationRef.current || controller.signal.aborted) return;
-        setResult({ ...next, key: filterKey });
+        if(resource === "span-hits") { const next=await searchSpanHits(options,controller.signal); if(generation!==generationRef.current||controller.signal.aborted)return;setHitResult({...next,key:filterKey}); }
+        else {const next=await searchRuns(options,controller.signal);if(generation!==generationRef.current||controller.signal.aborted)return;setResult({...next,key:filterKey});}
       } catch (cause) {
         if (generation !== generationRef.current || controller.signal.aborted) return;
         setError(cause instanceof Error ? cause.message : "Search could not be completed.");
@@ -83,7 +95,7 @@ export function SearchPage() {
       controller.abort();
       requestRef.current?.abort();
     };
-  }, [options, filterKey, refresh]);
+  }, [options, resource, filterKey, refresh]);
 
   const loadMore = async () => {
     if (!currentResult?.nextCursor || busyRef.current) return;
@@ -94,13 +106,15 @@ export function SearchPage() {
     setLoadingMore(true);
     setError(null);
     try {
-      const next = await searchRuns({ ...options, cursor: currentResult.nextCursor }, controller.signal);
-      if (generation !== generationRef.current || controller.signal.aborted) return;
-      setResult((previous) => {
-        if (!previous || previous.key !== filterKey) return previous;
-        const seen = new Set(previous.runs.map((run) => run.id));
-        return { ...next, key: filterKey, runs: [...previous.runs, ...next.runs.filter((run) => !seen.has(run.id))] };
-      });
+      if(resource === "span-hits") {
+        const next=await searchSpanHits({...options,cursor:currentResult.nextCursor},controller.signal);
+        if(generation!==generationRef.current||controller.signal.aborted)return;
+        setHitResult(previous=>{if(!previous||previous.key!==filterKey)return previous;const seen=new Set(previous.items.map(hit=>JSON.stringify([hit.runId,hit.spanId])));return {...next,key:filterKey,items:[...previous.items,...next.items.filter(hit=>!seen.has(JSON.stringify([hit.runId,hit.spanId])))]};});
+      } else {
+        const next=await searchRuns({...options,cursor:currentResult.nextCursor},controller.signal);
+        if(generation!==generationRef.current||controller.signal.aborted)return;
+        setResult(previous=>{if(!previous||previous.key!==filterKey)return previous;const seen=new Set(previous.runs.map(run=>run.id));return {...next,key:filterKey,runs:[...previous.runs,...next.runs.filter(run=>!seen.has(run.id))]};});
+      }
     } catch (cause) {
       if (generation !== generationRef.current || controller.signal.aborted) return;
       setError(cause instanceof Error ? cause.message : "More results could not be loaded.");
@@ -153,9 +167,9 @@ export function SearchPage() {
   }, [query, updateFilter]);
 
   useEffect(() => {
-    if (!currentResult?.runs.length || loading || selectedId || isMobile) return;
-    navigate(`${tracePath("/search", currentResult.runs[0].id)}${querySuffix}`, { replace: true });
-  }, [currentResult, loading, isMobile, navigate, selectedId, querySuffix]);
+    if (!currentRunResult?.runs.length || loading || selectedId || isMobile) return;
+    navigate(`${tracePath("/search", currentRunResult.runs[0].id)}${querySuffix}`, { replace: true });
+  }, [currentRunResult, loading, isMobile, navigate, selectedId, querySuffix]);
 
   const loadDemoTraces = async () => {
     setDemoLoading(true);
@@ -199,14 +213,14 @@ export function SearchPage() {
         className={`${isMobile ? (selectedId ? "hidden" : "w-full") : "w-[280px]"} min-h-0 flex-shrink-0 flex flex-col`}
         style={{ borderRight: isMobile ? "none" : `1px solid ${C.border}` }}
       >
-        <div className="px-4 py-4" style={{ borderBottom: `1px solid ${C.border}` }}>
+        <div className="flex-shrink-0 overflow-auto px-4 py-4" style={{ maxHeight: "66dvh", borderBottom: `1px solid ${C.border}` }}>
           <div className="flex items-center justify-between gap-3 pl-10 lg:pl-0">
             <div>
               <h1 className="text-[11px] uppercase tracking-[0.18em]" style={{ color: C.fg0 }}>Local Search</h1>
               <div className="mt-1 text-[14px] font-medium" style={{ color: C.fg4 }}>Search captured runs</div>
             </div>
-            <div aria-label={`${runs.length}${currentResult?.hasMore ? " or more" : ""} results loaded`} className="rounded-full border px-2 py-1 text-[10px] font-mono" style={{ background: C.surface, color: C.fg1, borderColor: C.border }}>
-              {runs.length}{currentResult?.hasMore ? "+" : ""}
+            <div aria-label={`${count}${currentResult?.hasMore ? " or more" : ""} results loaded`} className="rounded-full border px-2 py-1 text-[10px] font-mono" style={{ background: C.surface, color: C.fg1, borderColor: C.border }}>
+              {count}{currentResult?.hasMore ? "+" : ""}
             </div>
           </div>
           <div className="relative mt-4">
@@ -253,23 +267,25 @@ export function SearchPage() {
             <p className="text-[10px] leading-4" style={{ color: C.fg1 }}>Model and provider match exact names.</p>
             {hasFilters && <button type="button" onClick={clearFilters} className="text-[11px] underline underline-offset-4" style={{ color: C.fg3 }}>Clear all filters</button>}
           </div>
+          <SearchFilters query={params.toString()} onChange={submitParams} scopeKey={scopeKey} suggestions={searchSuggestions}/>
         </div>
         <div ref={searchListRef} aria-label="Search results" aria-busy={loading || loadingMore} className="flex-1 overflow-auto px-3 py-3 space-y-1.5 rp-list-scroll">
           <div role="status" className="text-[11px] leading-5" style={{ color: C.fg1 }}>
-            {loading ? "Searching local traces…" : currentResult && !error ? `${runs.length} ${runs.length === 1 ? "run" : "runs"} loaded${currentResult.hasMore ? "; more available" : ""}` : ""}
+            {loading ? "Searching local traces…" : currentResult && !error ? `${count} ${resource === "span-hits" ? "spans" : count === 1 ? "run" : "runs"} loaded${currentResult.hasMore ? "; more available" : ""}` : ""}
           </div>
           {error && <div role="alert" className="rounded-xl border px-3 py-3" style={controlStyle}>
             <p className="text-[13px] font-medium">Search unavailable</p>
             <p className="mt-1 break-words text-[11px] leading-5" style={{ color: C.fg2 }}>{error}</p>
             <button type="button" className="mt-2 text-[12px] underline underline-offset-4" onClick={() => setRefresh((value) => value + 1)}>Retry search</button>
           </div>}
-          {!loading && !error && currentResult && runs.length === 0 && <div className="rounded-2xl border px-4 py-5 text-center" style={{ borderColor: C.border, background: C.surface }}>
+          {!loading && !error && currentResult && count === 0 && <div className="rounded-2xl border px-4 py-5 text-center" style={{ borderColor: C.border, background: C.surface }}>
             <div className="text-[13px] font-medium" style={{ color: C.fg3 }}>{hasFilters ? "No matching runs" : "No captured runs yet"}</div>
             <p className="mt-2 text-[11px] leading-5" style={{ color: C.fg1 }}>{hasFilters ? "Try a shorter phrase or clear the filters to browse all captured runs." : "Capture a local agent run or load demo traces to start searching."}</p>
             {!hasFilters && <button type="button" disabled={demoLoading} onClick={() => void loadDemoTraces()} className="mt-3 text-[12px] underline underline-offset-4 disabled:opacity-60" style={{ color: C.fg3 }}>{demoLoading ? "Loading demo traces…" : "Load demo traces"}</button>}
           </div>}
-          {runs.map((run) => <RunListItem key={run.id} run={run} selected={selectedId === run.id} onClick={() => navigate(`${tracePath("/search", run.id)}${querySuffix}`)} />)}
-          {currentResult?.hasMore && <button type="button" onClick={() => void loadMore()} disabled={loading || loadingMore} className="w-full rounded-lg border px-3 py-2 text-[12px] disabled:opacity-60" style={controlStyle}>{loadingMore ? "Loading more…" : "Load more runs"}</button>}
+          {runs.map((run) => <RunListItem key={run.id} run={run} shortRunIds={shortRunIds} selected={selectedId === run.id} onClick={() => navigate(`${tracePath("/search", run.id)}${querySuffix}`)} />)}
+          {resource === "span-hits" && <SearchSpanHits items={hits} open={hit=>navigate(`${tracePath("/search",hit.runId)}/span/${encodeURIComponent(hit.spanId)}${querySuffix}`)}/>}
+          {currentResult?.hasMore && <button type="button" onClick={() => void loadMore()} disabled={loading || loadingMore} className="w-full rounded-lg border px-3 py-2 text-[12px] disabled:opacity-60" style={controlStyle}>{loadingMore ? "Loading more…" : resource === "span-hits" ? "Load more spans" : "Load more runs"}</button>}
         </div>
       </div>
       <div className={`${isMobile && !selectedId ? "hidden" : ""} flex-1 min-w-0`}>

@@ -8,20 +8,26 @@
  * rather than failing the session, which is what lets an assertion return
  * inconclusive instead of a false pass when its evidence was never being collected.
  */
-import { CAUSAL_PROTOCOL_VERSION, CAUSAL_CAPABILITY, VERIFICATION_LIMITS, type Coverage, type AppCommand, type RelativeTarget } from "../protocol.js";
+import { BUSINESS_PROTOCOL_VERSION, BUSINESS_CAPABILITY, SEMANTIC_PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_PROTOCOL_VERSION, SOURCE_CAPABILITY, TREE_PROTOCOL_VERSION, TREE_CAPABILITY, CAUSAL_CAPABILITY, VERIFICATION_LIMITS, type Coverage, type AppCommand, type RelativeTarget } from "../protocol.js";
 import { parseCommand, validateOrigin } from "../validation.js";
 import { sanitizeWithReport } from "../serialization.js";
 import { installConsole } from "./observers/console.js";
 import { installNetwork } from "./observers/network.js";
 import { installRoute } from "./observers/route.js";
 import { observeSafely, type Emit, type Teardown } from "./observers/types.js";
-import { runDomCommand } from "./actions/index.js";
+import { runDomCommand, runSemanticDomCommand } from "./actions/index.js";
+import { LiveElementRefs } from "./dom/refs.js";
 import { selectPath } from "../state-select.js";
 import { storeAdapterDetails, type StoreAdapter, type AdapterSnapshot } from "./store-adapters.js";
 export { queryStore, piniaStore, shapeStore, canonicalQueryKey } from "./store-adapters.js";
 export type { StoreAdapter, StateAdapterOptions, QueryAdapterOptions } from "./store-adapters.js";
+import { identifyReactControl } from "./framework/react.js";
+import { sanitizeControlSource } from "../build/source.js";
+import { snapshotSemanticTree } from "./dom/tree.js";
+import { PERFORMANCE_PROTOCOL_VERSION, PERFORMANCE_CAPABILITY } from "../protocol.js";
+import { installPerformance, type PerformanceCollector } from "./observers/performance.js";
 
-export interface ConnectionOptions { url: string; sessionId: string; token: string; causalReadings?: boolean }
+export interface ConnectionOptions { url: string; sessionId: string; token: string; causalReadings?: boolean; semanticRefs?: boolean; semanticSnapshots?: boolean; sourceProvenance?: { enabled: boolean; repoRoot?: string }; businessResponses?: boolean; performanceEvidence?: { enabled: boolean; metadata?: "none" | "origin-path" } }
 export interface RuntimeConnection {
   disconnect(): void;
   signal(name: string, data?: unknown): void;
@@ -37,10 +43,17 @@ function nameValid(value: unknown): value is string {
 export function connect(options: ConnectionOptions): RuntimeConnection {
   validateOrigin(location.origin);
   const origin = validateOrigin(options.url);
+  const sourceEnabled = options.sourceProvenance?.enabled === true;
+  const performanceEnabled = options.performanceEvidence?.enabled === true;
+  if (performanceEnabled && options.performanceEvidence?.metadata !== undefined && !["none", "origin-path"].includes(options.performanceEvidence.metadata)) throw new Error("Invalid performance metadata mode");
+  let performanceCollector: PerformanceCollector | undefined;
+  const sourceRoot = sourceEnabled ? options.sourceProvenance?.repoRoot : undefined;
+  if (sourceRoot !== undefined && (typeof sourceRoot !== "string" || sourceRoot.length > 4096)) throw new Error("Invalid browser-local source root");
   if (!nameValid(options.sessionId)) throw new Error("Invalid verification session ID");
   if (typeof options.token !== "string" || !options.token || options.token.length > 512) {
     throw new Error("Invalid verification session token");
   }
+  const refs = new LiveElementRefs(options.sessionId, document);
   const globals = window as unknown as Record<symbol, unknown>;
   if (globals[ACTIVE_RUNTIME]) throw new Error("A Run Phantom verification runtime is already connected on this page");
   const lease = {};
@@ -112,6 +125,7 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
     // Protocol discriminants and request/store/signal identities are generated metadata.
     // A fill equal to "error" or "GET" must not rewrite that metadata or its field names.
     const fields = type === "console" ? ["message", "stack"]
+      : type === "network.body" ? ["body"]
       : type === "network" || type === "network.start" ? ["url", "error"]
       : type === "route" ? ["url"]
       : type === "signal" ? ["data"]
@@ -162,6 +176,7 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
     for (const store of stores.values()) store.remove();
     stores.clear();
     window.removeEventListener("pagehide", disconnect);
+    refs.invalidate();
     secrets.clear();
     secretSpellings.clear();
     earlyEvents.length = 0;
@@ -179,10 +194,14 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
   const onOpen = (): void => {
     if (!active) return;
     install("console", () => installConsole(emit, prepare));
-    install("network", () => installNetwork(emit, () => currentActionId));
+    install("network", () => installNetwork(emit, () => currentActionId, options.businessResponses === true ? prepare : undefined));
     install("route", () => installRoute(emit));
-    observeSafely(() => send({ type: "hello", version: CAUSAL_PROTOCOL_VERSION, token: options.token, coverage,
-      capabilities: options.causalReadings === false ? [] : [CAUSAL_CAPABILITY] }), disconnect);
+    if (performanceEnabled) {
+      try { performanceCollector = installPerformance(options.performanceEvidence?.metadata ?? "none", value => String(prepare(value).value)); teardown.push(() => performanceCollector?.disconnect()); }
+      catch { /* Pairing remains available; performance commands disclose unavailable installation. */ }
+    }
+    observeSafely(() => send({ type: "hello", version: performanceEnabled ? PERFORMANCE_PROTOCOL_VERSION : options.semanticSnapshots !== false ? TREE_PROTOCOL_VERSION : sourceEnabled ? SOURCE_PROTOCOL_VERSION : options.businessResponses === true ? BUSINESS_PROTOCOL_VERSION : SEMANTIC_PROTOCOL_VERSION, token: options.token, coverage,
+      capabilities: [...(options.causalReadings === false ? [] : [CAUSAL_CAPABILITY]), ...(options.semanticRefs === false ? [] : [SEMANTIC_CAPABILITY]), ...(sourceEnabled ? [SOURCE_CAPABILITY] : []), ...(options.semanticSnapshots === false ? [] : [TREE_CAPABILITY]), ...(performanceEnabled ? [PERFORMANCE_CAPABILITY] : []), ...(options.businessResponses === true ? [BUSINESS_CAPABILITY] : [])] }), disconnect);
   };
   const actionReading = (id: string, phase: "before" | "after", target: RelativeTarget): void => {
     let available = false;
@@ -211,7 +230,17 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
   };
   const act = (id: string, command: AppCommand): void => {
     try {
-      if (command.type === "fill" && command.value && !secrets.has(command.value)) {
+      const boundary = (element: Element): void => {
+        if (sourceEnabled) {
+          const observation = sanitizeControlSource(identifyReactControl(element, sourceRoot), value => String(prepare(value).value));
+          if ((command.type === "ref-click" || command.type === "ref-fill") && refs.resolve(command.ref) !== element) throw new Error("Reference changed during source capture");
+          if (!send({ type: "event", event: { type: "action.source", data: { observation }, actionId: id } })) disconnect();
+        }
+        currentActionId = id;
+        emit("action.boundary", {}, id);
+        if (!active || !ready) throw new Error("Verification disconnected before action dispatch");
+      };
+      if ((command.type === "fill" || command.type === "ref-fill") && command.value && !secrets.has(command.value)) {
         if (secretCharacters + command.value.length > 1024 * 1024 || secrets.size >= 1000) {
           throw new Error("Live fill redaction capacity reached; reconnect before another fill");
         }
@@ -223,13 +252,16 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
         if (options.causalReadings === false) throw new Error("Causal readings are not enabled for this runtime");
         for (const target of command.targets) actionReading(id, "before", target);
       }
-      if (command.type === "click" || command.type === "fill" || command.type === "causal-click") {
+      if (!sourceEnabled && (command.type === "click" || command.type === "fill" || command.type === "causal-click")) {
         currentActionId = id;
         emit("action.boundary", {}, id);
         if (!active || !ready) throw new Error("Verification disconnected before action dispatch");
       }
       let output: { result: unknown; truncated?: boolean };
-      if (command.type === "state") {
+      if (command.type === "performance") {
+        if (!performanceCollector) throw new Error("Native performance evidence is not enabled or could not be installed");
+        output = { result: performanceCollector.read(command.phase) };
+      } else if (command.type === "state") {
         const read = stores.get(command.store);
         if (!read) throw new Error("Requested store is not registered");
         const reading = read.read();
@@ -239,12 +271,18 @@ export function connect(options: ConnectionOptions): RuntimeConnection {
           ...(reading.availability ? { availability: reading.availability } : {}), ...(reading.reason ? { reason: reading.reason } : {}) },
           truncated: Boolean(reading.truncated || safe.truncated || store.truncation || store.redacted) };
       } else if (command.type === "causal-click") {
-        output = runDomCommand({ type: "click", selector: command.selector }, prepare);
+        output = runDomCommand({ type: "click", selector: command.selector }, prepare, sourceEnabled ? boundary : undefined);
         for (const target of command.targets) actionReading(id, "after", target);
-      } else output = runDomCommand(command, prepare);
+      } else if (command.type === "semantic-tree") {
+        if (options.semanticSnapshots === false) throw new Error("Semantic tree snapshots are not enabled for this runtime");
+        output = snapshotSemanticTree(refs.document, refs.documentGeneration, prepare);
+      } else if (command.type === "find" || command.type === "semantic-snapshot" || command.type === "ref-click" || command.type === "ref-fill") {
+        if (options.semanticRefs === false) throw new Error("Semantic references are not enabled for this runtime");
+        output = runSemanticDomCommand(command, refs, prepare, boundary, sourceEnabled ? element => sanitizeControlSource(identifyReactControl(element, sourceRoot), value => String(prepare(value).value)) : undefined);
+      } else output = runDomCommand(command, prepare, sourceEnabled ? boundary : undefined);
       // DOM commands redact their text fields before returning. Apply generic size limits
       // to the result envelope without exact-fill rewriting of its typed schema.
-      const safe = command.type === "state" ? { value: output.result } : sanitizeWithReport(output.result);
+      const safe = command.type === "state" || command.type === "performance" ? { value: output.result } : sanitizeWithReport(output.result);
       if (!send({ type: "result", id, ok: true, result: safe.value, ...(output.truncated || safe.truncation || safe.redacted ? { truncated: true } : {}) })) disconnect();
     } catch (error) {
       const safe = prepare(error instanceof Error ? error.message : "Runtime command failed");

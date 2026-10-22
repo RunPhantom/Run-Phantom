@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider, useInfiniteQuery, useQuery, useQueryC
 import { Navigate, useParams } from "react-router-dom";
 import { TeamApiError, TeamClient, projectApi, teamQuery, type Page, type Project, type SessionResponse } from "../api/team";
 import { ErrorNotice, Loading } from "./common";
+import { discardTeamSearchHistory, synchronizeTeamSearchSession } from "../utils/search-state";
 
 type Authenticated = Extract<SessionResponse, { authenticated: true }>;
 const signedOut: SessionResponse = { authenticated: false, setupRequired: false, user: null, session: null, csrfToken: null };
@@ -24,6 +25,7 @@ export function TeamProvider({ children }: { children: ReactNode }) {
   const accessChecks = useRef(new Set<string>());
   const [client] = useState(() => new TeamClient((status, path) => {
     if (status === 401 && !["/login", "/setup", "/invites/accept"].includes(path)) {
+      discardTeamSearchHistory();
       current.current = signedOut;
       client.setSession(signedOut);
       void queries.cancelQueries(); queries.clear(); setSession(signedOut);
@@ -33,7 +35,8 @@ export function TeamProvider({ children }: { children: ReactNode }) {
     const project = path.match(/^\/projects\/([^/?]+)(?:\/|$)/)?.[1];
     const principal = current.current;
     if (!project || !principal?.authenticated) return;
-    if (status === 403) {
+    discardTeamSearchHistory(project);
+    if (status === 403 || status === 404) {
       // One-time values disappear immediately, before the membership response.
       setPermissionRevisions(value => ({ ...value, [project]: (value[project] ?? 0) + 1 }));
     }
@@ -63,7 +66,8 @@ export function TeamProvider({ children }: { children: ReactNode }) {
   }));
   const acceptSession = (next: SessionResponse) => {
     const previousId = current.current?.session?.id;
-    if (previousId !== next.session?.id) { void queries.cancelQueries(); queries.clear(); setPermissionRevisions({}); }
+    if (previousId !== next.session?.id) { if(current.current!==null)discardTeamSearchHistory();void queries.cancelQueries(); queries.clear(); setPermissionRevisions({}); }
+    if(next.authenticated)void synchronizeTeamSearchSession(next.session.id).catch(()=>{});
     if (current.current?.authenticated && !next.authenticated) setNotice("Your session has ended. Sign in to continue.");
     else if (next.authenticated) setNotice("");
     current.current = next; client.setSession(next); setSession(next);
