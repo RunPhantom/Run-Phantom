@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import { redactText } from "../verification/serialization";
+import { parseFindingBatch } from "./finding-validation";
 import { EVIDENCE_LIMITS as L, EVIDENCE_VERSION, EVIDENCE_STATEMENT_TYPE, EVIDENCE_PREDICATE_TYPE, EVIDENCE_PAYLOAD_TYPES, EvidenceError, type EvidenceAttestationSummary, type EvidenceAttachment, type EvidenceCounts,
   type EvidenceExpectedSource, type EvidenceImportRequest, type EvidenceKind, type EvidenceLeaf, type EvidenceProducerSummary,
   type EvidenceReason, type EvidenceScope, type NormalizedEvidenceSource } from "./evidence-protocol";
 
-const kinds = ["junit", "json", "jsonl", "attestation"] as const;
-const dialects = { junit: ["junit-xml/v1"], json: ["in-toto-statement/v1", "dsse-envelope/v1"], jsonl: ["dsse-envelope-jsonl/v1"], attestation: ["in-toto-statement/v1", "dsse-envelope/v1"] } as const;
+const kinds = ["junit", "json", "jsonl", "attestation", "finding"] as const;
+const dialects = { junit: ["junit-xml/v1"], json: ["in-toto-statement/v1", "dsse-envelope/v1"], jsonl: ["dsse-envelope-jsonl/v1"], attestation: ["in-toto-statement/v1", "dsse-envelope/v1"], finding: ["runphantom-findings-json/v1"] } as const;
 const countKeys = ["executed", "passed", "failed", "errored", "skipped", "disabled", "unknown"] as const;
 const producerKeys = ["tests", "executed", "passed", "failures", "errors", "skipped", "disabled", "unknown"] as const;
 const statuses = ["passed", "failed", "errored", "skipped", "disabled", "unknown"] as const;
@@ -158,7 +159,7 @@ function parseAttestation(value: unknown, parsed: boolean): EvidenceAttestationS
     subjects, assertedCommits, reportReferences };
 }
 export function parseNormalizedEvidence(value: unknown, kind: EvidenceKind): NormalizedEvidenceSource {
-  const source = evidenceObject(value, ["version", "sourceId", "parseState", "interpretationComplete", "reportOutcome", "leafCounts", "observedExecutedLowerBound", "producerCounts", "producerSummaries", "countsConsistent", "assertedIdentity", "attestation", "reasonCodes", "leaves"], "normalized source");
+  const source = evidenceObject(value, ["version", "sourceId", "parseState", "interpretationComplete", "reportOutcome", "leafCounts", "observedExecutedLowerBound", "producerCounts", "producerSummaries", "countsConsistent", "assertedIdentity", "attestation", "reasonCodes", "leaves", "findingBatch"], "normalized source");
   if (source.version !== EVIDENCE_VERSION) invalid("Unsupported evidence version");
   const parseState = oneOf(source.parseState, ["parsed", "unparsed", "rejected"], "parse state");
   let leafBytes = 0;
@@ -213,12 +214,15 @@ export function parseNormalizedEvidence(value: unknown, kind: EvidenceKind): Nor
   if (reportOutcome !== expectedOutcome) invalid("Report outcome does not follow its independent observation precedence");
   const identity = evidenceObject(source.assertedIdentity, ["runnerId", "commit", "sourceSha256"], "asserted identity");
   const attestation = source.attestation === null ? null : parseAttestation(source.attestation, parseState === "parsed");
-  if (parseState === "parsed" && kind !== "junit" && !attestation) invalid("Parsed JSON evidence requires its selected attestation schema");
+  const findingBatch = source.findingBatch === undefined ? undefined : parseFindingBatch(source.findingBatch);
+  if (kind === "finding" && parseState === "parsed" && !findingBatch || findingBatch && (kind !== "finding" || parseState !== "parsed" || attestation || producerCounts || producerSummaries.length)) invalid("Finding captures must stay separate from test and attestation observations");
+  if (findingBatch && Buffer.byteLength(canonicalEvidenceJson(findingBatch)) > L.MAX_NORMALIZED_BYTES) throw new EvidenceError("Finding capture exceeds normalized byte limit", 413);
+  if (parseState === "parsed" && kind !== "junit" && kind !== "finding" && !attestation) invalid("Parsed JSON evidence requires its selected attestation schema");
   if (kind === "junit" && attestation) invalid("Attestation metadata is separate from report leaf execution");
   return { version: EVIDENCE_VERSION, sourceId: evidenceText(source.sourceId, "source ID"), parseState, interpretationComplete: source.interpretationComplete, reportOutcome, leafCounts, observedExecutedLowerBound: lowerBound, producerCounts, producerSummaries,
     countsConsistent: source.countsConsistent as boolean | null, assertedIdentity: { runnerId: nullableText(identity.runnerId, "runner ID"),
       commit: nullableText(identity.commit, "commit", 256), sourceSha256: identity.sourceSha256 === null ? null : evidenceSha256(identity.sourceSha256) },
-    attestation, reasonCodes, leaves };
+    attestation, reasonCodes, leaves, ...(findingBatch ? { findingBatch } : {}) };
 }
 
 /** Only validated ordinary JSON participates in identity. Key order is irrelevant; array order and duplicate membership are material. */

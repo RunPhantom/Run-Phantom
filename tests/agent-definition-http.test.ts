@@ -273,18 +273,25 @@ test("actual escaped portable composite is unavailable across all public routes 
   expect(original.attributes).toContain(marker); expect(original.otlp_evidence).toBe(source.otlp_evidence);
 });
 
-test.each(["span", "resource", "scope", "event", "link", "capture", "value"] as const)("actual admitted %s lexical receipt ambiguity refuses public detail/export and preserves private row identity", async source => {
+test.each(["span", "resource", "scope", "event", "link", "capture", "value"] as const)("actual legacy %s lexical receipt ambiguity is refused at import/export and preserves private row identity", async source => {
   const index = ["span", "resource", "scope", "event", "link", "capture", "value"].indexOf(source);
   const capture = definitionTrace(9920 + index), marker = `F17 private ambiguous ${source} receipt instruction`;
   const span = capture.body.resourceSpans[0].scopeSpans[0].spans[0]; span.attributes = span.attributes.filter(entry => entry.key !== definitionKey);
   await ingest(capture); const portable = await json(`/api/runs/${capture.id}/export`);
   portable.run.id = `f17-duplicate-receipt-${source}`;
-  for (const row of portable.spans) {
-    row.run_id = portable.run.id;
-    row.otlp_evidence = duplicateDefinitionReceipt(row.otlp_evidence, source, index % 2 === 0, index % 3 !== 0, marker);
-  }
+  for (const row of portable.spans) row.run_id = portable.run.id;
   expect((await request("/api/import-run", portable)).status).toBe(200);
   const sql = `SELECT rowid AS identity,attributes,otlp_evidence,input_payload,output_payload FROM spans WHERE run_id='${portable.run.id}'`;
+  const admitted = await request("/api/traces/query", { sql }); expect(admitted.status).toBe(200);
+  const validRows = (await admitted.json()).rows;
+  for (const row of portable.spans) row.otlp_evidence = duplicateDefinitionReceipt(row.otlp_evidence, source, index % 2 === 0, index % 3 !== 0, marker);
+  expect((await request("/api/import-run", portable)).status).toBe(400);
+  const refused = await request("/api/traces/query", { sql }); expect(refused.status).toBe(200);
+  expect((await refused.json()).rows).toEqual(validRows);
+  const legacy = new Database(path.join(directory, "capture.db"));
+  try {
+    for (const row of portable.spans) legacy.query("UPDATE spans SET otlp_evidence=? WHERE run_id=? AND id=?").run(row.otlp_evidence, row.run_id, row.id);
+  } finally { legacy.close(); }
   const privateBefore = await request("/api/traces/query", { sql }); expect(privateBefore.status).toBe(200);
   const retained = (await privateBefore.json()).rows[0];
   expect(retained.otlp_evidence).toBe(portable.spans[0].otlp_evidence); expect(retained.attributes).toBe(portable.spans[0].attributes);
@@ -293,8 +300,8 @@ test.each(["span", "resource", "scope", "event", "link", "capture", "value"] as 
   for (const route of [`/api/runs/detail/${portable.run.id}`, `/api/runs/${portable.run.id}/export`]) {
     const response = await request(route), text = await response.text();
     observations.push({ route, status: response.status, containsPrivate: text.includes(marker), body: text });
-    expect(response.status).toBe(500);
-    expect(JSON.parse(text)).toEqual({ error: route.endsWith("/export") ? "Could not export trace" : "request failed" });
+    expect(response.status).toBe(route.endsWith("/export") ? 413 : 500);
+    expect(JSON.parse(text)).toEqual({ error: route.endsWith("/export") ? "spans[0].otlp_evidence is invalid or contains credentials" : "request failed" });
     expect(text).not.toContain(marker);
   }
   const meta = await json(`/api/spans/${capture.spanId}?run_id=${portable.run.id}`);
@@ -311,6 +318,6 @@ test.each(["span", "resource", "scope", "event", "link", "capture", "value"] as 
   expect(healthyPrivate.status).toBe(200);
   expect(healthy.spans[0].otlp_evidence).toBe((await healthyPrivate.json()).rows[0].otlp_evidence);
   expect(healthy.spans[0].input_payload).toBe(definitionInput); expect(healthy.spans[0].output_payload).toBe(definitionOutput);
-  proof(`http-duplicate-receipt-${source}.json`, { source: "Actual source OTLP, v2 import, public HTTP and privileged private SQL", pid: daemon.pid,
-    admittedImportStatus: 200, observations, privateRowExact: true, inputOutputExact: true, healthyControlStatus: 200 });
+  proof(`http-duplicate-receipt-${source}.json`, { source: "Actual source OTLP, valid v2 import, refused duplicate import, native legacy SQLite update, public HTTP and privileged private SQL", pid: daemon.pid,
+    admittedImportStatus: 200, rejectedDuplicateImportStatus: 400, importRefusalAtomic: true, legacyNativeReceipt: true, observations, privateRowExact: true, inputOutputExact: true, healthyControlStatus: 200 });
 });
