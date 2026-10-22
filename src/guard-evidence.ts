@@ -130,7 +130,7 @@ function fromReceipt(receipt: OtlpEvidence): CapturedGuardEvidence {
 // extra fields, while retaining the original replay payload/status columns.
 const PUBLIC_SPAN_FIELDS = ["id", "run_id", "parent_span_id", "name", "span_type", "status", "input_payload", "output_payload",
   "start_time_ms", "end_time_ms", "duration_ms", "model", "provider", "input_tokens", "output_tokens", "attributes", "otlp_evidence"] as const;
-export function projectCapturedGuardSpan(span: unknown): Record<string, unknown> & { guardEvidence: CapturedGuardEvidence } {
+export function projectCapturedGuardSpan(span: unknown): Record<string, unknown> & { attributes?: unknown; otlp_evidence?: unknown; guardEvidence: CapturedGuardEvidence } {
   const out: Record<string, unknown> = {};
   for (const field of PUBLIC_SPAN_FIELDS) { const value = own(span, field); if (value !== undefined) out[field] = value; }
   if (typeof out.name === "string") {

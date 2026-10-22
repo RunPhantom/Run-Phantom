@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import { closeDb, upsertRun, insertSpan } from "../src/db";
+import { upsertRun, insertSpan } from "../src/db";
 import { EvaluationMcpFixture, cleanupError } from "./helpers/evaluation-mcp-fixture";
 import type { DatasetRevision, DatasetExport, Experiment, Comparison, Review, Snapshot } from "../src/evaluations/protocol";
 
@@ -162,7 +162,7 @@ test("MCP experiments freeze baseline/failing/corrected candidates, compare and 
   expect(await call<Review[]>("eval_review", { action: "list", experimentId: rejected.id })).toHaveLength(2);
   expect((await call<Experiment>("eval_run", { action: "get", experimentId: rejected.id })).verdict).toBe("fail");
   await call("eval_dataset", { action: "delete", datasetId: revision.datasetId });
-  closeDb();
+  server = await fixture!.restartHttp();
   expect((await call<Experiment>("eval_run", { action: "get", experimentId: rejected.id })).results[0].snapshot.output.value).toBe("declined");
   expect(await call<Review[]>("eval_review", { action: "list", experimentId: rejected.id })).toHaveLength(2);
 });

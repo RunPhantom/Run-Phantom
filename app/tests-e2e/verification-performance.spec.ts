@@ -55,7 +55,13 @@ test("actual user opt-in, trusted slow/healthy interactions, numeric identity, s
     await app.goto(lab); await app.evaluate(async ({ url, sessionId, token }) => { const sdk = await import(url + "/verification/sdk.js"); window.runtime = sdk.connect({ url, sessionId, token, performanceEvidence: { enabled: true, metadata: "none" } }); }, { url: daemon.url, sessionId, token });
     await expect(page.getByRole("button", { name: "Begin lab window", exact: true })).toBeEnabled(); await page.getByRole("button", { name: "Dismiss setup", exact: true }).click();
     const panel = page.getByRole("region", { name: "Native performance lab", exact: true });
+    await page.route(`**/api/verification/sessions/${sessionId}/command`, route => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Native lab transport temporarily unavailable" }) }), { times: 1 });
+    await panel.getByRole("button", { name: "Begin lab window", exact: true }).click();
+    await expect(page.locator("#verification-performance").getByRole("alert")).toContainText("Native lab transport temporarily unavailable");
+    await expect(panel.getByText("No lab window captured yet.", { exact: true })).toBeVisible();
+    await expect(panel.getByRole("button", { name: "Begin lab window", exact: true })).toBeEnabled();
     await panel.getByRole("button", { name: "Begin lab window", exact: true }).focus(); await page.keyboard.press("Enter"); await expect(panel.getByText(/^Lab window opened/)).toBeVisible();
+    await expect(page.locator("#verification-performance").getByRole("alert")).toHaveCount(0);
     await app.locator("#slow").click(); await expect(app.locator("#status")).toHaveText("slow complete");
     await app.locator("#load").click(); await expect(app.locator("#status")).toHaveText("loaded 1");
     // Wait beyond recent-input exclusion before causing a real observed native layout shift.
@@ -156,4 +162,69 @@ test("actual source transport refuses injected loss/overflow/invalid populations
   await page.goto(lab + "?new-document"); await expect.poll(async () => (await (await request.get(daemon.url + "/api/verification/sessions")).json()).find((item: { id: string }) => item.id === created.id)?.connected).toBe(false);
   const after = await (await request.post(`${daemon.url}/api/verification/sessions/${created.id}/command`, { data: { type: "performance", phase: "capture" } })).json(); expect(after.ok).toBe(false);
   record("injected-source-faults", { injected: true, nativeMeasurementClaimed: false, observations, navigationDisconnected: true, after });
+});
+
+for (const outcome of ["native-success", "injected-failure"] as const) test(`held performance ${outcome} cannot publish into a different linked-run scope`, async ({ page, context, request, lab, daemon }) => {
+  const createdResponse = await request.post(daemon.url + "/api/verification/sessions", { data: { origin: lab } });
+  expect(createdResponse.status()).toBe(201);
+  const created = await createdResponse.json() as { id: string; token: string };
+  const app = await context.newPage();
+  const pattern = `**/api/verification/sessions/${created.id}/command`;
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const pending = new Set<Promise<void>>();
+  let nativeReply: { ok: boolean; result: PerformanceSnapshot } | undefined;
+  const handler = (route: import("@playwright/test").Route) => {
+    const work = (async () => {
+      expect(route.request().postDataJSON()).toEqual({ type: "performance", phase: "begin" });
+      const response = await route.fetch({ timeout: 10_000, maxRedirects: 0 });
+      expect(response.ok()).toBe(true);
+      const body = await response.json() as { ok: boolean; result: PerformanceSnapshot };
+      expect(body.ok).toBe(true); expect(body.result.phase).toBe("begin");
+      nativeReply = body;
+      await held;
+      if (outcome === "native-success") await route.fulfill({ response });
+      else await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Obsolete native lab transport failure" }) });
+    })();
+    pending.add(work); void work.then(() => pending.delete(work), () => pending.delete(work));
+    return work;
+  };
+  try {
+    await app.goto(lab);
+    await app.evaluate(async ({ url, sessionId, token }) => {
+      const sdk = await import(url + "/verification/sdk.js");
+      window.runtime = sdk.connect({ url, sessionId, token, performanceEvidence: { enabled: true, metadata: "none" } });
+    }, { url: daemon.url, sessionId: created.id, token: created.token });
+    await page.goto(`${daemon.url}/verification?runId=performance-held-${outcome}`);
+    const panel = page.getByRole("region", { name: "Native performance lab", exact: true });
+    const begin = panel.getByRole("button", { name: "Begin lab window", exact: true });
+    await expect(begin).toBeEnabled();
+    await page.route(pattern, handler, { times: 1 });
+    await begin.click();
+    await expect.poll(() => nativeReply?.result.phase, { timeout: 12_000 }).toBe("begin");
+    await expect(begin).toBeDisabled();
+    await page.getByRole("link", { name: "Show reports for all runs", exact: true }).click();
+    await expect(page).toHaveURL(daemon.url + "/verification");
+    await expect(panel.getByText("No lab window captured yet.", { exact: true })).toBeVisible();
+    const delivered = page.waitForResponse(response => response.url().endsWith(`/sessions/${created.id}/command`));
+    release(); const response = await delivered;
+    expect(response.status()).toBe(outcome === "native-success" ? 200 : 503);
+    await response.finished(); await Promise.all(pending); await page.unroute(pattern, handler);
+    await expect(panel.getByText("No lab window captured yet.", { exact: true })).toBeVisible();
+    await expect(page.locator("#verification-performance").getByRole("alert")).toHaveCount(0);
+    await expect(page.getByText("Native lab report saved. Review its window and coverage below.", { exact: true })).toHaveCount(0);
+    const freshResponse = page.waitForResponse(value => value.url().endsWith(`/sessions/${created.id}/command`));
+    await begin.click(); const fresh = await (await freshResponse).json() as { ok: boolean; result: PerformanceSnapshot };
+    expect(fresh.ok).toBe(true); expect(fresh.result.phase).toBe("begin");
+    expect(fresh.result.windowId).not.toBe(nativeReply!.result.windowId);
+    await expect(panel.getByText(/^Lab window opened/)).toBeVisible();
+    await expect(panel).toContainText(fresh.result.windowId);
+    await expect(panel).not.toContainText(nativeReply!.result.windowId);
+    await expect(page.locator("#verification-performance").getByRole("alert")).toHaveCount(0);
+    await expect(page.getByText("Native lab report saved. Review its window and coverage below.", { exact: true })).toHaveCount(0);
+    await expect(app.locator("#status")).toHaveText("ready");
+    record(`held-scope-${outcome}`, { actualNativeCommand: true, injectedHttpFailure: outcome === "injected-failure", oldWindowId: nativeReply!.result.windowId, currentWindowId: fresh.result.windowId, linkedRunScopeCleared: true });
+  } finally {
+    release(); await page.unroute(pattern, handler); await Promise.allSettled(pending); await app.close();
+  }
 });

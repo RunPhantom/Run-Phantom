@@ -40,7 +40,7 @@ export function PerformanceReadings({ snapshot, retained = false }: { snapshot: 
 
 export function PerformanceEvidence({ sessionId, connected, capable, disabled, perform, onReport }: {
   sessionId: string; connected: boolean; capable: boolean; disabled: boolean;
-  perform: (label: string, operation: () => Promise<void>) => Promise<void>; onReport: (report: VerificationReport) => void;
+  perform: (label: string, operation: (current: () => boolean) => Promise<void>) => Promise<void>; onReport: (report: VerificationReport) => void;
 }) {
   const [snapshot, setSnapshot] = useState<PerformanceSnapshot>();
   const [baseline, setBaseline] = useState<PerformanceSnapshot>();
@@ -50,18 +50,20 @@ export function PerformanceEvidence({ sessionId, connected, capable, disabled, p
   const active = useRef(sessionId);
   useEffect(() => { active.current = sessionId; return () => { active.current = ""; }; }, [sessionId]);
   const unavailable = disabled || !connected || !capable;
-  const capture = (phase: "begin" | "capture") => void perform(phase === "begin" ? "Opening native lab window…" : "Capturing native lab window…", async () => {
+  const capture = (phase: "begin" | "capture") => void perform(phase === "begin" ? "Opening native lab window…" : "Capturing native lab window…", async current => {
     const response = await verificationApi.command(sessionId, { type: "performance", phase });
+    if (!current()) return;
     if (!response.ok) throw new Error(response.error ?? "Native performance capture is unavailable.");
     const result = parsePerformanceSnapshot(response.result);
     if (result.phase !== phase) throw new Error("Native performance response does not match this request.");
     if (active.current === sessionId) setSnapshot(result);
   });
-  const check = () => void perform("Checking native lab metric…", async () => {
+  const check = () => void perform("Checking native lab metric…", async current => {
     if (!/^(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(limit.trim())) throw new Error("Enter a nonnegative decimal numeric limit.");
     const value = Number(limit);
     if (!Number.isFinite(value) || value < 0 || ((metric === "resourceCount" || metric === "resourceTransferBytes") && !Number.isSafeInteger(value))) throw new Error("This metric requires a finite nonnegative limit; counts and bytes require safe whole numbers.");
     const report = await verificationApi.assert(sessionId, { kind: "performance", metric, op, value }, undefined, `Native lab: ${labels[metric]}`);
+    if (!current()) return;
     if (active.current === sessionId) { const saved = report.context?.checks[0]?.performance; if (saved) setSnapshot(parsePerformanceSnapshot(saved.snapshot)); onReport(report); }
   });
   const compatible = baseline && snapshot?.phase === "capture" && baseline.documentId === snapshot.documentId && baseline.clock.timeOriginMs === snapshot.clock.timeOriginMs && baseline.windowId !== snapshot.windowId && performanceClockComplete(baseline) && performanceClockComplete(snapshot);

@@ -2,7 +2,7 @@ import { createServer as createHttpServer } from "node:http";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { createServer } from "../../src/server";
-import { closeDb, getDrizzleDb, getRunWithSpans, upsertRun } from "../../src/db";
+import { getDrizzleDb, getRunWithSpans, upsertRun } from "../../src/db";
 import { saveAgentsConfig } from "../../src/agents-config";
 import { decodeCodexRollout, codexSnapshotOtlp } from "../../src/coding-hooks/codex";
 import { codexJsonl, codexRecords, codexSession } from "./coding-hooks-codex";
@@ -67,5 +67,5 @@ try {
   process.stdout.write(JSON.stringify({ observation, mixedObservation, ordinaryPositive, ordinaryNegative }) + "\n");
 } finally {
   await new Promise<void>((resolve, reject) => agent.close(error => error ? reject(error) : resolve()));
-  runtime.server.closeAllConnections(); await new Promise<void>((resolve, reject) => runtime.server.close(error => error ? reject(error) : resolve())); closeDb();
+  await runtime.close();
 }

@@ -35,7 +35,7 @@ test("verification workspace: deep links retain real outcomes, filters and respo
       await expect(page.getByRole("article", { name: `Workspace checkout outcome: ${outcome}`, exact: true })).toBeVisible({ timeout: 15_000 });
     }
     await app.evaluate(() => window.runtime.disconnect());
-    await expect(page.getByText("Disconnected", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Application session", exact: true }).getByRole("status")).toHaveText("Disconnected");
     await page.getByRole("button", { name: "Check outcome", exact: true }).click();
     await expect(page.getByRole("article", { name: "Workspace checkout outcome: inconclusive", exact: true })).toBeVisible({ timeout: 15_000 });
     const saved = await request.get(`${runPhantom.url}/api/verification/reports?runId=${FIXTURE_PRIMARY_RUN_ID}`);

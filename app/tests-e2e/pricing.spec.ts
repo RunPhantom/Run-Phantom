@@ -1,20 +1,11 @@
 import { createHash } from "node:crypto";
-import { expect, test as sourceTest } from "./fixtures";
+import { expect, test } from "./fixtures";
 import { clearRunPhantom } from "./helpers";
 import type { Snapshot } from "../../src/evaluations/protocol";
 
-const compiledUrl = process.env.RUNPHANTOM_COMPILED_URL;
-if (compiledUrl) {
-  const target = new URL(compiledUrl);
-  if (target.protocol !== "http:" || target.hostname !== "127.0.0.1" || !target.port) {
-    throw new Error("Pricing compiled tests require an isolated loopback daemon with an explicit port");
-  }
+if (process.env.RUNPHANTOM_COMPILED_URL) {
+  throw new Error("Pricing installed journeys require RUNPHANTOM_E2E_RUNTIME=installed with RUNPHANTOM_E2E_BINARY and RUNPHANTOM_E2E_SHA256; an external URL does not establish artifact identity");
 }
-const test = compiledUrl ? sourceTest.extend({
-  runPhantom: async ({}, use) => {
-    await use({ url: compiledUrl, port: Number(new URL(compiledUrl).port), dbPath: "isolated-compiled-runtime" });
-  },
-}) : sourceTest;
 
 const CATALOGUE_URL = "https://openrouter.ai/api/v1/models";
 const RUN_ID = "0000000000000000000000000000f140";
@@ -53,7 +44,7 @@ async function seed(url: string, mode: "mixed" | "zero" | "missing") {
 test.beforeEach(async ({ runPhantom }, testInfo) => {
   await clearRunPhantom(runPhantom.url);
   await testInfo.attach("Pricing runtime profile", {
-    body: JSON.stringify({ runtime: compiledUrl ? "compiled-daemon" : "source-daemon", catalogue: "controlled-synthetic", providerSpendUsd: 0 }),
+    body: JSON.stringify({ runtime: runPhantom.runtime.mode, catalogue: "controlled-synthetic", providerSpendUsd: 0 }),
     contentType: "application/json",
   });
 });

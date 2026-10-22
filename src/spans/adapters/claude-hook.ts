@@ -1,21 +1,8 @@
 import type { AdapterInput, AdapterMatch, SpanAdapter } from "./types";
 import { parseBoundedHookJson, type HookJson } from "../../coding-hooks/shared";
 
-export interface ClaudeHookCaptureViewV1 {
- contract:"runphantom.claude-hook.observation/v1";
- entityKind:"session"|"prompt"|"tool"|"assistant"|"subagent";
- sourceKind:"hook"|"transcript";
- coverage:"partial";producerVerified:false;runtimeVerified:false;
- reportedPhase:"pending"|"success"|"failure"|"interrupted"|"complete"|"unknown"|"conflict";
- reportedDurationMs:number|null;
- usage:{freshInputTokens:number|null;outputTokens:number|null;cacheCreatedInputTokens:number|null;cacheReadInputTokens:number|null}|null;
- userText:string|null;assistantText:string|null;
-}
-export interface ClaudeHookCaptureViewV2 extends Omit<ClaudeHookCaptureViewV1,"contract"> {
- contract:"runphantom.claude-hook.observation/v2";
- contextKey:string|null;contextRevision:number|null;sessionContextVersion:2|null;retainedSessionSha256:string|null;
-}
-export type ClaudeHookCaptureView = ClaudeHookCaptureViewV1 | ClaudeHookCaptureViewV2;
+import type { ClaudeHookCaptureView, ClaudeHookCaptureViewV1 } from "../hook-capture-types";
+export type { ClaudeHookCaptureView, ClaudeHookCaptureViewV1, ClaudeHookCaptureViewV2 } from "../hook-capture-types";
 export const CLAUDE_HOOK_CAPTURE_CONTRACT="runphantom.claude-hook.observation/v1";
 const contract=CLAUDE_HOOK_CAPTURE_CONTRACT;
 const contextContract="runphantom.claude-hook.observation/v2";

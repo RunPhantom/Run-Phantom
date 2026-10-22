@@ -24,7 +24,7 @@ beforeEach(() => {
   process.env.RUNPHANTOM_DB_PATH = path.join(home, "runtime.sqlite");
 });
 afterEach(async () => {
-  if (runtime) { runtime.server.closeAllConnections(); await new Promise<void>((resolve, reject) => runtime!.server.close(e => e ? reject(e) : resolve())); runtime = undefined; }
+  if (runtime) { await runtime.close(); runtime = undefined; }
   closeDb(); if (prior === undefined) delete process.env.RUNPHANTOM_DB_PATH; else process.env.RUNPHANTOM_DB_PATH = prior;
   rmSync(dir, { recursive: true, force: true });
 });

@@ -1,6 +1,6 @@
 export type CaptureReason = "unsupported-event" | "missing-source-evidence" | "missing-roster" | "missing-chunk" | "duplicate-conflict" | "terminal-conflict" | "invalid-field" | "source-loss" | "receiver-loss" | "content-truncated" | "content-redacted" | "content-unavailable" | "metadata-conflict";
-export interface RetrievalCapture { kind: "retrieval"; collection: string | null; topK: number | null; filter: string | null; resultCount: number | null; querySummary: string | null; queryText: string | null }
-export interface EmbeddingCapture { kind: "embedding"; model: string | null; dimensions: number | null; inputText: string | null }
+export interface RetrievalCapture { kind: "retrieval"; capture?: never; collection: string | null; topK: number | null; filter: string | null; resultCount: number | null; querySummary: string | null; queryText: string | null }
+export interface EmbeddingCapture { kind: "embedding"; capture?: never; model: string | null; dimensions: number | null; inputText: string | null }
 export interface StreamCapture {
   requested: boolean | null; state: "completed" | "cancelled" | "error" | "incomplete" | "unknown";
   reportedTerminal: "completed" | "cancelled" | "error" | null; coverage: "complete" | "partial" | "unavailable";
