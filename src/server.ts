@@ -9,12 +9,14 @@ import path from "path";
 import { randomUUID } from "crypto";
 import { normalizeOtelId } from "./ids";
 import { searchRuns, RunSearchError } from "./run-search";
+import { searchSpanHits, searchSuggestions, localSearchScope, SearchResourceError } from "./local-search-resources";
 import { getRunComparison, RunComparisonError } from "./run-comparison";
 import { publicCaptureMetadata } from "./spans/adapters/capture-visibility";
 import { normalizeStoredSpan } from "./spans/normalize";
 import { withholdAgentDefinitionCapture } from "./agent-definitions";
 import { guardSpanForPersistence, projectCapturedGuardSpan } from "./guard-evidence";
 import { parseOtlpRequest } from "./parse";
+import { observeOtlpTagSource, ambiguousOtlpTagSpans, unavailableOtlpTagSource, type OtlpTagSourceEvidence } from "./otlp-tag-source";
 import { decodeOtlpProtobuf } from "./otlp-protobuf";
 import {
   upsertRun,
@@ -1038,6 +1040,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
     "/otel/v1/traces",
     "/v1/live",
   ]);
+  const tagSources = new WeakMap<object, OtlpTagSourceEvidence>();
 
   // Run Phantom is a local control plane. Enforce loopback at the socket layer so
   // spoofable Host/Origin headers cannot turn a broad listener into LAN access.
@@ -1148,7 +1151,17 @@ export async function createServer(port: number, options: { comparisons?: Compar
     limit: EVALUATION_LIMITS.MAX_REQUEST,
     verify: (_req, _res, body, encoding) => { parseJsonEvidence(new TextDecoder(encoding).decode(body)); },
   }));
-  app.use(express.json({ limit: "50mb" }));
+  app.use(express.json({ limit: "50mb", verify: (req, _res, bytes, encoding) => {
+    const pathname = (req as Request).path.replace(/\/+$/, "").toLowerCase();
+    if (!INGEST_PATHS.has(pathname) || pathname === "/v1/live") return;
+    // Other accepted charsets retain middleware behavior, but cannot grant
+    // tags authority from an annotation decoded with uncertain semantics.
+    let evidence = unavailableOtlpTagSource();
+    if (encoding === "utf-8") {
+      try { evidence = observeOtlpTagSource(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { /* tags stay unavailable */ }
+    }
+    tagSources.set(req, evidence);
+  } }));
   // Accept protobuf bodies so Traceloop OTLP exports aren't silently dropped
   app.use(express.raw({ limit: "50mb", type: "application/x-protobuf" }));
 
@@ -1251,7 +1264,9 @@ export async function createServer(port: number, options: { comparisons?: Compar
         res.json(payload);
       };
 
-      const spans = parseOtlpRequest(body);
+      const source = tagSources.get(req);
+      tagSources.delete(req);
+      const spans = parseOtlpRequest(body, source ? ambiguousOtlpTagSpans(body, source) : undefined);
       if (spans.length === 0) { ok({ ok: true, spansIngested: 0 }); return; }
 
       // Reject structurally impossible spans up front. These are client errors, and
@@ -1425,6 +1440,19 @@ export async function createServer(port: number, options: { comparisons?: Compar
     const raw = Number(req.query.limit);
     const limit = Number.isFinite(raw) && raw > 0 ? Math.min(Math.floor(raw), 5000) : 5000;
     res.json(getRuns(limit));
+  });
+  for (const [resource, read] of [["search-hits", searchSpanHits], ["search-suggestions", searchSuggestions]] as const) app.get(`/api/runs/${resource}`, async (req, res) => {
+    const cancellation = new AbortController();
+    const close = () => { if (!res.writableEnded) cancellation.abort(); };
+    res.on("close", close);
+    try { const result = await read(req.query, { signal: cancellation.signal }); if (!res.destroyed) { res.setHeader("Cache-Control", "no-store"); res.json(result); } }
+    catch (error) { if (!res.destroyed) { const status = error instanceof SearchResourceError ? error.status : 500; if (status === 503) res.setHeader("Retry-After", "1"); res.status(status).json({ error: error instanceof SearchResourceError ? error.message : "Search could not complete" }); } }
+    finally { res.removeListener("close",close); }
+  });
+  app.get("/api/runs/search-scope", (req,res) => {
+    const keys = Object.keys(req.query), resource = req.query.resource;
+    if (keys.length !== 1 || keys[0] !== "resource" || resource !== "runs" && resource !== "span-hits") return res.status(400).json({ error: "Search resource is invalid" });
+    res.setHeader("Cache-Control", "no-store"); res.json({ scope: localSearchScope(resource) });
   });
   app.get("/api/runs/search", async (req, res) => {
     const cancellation = new AbortController();

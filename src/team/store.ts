@@ -29,6 +29,7 @@ import { assertTeamIngestBatch, redactTeamText, type TeamIngestBatch } from "./i
 import { TeamError } from "./errors";
 import { bytes, digest, requiredEmail, requiredHash, requiredId, requiredName, requiredRole, lifetime, pageInput, pageResult, type Paging } from "./store-utils";
 import { searchTeamRuns } from "./search";
+import { searchSpanHits, searchSuggestions, SearchResourceError, type SearchHitPage, type SearchSuggestionResult } from "../search-resources";
 import { TEAM_LIMITS as L, type Account, type Actor, type SessionInfo, type Project, type Role, type PageQuery, type Page, type Member, type Invite, type InviteCreate, type IngestKey, type KeyCreate, type RunSummary, type RunFilters, type RunDetail, type Span, type SpanSummary, type Note, type NoteCreate, type Metrics, type Check, type CheckSummary, type CheckReport, type AuditEvent, type AuditPage } from "./protocol";
 
 export interface SessionContext {
@@ -540,6 +541,29 @@ export class TeamStore {
     const result = await searchTeamRuns(this.#path, scope.projectId, query, signal);
     this.#project(context);
     return result;
+  }
+  async searchSpanHits(context: ProjectContext, query: PageQuery & RunFilters = {}, signal?: AbortSignal): Promise<SearchHitPage> {
+    return this.#searchResource(context, query, searchSpanHits, signal);
+  }
+  async searchSuggestions(context: ProjectContext, query: {field?: string; prefix?: string; limit?: number} = {}, signal?: AbortSignal): Promise<SearchSuggestionResult> {
+    return this.#searchResource(context, query, searchSuggestions, signal);
+  }
+  async #searchResource<T>(context: ProjectContext, query: unknown, read: (query: unknown, options: { dbPath: string; projectId: string; signal?: AbortSignal }) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const scope = this.#project(context);
+    const p = this.#get<ProjectRow>("SELECT * FROM projects WHERE id=?",scope.projectId)!;
+    if(p.evidence_bytes>L.PROJECT_BYTES || p.run_count>L.PROJECT_RUNS || p.span_count>L.PROJECT_SPANS) throw quota();
+    try {
+      const result = await read(query,{dbPath:this.#path,projectId:scope.projectId,signal});
+      this.#project(context);
+      return result;
+    } catch(error) {
+      this.#project(context);
+      if(error instanceof SearchResourceError) {
+        const code = error.code === "invalid_search" ? "invalid_request" : error.code === "search_busy" ? "busy" : error.code === "cancelled" ? "query_timeout" : error.code === "too_large" ? "too_large" : error.code === "quota_exceeded" ? "quota_exceeded" : error.code === "query_timeout" ? "query_timeout" : "internal_error";
+        throw new TeamError(code,error.message,undefined,error.status===503||error.status===504?1:undefined);
+      }
+      throw error;
+    }
   }
   getRun(context: ProjectContext, runId: string, query?: PageQuery): RunDetail {
     requiredId(runId);

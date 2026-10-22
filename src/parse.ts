@@ -2,13 +2,15 @@ import { normalizeOtelId } from "./ids";
 import { inferSpanType, type CaptureVisibilityV1 } from "./spans/adapters/capture-visibility";
 import { normalizeSpan } from "./spans/normalize";
 import type { NormalizedSpan } from "./spans/normalized";
+import { isCapturedCategoricalTag } from "./captured-tags";
+import { SEARCH_FILTER_LIMITS } from "./search-protocol";
 import { captureOtlpEvidence, type OtlpEvidence } from "./spans/otlp-evidence";
 
 export interface ParsedSpan {
   traceId: string; spanId: string; parentSpanId?: string; name: string; spanType: string;
   status: string; inputPayload?: string; outputPayload?: string; startTimeMs: number;
   endTimeMs: number; durationMs: number; model?: string; provider?: string;
-  inputTokens?: number; outputTokens?: number; attributes: Record<string, string | number | boolean>;
+  inputTokens?: number; outputTokens?: number; attributes: Record<string, string | number | boolean | string[]>;
   eventId?: string; eventName?: string; userId?: string; convoId?: string;
   replayRunId?: string;
   otlpEvidence: OtlpEvidence;
@@ -77,12 +79,38 @@ function getAttr(attrs: any[], key: string): string | number | boolean | undefin
 function collectAttrs(
   attrs: any[] | undefined,
   into: Record<string, string | number | boolean>,
+  unavailableTags = false,
 ): void {
   for (const a of attrs ?? []) {
     if (typeof a?.key !== "string") continue;
+    if (unavailableTags && a.key === "tags") { into.tags = "[UNAVAILABLE]"; continue; }
     const v = anyValue(a.value);
     if (v !== undefined) into[a.key] = v;
   }
+}
+
+// Only an explicit span tags array supplies complete membership evidence.
+// Other composites and legacy JSON strings retain their scalar representation.
+function capturedTags(attrs: any[], droppedAttributesCount: unknown): string[] | "[UNAVAILABLE]" | undefined {
+  let wire: any, occurrences = 0;
+  for (const attribute of attrs) if (attribute?.key === "tags") { occurrences++; wire = attribute.value; }
+  if (occurrences > 1) return "[UNAVAILABLE]";
+  if (!wire || typeof wire !== "object" || !Object.hasOwn(wire, "arrayValue")) return undefined;
+  if (droppedAttributesCount !== undefined && (typeof droppedAttributesCount !== "number"
+    || !Number.isSafeInteger(droppedAttributesCount) || droppedAttributesCount !== 0)) return "[UNAVAILABLE]";
+  if (Object.keys(wire).length !== 1 || !wire.arrayValue || typeof wire.arrayValue !== "object"
+    || Array.isArray(wire.arrayValue) || Object.keys(wire.arrayValue).some(key => key !== "values")) return "[UNAVAILABLE]";
+  const values = Object.hasOwn(wire.arrayValue, "values") ? wire.arrayValue.values : [];
+  if (!Array.isArray(values) || values.length > SEARCH_FILTER_LIMITS.tags) return "[UNAVAILABLE]";
+  const tags: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const tag = value?.stringValue;
+    if (!value || Object.keys(value).length !== 1 || !isCapturedCategoricalTag(tag) || seen.has(tag)) return "[UNAVAILABLE]";
+    seen.add(tag);
+    tags.push(tag);
+  }
+  return tags;
 }
 
 function first(attrs: any[], ...keys: string[]): string | number | boolean | undefined {
@@ -165,13 +193,14 @@ function stripNul<T extends string | undefined>(value: T): T {
     : value) as T;
 }
 
-export function parseOtlpRequest(body: any): ParsedSpan[] {
+export function parseOtlpRequest(body: any, ambiguousTags?: WeakSet<object>): ParsedSpan[] {
   const spans: ParsedSpan[] = [];
   if (!body?.resourceSpans) return spans;
   for (const rs of body.resourceSpans) {
     for (const ss of rs.scopeSpans ?? []) {
       for (const s of ss.spans ?? []) {
         const attrs = s.attributes ?? [];
+        const tags = ambiguousTags?.has(s) ? "[UNAVAILABLE]" : capturedTags(attrs, s.droppedAttributesCount);
         // BigInt() throws SyntaxError on anything non-numeric, so a single bad
         // timestamp from one exporter used to abort the whole batch with a 500.
         // Yield NaN instead and let the ingest validator reject that span with a
@@ -191,7 +220,7 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
         if (typeof ss.scope?.version === "string" && ss.scope.version) {
           allAttrs["otel.scope.version"] = ss.scope.version;
         }
-        collectAttrs(attrs, allAttrs);
+        collectAttrs(attrs, allAttrs, tags === "[UNAVAILABLE]");
         for (const [k, v] of Object.entries(allAttrs)) {
           if (typeof v === "string") allAttrs[k] = stripNul(v);
         }
@@ -297,7 +326,7 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
           model, provider,
           inputTokens: typeof inputTokens === "number" ? inputTokens : undefined,
           outputTokens: typeof outputTokens === "number" ? outputTokens : undefined,
-          attributes: allAttrs,
+          attributes: tags === undefined ? allAttrs : { ...allAttrs, tags },
           eventId, eventName, userId, convoId, replayRunId,
           otlpEvidence,
           ...(match.captureVisibility ? { captureVisibility: match.captureVisibility } : {}),

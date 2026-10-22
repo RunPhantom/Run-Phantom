@@ -163,7 +163,7 @@ export class TeamClient {
 
 export function teamQuery(values: object): string {
   const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(values)) if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
+  for (const [key, value] of Object.entries(values)) if (value !== undefined && value !== null && value !== "") query.set(key, key === "filter" && typeof value === "object" ? JSON.stringify(value) : String(value));
   const text = query.toString();
   return text ? `?${text}` : "";
 }
