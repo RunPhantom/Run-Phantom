@@ -95,6 +95,7 @@ test("bounded actual database descriptor distinguishes the opened file from a sa
   const directory = await mkdtemp(path.join(tmpdir(), "phantom-default-db-identity-")); directories.push(directory);
   const file = path.join(directory, "owned.db"), database = new Database(file, { create: true });
   const unrelated: FileHandle[] = [];
+  const failures: unknown[] = [];
   try {
     database.exec("CREATE TABLE actual_owned_control (id INTEGER PRIMARY KEY)");
     if (process.platform === "darwin") {
@@ -122,9 +123,11 @@ test("bounded actual database descriptor distinguishes the opened file from a sa
       expect(observed.openByProcess).toBeNull();
       expect(observed.coverage).toContain("unavailable");
     }
-  } finally {
+  } catch (error) { failures.push(error); }
+  finally {
     const closed = await Promise.allSettled([Promise.resolve().then(() => database.close()), ...unrelated.map(handle => handle.close())]);
-    const failures = closed.flatMap(result => result.status === "rejected" ? [result.reason] : []);
-    if (failures.length) throw new AggregateError(failures, "Owned database descriptor fixture cleanup failed");
+    failures.push(...closed.flatMap(result => result.status === "rejected" ? [result.reason] : []));
   }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, "Owned database descriptor fixture failed", { cause: failures[0] });
 });
