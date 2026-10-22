@@ -15,6 +15,7 @@ interface MigrationJournal {
   entries: Array<{ idx: number; version: string; when: number; tag: string; breakpoints: boolean }>;
 }
 
+// Real disk migrations and connection reopen checks use a per-case integration budget.
 test("verification migrations preserve an existing 0003 trace database and retain contextual reports after reopening", () => {
   const directory = mkdtempSync(path.join(tmpdir(), "runphantom-verification-migration-"));
   const dbPath = path.join(directory, "existing-traces.db");
@@ -115,4 +116,4 @@ test("verification migrations preserve an existing 0003 trace database and retai
     else process.env.RUNPHANTOM_DB_PATH = previousDbPath;
     rmSync(directory, { recursive: true, force: true });
   }
-});
+}, 15_000);
