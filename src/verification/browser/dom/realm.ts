@@ -106,3 +106,12 @@ export function valuePrototypeOf(el: Element): object | undefined {
   const proto: unknown = (ctor as { prototype?: unknown }).prototype;
   return 'object' === typeof proto && proto !== null ? proto : undefined;
 }
+
+/** Bypass instance methods/accessors using Element's own realm intrinsic. */
+export function nativeAttribute(el: Element, name: string): string | null {
+  const ctor = ctorIn(el, "Element");
+  if (typeof ctor !== "function") return null;
+  const proto: unknown = Object.getOwnPropertyDescriptor(ctor, "prototype")?.value;
+  const method: unknown = proto && typeof proto === "object" ? Object.getOwnPropertyDescriptor(proto, "getAttribute")?.value : undefined;
+  return typeof method === "function" ? Reflect.apply(method, el, [name]) as string | null : null;
+}

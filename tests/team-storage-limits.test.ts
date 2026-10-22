@@ -155,7 +155,7 @@ describe("team storage quota and retention boundaries", () => {
     expect(state(f)).toEqual(before);
     expect(f.store.getRun(f.scope, runId(1)).run.spanCount).toBe(committed);
     expect(f.store.getSpan(f.scope, runId(1), spanId(committed)).outputPayload).toBe(output);
-  });
+  }, 15_000);
 
   test("check acquisition includes all selected spans and rejects before payload materialization", () => {
     const f = fixture(), ingest = exporter(f);

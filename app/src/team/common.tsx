@@ -19,7 +19,7 @@ export function ErrorNotice({ error, retry }: { error: unknown; retry?: () => vo
 }
 export function Loading({ text = "Loading workspace…" }: { text?: string }) { return <div role="status" className="team-loading"><LoaderCircle size={18} aria-hidden="true" className="animate-spin motion-reduce:animate-none" />{text}</div>; }
 export function Empty({ title, children }: { title: string; children: ReactNode }) { return <div className="team-empty"><h2>{title}</h2><div>{children}</div></div>; }
-export function Heading({ title, children, action }: { title: string; children?: ReactNode; action?: ReactNode }) { return <header className="team-heading"><div><h1>{title}</h1>{children && <p>{children}</p>}</div>{action}</header>; }
+export function Heading({ title, children, action }: { title: string; children?: ReactNode; action?: ReactNode }) { return <header className="team-heading"><div><h1>{title}</h1>{children && <div className="team-heading-description">{children}</div>}</div>{action}</header>; }
 export function Badge({ value }: { value: string }) { return <span className={`team-badge team-badge-${value}`}>{value}</span>; }
 export function DateTime({ value }: { value: number | null }) { return value === null ? <>Unavailable</> : <time dateTime={new Date(value).toISOString()}>{new Date(value).toLocaleString()}</time>; }
 export function duration(value: number | null) { return value === null ? "Unavailable" : value < 1000 ? `${Number(value.toFixed(2))} ms` : `${Number((value / 1000).toFixed(2))} s`; }
@@ -32,14 +32,15 @@ export function More({ available, busy, onClick }: { available: boolean; busy: b
 export function TeamBrand() { return <Link className="team-brand" to="/team"><span className="team-brand-mark"><RunPhantomMark decorative size={28} /></span><span>Run Phantom<small>Team workspace</small></span></Link>; }
 export function useTask() {
   const [busy, setBusy] = useState(false); const [error, setError] = useState<unknown>(null);
-  const active = useRef(true); const generation = useRef(0);
-  useEffect(() => () => { active.current = false; generation.current++; }, []);
+  const active = useRef(true); const generation = useRef(0); const pending = useRef(false);
+  useEffect(() => { active.current = true; generation.current++; return () => { active.current = false; pending.current = false; }; }, []);
   async function run<T>(work: () => Promise<T>, done?: (value: T) => void) {
-    if (busy) return;
+    if (pending.current) return;
+    pending.current = true;
     const owner = ++generation.current; setBusy(true); setError(null);
     try { const value = await work(); if (active.current && generation.current === owner) done?.(value); }
     catch (cause) { if (active.current && generation.current === owner && !(cause instanceof DOMException && cause.name === "AbortError")) setError(cause); }
-    finally { if (active.current && generation.current === owner) setBusy(false); }
+    finally { if (active.current && generation.current === owner) { pending.current = false; setBusy(false); } }
   }
   return { busy, error, run };
 }

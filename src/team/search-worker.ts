@@ -5,6 +5,7 @@ export interface TeamSearchWork {
   dbPath: string;
   projectId: string;
   filters: RunFilters;
+  typed?: { sql: string; params: (string | number)[] };
   paging: Paging;
   started: number;
   deadline: number;
@@ -35,14 +36,15 @@ export async function teamSearchWorker(): Promise<void> {
     const params: (string | number)[] = [work.projectId];
     const where = ["r.project_id=?"];
     const filters = work.filters;
-    if (filters.status !== undefined) { where.push("r.status=?"); params.push(filters.status); }
+    if (work.typed) { where.push(work.typed.sql); params.push(...work.typed.params); }
+    else if (filters.status !== undefined) { where.push("r.status=?"); params.push(filters.status); }
     if (filters.from !== undefined) { where.push("r.started_at>=?"); params.push(filters.from); }
     if (filters.to !== undefined) { where.push("r.started_at<?"); params.push(filters.to); }
     if (filters.q !== undefined) {
       where.push("(instr(lower(json_extract(r.data,'$.name')),lower(?))>0 OR instr(lower(json_extract(r.data,'$.displayName')),lower(?))>0 OR instr(lower(r.search_text),lower(?))>0 OR EXISTS(SELECT 1 FROM spans s WHERE s.project_id=r.project_id AND s.run_id=r.id AND (instr(lower(s.name),lower(?))>0 OR instr(lower(json_extract(s.data,'$.inputPayload')),lower(?))>0 OR instr(lower(json_extract(s.data,'$.outputPayload')),lower(?))>0)))");
       params.push(filters.q, filters.q, filters.q, filters.q, filters.q, filters.q);
     }
-    if (filters.model !== undefined || filters.provider !== undefined) {
+    if (!work.typed && (filters.model !== undefined || filters.provider !== undefined)) {
       const clauses = ["s.project_id=r.project_id", "s.run_id=r.id"];
       if (filters.model !== undefined) { clauses.push("s.model=?"); params.push(filters.model); }
       if (filters.provider !== undefined) { clauses.push("s.provider=?"); params.push(filters.provider); }
