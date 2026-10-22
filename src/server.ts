@@ -140,6 +140,9 @@ import { EvidenceError } from "./evaluations/evidence-protocol";
 import { evidenceBinaryHandler, evidenceJsonBody } from "./evaluations/evidence-router";
 import { EVALUATION_LIMITS } from "./evaluations/protocol";
 import { parseJsonEvidence, LossyJsonNumberError } from "./evaluations/json-evidence";
+import { hasDuplicateJsonKeys } from "./json-keys";
+import { ANALYTICS_LIMITS, CostAnalyticsError } from "./pricing/analytics";
+import { getLocalCostAnalytics } from "./pricing/local";
 import {
   getEffectiveSecret,
   getSecretStatus,
@@ -1126,7 +1129,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
     hookManagementWork.add(work); void work.finally(() => hookManagementWork.delete(work));
   });
 
-  app.use(["/api/verification", "/api/evaluations"], (req, res, next) => {
+  app.use(["/api/verification", "/api/evaluations", "/api/pricing"], (req, res, next) => {
     const hasBody = req.headers["transfer-encoding"] !== undefined || Number(req.headers["content-length"] ?? 0) > 0;
     if (hasBody && !req.is("application/json")) {
       res.status(400).json({ error: "This API accepts JSON request bodies only" });
@@ -1150,6 +1153,14 @@ export async function createServer(port: number, options: { comparisons?: Compar
   app.use("/api/evaluations", express.json({
     limit: EVALUATION_LIMITS.MAX_REQUEST,
     verify: (_req, _res, body, encoding) => { parseJsonEvidence(new TextDecoder(encoding).decode(body)); },
+  }));
+  app.use("/api/pricing", express.json({
+    limit: ANALYTICS_LIMITS.requestBytes,
+    verify: (_req, _res, body) => {
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+      parseJsonEvidence(text);
+      if (hasDuplicateJsonKeys(text)) throw new SyntaxError("Duplicate analytics request keys");
+    },
   }));
   app.use(express.json({ limit: "50mb", verify: (req, _res, bytes, encoding) => {
     const pathname = (req as Request).path.replace(/\/+$/, "").toLowerCase();
@@ -1481,6 +1492,18 @@ export async function createServer(port: number, options: { comparisons?: Compar
         error: expected ? error.message : "Run comparison failed",
         code: expected ? error.code : "comparison_failed",
       });
+    }
+  });
+  app.post("/api/pricing/analytics", (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      if (Object.keys(req.query).length) throw new CostAnalyticsError("invalid_request", "Invalid cost analytics request");
+      const result = getLocalCostAnalytics(req.body);
+      const data = JSON.stringify(result);
+      if (Buffer.byteLength(data) > 2 * 1024 * 1024) throw new CostAnalyticsError("too_large", "Cost analytics exceeds a response limit; select a smaller window");
+      res.type("application/json").send(data);
+    } catch (error) {
+      res.status(error instanceof CostAnalyticsError ? error.code === "too_large" ? 413 : 400 : 500).json({ error: error instanceof CostAnalyticsError ? error.message : "Cost analytics unavailable", code: error instanceof CostAnalyticsError ? error.code : "analytics_unavailable" });
     }
   });
   app.get("/api/runs/active", (_req, res) => {

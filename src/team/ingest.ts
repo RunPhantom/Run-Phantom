@@ -15,6 +15,16 @@ export interface TeamCapture {
 }
 export interface TeamIngestBatch { readonly captures: readonly TeamCapture[] }
 const admitted = new WeakSet<object>();
+// Numeric usage measurements are distinct from credential tokens. Keep this
+// exact set aligned with pricing/usage; strings and unsafe counts remain withheld.
+const measuredTokenKeys = new Set([
+  "gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens", "ai.usage.inputTokens", "ai.usage.promptTokens", "ai.usage.prompt_tokens", "llm.token_count.prompt",
+  "gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens", "ai.usage.outputTokens", "ai.usage.completionTokens", "ai.usage.completion_tokens", "llm.token_count.completion",
+  "gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.input_tokens.cached", "runphantom.usage.cache_read_tokens",
+  "gen_ai.usage.cache_creation.input_tokens", "runphantom.usage.cache_write_tokens", "runphantom.usage.cache_write_5m_tokens", "runphantom.usage.cache_write_1h_tokens",
+  "gen_ai.usage.output_tokens.reasoning", "runphantom.usage.reasoning_tokens", "gen_ai.usage.input_tokens.audio", "runphantom.usage.audio_input_tokens",
+  "gen_ai.usage.output_tokens.audio", "runphantom.usage.audio_output_tokens", "runphantom.usage.context_tokens",
+]);
 const unavailable = /\[(?:REDACTED|TRUNCATED|UNAVAILABLE|UNSERIALIZABLE|CIRCULAR)\]|__REDACTED__/i;
 const invalid = () => new TeamError("invalid_request", "Invalid OTLP trace batch");
 const large = () => new TeamError("too_large", "OTLP trace batch exceeds a capture limit");
@@ -276,8 +286,9 @@ export function normalizeTeamIngest(bytes: Uint8Array, format: "json" | "protobu
     if (Object.keys(source.attributes).length > L.SPAN_ATTRIBUTES) throw large();
     const safeAttrs = Object.create(null) as ObjectValue;
     for (const [key, value] of Object.entries(source.attributes)) {
+      const measuredCount = measuredTokenKeys.has(key) && typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
       const tags = key === "tags" && Array.isArray(value) ? value.map(tag => redactTeamText(tag, activeSecret)) : null;
-      safeAttrs[redactTeamText(key, activeSecret)] = defaultIsSensitiveKey(key)
+      safeAttrs[redactTeamText(key, activeSecret)] = defaultIsSensitiveKey(key) && !measuredCount
         ? "[REDACTED]" : tags ? tags.some((tag,index) => tag !== (value as string[])[index]) ? "[UNAVAILABLE]" : tags
           : typeof value === "string" ? redactTeamText(value, activeSecret) : value;
     }
