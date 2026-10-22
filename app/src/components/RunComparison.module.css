@@ -1,0 +1,49 @@
+@font-face {
+  font-family: "Syne";
+  src: url("/fonts/syne-variable.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+}
+
+.definitions {
+  --rp-focus: #0021CC;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #D9DEEA;
+  border-radius: 7px;
+  background: #F9FAFC;
+  color: #0E121B;
+  font: 400 14px/1.5 "Inter Variable", "Inter", sans-serif;
+}
+
+.title { margin: 0; font: 600 18px/1.4 "Syne", sans-serif; }
+.hint { margin: 6px 0 12px; color: #525866; }
+.result { margin: 10px 0; font-weight: 600; color: #0021CC; }
+.sides { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.side { min-width: 0; }
+.side h4 { margin: 0 0 6px; font-weight: 600; }
+.record { min-width: 0; margin-bottom: 8px; border: 1px solid #D9DEEA; border-radius: 7px; background: #FFFFFF; }
+.summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-height: 44px; padding: 8px 10px; cursor: pointer; border-radius: 7px; transition: background-color 180ms; }
+.summary::before { content: "›"; color: #0021CC; font-size: 18px; }
+.record[open] > .summary::before { content: "⌄"; }
+.summary:hover { background: #EEF2FF; }
+.summary:focus-visible, .source:focus-visible { outline: 2px solid #0021CC; outline-offset: 2px; }
+.complete { color: #0021CC; font-weight: 600; }
+.partial { color: #8A4B08; font-weight: 600; }
+.id { overflow-wrap: anywhere; color: #525866; font: 12px/1.5 var(--font-mono); }
+.body { min-width: 0; padding: 0 10px 12px; }
+.body p { margin: 8px 0; }
+.hashes { margin: 10px 0; }
+.hashes > div { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 8px; padding: 8px 0; border-top: 1px solid #D9DEEA; }
+.hashes dt { color: #525866; }
+.hashes dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.hashes code { font: 12px/1.6 var(--font-mono); }
+.source { display: inline-flex; align-items: center; min-height: 44px; color: #0021CC; text-decoration: underline; text-underline-offset: 3px; border-radius: 4px; }
+.reasons { padding-left: 18px; margin: 8px 0; color: #525866; }
+
+@media (max-width: 767px) {
+  .definitions { padding: 12px; }
+  .sides { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) { .summary { transition: none; } }

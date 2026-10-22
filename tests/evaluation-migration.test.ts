@@ -59,19 +59,20 @@ test("evaluation migration upgrades schema 0005 without changing traces or verif
       .run("historical-report", "historical-session", "historical-checkout", "historical-flow", "Prior runtime evidence", "pass", "A response was observed.", "[]", priorContext, before + 120);
     const original = {
       runs: baseline.query("SELECT * FROM runs ORDER BY id").all(),
-      spans: baseline.query("SELECT * FROM spans ORDER BY run_id, id").all(),
+      spans: baseline.query("SELECT * FROM spans ORDER BY run_id, id").all() as Record<string, unknown>[],
       flows: baseline.query("SELECT * FROM verification_flows ORDER BY id").all(),
       reports: baseline.query("SELECT * FROM verification_reports ORDER BY id").all(),
       history: baseline.query("SELECT hash, created_at FROM __drizzle_migrations ORDER BY created_at").all(),
     };
     expect(original.history).toHaveLength(6);
+    const upgradedSpans = original.spans.map(span => ({ ...span, otlp_evidence: null }));
     baseline.close(true);
     baseline = null;
 
     process.env.RUNPHANTOM_DB_PATH = dbPath;
     upgraded = getDrizzleDb().$client;
     expect(upgraded.query("SELECT * FROM runs ORDER BY id").all()).toEqual(original.runs);
-    expect(upgraded.query("SELECT * FROM spans ORDER BY run_id, id").all()).toEqual(original.spans);
+    expect(upgraded.query("SELECT * FROM spans ORDER BY run_id, id").all()).toEqual(upgradedSpans);
     expect(upgraded.query("SELECT * FROM verification_flows ORDER BY id").all()).toEqual(original.flows);
     expect(upgraded.query("SELECT * FROM verification_reports ORDER BY id").all()).toEqual(original.reports);
     const upgradedHistory = upgraded.query("SELECT hash, created_at FROM __drizzle_migrations ORDER BY created_at").all();
@@ -106,7 +107,7 @@ test("evaluation migration upgrades schema 0005 without changing traces or verif
     expect(getExperiment(experiment.id)).toEqual(experiment);
     expect(listReviews(experiment.id)).toEqual([review]);
     expect(reopened.query("SELECT * FROM runs ORDER BY id").all()).toEqual(original.runs);
-    expect(reopened.query("SELECT * FROM spans ORDER BY run_id, id").all()).toEqual(original.spans);
+    expect(reopened.query("SELECT * FROM spans ORDER BY run_id, id").all()).toEqual(upgradedSpans);
     expect(reopened.query("SELECT * FROM verification_flows ORDER BY id").all()).toEqual(original.flows);
     expect(reopened.query("SELECT * FROM verification_reports ORDER BY id").all()).toEqual(original.reports);
     expect(reopened.query("SELECT hash, created_at FROM __drizzle_migrations ORDER BY created_at").all()).toEqual(upgradedHistory);

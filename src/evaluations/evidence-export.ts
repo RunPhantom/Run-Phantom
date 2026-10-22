@@ -13,6 +13,7 @@ export function evidenceExport(view: EvidenceSetView) {
 }
 const escapeXml = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[char]!);
 export function evidenceExportJUnit(view: EvidenceSetView): string {
+  if (view.revision.sources.some(source => source.kind === "finding")) throw new EvidenceError("Findings are not test executions; use finding JSON export", 409);
   if (view.sources.some(source => !source.normalized || source.normalized.parseState !== "parsed" || !source.normalized.interpretationComplete || source.normalized.leaves.some(leaf => leaf.status === "unknown"))) throw new EvidenceError("JUnit export requires complete classified observations; use JSON for unavailable evidence", 409);
   const leaves = view.sources.flatMap(source => source.normalized!.leaves);
   const property = (name: string, value: string) => `<property name="${escapeXml(name)}" value="${escapeXml(value)}"/>`;

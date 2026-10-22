@@ -1,10 +1,15 @@
+import { parseCapturedAgentDefinitions } from "../agent-definitions";
 import { randomUUID, createHash } from "node:crypto";
 import { and, asc, desc, eq, inArray, notInArray, count, sql } from "drizzle-orm";
 import { getDrizzleDb } from "../db";
 import { evaluation_datasets as datasets, evaluation_revisions as revisions, evaluation_experiments as experiments, evaluation_reviews as reviews } from "../db/schema";
-import { canonicalCaseDefinitions, EvaluationError } from "./validation";
+import { canonicalCaseDefinitions, EvaluationError, parseDatasetExport } from "./validation";
 import { EVALUATION_LIMITS as L, type Dataset, type DatasetCase, type DatasetRevision, type Experiment, type ExperimentSummary, type Review } from "./protocol";
 import { MAX_TRIAL_ACQUISITION_BYTES, parseTrialSelection } from "./trials";
+import type { PromotionRequest, PromotionReceipt } from "../review-queues/protocol";
+import { parsePromotionRequest, canonicalReviewJson, reviewHash, compileReviewCase, ReviewQueueError } from "../review-queues/validation";
+import { readReviewQueue, readReviewItem, assertReviewRetention, persistReviewMutation, findReviewPromotion } from "../review-queues/store";
+import { markReviewPromoted } from "../review-queues/state";
 import { activeLocalEvidenceAttachmentIds } from "./evidence-inventory";
 
 export function listDatasets(): Dataset[] {
@@ -33,18 +38,20 @@ export function createDataset(name: string, cases: DatasetCase[] = []): DatasetR
   return { datasetId: id, datasetName: name, version: 1, hash, cases, createdAt };
 }
 
+type DatasetTransaction = Parameters<Parameters<ReturnType<typeof getDrizzleDb>["transaction"]>[0]>[0];
+function appendRevisionInTransaction(tx: DatasetTransaction, id: string, expectedVersion: number, cases: DatasetCase[]): DatasetRevision {
+  const dataset = tx.select().from(datasets).where(eq(datasets.id, id)).get();
+  if (!dataset) throw new EvaluationError("Dataset not found", 404);
+  if (dataset.latest_version !== expectedVersion) throw new EvaluationError("Dataset changed; reload the latest revision before saving", 409);
+  if (dataset.latest_version >= L.MAX_REVISIONS) throw new EvaluationError("Dataset revision limit reached", 409);
+  const version = dataset.latest_version + 1, createdAt = Date.now();
+  const hash = createHash("sha256").update(canonicalCaseDefinitions(cases)).digest("hex");
+  tx.insert(revisions).values({ dataset_id: id, version, hash, cases: JSON.stringify(cases), created_at: createdAt }).run();
+  tx.update(datasets).set({ latest_version: version, case_count: cases.length }).where(eq(datasets.id, id)).run();
+  return { datasetId: id, datasetName: dataset.name, version, hash, cases, createdAt };
+}
 export function appendRevision(id: string, expectedVersion: number, cases: DatasetCase[]): DatasetRevision {
-  return getDrizzleDb().transaction((tx) => {
-    const dataset = tx.select().from(datasets).where(eq(datasets.id, id)).get();
-    if (!dataset) throw new EvaluationError("Dataset not found", 404);
-    if (dataset.latest_version !== expectedVersion) throw new EvaluationError("Dataset changed; reload the latest revision before saving", 409);
-    if (dataset.latest_version >= L.MAX_REVISIONS) throw new EvaluationError("Dataset revision limit reached", 409);
-    const version = dataset.latest_version + 1, createdAt = Date.now();
-    const hash = createHash("sha256").update(canonicalCaseDefinitions(cases)).digest("hex");
-    tx.insert(revisions).values({ dataset_id: id, version, hash, cases: JSON.stringify(cases), created_at: createdAt }).run();
-    tx.update(datasets).set({ latest_version: version, case_count: cases.length }).where(eq(datasets.id, id)).run();
-    return { datasetId: id, datasetName: dataset.name, version, hash, cases, createdAt };
-  });
+  return getDrizzleDb().transaction(tx => appendRevisionInTransaction(tx, id, expectedVersion, cases));
 }
 
 export function deleteDataset(id: string): void {
@@ -55,7 +62,14 @@ function summarize(experiment: Experiment): ExperimentSummary {
   const { results: _results, ...summary } = experiment;
   return summary;
 }
+function validateFrozenDefinitions(experiment: Experiment): void {
+  for (const result of experiment.results) if (result.snapshot.agentDefinitions !== undefined) {
+    try { parseCapturedAgentDefinitions(result.snapshot.agentDefinitions); }
+    catch { throw new EvaluationError("Frozen definition provenance is invalid", 409); }
+  }
+}
 function encoded(experiment: Experiment): string {
+  validateFrozenDefinitions(experiment);
   const data = JSON.stringify(experiment);
   if (Buffer.byteLength(data) > L.MAX_EXPERIMENT) throw new EvaluationError("Experiment exceeds the retained result size limit", 413);
   return data;
@@ -82,7 +96,8 @@ export function insertExperiment(experiment: Experiment, token: string): void {
 export function getExperimentRecord(id: string) {
   const row = getDrizzleDb().select().from(experiments).where(eq(experiments.id, id)).get();
   if (!row) throw new EvaluationError("Experiment not found", 404);
-  return { experiment: JSON.parse(row.data) as Experiment, token: row.job_token, completedChecks: row.completed_checks };
+  const experiment = JSON.parse(row.data) as Experiment; validateFrozenDefinitions(experiment);
+  return { experiment, token: row.job_token, completedChecks: row.completed_checks };
 }
 export function getExperiment(id: string): Experiment { return getExperimentRecord(id).experiment; }
 export function readExperimentSelection(ids: string[], consume: (experiment: Experiment) => void): void {
@@ -94,7 +109,7 @@ export function readExperimentSelection(ids: string[], consume: (experiment: Exp
     if (bound.bytes > MAX_TRIAL_ACQUISITION_BYTES) throw new EvaluationError("Selected experiment evidence exceeds 8 MiB", 413);
     for (const id of ids) {
       const row = tx.select({ data: experiments.data }).from(experiments).where(eq(experiments.id, id)).get()!;
-      consume(JSON.parse(row.data) as Experiment);
+      const experiment = JSON.parse(row.data) as Experiment; validateFrozenDefinitions(experiment); consume(experiment);
     }
   });
 }
@@ -131,4 +146,50 @@ export function addReview(experimentId: string, draft: { caseId: string; rating:
     if (old.length) tx.delete(reviews).where(inArray(reviews.id, old.map((row) => row.id))).run();
     return review;
   });
+}
+
+/** Local curation is one publication: dataset revision, terminal items, and retry receipt. */
+export function promoteApprovedReviewItems(rawRequest: PromotionRequest): PromotionReceipt {
+  const request = parsePromotionRequest(rawRequest);
+  return getDrizzleDb().transaction(tx => {
+    const previous = findReviewPromotion(request.queueId, request.idempotencyKey);
+    if (previous) {
+      if (reviewHash(previous.request) !== reviewHash(request)) throw new ReviewQueueError("idempotency_conflict", "Promotion identity changed; use the original request for retry", 409);
+      return previous.receipt;
+    }
+    const queue = readReviewQueue(request.queueId);
+    const dataset = tx.select().from(datasets).where(eq(datasets.id, request.datasetId)).get();
+    if (!dataset) throw new EvaluationError("Dataset not found", 404);
+    if (dataset.latest_version !== request.expectedDatasetVersion) throw new ReviewQueueError("revision_conflict", "Dataset changed; retain selection and reload the latest revision", 409);
+    const row = tx.all<{ cases: string | null; hash: string }>(sql`SELECT CASE WHEN length(CAST(cases AS BLOB))<=${L.MAX_REQUEST} THEN cases END AS cases,hash
+      FROM evaluation_revisions WHERE dataset_id=${request.datasetId} AND version=${request.expectedDatasetVersion}`)[0];
+    if (!row || row.cases === null) throw new ReviewQueueError("integrity_conflict", "Dataset revision is unavailable within its byte limit", 409);
+    const priorCases: DatasetCase[] = JSON.parse(row.cases);
+    if (!Array.isArray(priorCases) || priorCases.length > L.MAX_CASES || priorCases.length + request.items.length > L.MAX_CASES
+      || createHash("sha256").update(canonicalCaseDefinitions(priorCases)).digest("hex") !== row.hash) throw new ReviewQueueError("integrity_conflict", "Dataset revision or case budget is invalid", 409);
+    const items = request.items.map(ref => {
+      const item = readReviewItem(request.queueId, ref.itemId, queue.schema);
+      if (item.revision !== ref.expectedRevision || item.state !== "approved") throw new ReviewQueueError("revision_conflict", "Approved review item changed before promotion", 409);
+      return item;
+    });
+    const additions = items.map(item => compileReviewCase(queue.id, item.id, queue.schema, item.draft, item.source));
+    if (additions.some(item => priorCases.some(prior => prior.id === item.id))) throw new ReviewQueueError("revision_conflict", "A curated case already exists in this dataset", 409);
+    const cases = [...priorCases, ...additions];
+    const portable = { format: "runphantom-evaluations/v1", name: dataset.name,
+      cases: cases.map(({ name, input, tags, rules }) => ({ name, ...(input === null ? {} : { input }), tags, rules })) };
+    parseDatasetExport(portable);
+    if (Buffer.byteLength(JSON.stringify(portable, null, 2)) > L.MAX_REQUEST || Buffer.byteLength(JSON.stringify(cases)) > L.MAX_REQUEST) throw new EvaluationError("Dataset exceeds the portable size limit", 413);
+    const requestJson = canonicalReviewJson(request);
+    assertReviewRetention(Buffer.byteLength(requestJson), 0, 0, 1);
+    const revision = appendRevisionInTransaction(tx, dataset.id, request.expectedDatasetVersion, cases);
+    const receipt: PromotionReceipt = { promotionId: reviewHash([queue.id, request.idempotencyKey]), datasetId: dataset.id,
+      datasetVersion: revision.version, datasetHash: revision.hash, itemIds: items.map(item => item.id), caseIds: additions.map(item => item.id), createdAt: revision.createdAt };
+    const resultJson = canonicalReviewJson(receipt);
+    assertReviewRetention(Buffer.byteLength(requestJson) + Buffer.byteLength(resultJson), 0, 0, 1);
+    for (const item of items) persistReviewMutation(markReviewPromoted(item, queue.schema, item.revision,
+      { datasetId: dataset.id, datasetVersion: revision.version }, Math.max(revision.createdAt, item.updatedAt)), item.revision);
+    tx.run(sql`INSERT INTO review_queue_promotions(id,queue_id,idempotency_key,request_hash,request_json,dataset_id,dataset_version,dataset_hash,result_json,created_at)
+      VALUES(${receipt.promotionId},${queue.id},${request.idempotencyKey},${reviewHash(request)},${requestJson},${receipt.datasetId},${receipt.datasetVersion},${receipt.datasetHash},${resultJson},${receipt.createdAt})`);
+    return receipt;
+  }, { behavior: "immediate" });
 }

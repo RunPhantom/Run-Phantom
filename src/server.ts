@@ -1,3 +1,4 @@
+import { observationReplayUnavailable } from "./spans/normalized";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import { WebSocketServer, WebSocket } from "ws";
@@ -9,6 +10,10 @@ import { randomUUID } from "crypto";
 import { normalizeOtelId } from "./ids";
 import { searchRuns, RunSearchError } from "./run-search";
 import { getRunComparison, RunComparisonError } from "./run-comparison";
+import { publicCaptureMetadata } from "./spans/adapters/capture-visibility";
+import { normalizeStoredSpan } from "./spans/normalize";
+import { withholdAgentDefinitionCapture } from "./agent-definitions";
+import { guardSpanForPersistence, projectCapturedGuardSpan } from "./guard-evidence";
 import { parseOtlpRequest } from "./parse";
 import { decodeOtlpProtobuf } from "./otlp-protobuf";
 import {
@@ -16,7 +21,9 @@ import {
   insertSpan,
   getRuns,
   getDrizzleDb,
+  closeDb,
   getRunWithSpans,
+  SpanSearchLimitError,
   getRunsByConvoId,
   clearAll,
   upsertLiveEvent,
@@ -49,6 +56,13 @@ import {
   queryTracesBounded,
 } from "./db";
 import { sliceSpanPayload } from "./payload-slice";
+import { startCodingHookOwner } from "./coding-hooks/owner";
+import { CodingHookController } from "./coding-hooks/service";
+import { ClaudeHookManagement } from "./coding-hooks/management";
+import { executeHookManagement, parseHookManagementCommand } from "./coding-hooks/configuration";
+import { parseBoundedHookJson } from "./coding-hooks/shared";
+import { HookRefusal } from "./coding-hooks/protocol";
+import { capabilityOwnerKey } from "./coding-hooks/capability";
 import { exportTrace, importTrace, InvalidTraceImportError } from "./trace-export";
 import { detectSubAgents } from "./agents";
 import { detectProvider, getProviderBaseURL, getProviderHeaders, isSupportedProvider } from "./provider-options";
@@ -59,6 +73,8 @@ import { setReplayTrace } from "./replay-map";
 import { getClaudeSession, getLatestClaudeLoadout, type ClaudeLoadout } from "./claude-sessions";
 import { getCodexSession } from "./codex-sessions";
 import { listAgentSessions } from "./sessions-listing";
+import { AcpSessionError, OpenCodeAcpSessions } from "./acp-sessions";
+import { AcpMcpError, AcpVerificationGrants } from "./acp-mcp";
 import { runClaudeCliChat } from "./claude-cli-chat";
 import { runCodexCliChat } from "./codex-cli-chat";
 import {
@@ -68,13 +84,14 @@ import {
   getAgentProvider,
   parseAgentProvider,
   setAgentProvider,
+  resolveRunPhantomMcpCommand,
   type AgentProviderId,
 } from "./agent-chat";
 import { loadInstallRegistry } from "./install/registry";
 import {
   ACTIVE_WORKSPACE_MISSING_MESSAGE,
   type ActiveWorkspace,
-  getActiveWorkspace,
+  getActiveWorkspace, getActiveWorkspaceSelection, getSelectedActiveWorkspace,
   setActiveWorkspace,
 } from "./active-workspace";
 import {
@@ -98,15 +115,25 @@ import {
 } from "./annotations";
 import { replayDefaultDemoTraces } from "./demo-traces";
 import { createVerificationService } from "./verification/service";
-import { createVerificationRouter } from "./verification/router";
+import { createVerificationRouter, verifyVerificationChangeRequest } from "./verification/router";
+import { ChangeContextReader } from "./verification/change-context";
+import { listReports } from "./verification/store";
 import { parseAppOrigin } from "./verification/bridge";
 import verificationSdk from "./verification/browser-sdk.js" with { type: "text" };
 import { VERIFICATION_LIMITS } from "./verification/protocol";
+import { BrowserAutomation } from "./verification/automation";
+import { browserHostConfig } from "./verification/browser-provider";
+import { createBrowserRouter } from "./verification/browser-router";
 import { createEvaluationService } from "./evaluations/service";
 import { createEvaluationRouter } from "./evaluations/router";
+import { createReviewQueueRouter } from "./review-queues/router";
 import { EvidenceImportService } from "./evaluations/evidence-import";
 import { EvidenceSupervisor } from "./evaluations/evidence-supervisor";
 import { createLocalEvidenceOwner } from "./evaluations/evidence-inventory";
+import { createLocalPromptRegistry } from "./prompts/registry";
+import { createPromptRouter } from "./prompts/router";
+import { createComparisonRuntime, initializeComparisonScope, type ComparisonRuntime, type ComparisonRuntimeOptions } from "./prompts/comparison-runtime";
+import { createComparisonRouter } from "./prompts/comparison-router";
 import { EvidenceError } from "./evaluations/evidence-protocol";
 import { evidenceBinaryHandler, evidenceJsonBody } from "./evaluations/evidence-router";
 import { EVALUATION_LIMITS } from "./evaluations/protocol";
@@ -121,7 +148,7 @@ import {
 } from "./secret-store";
 
 function parseAnnotationSource(value: unknown): AnnotationSource | null {
-  return value === "user" || value === "claude-code" || value === "codex" ? value : null;
+  return value === "user" || value === "claude-code" || value === "codex" || value === "opencode" ? value : null;
 }
 
 function getStringMetadata(
@@ -375,6 +402,8 @@ function demoChatHtml(): string {
       --border: #9C8870;
       --accent: #B83C24;
       --mark-accent: #C7462D;
+      --mark-shield: #EEE7DE;
+      --mark-shield-edge: #D8D0C7;
       --accent-strong: #9F301D;
       --focus: #9F301D;
       --info: #275EA8;
@@ -409,19 +438,10 @@ function demoChatHtml(): string {
     header { padding: 24px 24px 18px; border-bottom: 1px solid var(--border); }
     .brand { display: flex; gap: 16px; align-items: flex-start; }
     .mark {
-      position: relative;
       flex: 0 0 auto;
       width: 52px;
       height: 52px;
-      border-radius: 16px;
-      border: 1px solid var(--border);
-      background: var(--canvas);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.86);
-      padding: 8px;
-      color: var(--ink);
     }
-    .mark path { stroke: currentColor; }
-    .mark circle { fill: var(--mark-accent); }
     .eyebrow {
       margin: 1px 0 7px;
       color: var(--muted);
@@ -560,7 +580,7 @@ function demoChatHtml(): string {
       .shell { height: min(760px, calc(100svh - 24px)); border-radius: 22px; }
       header { padding: 20px 18px 16px; }
       .brand { gap: 12px; }
-      .mark { width: 46px; height: 46px; border-radius: 14px; }
+      .mark { width: 46px; height: 46px; }
       main { padding: 14px; }
       form { padding: 12px; }
       .actions { flex-direction: column; align-items: stretch; }
@@ -576,10 +596,14 @@ function demoChatHtml(): string {
   <div class="shell">
     <header>
       <div class="brand">
-        <svg class="mark" viewBox="0 0 64 64" fill="none" role="img" aria-label="Run Phantom">
-          <path d="M12 26V12H26M38 52H52V38" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"></path>
-          <path d="M12 42C20 42 20 22 30 22C40 22 39 42 52 42" stroke-width="4.5" stroke-linecap="round"></path>
-          <circle cx="30" cy="22" r="5"></circle>
+        <svg class="mark" viewBox="0 0 32 32" fill="none" role="img" aria-label="Run Phantom">
+          <path d="M15.05 1.95Q16 1.6 16.95 1.95L26.75 6.2Q27.85 6.65 27.85 7.85V19.2Q27.85 22.6 17.1 29.9Q16 30.6 14.9 29.9Q4.15 22.6 4.15 19.2V7.85Q4.15 6.65 5.25 6.2Z" fill="var(--mark-shield)" stroke="var(--mark-shield-edge)" stroke-width="0.5" stroke-linejoin="round"></path>
+          <path d="M10.42 19.66A6.9 6.9 0 0 1 20.96 10.81" stroke="var(--mark-accent)" stroke-width="2.6" stroke-linecap="round"></path>
+          <path d="M22.87 8.97L22.8 14.4L19.06 12.65Z" fill="var(--mark-accent)" stroke="var(--mark-accent)" stroke-width="0.6" stroke-linejoin="round"></path>
+          <rect x="12.1" y="20.75" width="2.4" height="2.4" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.8"></rect>
+          <rect x="15.62" y="21.36" width="2.2" height="2.2" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.62"></rect>
+          <rect x="18.96" y="20.25" width="2" height="2" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.46"></rect>
+          <rect x="21.3" y="17.72" width="1.8" height="1.8" rx="0.3" fill="var(--mark-accent)" fill-opacity="0.34"></rect>
         </svg>
         <div>
           <p class="eyebrow">Run Phantom demo</p>
@@ -690,9 +714,14 @@ function demoChatHtml(): string {
 </html>`;
 }
 
-export async function createServer(port: number) {
+export async function createServer(port: number, options: { comparisons?: ComparisonRuntimeOptions } = {}) {
   const app = express();
   const server = http.createServer(app);
+  const hookOwner = await startCodingHookOwner(getDrizzleDb().$client, undefined, { contextTransport: true });
+  let hookController: CodingHookController;
+  let clearingHooks = false;
+  const hookManagementWork = new Set<Promise<void>>();
+  try {
 
   const currentServerPort = (): number | null => {
     const address = server.address();
@@ -752,12 +781,29 @@ export async function createServer(port: number) {
     const msg = JSON.stringify({ event, data });
     for (const ws of clients) { if (ws.readyState === WebSocket.OPEN) ws.send(msg); }
   }
+  hookController = new CodingHookController(hookOwner.store, runId => broadcast("spans", { runIds: [runId] }));
 
   const verification = createVerificationService({ broadcast, allowedSourceIps, allowedHosts });
+  const changeOwner = randomUUID();
+  const changes = new ChangeContextReader({ workspace: getSelectedActiveWorkspace,
+    authority: () => ({ id: changeOwner, role: "owner", generation: 1 }),
+    report: id => listReports().find(report => report.id === id) });
+  const browserAutomation = new BrowserAutomation(browserHostConfig(), broadcast);
   const evaluations = createEvaluationService();
   const evidenceDatabase = getDrizzleDb().$client;
-  evidenceDatabase.query("INSERT OR IGNORE INTO evaluation_evidence_scopes(scope_key,generation,active) VALUES('local:local',1,1)").run();
+  evidenceDatabase.transaction(() => {
+    evidenceDatabase.query("INSERT OR IGNORE INTO evaluation_evidence_scopes(scope_key,generation,active) VALUES('local:local',1,1)").run();
+    evidenceDatabase.query("INSERT INTO prompt_scope_controls(scope_key,generation) SELECT scope_key,1 FROM evaluation_evidence_scopes WHERE scope_key='local:local' ON CONFLICT(scope_key) DO NOTHING").run();
+  }).immediate();
   const evidenceOwner = createLocalEvidenceOwner(evidenceDatabase);
+  const prompts = createLocalPromptRegistry(evidenceDatabase);
+  prompts.capture("read");
+  let comparisons: ComparisonRuntime | null = null;
+  try {
+    comparisons = await createComparisonRuntime(evidenceDatabase, options.comparisons);
+    initializeComparisonScope({ database: evidenceDatabase, scope: { kind: "local", id: "local" }, authorize: () => {} });
+  } catch { await comparisons?.close(); comparisons = null; }
+  const comparisonStore = comparisons?.scope({ database: evidenceDatabase, scope: { kind: "local", id: "local" }, authorize: () => {} }) ?? null;
   const evidenceImports = new EvidenceImportService(new EvidenceSupervisor());
   evidenceImports.initialize(evidenceOwner);
   server.on("upgrade", (req, socket, head) => {
@@ -769,6 +815,65 @@ export async function createServer(port: number) {
   });
 
   const askUserQuestions = new AskUserQuestionBridge(broadcast);
+  const acpSessions = new OpenCodeAcpSessions();
+  const acpGrants = new AcpVerificationGrants(verification);
+  const acpRequests = new Map<string, { cwd: string; generation: string; controller: AbortController }>();
+  let acpWorkspaceEpoch = 0;
+  let acpProviderEpoch = 0;
+  let acpTransitioning = false;
+  const closeHttp = server.close.bind(server);
+  let shutdownTask: Promise<void> | undefined;
+  function closeServer(): Promise<void> {
+    if (shutdownTask) return shutdownTask;
+    acpTransitioning = true;
+    acpWorkspaceEpoch++;
+    acpProviderEpoch++;
+    changes.close();
+    // Fence hook publication synchronously alongside the ACP authority transition.
+    let revocationError: Error | undefined;
+    try { hookOwner.store.rotateOwner(); } catch (error) { revocationError = error instanceof Error ? error : new Error("Hook revocation unavailable"); } finally { hookOwner.revoke(); }
+    const nativeClosed = acpSessions.close();
+    // Stop accepting HTTP synchronously, then join all owned work before its shared peers.
+    const httpClosed = new Promise<Error | undefined>((resolve) => closeHttp((error) => resolve(error)));
+    shutdownTask = (async () => {
+      try {
+        await Promise.all([nativeClosed, browserAutomation.close(), hookController.close(), evidenceImports.shutdown(), comparisons?.close(), ...hookManagementWork]);
+        await acpGrants.close();
+        askUserQuestions.closeAll();
+        verification.close();
+        evaluations.close();
+        for (const client of clients) client.terminate();
+        wss.close();
+        server.closeAllConnections();
+        const error = await httpClosed;
+        if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") throw error;
+      } finally { closeDb(); await hookOwner.close(); }
+      if (revocationError) throw revocationError;
+    })();
+    return shutdownTask;
+  }
+  server.close = (callback) => {
+    void closeServer().then(() => callback?.(), (error: Error) => callback?.(error));
+    return server;
+  };
+
+  function acpScopeFromRequest(req: express.Request, res: express.Response) {
+    if (acpTransitioning || shutdownTask) { res.status(409).json({ error: "ACP workspace authority is changing." }); return null; }
+    const selected = getActiveWorkspaceSelection();
+    if (!selected) { res.status(409).json({ error: "Select a valid current workspace before using ACP." }); return null; }
+    const requested = requestCwd(req);
+    try {
+      if (requested && fs.realpathSync(requested) !== selected.cwd) { res.status(409).json({ error: "ACP requires the currently selected workspace." }); return null; }
+    } catch { res.status(400).json({ error: "Invalid ACP workspace." }); return null; }
+    const epoch = acpWorkspaceEpoch;
+    const providerEpoch = acpProviderEpoch;
+    const isCurrent = () => {
+      const current = getActiveWorkspaceSelection();
+      return !acpTransitioning && !shutdownTask && acpWorkspaceEpoch === epoch && acpProviderEpoch === providerEpoch && current?.generation === selected.generation;
+    };
+    return { ...selected, isCurrent };
+  }
+
   let agentProvider: AgentProviderId = getAgentProvider();
   let latestClaudeLoadout: ClaudeLoadout | null = null;
 
@@ -889,6 +994,7 @@ export async function createServer(port: number) {
   }
 
   function currentLoadout(cwd: string) {
+    if (agentProvider === "opencode") return defaultAgentLoadout("opencode");
     if (agentProvider === "codex") return defaultAgentLoadout("codex");
     if (!latestClaudeLoadout) {
       latestClaudeLoadout = getLatestClaudeLoadout(cwd);
@@ -992,6 +1098,30 @@ export async function createServer(port: number) {
 
   // This one identity binary transport remains behind every local-access guard.
   app.post("/api/evaluations/evidence/imports", evidenceBinaryHandler(evidenceImports, evidenceOwner));
+  app.use("/api/prompts/comparisons", createComparisonRouter(comparisonStore, comparisons?.coordinator ?? null));
+  app.use("/api/prompts", createPromptRouter(prompts));
+
+  // Keep the bounded review parser behind local access guards and ahead of the global JSON parser.
+  app.use("/api/review-queues", createReviewQueueRouter());
+  app.post(["/api/coding-hooks/claude/admission", "/api/coding-hooks/claude/publication", "/api/coding-hooks/claude/transport"], (req, res) => { void hookController.handle(req, res); });
+  app.post("/api/coding-hooks/claude/manage", express.raw({ type: "application/json", limit: 16384 }), (req, res) => {
+    if (clearingHooks || !hookOwner.store.isOwnerActive() || hookManagementWork.size >= 2) { res.status(503).json({ status: "unavailable", reason: "unavailable" }); return; }
+    const work = (async () => {
+      try {
+        if (req.headers["x-runphantom-hook-owner"] !== capabilityOwnerKey(hookOwner.store.db.filename)) throw new HookRefusal("unauthorized", 403);
+        if (!Buffer.isBuffer(req.body)) throw new HookRefusal("malformed", 400);
+        const parsed = parseBoundedHookJson(new TextDecoder("utf-8", { fatal: true }).decode(req.body), 16384);
+        if (parsed.status !== "accepted") throw new HookRefusal("malformed", 400);
+        const currentPort = currentServerPort(); if (!currentPort) throw new HookRefusal("inactive", 503);
+        const manager = new ClaudeHookManagement(hookOwner.store, `http://127.0.0.1:${currentPort}`, true);
+        if (parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value) && parsed.value.action === "activate-context-v2") {
+          // The trusted owner action is distinct from hook bodies and never promotes capture policy.
+          res.json(await manager.transitionContextV2(new TextDecoder("utf-8", { fatal: true }).decode(req.body), hookController));
+        } else res.json(await executeHookManagement(manager, parseHookManagementCommand(parsed.value)));
+      } catch (error) { res.status(error instanceof HookRefusal ? error.status : 503).json({ status: "unavailable", reason: error instanceof HookRefusal ? error.reason : "unavailable" }); }
+    })();
+    hookManagementWork.add(work); void work.finally(() => hookManagementWork.delete(work));
+  });
 
   app.use(["/api/verification", "/api/evaluations"], (req, res, next) => {
     const hasBody = req.headers["transfer-encoding"] !== undefined || Number(req.headers["content-length"] ?? 0) > 0;
@@ -1001,8 +1131,19 @@ export async function createServer(port: number) {
     }
     next();
   });
-  app.use("/api/evaluations/evidence", evidenceJsonBody());
-  app.use("/api/verification", express.json({ limit: VERIFICATION_LIMITS.MAX_FRAME_BYTES }));
+
+  app.post("/api/agent/acp/mcp/:token", express.raw({ type: "application/json", limit: "16kb" }), async (req, res) => {
+    if (!Buffer.isBuffer(req.body)) { res.status(400).json({ error: "Verification MCP requires a JSON frame." }); return; }
+    try {
+      const raw = new TextDecoder("utf-8", { fatal: true }).decode(req.body);
+      const result = await acpGrants.invoke(String(req.params.token), raw);
+      if (!res.destroyed) res.json(result);
+    } catch (error) {
+      if (!res.destroyed) res.status(error instanceof AcpMcpError && error.reason === "busy" ? 409 : 400).json({ error: "Verification MCP unavailable or invalid." });
+    }
+  });
+  app.use(["/api/evaluations/evidence", "/api/evaluations/findings", "/api/evaluations/claims"], evidenceJsonBody());
+  app.use("/api/verification", express.json({ limit: VERIFICATION_LIMITS.MAX_FRAME_BYTES, verify: verifyVerificationChangeRequest }));
   app.use("/api/evaluations", express.json({
     limit: EVALUATION_LIMITS.MAX_REQUEST,
     verify: (_req, _res, body, encoding) => { parseJsonEvidence(new TextDecoder(encoding).decode(body)); },
@@ -1034,34 +1175,10 @@ export async function createServer(port: number) {
     res.status(status >= 400 && status < 600 ? status : 500).json({ error: "request failed" });
   });
 
-  let closedServices = false;
-  const closeServices = () => {
-    if (closedServices) return;
-    closedServices = true;
-    askUserQuestions.closeAll();
-    verification.close();
-    evaluations.close();
-    for (const client of clients) client.terminate();
-    wss.close();
-  };
-  server.on("close", closeServices);
-  const nativeClose = server.close.bind(server);
-  let closePromise: Promise<void> | undefined;
-  server.close = ((callback?: (error?: Error) => void) => {
-    closePromise ??= evidenceImports.shutdown().then(() => {
-      closeServices();
-      return new Promise<void>((resolve, reject) => {
-        nativeClose(error => { if (error) reject(error); else resolve(); });
-        // Register close completion before terminating sockets; Bun's force-close also stops its listener.
-        server.closeAllConnections();
-      });
-    });
-    if (callback) void closePromise.then(() => callback(), error => callback(error));
-    else void closePromise.catch(() => {});
-    return server;
-  }) as typeof server.close;
+  // The owned close promise above joins ACP before disposing these shared services.
 
-  app.use("/api/verification", createVerificationRouter(verification));
+  app.use("/api/verification/browser", localOriginGuard, createBrowserRouter(browserAutomation, () => currentServerPort() ?? port));
+  app.use("/api/verification", createVerificationRouter(verification, { changeContext: changes }));
   app.use("/api/evaluations", createEvaluationRouter(evaluations, { service: evidenceImports, owner: evidenceOwner }));
 
   // Health check endpoint — used by SDKs to auto-detect a running debugger
@@ -1207,6 +1324,7 @@ export async function createServer(port: number) {
             model: s.model, provider: s.provider,
             input_tokens: s.inputTokens, output_tokens: s.outputTokens,
             attributes: JSON.stringify(s.attributes),
+            otlp_evidence: JSON.stringify(s.otlpEvidence),
           });
         }
 
@@ -1270,7 +1388,7 @@ export async function createServer(port: number) {
         getStringMetadata(metadata, "eventId") ??
         getStringMetadata(metadata, "event_id");
 
-      upsertLiveEvent({
+      const persistedId = upsertLiveEvent({
         traceId: normalizedTraceId,
         spanId: normalizedSpanId,
         type,
@@ -1288,6 +1406,7 @@ export async function createServer(port: number) {
         last_updated_at: ts,
       });
       broadcast("live", {
+        persistedId,
         traceId: normalizedTraceId,
         spanId: normalizedSpanId,
         type,
@@ -1456,9 +1575,10 @@ export async function createServer(port: number) {
     const runId = typeof req.query.run_id === "string" && req.query.run_id ? req.query.run_id : undefined;
     const row = getSpanMeta(req.params.id, runId) as any;
     if (!row) { res.status(404).json({ error: "Span not found" }); return; }
-    const { input_head, output_head, input_chars, output_chars, ...rest } = row;
+    const { input_head, output_head, input_chars, output_chars, otlp_evidence, ...rest } = row;
     res.json({
-      ...rest,
+      ...publicCaptureMetadata(projectCapturedGuardSpan(withholdAgentDefinitionCapture(rest))),
+      captureVisibility: normalizeStoredSpan({ ...rest, otlp_evidence, input_payload: null, output_payload: null }).captureVisibility,
       input_chars,
       output_chars,
       input_preview: input_chars > 80 ? input_head.slice(0, 80) + "…" : input_head,
@@ -1526,6 +1646,7 @@ export async function createServer(port: number) {
   // through get_span_payload.
   const MAX_DETAIL_ATTR_CHARS = 2_000;
   function compactSpanForDetail(span: any): any {
+    span = publicCaptureMetadata(projectCapturedGuardSpan(withholdAgentDefinitionCapture(span)));
     if (typeof span?.attributes !== "string" || span.attributes.length <= MAX_DETAIL_ATTR_CHARS) return span;
     let parsed: Record<string, unknown>;
     try {
@@ -1552,11 +1673,25 @@ export async function createServer(port: number) {
       // Fall back to saved run cache
       const cached = getCachedRun(id);
       if (cached) {
-        try { const data = JSON.parse(cached); if (data.run) { res.json(data); return; } } catch {}
+        try {
+          const data = JSON.parse(cached);
+          if (data.run) {
+            // A live-only run can reuse cached presentation, but its live rows
+            // must come from this store. Saved-only history survives clears.
+            const body = {
+              ...publicCachedRun(data),
+              ...(run ? { liveEvents: getLiveEvents(id) } : {}),
+            };
+            res.setHeader("X-RunPhantom-Live-Events", run ? "current-store" : "saved-cache");
+            res.json(body);
+            return;
+          }
+        } catch {}
       }
       if (!run) { res.status(404).json({ error: "Not found" }); return; }
     }
     const subAgents = detectSubAgents(spans as any);
+    res.setHeader("X-RunPhantom-Live-Events", "current-store");
     res.json({ run, spans: spans.map(compactSpanForDetail), liveEvents: getLiveEvents(id), subAgents });
   });
   app.get("/api/runs/:id/outline", (req, res) => {
@@ -1639,7 +1774,7 @@ export async function createServer(port: number) {
       opts.max_matches = n;
     }
     try { res.json(searchRun(req.params.id, opts)); }
-    catch (err: any) { res.status(400).json({ error: err.message }); }
+    catch (err: any) { res.status(err instanceof SpanSearchLimitError ? err.status : 400).json({ error: err.message }); }
   });
   app.get("/api/runs/:id/events", (req, res) => {
     const opts: any = {};
@@ -1663,10 +1798,13 @@ export async function createServer(port: number) {
     res.json(tailLiveEvents(req.params.id, opts));
   });
   app.post("/api/clear", (_req, res) => {
-    void evidenceImports.clear(evidenceOwner).then(() => {
+    hookOwner.store.rotateOwner();
+    clearingHooks = true;
+    const draining = hookController.close();
+    void Promise.all([draining, browserAutomation.reset(), evidenceImports.clear(evidenceOwner), ...hookManagementWork]).then(() => {
       evaluations.reset();
       for (const id of verification.bridge.sessions.keys()) verification.bridge.remove(id);
-      clearAll(); broadcast("clear", {}); res.json({ ok: true });
+      clearAll(); hookController = new CodingHookController(hookOwner.store, runId => broadcast("spans", { runIds: [runId] })); clearingHooks = false; broadcast("clear", {}); res.json({ ok: true });
     }).catch(() => res.status(500).json({ error: "Workspace clear failed" }));
   });
 
@@ -1731,13 +1869,20 @@ export async function createServer(port: number) {
     }
   });
 
-  app.post("/api/workspace/active", (req, res) => {
+  app.post("/api/workspace/active", async (req, res) => {
     const cwd = (req.body as Record<string, unknown> | null)?.cwd;
     if (typeof cwd !== "string" || !cwd.trim()) {
       res.status(400).json({ error: "cwd required" });
       return;
     }
+    if (acpTransitioning || shutdownTask) { res.status(409).json({ error: "A workspace or provider transition is already running." }); return; }
+    acpTransitioning = true;
     try {
+      const resolved = path.resolve(cwd);
+      if (!fs.statSync(resolved).isDirectory()) throw new Error("Invalid workspace");
+      acpWorkspaceEpoch++;
+      await Promise.all([acpSessions.drain(), acpGrants.revokeAll()]);
+      if (shutdownTask) throw new Error("Daemon closing");
       const workspace = setActiveWorkspace(cwd);
       registerReplayProjectIfPresent(workspace.cwd).catch((err) => {
         console.warn("[runphantom] failed to refresh replay project registration:", err);
@@ -1753,24 +1898,33 @@ export async function createServer(port: number) {
     } catch {
       // Raw fs errors carry the absolute path being stat'd; don't reflect them.
       res.status(400).json({ error: "workspace directory not found" });
-    }
+    } finally { if (!shutdownTask) acpTransitioning = false; }
   });
 
   app.get("/api/agent/provider", (_req, res) => {
     res.json({ provider: agentProvider });
   });
 
-  app.post("/api/agent/provider", (req, res) => {
+  app.post("/api/agent/provider", async (req, res) => {
     const provider = parseAgentProvider((req.body as Record<string, unknown> | null)?.provider);
     if (!provider) {
-      res.status(400).json({ error: "provider must be 'claude' or 'codex'" });
+      res.status(400).json({ error: "provider must be 'claude', 'codex' or 'opencode'" });
       return;
     }
-    agentProvider = setAgentProvider(provider);
-    broadcast("agent_provider", { provider: agentProvider });
-    const workspace = getActiveWorkspace();
-    if (workspace) broadcast("agent_loadout", currentLoadout(workspace.cwd));
-    res.json({ provider: agentProvider });
+    if (acpTransitioning || shutdownTask) { res.status(409).json({ error: "A workspace or provider transition is already running." }); return; }
+    acpTransitioning = true;
+    try {
+      if (provider !== agentProvider) {
+        acpProviderEpoch++;
+        await Promise.all([acpSessions.drain(), acpGrants.revokeAll()]);
+      }
+      if (shutdownTask) { res.status(409).json({ error: "Daemon closing" }); return; }
+      agentProvider = setAgentProvider(provider);
+      broadcast("agent_provider", { provider: agentProvider });
+      const workspace = getActiveWorkspace();
+      if (workspace) broadcast("agent_loadout", currentLoadout(workspace.cwd));
+      res.json({ provider: agentProvider });
+    } finally { if (!shutdownTask) acpTransitioning = false; }
   });
 
   app.get("/api/agent/sessions", (req, res) => {
@@ -1780,11 +1934,11 @@ export async function createServer(port: number) {
       ? null
       : parseAgentProvider(req.query.provider);
     if (req.query.provider !== undefined && !requestedProvider) {
-      res.status(400).json({ error: "provider must be 'claude' or 'codex'" });
+      res.status(400).json({ error: "provider must be 'claude', 'codex' or 'opencode'" });
       return;
     }
     const targetProvider = requestedProvider ?? agentProvider;
-    void listAgentSessions(targetProvider, cwd)
+    void listAgentSessions(targetProvider, cwd, acpSessions)
       .then(({ sessions, stale }) => {
         res.setHeader("X-Sessions-Stale", String(stale));
         res.json(sessions);
@@ -1811,18 +1965,39 @@ export async function createServer(port: number) {
       ? null
       : parseAgentProvider(req.query.provider);
     if (req.query.provider !== undefined && !requestedProvider) {
-      res.status(400).json({ error: "provider must be 'claude' or 'codex'" });
+      res.status(400).json({ error: "provider must be 'claude', 'codex' or 'opencode'" });
       return;
     }
     const targetProvider = requestedProvider ?? agentProvider;
-    const session = targetProvider === "codex"
+    const session = targetProvider === "opencode" ? acpSessions.get(cwd, req.params.id) : targetProvider === "codex"
       ? getCodexSession(cwd, req.params.id)
       : getClaudeSession(cwd, req.params.id);
     if (!session) {
-      res.status(404).json({ error: `${targetProvider === "codex" ? "Codex" : "Claude"} session not found` });
+      res.status(404).json({ error: `${agentProviderLabel(targetProvider)} session not found` });
       return;
     }
     res.json(session);
+  });
+
+  app.get("/api/agent/acp/status", localOriginGuard, async (req, res) => {
+    const scope = acpScopeFromRequest(req, res);
+    if (!scope) return;
+    const lifecycle = createReplayAbortLifecycle(req, res);
+    try {
+      const status = await acpSessions.availability(scope.cwd, { isCurrent: scope.isCurrent, abortSignal: lifecycle.controller.signal });
+      if (!scope.isCurrent()) { if (!res.destroyed) res.status(409).json({ error: "The selected workspace changed." }); return; }
+      if (!res.destroyed) res.json({ ...status, workspaceGeneration: scope.generation });
+    } finally { lifecycle.cleanup(); }
+  });
+
+  app.post("/api/agent/messages/:id/cancel", localOriginGuard, (req, res) => {
+    const scope = acpScopeFromRequest(req, res);
+    if (!scope) return;
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(req.params.id)) { res.status(400).json({ error: "Invalid ACP operation ID" }); return; }
+    const active = acpRequests.get(req.params.id);
+    if (!active || active.cwd !== scope.cwd || active.generation !== scope.generation || !scope.isCurrent()) { res.status(404).json({ error: "ACP turn not active in this workspace" }); return; }
+    active.controller.abort();
+    res.json({ status: "cancellation_requested" });
   });
 
   app.post("/api/agent/messages", localOriginGuard, async (req, res) => {
@@ -1841,7 +2016,9 @@ export async function createServer(port: number) {
       res.status(409).json({ error: "Claude Code chat is disabled" });
       return;
     }
-    const cwd = cwdFromRequestOrActive(req, res);
+    const acpScope = requestProvider === "opencode" ? acpScopeFromRequest(req, res) : null;
+    if (requestProvider === "opencode" && !acpScope) return;
+    const cwd = acpScope?.cwd ?? cwdFromRequestOrActive(req, res);
     if (!cwd) return;
 
     let providerSessionId = typeof session_id === "string" && session_id ? session_id : null;
@@ -1856,9 +2033,18 @@ export async function createServer(port: number) {
         return;
       }
     }
+    if (requestProvider === "opencode" && (Buffer.byteLength(content) > 16_384 || (client_message_id !== undefined && (typeof client_message_id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(client_message_id))))) {
+      res.status(400).json({ error: "ACP request exceeds the input limit" }); return;
+    }
     const clientMessageId = typeof client_message_id === "string" && client_message_id
       ? client_message_id
       : randomUUID();
+    if (requestProvider === "opencode" && (acpRequests.size >= 2 || acpRequests.has(clientMessageId))) {
+      res.status(409).json({ error: "OpenCode ACP is busy" }); return;
+    }
+    const acpLifecycle = requestProvider === "opencode" ? createReplayAbortLifecycle(req, res) : null;
+    if (acpLifecycle) acpRequests.set(clientMessageId, { cwd, generation: acpScope!.generation, controller: acpLifecycle.controller });
+    let acpGrantToken: string | undefined;
     let text = "";
     let errorText = "";
     const events: unknown[] = [];
@@ -1880,7 +2066,27 @@ export async function createServer(port: number) {
         runId: typeof run_id === "string" ? run_id : null,
         resumeSessionId: providerSessionId,
       };
-      const result = requestProvider === "codex"
+      let verificationMcp: import("./acp-sessions").AcpMcpServer[] = [];
+      if (acpScope) {
+        const focused = viewingRegistry.getMostRecentView();
+        const targets = [...verification.bridge.sessions.values()].filter((session) => session.runId === focused?.run_id && session.ws?.readyState === 1 && session.generation > 0);
+        if (focused?.run_id && getRunById(focused.run_id) && targets.length === 1) {
+          const isCurrent = () => acpScope.isCurrent() && viewingRegistry.getMostRecentView() === focused;
+          acpGrantToken = acpGrants.issue(targets[0], focused.run_id, isCurrent);
+          const command = resolveRunPhantomMcpCommand();
+          verificationMcp = [{ name: "runphantom_verification", command: command.command, args: command.args,
+            env: [{ name: "RUNPHANTOM_URL", value: backendUrl() }, { name: "RUNPHANTOM_ACP_MCP_GRANT", value: acpGrantToken }] }];
+        }
+      }
+      const result = requestProvider === "opencode"
+        ? await acpSessions.chat({ ...chatInput, abortSignal: acpLifecycle?.controller.signal }, {
+          onEvent(event) { events.push(event); broadcastStreamEvent(event); },
+          onProviderSession(sessionId) { providerSessionId = sessionId; broadcastStreamEvent({ type: "provider_session", sessionId }); },
+          onText(nextContent) { text = nextContent; broadcastStreamEvent({ type: "text", content: nextContent }); },
+          onStatus() {},
+          onError(nextContent) { errorText = nextContent; broadcastStreamEvent({ type: "error", content: nextContent }); },
+        }, acpScope ? { isCurrent: () => acpScope.isCurrent() && agentProvider === "opencode", mcpServers: verificationMcp } : undefined)
+        : requestProvider === "codex"
         ? await runCodexCliChat(chatInput, {
           onEvent(event) {
             events.push(event);
@@ -1920,6 +2126,7 @@ export async function createServer(port: number) {
             broadcastStreamEvent({ type: "error", content: nextContent });
           },
         });
+      if (acpScope && !acpScope.isCurrent()) throw new AcpSessionError("scope_changed");
       if (result.code !== 0 || errorText) {
         res.status(502).json({
           error: errorText || result.stderr || `${agentProviderLabel(requestProvider)} exited with code ${result.code ?? "unknown"}`,
@@ -1935,18 +2142,24 @@ export async function createServer(port: number) {
         text,
         events,
         session: providerSessionId
-          ? requestProvider === "claude"
+          ? requestProvider === "opencode" ? acpSessions.get(cwd, providerSessionId) : requestProvider === "claude"
             ? getClaudeSession(cwd, providerSessionId)
             : getCodexSession(cwd, providerSessionId)
           : null,
       });
     } catch (err) {
-      res.status(500).json({
+      const status = err instanceof AcpSessionError ? (err.category === "cancelled" ? 409 : err.category === "busy" ? 409 : 502) : 500;
+      if (!res.destroyed) res.status(status).json({
         error: (err as Error).message || `${agentProviderLabel(requestProvider)} chat failed`,
+        ...(err instanceof AcpSessionError ? { category: err.category } : {}),
         client_message_id: clientMessageId,
         session_id: providerSessionId,
         events,
       });
+    } finally {
+      if (acpGrantToken) await acpGrants.revoke(acpGrantToken);
+      acpLifecycle?.cleanup();
+      if (acpLifecycle) acpRequests.delete(clientMessageId);
     }
   });
 
@@ -2103,8 +2316,8 @@ export async function createServer(port: number) {
       agent_provider: agentProvider,
       agent: {
         provider: agentProvider,
-        mode: agentProvider === "codex" ? "codex_exec_stream" : "cli_stream",
-        state: agentProvider === "codex" || claudeCliChatEnabled ? "green" : "gray",
+        mode: agentProvider === "opencode" ? "acp_stream" : agentProvider === "codex" ? "codex_exec_stream" : "cli_stream",
+        state: agentProvider === "opencode" ? "gray" : agentProvider === "codex" || claudeCliChatEnabled ? "green" : "gray",
       },
       claude_code: {
         mode: "cli_stream",
@@ -2299,16 +2512,26 @@ export async function createServer(port: number) {
   });
 
   // Saved run cache — persists across clears
+  function publicCachedRun(data: any) {
+    return { run: data.run, spans: Array.isArray(data.spans) ? data.spans.map((span: any) => publicCaptureMetadata(projectCapturedGuardSpan(withholdAgentDefinitionCapture(span)))) : [],
+      liveEvents: Array.isArray(data.liveEvents) ? data.liveEvents : [], subAgents: Array.isArray(data.subAgents) ? data.subAgents : [] };
+  }
   app.put(/^\/api\/saved-runs\/cache\/(.+)$/, (req, res) => {
     const id = (req.params as unknown as string[])[0];
-    cacheSavedRun(id, JSON.stringify(req.body));
+    const data = req.body;
+    if (!data || typeof data !== "object" || !data.run || !Array.isArray(data.spans)) {
+      res.status(400).json({ error: "Cache requires a run and spans" }); return;
+    }
+    cacheSavedRun(id, JSON.stringify({ run: data.run, spans: data.spans.map((span: any) => guardSpanForPersistence(withholdAgentDefinitionCapture(span))),
+      liveEvents: Array.isArray(data.liveEvents) ? data.liveEvents : [], subAgents: Array.isArray(data.subAgents) ? data.subAgents : [] }));
     res.json({ ok: true });
   });
   app.get(/^\/api\/saved-runs\/cache\/(.+)$/, (req, res) => {
     const id = (req.params as unknown as string[])[0];
     const data = getCachedRun(id);
     if (!data) { res.status(404).json({ error: "Not cached" }); return; }
-    res.json(JSON.parse(data));
+    const cached = JSON.parse(data);
+    res.json(publicCachedRun(cached));
   });
   app.delete(/^\/api\/saved-runs\/cache\/(.+)$/, (req, res) => {
     const id = (req.params as unknown as string[])[0];
@@ -2691,12 +2914,16 @@ export async function createServer(port: number) {
       res.status(400).json({ error: "eventName must be a string when provided" });
       return;
     }
+    const { spans } = getRunWithSpans(runId);
+    if (spans.some(span => observationReplayUnavailable(span.normalized.capture))) {
+      res.status(422).json({ code: "observation_not_replayable", error: "Replay is unavailable for partial, unverified observations." });
+      return;
+    }
     const agents = loadAgentsConfig();
     const name = (eventName ?? "").replace(/^replay:/, "");
     const agentConfig = agents[name];
     const mapping = agentConfig?.prefillFromTrace;
     if (!mapping) { res.json({ context: {}, mapping: {} }); return; }
-    const { spans } = getRunWithSpans(runId);
     const context = extractContextFromTrace(spans, mapping);
     res.json({ context, mapping });
   });
@@ -2816,10 +3043,14 @@ export async function createServer(port: number) {
   return {
     app,
     server,
+    closeBrowserWorkers: () => browserAutomation.close(),
+    close: closeServer,
+    codingHooks: { store: hookOwner.store, get controller() { return hookController; }, management: () => new ClaudeHookManagement(hookOwner.store, server.listening && currentServerPort() ? `http://127.0.0.1:${currentServerPort()}` : null, server.listening) },
     get port() {
       return currentServerPort() ?? port;
     },
   };
+  } catch (error) { closeDb(); await hookOwner.close(); throw error; }
 }
 
 export const _serverInternal = { createReplayAbortLifecycle, extractAgentAskContinuation };
