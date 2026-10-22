@@ -139,6 +139,21 @@ export class EvaluationMcpFixture {
 
   get url(): string { return `http://127.0.0.1:${(this.server!.address() as { port: number }).port}`; }
 
+  async restartHttp(): Promise<Server> {
+    const previous = this.server;
+    if (!this.setupStarted || this.cleanupPromise || !previous?.listening) throw new Error("Evaluation MCP fixture HTTP restart requires a live fixture before cleanup");
+    if (!this.directory || process.env.RUNPHANTOM_DB_PATH !== path.join(this.directory, "evaluations.db")) throw new Error("Evaluation MCP fixture database profile changed before HTTP restart");
+    const address = previous.address();
+    if (!address || typeof address === "string") throw new Error("Evaluation MCP fixture HTTP restart requires a TCP listener");
+    // The owned close drains services and releases the database lease before reopening.
+    await new Promise<void>((resolve, reject) => previous.close(error => error ? reject(error) : resolve()));
+    this.server = undefined;
+    ({ server: this.server } = await createServer(address.port));
+    this.server.listen(address.port, "127.0.0.1");
+    await once(this.server, "listening");
+    return this.server;
+  }
+
   cleanup(): Promise<CleanupReport> {
     // Cache before entering a delegate: afterEach and setup's catch share one attempt.
     return this.cleanupPromise ??= Promise.resolve().then(() => this.performCleanup());

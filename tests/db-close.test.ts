@@ -5,7 +5,7 @@ import path from "node:path";
 import { closeDb, getDbPath, getDrizzleDb, queryTraces, upsertRun } from "../src/db";
 
 function withFixtureDb(check: (directory: string, dbPath: string) => void) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "runphantom-db-close-"));
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "runphantom-db-close-")));
   const dbPath = path.join(directory, "runphantom.db");
   const previous = process.env.RUNPHANTOM_DB_PATH;
   try {

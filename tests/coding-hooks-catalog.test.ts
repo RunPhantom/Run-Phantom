@@ -58,7 +58,7 @@ test("SQL global metadata and local full publish once-only usage without sharing
   const fullToken = installCatalogFixture(local, [first], "d".repeat(64)), full = admit(fullToken, first);
   expect(full.sourceKey).toBe(global.sourceKey); expect(full.runId).toBe(global.runId); expect(full.captureMode).toBe("full"); expect(global.captureMode).toBe("metadata");
   expect(store.publish(fullToken, full, batch(full)).status).toBe("accepted"); expect(store.publish(globalToken, global, batch(global)).status).toBe("accepted");
-  expect(store.db.query("SELECT input_tokens,output_tokens FROM spans WHERE run_id=? AND span_type='llm'").all(full.runId)).toEqual([{ input_tokens: 10, output_tokens: 4 }]);
+  expect(store.db.query("SELECT input_tokens,output_tokens FROM spans WHERE run_id=? AND span_type='LLM_GENERATION'").all(full.runId)).toEqual([{ input_tokens: 10, output_tokens: 4 }]);
   expect(JSON.stringify(store.db.query("SELECT * FROM spans WHERE run_id=?").all(full.runId))).toContain("safe exact business result");
   const other = admit(globalToken, registrations[1]); expect(other.sourceKey).not.toBe(full.sourceKey); expect(other.runId).not.toBe(full.runId);
   expect(store.publish(globalToken, other, batch(other)).status).toBe("accepted");
@@ -112,7 +112,7 @@ test("SQL global catalog acquires both actual registered transcripts before meta
     const normalized = normalizeClaudeHook(rawHook, { sourceKey: admission.sourceKey, captureMode: admission.captureMode }, snapshot.value); if (normalized.status !== "accepted") throw new Error("fixture normalization");
     expect(JSON.stringify(normalized.value)).not.toContain("safe exact business result"); expect(store.publish(capability, admission, normalized.value).status).toBe("accepted");
   }
-  expect(store.db.query("SELECT id FROM runs").all()).toHaveLength(2); expect(store.db.query("SELECT input_tokens,output_tokens FROM spans WHERE span_type='llm'").all()).toEqual([{ input_tokens: 10, output_tokens: 4 }, { input_tokens: 10, output_tokens: 4 }]);
+  expect(store.db.query("SELECT id FROM runs").all()).toHaveLength(2); expect(store.db.query("SELECT input_tokens,output_tokens FROM spans WHERE span_type='LLM_GENERATION'").all()).toEqual([{ input_tokens: 10, output_tokens: 4 }, { input_tokens: 10, output_tokens: 4 }]);
   expect(JSON.stringify(store.db.query("SELECT data FROM coding_hook_entities").all())).not.toContain("safe exact business result");
 });
 
