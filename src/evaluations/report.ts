@@ -1,3 +1,5 @@
+import { parseCapturedAgentDefinitions } from "../agent-definitions";
+import type { CapturedAgentDefinitions } from "../agent-definitions-protocol";
 import type { Comparison, Experiment, Status } from "./protocol";
 import { EVALUATION_LIMITS as L } from "./protocol";
 import { EvaluationError } from "./validation";
@@ -12,7 +14,7 @@ export interface EvaluationReport {
   dataset: { id: string; name: string; version: number; hash: string };
   summary: { total: number; pass: number; fail: number; inconclusive: number; passRate: number };
   gate: { pass: boolean; reasons: string[] };
-  cases: Array<{ id: string; name: string; runId: string; status: Status; checks: Array<{
+  cases: Array<{ id: string; name: string; runId: string; status: Status; agentDefinitions?: CapturedAgentDefinitions; checks: Array<{
     status: Status; source: "code" | "llm"; evaluatorVersion: string; reason: string;
   }> }>;
   comparison: { baselineId: string; candidateId: string; summary: Comparison["summary"] } | null;
@@ -43,7 +45,12 @@ export function createEvaluationReport(experiment: Experiment, comparison?: Comp
     const complete = result.inputMatch === "match" && result.snapshot.complete && checks.length > 0 && checks.length === result.case.rules.length;
     const status: Status = result.status === "fail" || checks.some(check => check.status === "fail") ? "fail"
       : complete && result.status === "pass" && checks.every(check => check.status === "pass") ? "pass" : "inconclusive";
-    return { id: label(result.caseId), name: label(result.caseName), runId: label(result.runId), status, checks };
+    const projected = { id: label(result.caseId), name: label(result.caseName), runId: label(result.runId), status, checks } as EvaluationReport["cases"][number];
+    if (result.snapshot.agentDefinitions !== undefined) {
+      try { projected.agentDefinitions = parseCapturedAgentDefinitions(result.snapshot.agentDefinitions); }
+      catch { throw new EvaluationError("Frozen definition provenance is invalid", 409); }
+    }
+    return projected;
   });
   const summary = { total: cases.length, pass: 0, fail: 0, inconclusive: 0, passRate: 0 };
   for (const result of cases) summary[result.status]++;
@@ -88,7 +95,8 @@ export function evaluationReportJUnit(report: EvaluationReport): string {
     const problem = result.status === "pass" ? "" : result.status === "fail"
       ? `<failure message="Evaluation failed">${xml(details || "The frozen case failed.")}</failure>`
       : `<error message="Inconclusive evidence">${xml(details || "The frozen case lacks sufficient evidence.")}</error>`;
-    return `    <testcase name="${xml(result.name)}" classname="${xml(report.dataset.name)}">${problem}</testcase>`;
+    const provenance = result.agentDefinitions === undefined ? "" : `<properties><property name="runphantom.agent-definitions" value="${xml(JSON.stringify(parseCapturedAgentDefinitions(result.agentDefinitions)))}"/></properties>`;
+    return `    <testcase name="${xml(result.name)}" classname="${xml(report.dataset.name)}">${provenance}${problem}</testcase>`;
   });
   if (extraGate) body.push(`    <testcase name="Experiment quality gate" classname="Run Phantom"><error message="Quality gate incomplete">${xml(report.gate.reasons.join("\n"))}</error></testcase>`);
   const attributes = `tests="${tests}" failures="${report.summary.fail}" errors="${errors}" skipped="0"`;

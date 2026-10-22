@@ -1,42 +1,31 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { once } from "node:events";
 import { closeDb, upsertRun, insertSpan } from "../src/db";
-import { createServer } from "../src/server";
-import { runMcpServer, type McpServerHandle } from "../src/mcp/index";
+import { EvaluationMcpFixture, cleanupError } from "./helpers/evaluation-mcp-fixture";
 import type { DatasetRevision, DatasetExport, Experiment, Comparison, Review, Snapshot } from "../src/evaluations/protocol";
 
 let client: Client;
-let mcp: McpServerHandle;
 let server: import("node:http").Server;
-let directory: string;
-let oldDb: string | undefined;
+let fixture: EvaluationMcpFixture | undefined;
+let setupFailed = false;
 
 beforeEach(async () => {
-  directory = mkdtempSync(path.join(tmpdir(), "rp-evaluation-mcp-"));
-  oldDb = process.env.RUNPHANTOM_DB_PATH;
-  closeDb();
-  process.env.RUNPHANTOM_DB_PATH = path.join(directory, "evaluations.db");
-  ({ server } = await createServer(0));
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  mcp = await runMcpServer({ url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, transport: serverTransport });
-  client = new Client({ name: "evaluation-mcp-regression", version: "1.0.0" });
-  await client.connect(clientTransport);
+  if (fixture?.report?.failures.length) throw cleanupError(fixture.report);
+  fixture = new EvaluationMcpFixture();
+  setupFailed = false;
+  try {
+    await fixture.setup();
+    client = fixture.client!;
+    server = fixture.server!;
+  } catch (error) { setupFailed = true; throw error; }
 });
 afterEach(async () => {
-  await client?.close();
-  await mcp?.close();
-  if (server) await new Promise<void>(resolve => server.close(() => resolve()));
-  closeDb();
-  if (oldDb === undefined) delete process.env.RUNPHANTOM_DB_PATH; else process.env.RUNPHANTOM_DB_PATH = oldDb;
-  rmSync(directory, { recursive: true, force: true });
+  if (!fixture) return;
+  const report = await fixture.cleanup();
+  if (report.failures.length) {
+    if (!setupFailed) throw cleanupError(report);
+  } else fixture = undefined;
 });
 async function call<T>(name: string, args: Record<string, unknown>): Promise<T> {
   const response = await client.callTool({ name, arguments: args });
