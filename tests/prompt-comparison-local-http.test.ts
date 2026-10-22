@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { once } from "node:events";
-import { randomUUID } from "node:crypto";
-import { mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "../src/server";
@@ -11,6 +11,10 @@ import { COMPARISON_MODELS } from "../src/prompts/comparison-protocol";
 import { ComparisonStore } from "../src/prompts/comparison-store";
 import { request as httpRequest } from "node:http";
 
+const migrations = join(import.meta.dir, "../drizzle"), journal = JSON.parse(readFileSync(join(migrations, "meta/_journal.json"), "utf8"));
+const currentHistory = journal.entries.map((entry: { tag: string; when: number }) => ({
+  hash: createHash("sha256").update(readFileSync(join(migrations, entry.tag + ".sql"))).digest("hex"), created_at: entry.when,
+}));
 let directory: string, url: string, prior: string | undefined, handle: Awaited<ReturnType<typeof createServer>>, upstream: ReturnType<typeof Bun.serve>;
 let calls = 0, active = 0, peak = 0, overage = false;
 beforeEach(async () => {
@@ -57,7 +61,7 @@ test("actual mounted adapter preserves enriched-output overage, fuse and all acc
   const result = await terminal(first.data.id); expect(result.attempts[0]).toMatchObject({ status: "failed", reason: "response_limit", payload: null, accountingState: "measured_estimate", observedEstimateUsd: "2.000008", chargeMicrousd: 2000008, budgetBreach: true }); expect(calls).toBe(1);
   const cap = await call("/api/prompts/comparisons/capabilities"); expect(cap.data.models.filter((model: { provider: string }) => model.provider === "openai").every((model: { spendingEnabled: boolean; admissionReason: string }) => !model.spendingEnabled && model.admissionReason === "overage_fuse")).toBe(true);
   const refused = await call("/api/prompts/comparisons", "POST", { ...value, operationKey: randomUUID() }); expect(refused.data.attempts[0].status).toBe("budget_refused"); expect(calls).toBe(1);
-  const filename = getDrizzleDb().$client.filename, inode = statSync(filename).ino, history = getDrizzleDb().$client.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all(); expect(history).toHaveLength(15);
+  const filename = getDrizzleDb().$client.filename, inode = statSync(filename).ino, history = getDrizzleDb().$client.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all(); expect(history).toEqual(currentHistory);
   expect((await call("/api/prompts/comparisons/clear", "POST", { operationKey: randomUUID(), expectedGeneration: cap.data.generation, confirmRemoval: true })).response.status).toBe(200);
   const tombstone = (await call("/api/prompts/comparisons/" + first.data.id)).data; expect(tombstone.request).toBeNull(); expect(tombstone.attempts[0].chargeMicrousd).toBe(2000008);
   await stop(); await start(); expect(statSync(filename).ino).toBe(inode); expect(getDrizzleDb().$client.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all()).toEqual(history);

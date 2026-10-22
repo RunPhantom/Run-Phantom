@@ -12,6 +12,7 @@ import { createComparisonRuntime, initializeComparisonScope } from "../src/promp
 
 const migrations = path.resolve(import.meta.dir, "../drizzle"), journal = JSON.parse(readFileSync(path.join(migrations, "meta/_journal.json"), "utf8"));
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
+const currentHistory = () => journal.entries.map((entry: { tag: string; when: number }) => ({ hash: digest(readFileSync(path.join(migrations, entry.tag + ".sql"))), created_at: entry.when }));
 let directory: string, db: Database, runtime: Awaited<ReturnType<typeof createComparisonRuntime>> | undefined;
 beforeEach(() => { directory = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-comparison-canonical14-"))); db = new Database(path.join(directory, "owner.sqlite")); });
 afterEach(async () => { await runtime?.close(); runtime = undefined; db.close(); rmSync(directory, { recursive: true, force: true }); });
@@ -49,7 +50,7 @@ test("actual canonical14 preserves the complete prefix13 catalog, every physical
     else expect(after.tables[table]).toEqual(rows);
   }
   const history = db.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all();
-  expect(history).toHaveLength(15); expect(history.at(-1)).toEqual({ hash: "5739e20dc98a32fbb5db8c08833c78f4cb665fef1593e1e1ea80b36a48160726", created_at: 1791766000005 });
+  expect(history).toEqual(currentHistory()); expect(history[14]).toEqual({ hash: "5739e20dc98a32fbb5db8c08833c78f4cb665fef1593e1e1ea80b36a48160726", created_at: 1791766000005 });
   expect(statSync(filename).ino).toBe(inode); expect(db.query("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" }); expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   const owner = { database: db, scope: { kind: "local" as const, id: "local" as const }, authorize() {} };
   runtime = await createComparisonRuntime(db, { budgets: { openai: 0, anthropic: 0 } }); initializeComparisonScope(owner);
@@ -61,17 +62,18 @@ test("actual canonical14 preserves the complete prefix13 catalog, every physical
   expect(statSync(filename).ino).toBe(inode); expect(witness()).toEqual(complete); expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
 });
 test("canonical14 uses the reserved genuine journal entry and exact reviewed SQL with no snapshot drift", async () => {
-  expect(journal.entries.map((row: { idx: number }) => row.idx)).toEqual(Array.from({ length: 15 }, (_value, idx) => idx));
+  expect(journal.entries.slice(0, 15).map((row: { idx: number }) => row.idx)).toEqual(Array.from({ length: 15 }, (_value, idx) => idx));
   expect(journal.entries[14]).toEqual({ idx: 14, version: "6", when: 1791766000005, tag: "0014_prompt_comparisons", breakpoints: true });
   const bytes = readFileSync(path.join(migrations, "0014_prompt_comparisons.sql")); expect(bytes.byteLength).toBe(8330); expect(digest(bytes)).toBe("5739e20dc98a32fbb5db8c08833c78f4cb665fef1593e1e1ea80b36a48160726");
   const old = JSON.parse(readFileSync(path.join(migrations, "meta/0013_snapshot.json"), "utf8")), current = JSON.parse(readFileSync(path.join(migrations, "meta/0014_snapshot.json"), "utf8"));
   expect(current.prevId).toBe(old.id); for (const [name, table] of Object.entries(old.tables)) expect(current.tables[name]).toEqual(table); expect(current.views).toEqual(old.views);
   expect(Object.keys(current.tables).filter(name => !Object.hasOwn(old.tables, name)).sort()).toEqual(["comparison_scope_controls", "prompt_comparison_attempts", "prompt_comparisons"]);
-  expect(await generateSQLiteMigration(current, await generateSQLiteDrizzleJson(typedSchema, current.id))).toEqual([]);
+  const latest = JSON.parse(readFileSync(path.join(migrations, `meta/${String(journal.entries.at(-1).idx).padStart(4, "0")}_snapshot.json`), "utf8"));
+  expect(await generateSQLiteMigration(latest, await generateSQLiteDrizzleJson(typedSchema, latest.id))).toEqual([]);
 });
 test("a late canonical14 failure rolls back all comparison tables/triggers/indexes and the receipt while old data stays exact", () => {
   apply(prefix(13)); seed(); const before = witness(), broken = prefix(14, "broken"), filename = path.join(broken, "0014_prompt_comparisons.sql");
   writeFileSync(filename, readFileSync(filename, "utf8") + "\n--> statement-breakpoint\nSELECT * FROM intentional_comparison_missing_table;\n");
   expect(() => apply(broken)).toThrow(); expect(witness()).toEqual(before); apply(migrations);
-  expect(db.query("SELECT count(*) n FROM __drizzle_migrations").get()).toEqual({ n: 15 }); expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  expect(db.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all()).toEqual(currentHistory()); expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
 });

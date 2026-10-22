@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
+import { createHash } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -48,7 +49,7 @@ test("semantic snapshot migration preserves prior traces and reports, bounds imm
     expect(actual.query("SELECT * FROM verification_reports").all()).toEqual(originalReports);
     expect(actual.query("PRAGMA foreign_key_check").all()).toEqual([]);
     const history = actual.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all();
-    expect(history).toHaveLength(10);
+    expect(history).toEqual(journal.entries.map(entry => ({ hash: createHash("sha256").update(readFileSync(path.join(migrations, entry.tag + ".sql"))).digest("hex"), created_at: entry.when })));
     expect(history.slice(0, 9)).toEqual(originalHistory);
     expect(actual.query("SELECT name FROM sqlite_master WHERE type='table' AND name='verification_snapshots'").all()).toHaveLength(1);
 

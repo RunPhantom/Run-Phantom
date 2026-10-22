@@ -49,6 +49,20 @@ afterAll(async () => {
 });
 async function json(route: string) { const response = await fetch(base + route); expect(response.status).toBe(200); return response.json(); }
 async function post(route: string, data: unknown) { return fetch(base + route, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }); }
+const persistedSpanColumns = ["id", "run_id", "parent_span_id", "name", "span_type", "status", "input_payload", "output_payload",
+  "start_time_ms", "end_time_ms", "duration_ms", "model", "provider", "input_tokens", "output_tokens", "attributes", "otlp_evidence"] as const;
+function assertStoredSource(bytes: string, request: { run: unknown; spans: Record<string, unknown>[]; liveEvents: unknown[] }, quarantineReceipt = false) {
+  const stored = JSON.parse(bytes);
+  expect(stored.run).toEqual(request.run); expect(stored.liveEvents).toEqual(request.liveEvents); expect(stored.subAgents).toEqual([]);
+  expect(stored.spans).toHaveLength(request.spans.length);
+  for (const [index, source] of request.spans.entries()) {
+    const span = stored.spans[index];
+    for (const column of persistedSpanColumns) expect(span[column]).toEqual(column === "otlp_evidence" && quarantineReceipt ? "[UNAVAILABLE]" : source[column]);
+    expect(Object.keys(span).sort()).toEqual(persistedSpanColumns.filter(column => Object.hasOwn(source, column)).sort());
+    for (const derived of ["normalized", "captureVisibility", "guardEvidence", "guard_decisions"]) expect(Object.hasOwn(span, derived)).toBe(false);
+  }
+  return stored;
+}
 test("actual captured hierarchy classification and canonical payloads agree across every public cache route", async () => {
   const cases = [];
   for (const [index, policy] of classificationCases.entries()) {
@@ -65,7 +79,8 @@ test("actual captured hierarchy classification and canonical payloads agree acro
       const data = { run: { ...original.run, id }, spans: [row], liveEvents: [] }, bytes = JSON.stringify(data);
       expect((await fetch(`${base}/api/saved-runs/cache/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: bytes })).status).toBe(200);
       const database = new Database(path.join(directory, "capture.db"), { readonly: true });
-      expect((database.query("SELECT data FROM saved_run_cache WHERE id=?").get(id) as { data: string }).data).toBe(bytes); database.close();
+      const stored = database.query("SELECT data FROM saved_run_cache WHERE id=?").get(id) as { data: string }; database.close();
+      assertStoredSource(stored.data, data);
       for (const route of [`/api/runs/detail/${id}`, `/api/saved-runs/cache/${id}`, `/api/runs/${id}/export`]) {
         const response = await fetch(base + route); expect(response.status).toBe(200); const current = (await response.json()).spans[0];
         for (const key of ["id", "run_id", "span_type", "status", "input_payload", "output_payload"] as const) expect(current[key]).toEqual(row[key]);
@@ -74,7 +89,7 @@ test("actual captured hierarchy classification and canonical payloads agree acro
         else { expect(current.normalized).toBeUndefined(); expect(current.captureVisibility?.retrieval).toBeUndefined(); }
       }
     }
-    cases.push({ policy: policy.name, expectedKind: policy.kind, actualKind: original.spans[0].span_type, canonicalFieldsPreserved: true, contradictoryRetrievalWithheld: policy.kind !== "RETRIEVAL", privateCacheBytesUnchanged: true });
+    cases.push({ policy: policy.name, expectedKind: policy.kind, actualKind: original.spans[0].span_type, canonicalFieldsPreserved: true, contradictoryRetrievalWithheld: policy.kind !== "RETRIEVAL", privateSourceColumnsPreserved: true, derivedDtosPersisted: false });
   }
   proof("http-classification-policy.json", { ownedPid: daemon.pid, cases, publicRoutesPerCase: 6 });
 }, 30000);
@@ -91,7 +106,7 @@ for (const [index, level] of ["resource", "scope"].entries()) {
     const database = new Database(path.join(directory, "capture.db"), { readonly: true });
     const cache = database.query("SELECT data FROM saved_run_cache WHERE id=?").get(id) as { data: string };
     const source = database.query("SELECT span_type,attributes,otlp_evidence FROM spans WHERE run_id=? AND id=?").get(fixture.id, parsed.spanId) as { span_type: string; attributes: string; otlp_evidence: string }; database.close();
-    expect(cache.data).toBe(bytes); expect(source.span_type).toBe("TOOL_CALL"); expect(source.attributes).toBe(JSON.stringify(parsed.attributes)); expect(source.otlp_evidence).toBe(JSON.stringify(parsed.otlpEvidence));
+    assertStoredSource(cache.data, data); expect(source.span_type).toBe("TOOL_CALL"); expect(source.attributes).toBe(JSON.stringify(parsed.attributes)); expect(source.otlp_evidence).toBe(JSON.stringify(parsed.otlpEvidence));
     const responses = [];
     for (const route of [`/api/runs/detail/${id}`, `/api/saved-runs/cache/${id}`, `/api/runs/${id}/export`]) {
       const response = await fetch(base + route); expect(response.status).toBe(200); const current = (await response.json()).spans[0];
@@ -100,7 +115,7 @@ for (const [index, level] of ["resource", "scope"].entries()) {
       responses.push({ route, status: response.status, contradictoryCaptureWithheld: true, originalFieldsPreserved: true });
     }
     const canonical = await json(`/api/runs/detail/${fixture.id}`); expect(canonical.spans[0].normalized).toEqual(original.spans[0].normalized);
-    proof(`http-classification-${level}.json`, { ownedPid: daemon.pid, actualIngestKind: source.span_type, unchangedProtectedRequest: true, privateBytesUnchanged: true, canonicalToolPreserved: true, responses });
+    proof(`http-classification-${level}.json`, { ownedPid: daemon.pid, actualIngestKind: source.span_type, unchangedProtectedRequest: true, privateSourceColumnsPreserved: true, derivedDtosPersisted: false, canonicalToolPreserved: true, responses });
   });
 }
 for (const spanType of [null, "INTERNAL"] as const) {
@@ -114,7 +129,7 @@ for (const spanType of [null, "INTERNAL"] as const) {
     expect((await fetch(`${base}/api/saved-runs/cache/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })).status).toBe(200);
     const database = new Database(path.join(directory, "capture.db"), { readonly: true });
     const stored = database.query("SELECT data FROM saved_run_cache WHERE id=?").get(id) as { data: string }; database.close();
-    expect(stored.data).toBe(JSON.stringify(data)); expect(stored.data).toContain(filterSecret);
+    assertStoredSource(stored.data, data); expect(stored.data).not.toContain(filterSecret);
     const responses = [];
     for (const route of [`/api/runs/detail/${id}`, `/api/saved-runs/cache/${id}`, `/api/runs/${id}/export`]) {
       const response = await fetch(base + route), text = await response.text(); expect(response.status).toBe(200); expect(text).not.toContain(filterSecret);
@@ -122,7 +137,7 @@ for (const spanType of [null, "INTERNAL"] as const) {
       for (const key of ["id", "run_id", "span_type", "status", "input_payload", "output_payload"] as const) expect(projected[key]).toEqual(row[key]);
       responses.push({ route, status: response.status, credentialWithheld: !text.includes(filterSecret), sourceFieldsPreserved: true, staleDtosRemoved: true });
     }
-    proof(`http-cache-dto-${spanType}.json`, { ownedPid: daemon.pid, spanType, privateBytesUnchanged: stored.data === JSON.stringify(data), responses });
+    proof(`http-cache-dto-${spanType}.json`, { ownedPid: daemon.pid, spanType, privateSourceColumnsPreserved: true, derivedDtosPersisted: false, forgedCredentialPersisted: stored.data.includes(filterSecret), responses });
   });
 }
 test("actual saved cache rebuilds canonical operations and lifecycle from valid source rather than serialized DTOs", async () => {
@@ -136,7 +151,8 @@ test("actual saved cache rebuilds canonical operations and lifecycle from valid 
   const data = { run: { ...original.run, id }, spans, liveEvents: [] };
   expect((await fetch(`${base}/api/saved-runs/cache/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })).status).toBe(200);
   const database = new Database(path.join(directory, "capture.db"), { readonly: true });
-  const stored = database.query("SELECT data FROM saved_run_cache WHERE id=?").get(id) as { data: string }; database.close(); expect(stored.data).toBe(JSON.stringify(data));
+  const stored = database.query("SELECT data FROM saved_run_cache WHERE id=?").get(id) as { data: string }; database.close(); assertStoredSource(stored.data, data);
+  expect(stored.data).toContain(filterSecret); // Valid private source metadata remains available for replay.
   for (const route of [`/api/runs/detail/${id}`, `/api/saved-runs/cache/${id}`, `/api/runs/${id}/export`]) {
     const response = await fetch(base + route); expect(response.status).toBe(200); const current = await response.json(); expect(JSON.stringify(current)).not.toContain(filterSecret);
     expect(current.spans[0].normalized).toMatchObject({ kind: "retrieval", collection: "manuals", resultCount: 0 });
@@ -145,7 +161,7 @@ test("actual saved cache rebuilds canonical operations and lifecycle from valid 
     expect(current.spans[3].captureVisibility.stream.state).toBe("cancelled");
     expect(current.spans[2].normalized).toEqual(original.spans[2].normalized); expect(current.spans[2].output_payload).toBe(captureOutput);
   }
-  proof("http-cache-dto-source-positive.json", { ownedPid: daemon.pid, privateBytesUnchanged: true, canonicalOperationsRebuilt: true, streamSourceRosterUsed: true, cancellationPreserved: true, authoritativeLlmNormalizationPreserved: true });
+  proof("http-cache-dto-source-positive.json", { ownedPid: daemon.pid, privateSourceColumnsPreserved: true, derivedDtosPersisted: false, canonicalOperationsRebuilt: true, streamSourceRosterUsed: true, cancellationPreserved: true, authoritativeLlmNormalizationPreserved: true });
 });
 for (const variant of ["valid", "escaped-invalid-receipt", "malformed-attributes"] as const) {
   test(`actual saved-cache ${variant} never publishes owned filter credentials`, async () => {
@@ -164,7 +180,10 @@ for (const variant of ["valid", "escaped-invalid-receipt", "malformed-attributes
     expect((await fetch(`${base}/api/saved-runs/cache/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })).status).toBe(200);
     const database = new Database(path.join(directory, "capture.db"), { readonly: true });
     const stored = database.query("SELECT data FROM saved_run_cache WHERE id=?").get(id) as { data: string }; database.close();
-    expect(stored.data).toBe(JSON.stringify(data)); expect(stored.data).toContain(filterSecret);
+    const quarantineReceipt = variant === "escaped-invalid-receipt";
+    assertStoredSource(stored.data, data, quarantineReceipt);
+    if (quarantineReceipt) expect(stored.data).not.toContain(filterSecret);
+    else expect(stored.data).toContain(filterSecret);
     const responses = [];
     for (const route of [`/api/runs/detail/${id}`, `/api/saved-runs/cache/${id}`, `/api/runs/${id}/export`]) {
       const response = await fetch(base + route), text = await response.text();
@@ -173,7 +192,7 @@ for (const variant of ["valid", "escaped-invalid-receipt", "malformed-attributes
       if (response.status === 200) { const projected = JSON.parse(text); expect(projected.spans[0].input_payload).toBe(row.input_payload); expect(projected.spans[0].output_payload).toBe(row.output_payload); }
       responses.push({ route, status: response.status, credentialWithheld: !text.includes(filterSecret) });
     }
-    proof(`http-cache-privacy-${variant}.json`, { variant, ownedPid: daemon.pid, privateBytesUnchanged: stored.data === JSON.stringify(data), responses });
+    proof(`http-cache-privacy-${variant}.json`, { variant, ownedPid: daemon.pid, canonicalPayloadsPreserved: true, attributeBytesPreserved: true, sourceReceiptPreserved: !quarantineReceipt, derivedDtosPersisted: false, invalidReceiptQuarantined: quarantineReceipt, responses });
   });
 }
 async function verify(id: string) {

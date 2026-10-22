@@ -96,14 +96,16 @@ test("legacy OTLP backfill rolls back if recording its canonical receipt fails",
   const db = new Database(filename); apply(db, priorFolder(root, 7, true)); seed(db, true);
   const before = retained(db, true), history = db.query("SELECT * FROM __drizzle_migrations ORDER BY created_at").all(); db.close(true);
   // Fail after SQLite has applied the ALTER, before the receipt can be written.
+  const actualFilename = fs.realpathSync(filename); let injectedFailures = 0;
   const execute = Reflect.get(Database.prototype, "exec") as Database["exec"];
   const failure = spyOn(Database.prototype, "exec").mockImplementation(function (this: Database, sql: string) {
     const result = execute.call(this, sql);
-    if (this.filename === filename && sql.includes("ALTER TABLE `spans` ADD `otlp_evidence`")) throw new Error("injected receipt failure");
+    if (this.filename === actualFilename && sql.includes("ALTER TABLE `spans` ADD `otlp_evidence`")) { injectedFailures++; throw new Error("injected receipt failure"); }
     return result;
   });
   try { expect(() => { getDrizzleDb(); }).toThrow("injected receipt failure"); }
   finally { failure.mockRestore(); }
+  expect(injectedFailures).toBe(1);
   const reopened = new Database(filename);
   expect(reopened.query("PRAGMA table_info(spans)").all().some((row: unknown) => (row as { name: string }).name === "otlp_evidence")).toBe(false);
   expect(retained(reopened, true)).toEqual(before);

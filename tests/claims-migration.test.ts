@@ -89,7 +89,7 @@ test("actual completion named indexes match snapshot uniqueness and exact column
   }
 });
 test("real next Drizzle generation has no delta and can drop and recreate both actual completion indexes", async () => {
-  const db = getDrizzleDb().$client, snapshot = JSON.parse(readFileSync(path.join(migrations, "meta/0014_snapshot.json"), "utf8"));
+  const db = getDrizzleDb().$client, snapshot = JSON.parse(readFileSync(path.join(migrations, `meta/${String(journal.entries.at(-1).idx).padStart(4, "0")}_snapshot.json`), "utf8"));
   const generated = await generateSQLiteDrizzleJson(typedSchema, snapshot.id); expect(await generateSQLiteMigration(snapshot, generated)).toEqual([]);
   const changed = structuredClone(snapshot); for (const index of indexes) delete changed.tables[index.table].indexes[index.name];
   const removal = await generateSQLiteMigration(snapshot, changed); expect(removal).toHaveLength(2);
