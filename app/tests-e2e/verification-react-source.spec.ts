@@ -2,6 +2,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdtempSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { pathToFileURL } from "node:url";
 import path from "node:path";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { test as base, expect, REPO_ROOT_PATH, type RunPhantomHandle } from "./fixtures";
@@ -43,7 +44,12 @@ async function stop(proc: ChildProcess) {
 const test = base.extend<{ reactApp: ReactApp; production: boolean }>({
   production: [false, { option: true }],
   reactApp: async ({ production }, use) => {
-    const root = mkdtempSync(path.join(realpathSync(tmpdir()), "rp-react-source-"));
+    const temporaryRoot = mkdtempSync(path.join(realpathSync(tmpdir()), "rp-react-source-"));
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.includes("API_KEY") && !key.startsWith("RUNPHANTOM_")));
+    const canonical = spawnSync("node", ["-e", "process.stdout.write(require('node:fs').realpathSync.native(process.argv[1]))", temporaryRoot], { cwd: REPO_ROOT_PATH, env, encoding: "utf8", timeout: 25_000 });
+    if (canonical.status !== 0) { rmSync(temporaryRoot, { recursive: true, force: true }); throw new Error(`Fixture root resolution refused: ${canonical.stderr}`); }
+    const root = canonical.stdout;
+    mkdirSync(path.join(REPO_ROOT_PATH, ".omx"), { recursive: true });
     const helper = mkdtempSync(path.join(REPO_ROOT_PATH, ".omx/react-source-"));
     mkdirSync(path.join(root, "src")); mkdirSync(path.join(root, "public"));
     writeFileSync(path.join(root, "src/Checkout.tsx"), source);
@@ -66,13 +72,12 @@ const test = base.extend<{ reactApp: ReactApp; production: boolean }>({
       writeFileSync(path.join(root, "legacy.html"), '<!doctype html><html lang="en"><h1>Real React 18 checkout</h1><div id="root"></div><output id="output">idle</output><script type="module" src="/legacy.js"></script></html>');
     }
     const script = path.join(helper, "server.mjs");
-    writeFileSync(script, `import {createServer as portProbe} from "node:net"; import * as vite from ${q(vite)}; import react from ${q(reactPlugin)}; import {runPhantomSourceProvenance} from ${q(adapter)};
+    writeFileSync(script, `import {createServer as portProbe} from "node:net"; import * as vite from ${q(pathToFileURL(vite).href)}; import react from ${q(pathToFileURL(reactPlugin).href)}; import {runPhantomSourceProvenance} from ${q(pathToFileURL(adapter).href)};
 const reservation=portProbe();await new Promise((resolve,reject)=>{reservation.once('error',reject);reservation.listen(0,'127.0.0.1',resolve)});const port=reservation.address().port;await new Promise((resolve,reject)=>reservation.close(error=>error?reject(error):resolve()));
 const config={root:${q(root)},configFile:false,logLevel:"silent",plugins:[runPhantomSourceProvenance({enabled:true,renderer:"react-dom",include:["src/Checkout.tsx"]}),react()],resolve:{alias:${JSON.stringify({ "react-dom": path.dirname(appRequire.resolve("react-dom/package.json")), react: path.dirname(appRequire.resolve("react/package.json")) })}},optimizeDeps:{noDiscovery:true,include:["react","react-dom/client","react/jsx-dev-runtime"]}};
 ${production ? "await vite.build({...config,build:{sourcemap:true}});const server=await vite.preview({...config,preview:{host:'127.0.0.1',port,strictPort:true}});" : "const server=await vite.createServer({...config,server:{host:'127.0.0.1',port,strictPort:true}});await server.listen();"}
 process.stdout.write(JSON.stringify({origin:'http://127.0.0.1:'+server.httpServer.address().port})+'\\n');
 process.on('SIGTERM',async()=>{${production ? "await new Promise(resolve=>server.httpServer.close(resolve));" : "await server.close();"}process.exit(0)});`);
-    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.includes("API_KEY") && !key.startsWith("RUNPHANTOM_")));
     const proc = spawn("node", [script], { cwd: REPO_ROOT_PATH, env: { ...env, NODE_ENV: production ? "production" : "development" }, stdio: ["ignore", "pipe", "pipe"] });
     let raw = ""; let errors = ""; proc.stderr!.on("data", value => { errors += value; });
     try {
