@@ -26,7 +26,7 @@ export interface CreateAnnotationInput {
 }
 
 const KINDS: ReadonlySet<AnnotationKind> = new Set(["issue", "good", "note"]);
-const SOURCES: ReadonlySet<AnnotationSource> = new Set(["user", "claude-code", "codex"]);
+const SOURCES: ReadonlySet<AnnotationSource> = new Set(["user", "claude-code", "codex", "opencode"]);
 
 export class InvalidAnnotationError extends Error {
   constructor(message: string) {

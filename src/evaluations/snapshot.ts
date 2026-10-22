@@ -1,3 +1,5 @@
+import { deriveCapturedAgentDefinitions } from "../agent-definitions";
+import { AGENT_DEFINITION_LIMITS } from "../agent-definitions-protocol";
 import { normalizeStoredSpan } from "../spans/normalize";
 import type { NormalizedSpan } from "../spans/normalized";
 import { outputCompletionEvidence, type OutputCompletion } from "../spans/completion";
@@ -326,5 +328,11 @@ export function snapshotRun(run: SnapshotRun, spans: SnapshotSpan[], outputSpanI
     warn("Snapshot evidence was shortened to its storage limit; independent numeric measurements remain intact.");
   }
   if (bytes(JSON.stringify(snapshot)) > L.MAX_SNAPSHOT) throw new EvaluationError("Snapshot exceeds its storage limit", 413);
+  // Existing output/tools/metrics and verdict semantics take priority over optional provenance storage.
+  const remaining = L.MAX_SNAPSHOT - bytes(JSON.stringify(snapshot)) - 32;
+  if (remaining > 0) {
+    const definitions = deriveCapturedAgentDefinitions(spans, Math.min(remaining, AGENT_DEFINITION_LIMITS.metadataBytes));
+    if (definitions) snapshot.agentDefinitions = definitions;
+  }
   return snapshot;
 }

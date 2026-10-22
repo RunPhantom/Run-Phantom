@@ -61,7 +61,7 @@ test("verification MCP tools compose with trace tools and advertise the complete
   const schema = result.tools.find(tool => tool.name === "app_assert")!.inputSchema;
   const definitions = schema.$defs as { predicate: { oneOf: Array<{ properties: Record<string, unknown> }> } };
   const kinds = definitions.predicate.oneOf.map(variant => variant.properties.kind);
-  expect(kinds).toEqual([{ const: "network" }, { const: "console" }, { const: "signal" }, { const: "state" }, { const: "element" },
+  expect(kinds).toEqual([{ const: "performance" }, { const: "performance" }, { const: "network" }, { const: "console" }, { const: "signal" }, { const: "state" }, { const: "element" },
     { const: "relative" }, { const: "relative" }, { enum: ["allOf", "anyOf"] }]);
   await client.callTool({ name: "query_traces", arguments: { sql: "SELECT id FROM runs" } });
   expect(requests[0]).toEqual({ method: "POST", path: "/api/traces/query", body: { sql: "SELECT id FROM runs" } });
@@ -82,6 +82,8 @@ test("observation and app actions carry exact cursors and all supported commands
   await client.callTool({ name: "app_observe", arguments: { sessionId: "session", since: 1700 } });
   expect(requests[0].path).toBe("/api/verification/sessions/session/events?since=1700");
   const commands = [
+    { type: "performance", phase: "begin" },
+    { type: "performance", phase: "capture" },
     { type: "snapshot" },
     { type: "snapshot", selector: "#result" },
     { type: "click", selector: "#checkout" },
@@ -98,6 +100,7 @@ test("observation and app actions carry exact cursors and all supported commands
 test("assertions expose all predicates, composites and immutable report results", async () => {
   const predicate = { kind: "allOf", predicates: [
     { kind: "network", urlContains: "/api/checkout", method: "post", status: 200 },
+    { kind: "performance", metric: "clsMaxSessionScore", op: "lte", value: 0.100000001 },
     { kind: "console", level: "error", absent: true },
     { kind: "signal", name: "checkout.complete" },
     { kind: "state", store: "cart", path: "items.length", equals: 0 },

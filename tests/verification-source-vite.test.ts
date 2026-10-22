@@ -26,12 +26,13 @@ if (import.meta.env.DEV) { globalThis.fixtureToken = "${fixtureToken}"; globalTh
 // Vite's Node API is exercised in Node, isolated from Bun's test-worker esbuild lifecycle.
 async function runVite(mode: "dev" | "multi" | "single-disabled" | "single-enabled", source = code, aliasedRoot = false): Promise<any> {
   const root = mkdtempSync(path.join(realpathSync(tmpdir()), "rp-source-vite-"));
-  mkdirSync(path.join(repo, ".omx"), { recursive: true });
-  const helperDir = mkdtempSync(path.join(repo, ".omx/source-vite-"));
-  mkdirSync(path.join(root, "src"));
-  writeFileSync(path.join(root, "index.html"), '<!doctype html><div id="root"></div><script type="module" src="/src/main.tsx"></script>');
-  writeFileSync(path.join(root, "src/main.tsx"), source);
+  let helperDir: string | undefined;
   try {
+    mkdirSync(path.join(repo, ".omx"), { recursive: true });
+    helperDir = mkdtempSync(path.join(repo, ".omx/source-vite-"));
+    mkdirSync(path.join(root, "src"));
+    writeFileSync(path.join(root, "index.html"), '<!doctype html><div id="root"></div><script type="module" src="/src/main.tsx"></script>');
+    writeFileSync(path.join(root, "src/main.tsx"), source);
     const adapter = path.join(helperDir, "adapter.mjs");
     await new Promise<void>((resolve, reject) => execFile("bun", ["build", path.join(repo, "src/verification/build/vite.ts"), "--target=node", "--format=esm", "--external=typescript", `--outfile=${adapter}`], { cwd: repo, timeout: 25_000 }, (error, _stdout, stderr) => error ? reject(new Error(`${error.message}\n${stderr}`)) : resolve()));
     const script = `import path from "node:path";
@@ -56,7 +57,7 @@ process.stdout.write(JSON.stringify({ root, result }));
 } finally { if (aliasRoot) rmSync(aliasRoot, { recursive: true, force: true }); }`;
     const raw = await new Promise<string>((resolve, reject) => execFile("node", ["--input-type=module", "-e", script], { cwd: repo, env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.includes("API_KEY") && !key.startsWith("RUNPHANTOM_"))), NODE_ENV: mode === "dev" ? "development" : "production" }, timeout: 25_000, maxBuffer: 32 * 1024 * 1024 }, (error, stdout, stderr) => error ? reject(new Error(`${error.message}\n${stderr}`)) : resolve(stdout)));
     return JSON.parse(raw);
-  } finally { rmSync(root, { recursive: true, force: true }); rmSync(helperDir, { recursive: true, force: true }); }
+  } finally { rmSync(root, { recursive: true, force: true }); if (helperDir) rmSync(helperDir, { recursive: true, force: true }); }
 }
 
 describe("actual Vite composition and production asset privacy", () => {

@@ -100,12 +100,13 @@ export const livekitToolAdapter: SpanAdapter = {
 };
 
 function extractItems(parsed: unknown): Array<Record<string, unknown>> {
-  if (Array.isArray(parsed)) return parsed as Array<Record<string, unknown>>;
-  if (parsed && typeof parsed === "object") {
-    const items = (parsed as { items?: unknown }).items;
-    if (Array.isArray(items)) return items as Array<Record<string, unknown>>;
+  let items: unknown[] = [];
+  if (Array.isArray(parsed)) items = parsed;
+  else if (parsed && typeof parsed === "object") {
+    const candidate = (parsed as { items?: unknown }).items;
+    if (Array.isArray(candidate)) items = candidate;
   }
-  return [];
+  return items.filter((item): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item));
 }
 
 function flattenContent(content: unknown): string {

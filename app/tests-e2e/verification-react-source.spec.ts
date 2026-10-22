@@ -117,9 +117,21 @@ test("real React 19 stamps survive rerender, semantic fill, unmount and SPA rout
   const secret = "F20_PRIVATE_FORM_VALUE_NEVER_RETAIN";
   const filled = await command(request, runPhantom, session.id, { type: "ref-fill", ref: found.result!.ref! , value: secret }); expect(filled.ok).toBe(true);
   expect(filled.controlSource?.observation).toMatchObject({ status: "captured", file: "src/Checkout.tsx", line: 7, mechanism: "dev-stamp" }); await expect(page.locator("#note")).toHaveValue(secret);
+  const boundariesBefore = (await observe(request, runPhantom, session.id)).events.filter(event => event.type === "action.boundary").length;
+  await page.locator("#note").evaluate(element => {
+    HTMLInputElement.prototype.blur.call(element);
+    const effects = { focus: 0, input: 0 }; Object.assign(window, { sourceRefEffects: effects });
+    element.addEventListener("focus", () => effects.focus++); element.addEventListener("input", () => effects.input++);
+  });
   await page.locator("#note").evaluate((element, secret) => element.setAttribute("data-runphantom-source", `src/${secret}.tsx:7:16`), secret);
-  const redacted = await command(request, runPhantom, session.id, { type: "ref-fill", ref: found.result!.ref!, value: secret }); expect(redacted.ok).toBe(true);
+  const stale = await command(request, runPhantom, session.id, { type: "ref-fill", ref: found.result!.ref!, value: secret }); expect(stale.ok).toBe(false); expect(stale.controlSource).toBeUndefined();
+  expect(await page.evaluate(() => Reflect.get(window, "sourceRefEffects"))).toEqual({ focus: 0, input: 0 });
+  expect((await observe(request, runPhantom, session.id)).events.filter(event => event.type === "action.boundary")).toHaveLength(boundariesBefore); await expect(page.locator("#note")).toHaveValue(secret); safe(stale, reactApp.root, session.token, [secret]);
+  const rediscovered = await command(request, runPhantom, session.id, { type: "find", query: { kind: "label", label: "Note" } }); expect(rediscovered.result?.status).toBe("unique"); expect(rediscovered.result!.ref).not.toBe(found.result!.ref);
+  const redacted = await command(request, runPhantom, session.id, { type: "ref-fill", ref: rediscovered.result!.ref!, value: secret }); expect(redacted.ok).toBe(true);
   expect(redacted.controlSource?.observation).toEqual({ source: "sdk-reported", framework: "react", status: "unavailable", reason: "redacted" }); safe(redacted, reactApp.root, session.token, [secret]); await expect(page.locator("#note")).toHaveValue(secret);
+  expect(await page.evaluate(() => Reflect.get(window, "sourceRefEffects"))).toEqual({ focus: 1, input: 1 });
+  expect((await observe(request, runPhantom, session.id)).events.filter(event => event.type === "action.boundary")).toHaveLength(boundariesBefore + 1);
   const removed = await command(request, runPhantom, session.id, { type: "click", selector: "#remove" }); expect(removed.ok).toBe(true); await expect(page.locator("#removed")).toBeVisible(); await expect(page.locator("#remove")).toHaveCount(0);
   const unmounted = await assertRuntime(request, runPhantom, session.id, { kind: "element", selector: "#removed", state: "present" }, removed.cursor, "Source retained before unmount"); expect(unmounted.status).toBe("pass"); expect(unmounted.context?.checks[0].controlSource).toEqual(removed.controlSource);
   const routed = await command(request, runPhantom, session.id, { type: "click", selector: "#route" }); expect(routed.ok).toBe(true); await expect(page).toHaveURL(`${reactApp.origin}/confirmed`); expect(routed.controlSource?.observation).toMatchObject({ line: 10, status: "captured" });

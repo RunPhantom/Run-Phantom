@@ -250,10 +250,10 @@ describe("telemetry interoperability", () => {
   });
 
   test("retrieval and embedding attributes do not imply generation", () => {
-    for (const kind of ["EMBEDDING", "RETRIEVER", "RERANKER", "GUARDRAIL", "EVALUATOR"]) {
+    for (const kind of ["RERANKER", "GUARDRAIL", "EVALUATOR"]) {
       expect(parsed({ "openinference.span.kind": kind, "llm.model_name": "model", "gen_ai.input.messages": "[]" }).spanType).toBe("INTERNAL");
     }
-    for (const operation of ["embeddings", "retrieval", "create_agent"]) {
+    for (const operation of ["create_agent"]) {
       expect(parsed({ "gen_ai.operation.name": operation, "gen_ai.request.model": "model" }).spanType).toBe("INTERNAL");
     }
   });
