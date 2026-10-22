@@ -42,6 +42,10 @@ The analysis shows passing, failing and inconclusive outcomes, the observed pass
 
 Download the versioned JSON analysis to retain its exact selection, dataset hash, evaluator versions and compact outcomes. The operation reads frozen experiments without replay or provider calls. Missing history, active experiments, incompatible definitions and selections exceeding 8 MiB of stored evidence reject as a whole; the report is capped at 1 MiB. The HTTP operation is `POST /api/evaluations/analyses/repeated-trials` with `{ "experimentIds": ["FIRST_ID", "SECOND_ID"] }`; MCP uses `eval_run` with `action: "analyze"` and the same `experimentIds`.
 
+## Numeric distributions and trends
+
+Choose **Distributions and trends** to analyze one precise frozen check or one captured metric across 1–20 compatible finished experiments. Actual zero stays known; unavailable observations remain excluded. Numeric preferences describe the selected direction and never change automatic verdicts. The current analysis can be downloaded without raw trace payloads or private compatibility hashes. See the [distribution guide](./distributions.md) for selection, units, keyboard scrolling, API fields and limits.
+
 ## Optional model grading
 
 A rubric rule can request an OpenAI or Anthropic score using credentials configured through Run Phantom's existing Settings or environment. Starting such an experiment requires an explicit opt-in to send the selected, bounded trace data to that provider. Local rules and browsing need no provider call.

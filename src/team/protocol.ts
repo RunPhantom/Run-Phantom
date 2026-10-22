@@ -151,6 +151,7 @@ export interface InviteAccept { token: string; email: string; password: string }
 export interface KeyCreate { label: string; expiresInDays?: number }
 
 export interface RunFilters {
+  filter?: import("../search-protocol").SearchFilter | string;
   q?: string; // Literal payload/metadata text; no SQL/wildcard language.
   status?: RunStatus; // Omit for all.
   model?: string; // Exact model match on a span.
@@ -271,14 +272,17 @@ export interface CheckReport {
 export type AuditAction = "project.created" | "member.role_changed" | "member.removed"
   | "invite.created" | "invite.accepted" | "invite.revoked"
   | "key.created" | "key.revoked" | "ingest.committed"
-  | "note.created" | "note.deleted" | "check.created" | "run.deleted";
+  | "note.created" | "note.deleted" | "check.created" | "run.deleted"
+  | "review_queue.created" | "review_queue.deleted" | "review_item.inserted" | "review_item.saved"
+  | "review_item.approved" | "review_item.reopened" | "review_item.deleted" | "review_items.promoted"
+  | "review_dataset.created" | "review_dataset.deleted";
 export interface AuditEvent {
   id: Id;
   createdAt: Milliseconds;
   requestId: string;
   actor: { type: "account" | "ingestKey"; id: Id };
   action: AuditAction;
-  target: { type: "project" | "member" | "invite" | "key" | "run" | "runBatch" | "note" | "check"; id: Id | null };
+  target: { type: "project" | "member" | "invite" | "key" | "run" | "runBatch" | "note" | "check" | "reviewQueue" | "reviewItem" | "reviewDataset"; id: Id | null };
   outcome: "success";
   details: { previousRole?: Role; role?: Role; spans?: number; traces?: number; bytes?: number };
 }

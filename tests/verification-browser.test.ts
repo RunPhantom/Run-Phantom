@@ -269,3 +269,168 @@ describe("the browser capture boundaries", () => {
     expect(() => runtime.registerStore("x", () => 1)).toThrow("disconnected");
   });
 });
+
+import { shapeStore, queryStore } from "../src/verification/browser/store-adapters";
+import { QueryClient } from "../app/node_modules/@tanstack/react-query";
+import { buildRedactionPolicy, setActiveRedactionPolicy, resetActiveRedactionPolicy } from "../src/verification/redaction";
+
+function subscribable(initial = { count: 1, text: "ordinary" }) {
+  const listeners = new Set<() => void>();
+  const callbacks: Array<() => void> = [];
+  let subscriptions = 0, releases = 0;
+  return {
+    state: initial, callbacks,
+    source: { getState: () => initial, subscribe(listener: () => void) {
+      subscriptions++; listeners.add(listener); callbacks.push(listener); listener();
+      return () => { releases++; listeners.delete(listener); };
+    } },
+    notify() { for (const listener of [...listeners]) listener(); },
+    counts: () => ({ subscriptions, releases, listeners: listeners.size }),
+  };
+}
+describe("explicit adapter runtime registration and teardown", () => {
+  test("one source/config has one subscriber, no initial event, independent release leases and fresh command reads", () => {
+    const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+    const fixture = subscribable(); const options = { select: { count: "count" } };
+    const release1 = runtime.registerStore("app", shapeStore(fixture.source, options));
+    const release2 = runtime.registerStore("app", shapeStore(fixture.source, options));
+    expect(fixture.counts().subscriptions).toBe(1);
+    expect(socket.sent.filter(message => message.event?.type === "state")).toHaveLength(0);
+    fixture.state.count++; fixture.notify(); fixture.notify();
+    expect(socket.sent.filter(message => message.event?.type === "state")).toHaveLength(1);
+    release1(); release1(); expect(fixture.counts().releases).toBe(0);
+    fixture.state.count++;
+    socket.receive({ type: "command", id: "fresh_read", command: { type: "state", store: "app" } });
+    expect(socket.sent.at(-1)?.result.value.values.count).toBe(3);
+    release2(); release2(); expect(fixture.counts()).toEqual({ subscriptions: 1, releases: 1, listeners: 0 });
+    expect(() => fixture.callbacks[0]()).not.toThrow();
+    expect(fixture.counts().releases).toBe(1);
+  });
+  test("source aliases/config changes refuse, distinct sources work and released names can be reused safely", () => {
+    const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+    const first = subscribable(), second = subscribable();
+    const options = { select: { count: "count" } };
+    const oldRelease = runtime.registerStore("first", shapeStore(first.source, options));
+    expect(() => runtime.registerStore("alias", shapeStore(first.source, options))).toThrow();
+    expect(() => runtime.registerStore("first", shapeStore(first.source, { select: { text: "text" } }))).toThrow();
+    runtime.registerStore("second", shapeStore(second.source, options));
+    oldRelease();
+    const replacement = runtime.registerStore("first", shapeStore(first.source, options));
+    oldRelease(); first.state.count++; first.notify();
+    expect(socket.sent.at(-1)?.event.data.value.values.count).toBe(2);
+    replacement(); runtime.disconnect();
+    expect(first.counts().releases).toBe(2); expect(second.counts().releases).toBe(1);
+  });
+  test("subscription state applies known fill redaction before transport and repeated partial callbacks disclose loss", () => {
+    const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+    const fixture = subscribable(); runtime.registerStore("app", shapeStore(fixture.source, { select: { text: "text" } }));
+    socket.receive({ type: "command", id: "fill_secret", command: { type: "fill", selector: "#missing", value: "user chosen sensitive value" } });
+    fixture.state.text = "user chosen sensitive value"; fixture.notify(); fixture.notify();
+    const events = socket.sent.filter(message => message.event?.type === "state");
+    expect(events).toHaveLength(2); expect(events.every(message => message.event.truncated === true)).toBe(true);
+    expect(JSON.stringify(socket.sent)).not.toContain("user chosen sensitive value");
+    expect(events[0].event.data.value.values.text).toBe("[REDACTED]");
+  });
+  test("adapter buffer loss disconnects and releases the acquired subscriber immediately", () => {
+    const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+    const fixture = subscribable(); runtime.registerStore("app", shapeStore(fixture.source, { select: { count: "count" } }));
+    socket.bufferedAmount = 300000; fixture.state.count++; fixture.notify();
+    expect(socket.readyState).toBe(3); expect(fixture.counts().releases).toBe(1);
+    expect(() => runtime.signal("later")).toThrow("disconnected");
+  });
+  test("pagehide tears down subscriptions and stale callbacks cannot emit into a new connection", () => {
+    const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+    const fixture = subscribable(); const release = runtime.registerStore("app", shapeStore(fixture.source, { select: { count: "count" } }));
+    window_.dispatchEvent(new Event("pagehide"));
+    expect(socket.readyState).toBe(3); expect(fixture.counts().releases).toBe(1);
+    const next = connection(); next.socket.receive({ type: "ready" });
+    const count = next.socket.sent.length; fixture.callbacks[0](); release();
+    expect(next.socket.sent).toHaveLength(count); expect(fixture.counts().releases).toBe(1);
+  });
+  test("failed registration rolls back its name and invalid unsubscriber never advertises a valid store", () => {
+    const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+    const source = { getState: () => ({ count: 1 }), subscribe() { throw new Error("private subscription details"); } };
+    expect(() => runtime.registerStore("app", shapeStore(source, { select: { count: "count" } }))).toThrow();
+    expect(() => runtime.registerStore("app", shapeStore({ getState: () => ({ count: 1 }), subscribe: () => null as unknown as () => void }, { select: { count: "count" } }))).toThrow();
+    expect(() => runtime.registerStore("app", () => ({ count: 2 }))).not.toThrow();
+    expect(JSON.stringify(socket.sent)).not.toContain("private subscription details");
+  });
+});
+
+test("a reentrant initial adapter read cannot advertise registration after losing its runtime", () => {
+  const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+  let listener: (() => void) | undefined, released = 0;
+  const source = { getState() { listener?.(); return { count: 1 }; }, subscribe(callback: () => void) { listener = callback; return () => { released++; }; } };
+  expect(() => runtime.registerStore("recursive", shapeStore(source, { select: { count: "count" } }))).toThrow();
+  expect(socket.readyState).toBe(3); expect(released).toBe(1);
+  expect(() => runtime.signal("later")).toThrow("disconnected");
+});
+
+
+test("actual query private identities remain redacted on the socket under application exemptions", () => {
+  const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+  const client = new QueryClient(); const key = ["profile", { nested: { password: "f23-socket-password", apiKey: "f23-socket-api-key", token: "f23-socket-token" } }];
+  setActiveRedactionPolicy(buildRedactionPolicy({ allow: ["password", "apiKey", "token"] }));
+  try {
+    client.setQueryData(key, { count: 1 });
+    runtime.registerStore("private-query", queryStore(client, { keys: [{ queryKey: key, select: { count: "count" } }] }));
+    socket.receive({ type: "command", id: "private_key", command: { type: "state", store: "private-query" } });
+    expect(socket.sent.at(-1)?.truncated).toBe(true); expect(socket.sent.at(-1)?.result.availability).toBe("partial");
+    expect(socket.sent.at(-1)?.result.value.queries[0].values.count).toBe(1);
+    client.setQueryData(key, { count: 2 });
+    expect(socket.sent.at(-1)?.event.type).toBe("state"); expect(socket.sent.at(-1)?.event.truncated).toBe(true);
+    for (const value of ["f23-socket-password", "f23-socket-api-key", "f23-socket-token"]) expect(JSON.stringify(socket.sent)).not.toContain(value);
+  } finally { runtime.disconnect(); resetActiveRedactionPolicy(); client.clear(); }
+});
+
+
+describe("connection-wide explicit registration lease budget", () => {
+  test("100 duplicates share one subscriber, 101 refuses before source work and releasing capacity admits a new source", () => {
+    const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+    const original = subscribable(); let reads = 0;
+    const source = { ...original.source, getState: () => { reads++; return original.state; } };
+    const adapter = shapeStore(source, { select: { count: "count" } });
+    const releases = Array.from({ length: 100 }, () => runtime.registerStore("original", adapter));
+    expect(original.counts().subscriptions).toBe(1); expect(reads).toBe(1);
+    expect(() => runtime.registerStore("original", adapter)).toThrow("lease limit");
+    let newReads = 0, newSubscriptions = 0, newReleases = 0;
+    const newAdapter = shapeStore({ getState: () => { newReads++; return { count: 1 }; }, subscribe: () => { newSubscriptions++; return () => { newReleases++; }; } }, { select: { count: "count" } });
+    expect(() => runtime.registerStore("new", newAdapter)).toThrow("lease limit");
+    expect(newReads).toBe(0); expect(newSubscriptions).toBe(0);
+    releases[0](); releases[0]();
+    const next = runtime.registerStore("new", newAdapter);
+    expect(newReads).toBe(1); expect(newSubscriptions).toBe(1);
+    expect(() => runtime.registerStore("original", adapter)).toThrow("lease limit");
+    next(); expect(newReleases).toBe(1);
+    runtime.registerStore("original", adapter);
+    runtime.disconnect(); expect(original.counts().releases).toBe(1); expect(newReleases).toBe(1);
+    for (const release of releases) release();
+    const fresh = connection(); fresh.socket.receive({ type: "ready" });
+    const newFixture = subscribable(); const freshAdapter = shapeStore(newFixture.source, { select: { count: "count" } });
+    const freshReleases = Array.from({ length: 100 }, () => fresh.runtime.registerStore("fresh", freshAdapter));
+    expect(newFixture.counts().subscriptions).toBe(1);
+    for (const release of freshReleases) release();
+    expect(newFixture.counts().releases).toBe(1); fresh.runtime.disconnect();
+  });
+  test("in-progress registration reserves its lease before reentrant initial reads and failed acquisition returns capacity", () => {
+    const { runtime, socket } = connection(); socket.receive({ type: "ready" });
+    const nestedReleases: Array<() => void> = []; let refused = 0;
+    const source = { getState: () => {
+      for (let n = 0; n < 100; n++) {
+        try { nestedReleases.push(runtime.registerStore("reentrant", adapter)); } catch { refused++; }
+      }
+      return { count: 1 };
+    }, subscribe: () => () => {} };
+    const adapter = shapeStore(source, { select: { count: "count" } });
+    const outer = runtime.registerStore("reentrant", adapter);
+    expect(nestedReleases).toHaveLength(99); expect(refused).toBe(1);
+    expect(() => runtime.registerStore("reentrant", adapter)).toThrow("lease limit");
+    outer(); for (const release of nestedReleases) release();
+    const bad = shapeStore({ getState: () => ({ count: 1 }), subscribe: () => { throw new Error("source unavailable"); } }, { select: { count: "count" } });
+    for (let n = 0; n < 100; n++) expect(() => runtime.registerStore("bad", bad)).toThrow("subscription is unavailable");
+    const stable = subscribable(); const stableAdapter = shapeStore(stable.source, { select: { count: "count" } });
+    const releases = Array.from({ length: 100 }, () => runtime.registerStore("stable", stableAdapter));
+    expect(stable.counts().subscriptions).toBe(1);
+    for (const release of releases) release(); expect(stable.counts().releases).toBe(1);
+  });
+});
