@@ -240,3 +240,57 @@ test("team ignores a late key issuance response after project permission denial"
     releaseRole(); await expect(admin.getByRole("heading", { name: "Administrator access required", exact: true })).toBeVisible();
   } finally { releaseCreate(); releaseRole(); await context.close(); }
 });
+
+
+test("team navigation preserves project and role context across mobile keyboard and zoomed views", async ({ page, team }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const project = await setup(page, team, "Reference workspace");
+  await expect(page.getByRole("heading", { name: "Reference workspace", exact: true })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Project navigation" })).toContainText("Audit log");
+  const capture = async (name: string) => {
+    if (process.env.RUNPHANTOM_F44_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.RUNPHANTOM_F44_SCREENSHOTS, `${name}.png`), fullPage: true });
+  };
+  await capture("team-overview-desktop");
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    const menu = page.getByRole("button", { name: "Open project navigation" });
+    await menu.click();
+    await expect(page.getByRole("link", { name: "Overview", exact: true })).toBeFocused();
+    await page.keyboard.press("Escape"); await expect(menu).toBeFocused(); await expect(menu).toHaveAttribute("aria-expanded", "false");
+    await menu.click(); await page.getByRole("link", { name: "Members", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Project members", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open project navigation" })).toHaveAttribute("aria-expanded", "false");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await capture(`team-members-${width}`);
+    await page.goto(`${team.url}/team/projects/${project}`);
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.evaluate(() => { document.documentElement.style.zoom = "2"; });
+  await expect(page.getByRole("heading", { name: "Reference workspace", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await capture("team-overview-css-200");
+  await page.evaluate(() => { document.documentElement.style.zoom = ""; });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  expect(await page.locator(".team-row-link").count()).toBe(0);
+  await page.getByRole("link", { name: "Ingestion keys", exact: true }).click();
+  const transition = await page.getByRole("button", { name: "Create ingestion key", exact: true }).evaluate(element => getComputedStyle(element).transitionDuration);
+  expect(transition.split(",").every(value => parseFloat(value) === 0)).toBe(true);
+});
+
+test("team authentication presents recoverable validation without changing route scope", async ({ page, team }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${team.url}/team/login`);
+  await expect(page.getByRole("heading", { name: "Set up your team workspace", exact: true })).toBeVisible();
+  if (process.env.RUNPHANTOM_F44_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.RUNPHANTOM_F44_SCREENSHOTS, "team-setup-mobile.png"), fullPage: true });
+  await page.getByLabel("Setup code").fill("wrong-bootstrap-code");
+  await page.getByLabel("Email", { exact: true }).fill("fixture-owner@example.test");
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Create owner account", exact: true }).click();
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(page.getByLabel("Email", { exact: true })).toHaveValue("fixture-owner@example.test");
+  await expect(page).toHaveURL(/\/team\/login$/);
+  await expect(page.getByRole("link", { name: "Back to traces", exact: true })).toHaveCount(0);
+  await page.getByRole("link", { name: "Have an invitation code?", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Join your project", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});

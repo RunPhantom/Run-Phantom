@@ -1,44 +1,9 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { createServer } from "node:net";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { readFileSync } from "node:fs";
 import { test, expect, REPO_ROOT_PATH } from "./fixtures";
+import { withPortableDestination } from "./portable-destination";
 
-async function secondStore(): Promise<{ url: string; close: () => Promise<void> }> {
-  const directory = mkdtempSync(path.join(tmpdir(), "rp-portable-browser-"));
-  const socket = createServer();
-  await new Promise<void>(resolve => socket.listen(0, "127.0.0.1", resolve));
-  const port = (socket.address() as { port: number }).port;
-  await new Promise<void>(resolve => socket.close(() => resolve()));
-  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
-    !key.startsWith("RUNPHANTOM_") && key !== "OPENAI_API_KEY" && key !== "ANTHROPIC_API_KEY"));
-  const proc: ChildProcess = spawn("bun", ["src/index.ts", "serve"], {
-    cwd: REPO_ROOT_PATH, stdio: "ignore",
-    env: { ...inherited, HOME: directory, USERPROFILE: directory, RUNPHANTOM_PORT: String(port), RUNPHANTOM_BIND_HOST: "127.0.0.1",
-      RUNPHANTOM_DB_PATH: path.join(directory, "destination.db"), RUNPHANTOM_SECRET_STORE_PATH: path.join(directory, "secrets.json"), RUNPHANTOM_CLAUDE_CLI_CHAT: "0" },
-  });
-  const close = async () => {
-    if (proc.exitCode === null) await new Promise<void>(resolve => {
-      const timer = setTimeout(() => proc.kill("SIGKILL"), 2500);
-      proc.once("exit", () => { clearTimeout(timer); resolve(); }); proc.kill("SIGTERM");
-    });
-    rmSync(directory, { recursive: true, force: true });
-  };
-  const url = `http://127.0.0.1:${port}`;
-  try {
-    for (let attempt = 0; attempt < 200; attempt++) {
-      if (proc.exitCode !== null) throw new Error("Destination daemon exited");
-      try { if ((await fetch(`${url}/health`)).ok) return { url, close }; } catch { /* starting */ }
-      await new Promise(resolve => setTimeout(resolve, 50));
-    }
-    throw new Error("Destination daemon did not start");
-  } catch (error) { await close(); throw error; }
-}
-
-test("portable trace: download annotated failure, import in another local store, inspect and download it again", async ({ page, request, runPhantom }) => {
-  const target = await secondStore();
-  try {
+test("portable trace: download annotated failure, import in another local store, inspect and download it again", async ({ page, request, runPhantom }, testInfo) => {
+  await withPortableDestination(REPO_ROOT_PATH, async target => {
     const runId = "portable-browser-run";
     const run = { id: runId, name: "payment-agent", event_name: "checkout", event_id: "portable-event", display_name: "Portable checkout failure",
       started_at: 1000, last_updated_at: 1100, metadata: '{"team":"fixture-review"}' };
@@ -95,7 +60,9 @@ test("portable trace: download annotated failure, import in another local store,
     await page.getByLabel("Import trace file", { exact: true }).setInputFiles({ name: "invalid.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify({ ...sourceExport, format: "runphantom-trace/v999" })) });
     await expect(page.getByRole("alert").filter({ hasText: "Import failed" })).toBeVisible();
     expect(await (await request.get(`${target.url}/api/runs/${runId}/export`)).json()).toEqual(sourceExport);
-  } finally { await target.close(); }
+  }, async diagnostic => {
+    await testInfo.attach("portable-destination-lifecycle", { body: Buffer.from(diagnostic), contentType: "application/json" });
+  });
 });
 
 test("portable trace: saved cached evidence remains downloadable after clearing the live store", async ({ page, request, runPhantom }) => {
