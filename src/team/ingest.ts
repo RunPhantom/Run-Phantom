@@ -1,4 +1,5 @@
 import { parseOtlpRequest } from "../parse";
+import { observeOtlpTagSource, ambiguousOtlpTagSpans } from "../otlp-tag-source";
 import { hasDuplicateJsonKeys } from "../json-keys";
 import { decodeOtlpProtobuf } from "../otlp-protobuf";
 import { parseJsonEvidence } from "../evaluations/json-evidence";
@@ -14,6 +15,16 @@ export interface TeamCapture {
 }
 export interface TeamIngestBatch { readonly captures: readonly TeamCapture[] }
 const admitted = new WeakSet<object>();
+// Numeric usage measurements are distinct from credential tokens. Keep this
+// exact set aligned with pricing/usage; strings and unsafe counts remain withheld.
+const measuredTokenKeys = new Set([
+  "gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens", "ai.usage.inputTokens", "ai.usage.promptTokens", "ai.usage.prompt_tokens", "llm.token_count.prompt",
+  "gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens", "ai.usage.outputTokens", "ai.usage.completionTokens", "ai.usage.completion_tokens", "llm.token_count.completion",
+  "gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.input_tokens.cached", "runphantom.usage.cache_read_tokens",
+  "gen_ai.usage.cache_creation.input_tokens", "runphantom.usage.cache_write_tokens", "runphantom.usage.cache_write_5m_tokens", "runphantom.usage.cache_write_1h_tokens",
+  "gen_ai.usage.output_tokens.reasoning", "runphantom.usage.reasoning_tokens", "gen_ai.usage.input_tokens.audio", "runphantom.usage.audio_input_tokens",
+  "gen_ai.usage.output_tokens.audio", "runphantom.usage.audio_output_tokens", "runphantom.usage.context_tokens",
+]);
 const unavailable = /\[(?:REDACTED|TRUNCATED|UNAVAILABLE|UNSERIALIZABLE|CIRCULAR)\]|__REDACTED__/i;
 const invalid = () => new TeamError("invalid_request", "Invalid OTLP trace batch");
 const large = () => new TeamError("too_large", "OTLP trace batch exceeds a capture limit");
@@ -188,12 +199,18 @@ function dropped(value: ObjectValue | undefined): boolean {
 export function normalizeTeamIngest(bytes: Uint8Array, format: "json" | "protobuf", activeSecret: string): TeamIngestBatch {
   if (bytes.byteLength > L.INGEST_EXPANDED_BYTES) throw large();
   let body: ObjectValue;
+  let ambiguousTags: WeakSet<object> | undefined;
   let rawTimes: Array<{ start: boolean; end: boolean }> | undefined;
   try {
     if (format === "protobuf") {
       rawTimes = checkProtobuf(bytes);
       body = decodeOtlpProtobuf(bytes);
-    } else if (format === "json") body = object(parseJsonEvidence(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+    } else if (format === "json") {
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      const evidence = observeOtlpTagSource(text);
+      body = object(parseJsonEvidence(text));
+      ambiguousTags = ambiguousOtlpTagSpans(body, evidence);
+    }
     else throw invalid();
   } catch (error) { if (error instanceof TeamError) throw error; throw invalid(); }
   validateTree(body);
@@ -259,7 +276,7 @@ export function normalizeTeamIngest(bytes: Uint8Array, format: "json" | "protobu
     }
   }
   let parsed;
-  try { parsed = parseOtlpRequest(body); } catch { throw invalid(); }
+  try { parsed = parseOtlpRequest(body, ambiguousTags); } catch { throw invalid(); }
   const captures: TeamCapture[] = parsed.map((source, index) => {
     if (!/^[0-9a-f]{32}$/.test(source.traceId) || /^0+$/.test(source.traceId)
       || !/^[0-9a-f]{16}$/.test(source.spanId) || /^0+$/.test(source.spanId)) throw invalid();
@@ -269,8 +286,11 @@ export function normalizeTeamIngest(bytes: Uint8Array, format: "json" | "protobu
     if (Object.keys(source.attributes).length > L.SPAN_ATTRIBUTES) throw large();
     const safeAttrs = Object.create(null) as ObjectValue;
     for (const [key, value] of Object.entries(source.attributes)) {
-      safeAttrs[redactTeamText(key, activeSecret)] = defaultIsSensitiveKey(key)
-        ? "[REDACTED]" : typeof value === "string" ? redactTeamText(value, activeSecret) : value;
+      const measuredCount = measuredTokenKeys.has(key) && typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+      const tags = key === "tags" && Array.isArray(value) ? value.map(tag => redactTeamText(tag, activeSecret)) : null;
+      safeAttrs[redactTeamText(key, activeSecret)] = defaultIsSensitiveKey(key) && !measuredCount
+        ? "[REDACTED]" : tags ? tags.some((tag,index) => tag !== (value as string[])[index]) ? "[UNAVAILABLE]" : tags
+          : typeof value === "string" ? redactTeamText(value, activeSecret) : value;
     }
     const attrs = JSON.stringify(safeAttrs);
     const input = typeof source.inputPayload === "string" ? redactTeamText(source.inputPayload, activeSecret) : null;

@@ -15,6 +15,7 @@ interface MigrationJournal {
   entries: Array<{ idx: number; version: string; when: number; tag: string; breakpoints: boolean }>;
 }
 
+// Real disk migrations and connection reopen checks use a per-case integration budget.
 test("verification migrations preserve an existing 0003 trace database and retain contextual reports after reopening", () => {
   const directory = mkdtempSync(path.join(tmpdir(), "runphantom-verification-migration-"));
   const dbPath = path.join(directory, "existing-traces.db");
@@ -51,7 +52,8 @@ test("verification migrations preserve an existing 0003 trace database and retai
       addSpan.run(id, "shared-span-id", "existing.tool", "OK", '{"prompt":"Keep prior trace data"}', outcome, createdAt, createdAt + 10, 10);
     }
     const originalRuns = baseline.query("SELECT * FROM runs ORDER BY id").all();
-    const originalSpans = baseline.query("SELECT * FROM spans ORDER BY run_id, id").all();
+    const originalSpans = baseline.query("SELECT * FROM spans ORDER BY run_id, id").all() as Record<string, unknown>[];
+    const upgradedSpans = originalSpans.map(span => ({ ...span, otlp_evidence: null }));
     const originalHistory = baseline.query("SELECT hash, created_at FROM __drizzle_migrations ORDER BY created_at").all();
     expect(originalHistory).toHaveLength(4);
     expect(originalSpans).toHaveLength(2);
@@ -61,7 +63,7 @@ test("verification migrations preserve an existing 0003 trace database and retai
     process.env.RUNPHANTOM_DB_PATH = dbPath;
     const upgraded = getDrizzleDb().$client;
     expect(upgraded.query("SELECT * FROM runs ORDER BY id").all()).toEqual(originalRuns);
-    expect(upgraded.query("SELECT * FROM spans ORDER BY run_id, id").all()).toEqual(originalSpans);
+    expect(upgraded.query("SELECT * FROM spans ORDER BY run_id, id").all()).toEqual(upgradedSpans);
     expect(upgraded.query("PRAGMA foreign_key_check").all()).toEqual([]);
     const upgradedHistory = upgraded.query("SELECT hash, created_at FROM __drizzle_migrations ORDER BY created_at").all();
     expect(upgradedHistory).toHaveLength(journal.entries.length);
@@ -104,7 +106,7 @@ test("verification migrations preserve an existing 0003 trace database and retai
     expect(listReports("existing-run-a")).toEqual([report]);
     expect(getFlow(flow.id)).toEqual(flow);
     expect(reopened.query("SELECT * FROM runs ORDER BY id").all()).toEqual(originalRuns);
-    expect(reopened.query("SELECT * FROM spans ORDER BY run_id, id").all()).toEqual(originalSpans);
+    expect(reopened.query("SELECT * FROM spans ORDER BY run_id, id").all()).toEqual(upgradedSpans);
     expect(reopened.query("SELECT hash, created_at FROM __drizzle_migrations ORDER BY created_at").all()).toEqual(upgradedHistory);
     expect(reopened.query("PRAGMA foreign_key_check").all()).toEqual([]);
   } finally {
@@ -114,4 +116,4 @@ test("verification migrations preserve an existing 0003 trace database and retai
     else process.env.RUNPHANTOM_DB_PATH = previousDbPath;
     rmSync(directory, { recursive: true, force: true });
   }
-});
+}, 15_000);

@@ -1,20 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import {
   type RouteObject,
+  Link,
   Navigate,
   Outlet,
+  useLocation,
   useMatch,
 } from "react-router-dom";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
-import { NavSidebar } from "./components/NavSidebar";
+import { NavSidebar, NAV_ITEMS } from "./components/NavSidebar";
 import { MessagePane } from "./components/MessagePane";
 import { RunsPage } from "./pages/RunsPage";
+import { CostAnalyticsPage } from "./pages/CostAnalyticsPage";
 import { SearchPage } from "./pages/SearchPage";
 import { SavedPage } from "./pages/SavedPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { VerificationPage } from "./pages/VerificationPage";
 import { EvaluationsPage } from "./pages/EvaluationsPage";
+import { ReviewQueuesRoute } from "./components/review-queues/ReviewQueuesRoute";
+import { PromptsPage } from "./pages/PromptsPage";
 import { RouteError } from "./components/RouteError";
 import { sendRunPhantomMessage, useRunPhantomConnectionStatus } from "./hooks/use-runphantom-ws";
 import { useAgentUiCommands } from "./hooks/use-agent-ui-commands";
@@ -24,6 +29,7 @@ import { safeDecodeParam } from "./utils/helpers";
 const DISCONNECTED_NOTICE_DELAY_MS = 100;
 
 function AppLayout() {
+  const location = useLocation();
   const [showDisconnectedNotice, setShowDisconnectedNotice] = useState(false);
   const disconnectedDialogRef = useRef<HTMLDivElement>(null);
   const runMatch = useMatch({ path: "/runs/:runId", end: false });
@@ -31,6 +37,8 @@ function AppLayout() {
     ? safeDecodeParam(runMatch.params.runId)
     : null;
   const connectionStatus = useRunPhantomConnectionStatus();
+  const section = NAV_ITEMS.find(({ path }) => location.pathname === path || location.pathname.startsWith(`${path}/`))?.label
+    ?? (location.pathname === "/settings" ? "Settings" : "Workspace");
   useAgentUiCommands();
   useDialogFocus(showDisconnectedNotice, disconnectedDialogRef);
 
@@ -54,10 +62,29 @@ function AppLayout() {
       <a href="#runphantom-main" className="skip-link">Skip to trace workspace</a>
       <NavSidebar />
       <SidebarInset id="runphantom-main" tabIndex={-1}>
-        <div className="relative h-screen overflow-hidden">
-          <SidebarTrigger className="absolute left-3 top-3 z-40 border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] text-[color:var(--rp-ink)] shadow-lg lg:hidden" />
+        <div className="relative flex h-screen flex-col overflow-hidden">
+          <header data-workspace-header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] px-4 lg:px-6">
+            <div className="flex min-w-0 items-center gap-3">
+              <SidebarTrigger className="size-11 shrink-0 border border-[color:var(--rp-border-strong)] text-[color:var(--rp-ink)] lg:size-9" />
+              <nav aria-label="Workspace breadcrumb" className="min-w-0 text-sm">
+                <ol className="flex min-w-0 items-center gap-2">
+                  <li className="hidden shrink-0 sm:block"><Link to="/runs" className="text-[color:var(--rp-ink-muted)] transition-colors hover:text-[color:var(--rp-accent)]">Workspace</Link></li>
+                  <li aria-hidden="true" className="hidden text-[color:var(--rp-ink-muted)] sm:block">/</li>
+                  <li aria-current={activeRunId ? undefined : "page"} className="shrink-0 font-medium text-[color:var(--rp-ink-strong)]">{section}</li>
+                  {activeRunId && <>
+                    <li aria-hidden="true" className="text-[color:var(--rp-ink-muted)]">/</li>
+                    <li aria-current="page" title={activeRunId} className="min-w-0 truncate font-mono text-xs text-[color:var(--rp-ink-muted)]">{activeRunId}</li>
+                  </>}
+                </ol>
+              </nav>
+            </div>
+            <div data-connection-status={connectionStatus} role="status" className="flex shrink-0 items-center gap-2 text-xs text-[color:var(--rp-ink-muted)]">
+              <span aria-hidden="true" className="size-1.5 rounded-full" style={{ background: connectionStatus === "connected" ? "var(--rp-success)" : "var(--rp-warning)" }} />
+              <span>{connectionStatus === "connected" ? "Connected" : connectionStatus === "connecting" ? "Connecting" : "Disconnected"}</span>
+            </div>
+          </header>
           <div
-            className={`flex h-full transition-opacity duration-200 ${showDisconnectedNotice ? "pointer-events-none select-none opacity-45" : ""}`}
+            className={`flex min-h-0 flex-1 transition-opacity duration-200 has-[[data-debug-launcher]]:pb-11 ${showDisconnectedNotice ? "pointer-events-none select-none opacity-45" : ""}`}
             aria-hidden={showDisconnectedNotice}
           >
             <div className="flex-1 min-w-0 overflow-auto">
@@ -117,6 +144,9 @@ export const localRoutes: RouteObject[] = [
       { path: "settings", element: <SettingsPage />, errorElement: <RouteError /> },
       { path: "verification", element: <VerificationPage />, errorElement: <RouteError /> },
       { path: "evaluations", element: <EvaluationsPage />, errorElement: <RouteError /> },
+      { path: "costs", element: <CostAnalyticsPage />, errorElement: <RouteError /> },
+      { path: "review-queues", element: <ReviewQueuesRoute />, errorElement: <RouteError /> },
+      { path: "prompts", element: <PromptsPage />, errorElement: <RouteError /> },
       { path: "*", element: <NotFoundPage />, errorElement: <RouteError /> },
     ],
   },

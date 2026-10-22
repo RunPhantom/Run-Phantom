@@ -28,6 +28,8 @@ const FIXTURE_HTML = `<!doctype html>
   <button id="route">Open confirmation</button><button id="signal">Confirm signal</button>
   <button id="console">Report error</button><button id="late-error">Delayed error</button>
   <button id="slow">Start delayed request</button><button id="noop">Do nothing</button>
+  <button id="increment">Increment synchronously</button><button id="decrement">Decrement synchronously</button>
+  <button id="background">Schedule background change</button>
   <output id="status">idle</output>
   <script>
     window.originalMethods = { fetch, pushState: history.pushState, error: console.error,
@@ -47,6 +49,17 @@ const FIXTURE_HTML = `<!doctype html>
     document.querySelector('#console').onclick = () => console.error('fixture observed error');
     document.querySelector('#late-error').onclick = () => setTimeout(() => console.error('fixture delayed error'), 80);
     document.querySelector('#slow').onclick = () => { void fetch('/api/late'); };
+    const increment = () => {
+      window.checkoutState.requests += 1;
+      window.checkoutState.status = 'ready';
+      if (!document.querySelector('#synchronous-result')) {
+        const result = document.createElement('p'); result.id = 'synchronous-result';
+        result.textContent = 'Synchronous result'; document.body.append(result);
+      }
+    };
+    document.querySelector('#increment').onclick = increment;
+    document.querySelector('#decrement').onclick = () => { window.checkoutState.requests -= 1; document.querySelector('#synchronous-result')?.remove(); };
+    document.querySelector('#background').onclick = () => setTimeout(increment, 60);
     document.querySelector('#password').oninput = (event) => {
       window.checkoutState.password = event.target.value;
     };
@@ -109,16 +122,17 @@ export async function connectTarget(
   daemon: RunPhantomHandle,
   origin: string,
   runId?: string,
+  causalReadings = true,
 ): Promise<SessionSummary> {
   const response = await request.post(`${daemon.url}/api/verification/sessions`, { data: { origin, ...(runId ? { runId } : {}) } });
   expect(response.ok(), "Control caller can create a runtime session").toBe(true);
   const paired = await response.json() as SessionSummary & { token: string; sdkUrl: string };
   await page.goto(origin);
-  await page.evaluate(async ({ url, sessionId, token, sdkUrl }) => {
-    const sdk = await import(sdkUrl) as { connect(options: { url: string; sessionId: string; token: string }): RuntimeHandle };
-    window.runtime = sdk.connect({ url, sessionId, token });
+  await page.evaluate(async ({ url, sessionId, token, sdkUrl, causalReadings }) => {
+    const sdk = await import(sdkUrl) as { connect(options: { url: string; sessionId: string; token: string; causalReadings: boolean }): RuntimeHandle };
+    window.runtime = sdk.connect({ url, sessionId, token, causalReadings });
     window.runtime.registerStore("checkout", () => window.checkoutState);
-  }, { url: daemon.url, sessionId: paired.id, token: paired.token, sdkUrl: new URL(paired.sdkUrl, daemon.url).href });
+  }, { url: daemon.url, sessionId: paired.id, token: paired.token, sdkUrl: new URL(paired.sdkUrl, daemon.url).href, causalReadings });
   await expect.poll(async () => {
     const sessions = await request.get(`${daemon.url}/api/verification/sessions`);
     const body = await sessions.json() as SessionSummary[];

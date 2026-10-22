@@ -38,6 +38,8 @@ export default defineConfig(
       ".claude/**",
       "examples/**",
       "src/**/*.d.ts",
+      // Unmodified upstream bundle; integrity and native behavior are verified separately.
+      "src/verification/vendor/axe-core-4.11.0/axe.min.js",
       "**/*.cjs",
       "**/*.config.js",
       "eslint.config.mjs",

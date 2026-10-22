@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { ChevronDown, Menu, X } from "lucide-react";
+import { Activity, ChevronDown, ClipboardCheck, Coins, FileText, FolderKanban, KeyRound, LayoutDashboard, Menu, MessagesSquare, ScanLine, ShieldCheck, Users, X } from "lucide-react";
 import { projectPath, type Project } from "../api/team";
 import { TeamProvider, RequireSession, ProjectBoundary, useAccount, useProject, useTeam, useTeamPages } from "./context";
 import { Action, ErrorNotice, Select, TeamBrand, useTask } from "./common";
@@ -9,6 +9,10 @@ import { OverviewPage, ProjectsPage } from "./projects";
 import { TracesPage } from "./traces";
 import { ChecksPage } from "./checks";
 import { AdminPage } from "./admin";
+import { PricingPage } from "./pricing";
+import { EvidencePage } from "./evidence";
+import { PromptsPage } from "./prompts";
+import { TeamReviewQueuesPage, TeamReviewRevisionPage } from "./review-queues";
 import "./team.css";
 
 function TeamShell({ children }: { children: React.ReactNode }) {
@@ -17,14 +21,25 @@ function TeamShell({ children }: { children: React.ReactNode }) {
 }
 function ProjectShell() {
   const project = useProject(); const navigate = useNavigate(); const location = useLocation(); const [open, setOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const navigation = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    navigation.current?.querySelector<HTMLAnchorElement>("a.active")?.focus();
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { setOpen(false); menuButton.current?.focus(); }
+    };
+    window.addEventListener("keydown", dismiss);
+    return () => window.removeEventListener("keydown", dismiss);
+  }, [open]);
   const projects = useTeamPages<Project>(["projects"], "/projects", {}, 30_000);
   const items = projects.data?.pages.flatMap(page => page.items) ?? [];
-  const links = [["", "Overview"], ["traces", "Traces"], ["checks", "Checks"], ...(project.role === "admin" ? [["members", "Members"], ["keys", "Ingestion keys"], ["audit", "Audit log"]] : [])];
-  return <div className="team-workspace"><aside className={`team-sidebar ${open ? "team-sidebar-open" : ""}`}>
-    <div className="team-switcher"><label htmlFor="team-project-switcher">Project</label><Select id="team-project-switcher" value={project.id} onChange={event => { setOpen(false); navigate(projectPath(event.target.value)); }}>{!items.some(item => item.id === project.id) && <option value={project.id}>{project.name}</option>}{items.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</Select>{projects.hasNextPage && <Action onClick={() => void projects.fetchNextPage()}>More projects <ChevronDown size={14} /></Action>}</div>
-    <nav aria-label="Project navigation">{links.map(([path, name]) => <NavLink key={path} end={!path} to={`${projectPath(project.id)}${path ? `/${path}` : ""}`} onClick={() => setOpen(false)}>{name}</NavLink>)}</nav><p className="team-sidebar-footer">Signed in as <strong>{project.role}</strong><br />Project access is checked on every request.</p>
-  </aside><div className="team-content"><div className="team-mobile-bar"><Action aria-label={open ? "Close project navigation" : "Open project navigation"} aria-expanded={open} onClick={() => setOpen(!open)}>{open ? <X /> : <Menu />}{project.name}</Action></div><main id="team-main" tabIndex={-1} key={project.id}>
-    <Routes location={location}><Route index element={<OverviewPage />} /><Route path="traces/*" element={<TracesPage />} /><Route path="checks/*" element={<ChecksPage />} /><Route path="members" element={<AdminPage kind="members" />} /><Route path="keys" element={<AdminPage kind="keys" />} /><Route path="audit" element={<AdminPage kind="audit" />} /><Route path="*" element={<p className="team-page">This team page does not exist. <Link to={projectPath(project.id)}>Open project overview</Link></p>} /></Routes>
+  const links = [{ path: "", name: "Overview", icon: LayoutDashboard }, { path: "traces", name: "Traces", icon: Activity }, { path: "checks", name: "Checks", icon: ClipboardCheck }, { path: "costs", name: "Cost & usage", icon: Coins }, { path: "evidence", name: "External reports", icon: FileText }, { path: "prompts", name: "Prompts", icon: MessagesSquare }, { path: "review-queues", name: "Review queues", icon: ScanLine }, ...(project.role === "admin" ? [{ path: "members", name: "Members", icon: Users }, { path: "keys", name: "Ingestion keys", icon: KeyRound }, { path: "audit", name: "Audit log", icon: ShieldCheck }] : [])];
+  return <div className="team-workspace"><aside id="team-project-navigation" ref={navigation} className={`team-sidebar ${open ? "team-sidebar-open" : ""}`}>
+    <div className="team-switcher"><span className="team-eyebrow"><FolderKanban size={14} aria-hidden="true" /> Workspace</span><label htmlFor="team-project-switcher">Project</label><Select id="team-project-switcher" value={project.id} onChange={event => { setOpen(false); navigate(projectPath(event.target.value)); }}>{!items.some(item => item.id === project.id) && <option value={project.id}>{project.name}</option>}{items.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</Select>{projects.hasNextPage && <Action onClick={() => void projects.fetchNextPage()}>More projects <ChevronDown size={14} /></Action>}</div>
+    <nav aria-label="Project navigation">{links.map(({ path, name, icon: Icon }) => <NavLink key={path} end={!path} to={`${projectPath(project.id)}${path ? `/${path}` : ""}`} onClick={() => { if (open) menuButton.current?.focus(); setOpen(false); }}><Icon size={16} aria-hidden="true" />{name}</NavLink>)}</nav><p className="team-sidebar-footer">Signed in as <strong>{project.role}</strong><br />Project access is checked on every request.</p>
+  </aside><div className="team-content"><div className="team-mobile-bar"><button ref={menuButton} type="button" className="team-action team-mobile-menu" aria-controls="team-project-navigation" aria-label={open ? "Close project navigation" : "Open project navigation"} aria-expanded={open} onClick={() => setOpen(!open)}>{open ? <X /> : <Menu />}{project.name}</button></div><main id="team-main" tabIndex={-1} key={project.id}>
+    <Routes location={location}><Route index element={<OverviewPage />} /><Route path="traces/*" element={<TracesPage />} /><Route path="checks/*" element={<ChecksPage />} /><Route path="costs" element={<PricingPage />} /><Route path="evidence" element={<EvidencePage />} /><Route path="prompts" element={<PromptsPage />} /><Route path="review-queues" element={<TeamReviewQueuesPage />} /><Route path="review-datasets/:datasetId/revisions/:version" element={<TeamReviewRevisionPage />} /><Route path="members" element={<AdminPage kind="members" />} /><Route path="keys" element={<AdminPage kind="keys" />} /><Route path="audit" element={<AdminPage kind="audit" />} /><Route path="*" element={<p className="team-page">This team page does not exist. <Link to={projectPath(project.id)}>Open project overview</Link></p>} /></Routes>
   </main></div></div>;
 }
 function SignedInRoutes() {

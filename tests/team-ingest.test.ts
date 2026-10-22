@@ -26,6 +26,51 @@ const proto = protobuf.parse(`syntax="proto3";
 `).root.lookupType("Export");
 
 describe("team ingestion admission and fixed redaction", () => {
+  test.each([
+    "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "runphantom.usage.cache_read_tokens", "runphantom.usage.cache_write_tokens",
+    "runphantom.usage.cache_write_5m_tokens", "runphantom.usage.cache_write_1h_tokens", "runphantom.usage.reasoning_tokens",
+    "runphantom.usage.audio_input_tokens", "runphantom.usage.audio_output_tokens", "runphantom.usage.context_tokens",
+    "ai.usage.inputTokens", "llm.token_count.completion",
+  ])("preserves exact numeric measurement %s without withholding unrelated evidence", key => {
+    for (const count of [0, 200, Number.MAX_SAFE_INTEGER]) {
+      const span = normalize([capture([{ key, value: { intValue: String(count) } }])]).captures[0].span;
+      expect(JSON.parse(span.attributes!)[key]).toBe(count);
+      expect(span.unavailable.attributes).toBe(false);
+    }
+  });
+  test.each([["numeric-looking", "200"], ["credential-shaped", secret]])("%s usage string remains redacted", (_label, value) => {
+    const span = normalize([capture([attr("gen_ai.usage.input_tokens", value)])]).captures[0].span;
+    expect(JSON.parse(span.attributes!)["gen_ai.usage.input_tokens"]).toBe("[REDACTED]");
+    expect(span.unavailable.attributes).toBe(true);
+  });
+  test.each([-1, .5])("invalid numeric telemetry %p is not declassified", count => {
+    const span = normalize([capture([{ key: "gen_ai.usage.input_tokens", value: { doubleValue: count } }])]).captures[0].span;
+    expect(JSON.parse(span.attributes!)["gen_ai.usage.input_tokens"]).toBe("[REDACTED]");
+    expect(span.unavailable.attributes).toBe(true);
+  });
+  test("unsafe numeric counts, token-like objects and oversized capture retain admission/privacy limits", () => {
+    const unsafe = normalize([capture([{ key: "gen_ai.usage.input_tokens", value: { doubleValue: Number.MAX_SAFE_INTEGER + 1 } }])]).captures[0].span;
+    expect(JSON.parse(unsafe.attributes!)["gen_ai.usage.input_tokens"]).toBe("[REDACTED]");
+    expect(unsafe.inputTokens).toBeNull();
+    expect(unsafe.unavailable.attributes).toBe(true);
+    const span = normalize([capture([{ key: "gen_ai.usage.input_tokens", value: { kvlistValue: { values: [attr("safe", "200")] } } }])]).captures[0].span;
+    expect(JSON.parse(span.attributes!)["gen_ai.usage.input_tokens"]).toBe("[REDACTED]");
+    expect(() => normalize([capture([attr("unrelated", "x".repeat(L.SPAN_BYTES + 1))])])).toThrow();
+  });
+  test("valid telemetry never exempts credential keys, unrelated secrets or capture-loss flags", () => {
+    const span = normalize([capture([
+      { key: "gen_ai.usage.input_tokens", value: { intValue: "200" } },
+      { key: "access_token", value: { intValue: "12345" } },
+      attr("api_key", "PRIVATE_API_CANARY"),
+    ], { droppedAttributesCount: 1 })]).captures[0].span;
+    const attrs = JSON.parse(span.attributes!);
+    expect(attrs["gen_ai.usage.input_tokens"]).toBe(200);
+    expect(attrs.access_token).toBe("[REDACTED]");
+    expect(attrs.api_key).toBe("[REDACTED]");
+    expect(span.unavailable.attributes).toBe(true);
+    expect(JSON.stringify(span)).not.toContain("PRIVATE_API_CANARY");
+  });
+
   test("redacts credential canaries across raw, nested JSON, URL, key and transport forms regardless of ambient policy", () => {
     const canary = "REVIEW_CANARY_PASSWORD";
     setActiveRedactionPolicy({ isSensitiveKey: () => false });

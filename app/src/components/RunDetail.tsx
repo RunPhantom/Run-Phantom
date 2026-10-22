@@ -25,6 +25,7 @@ import { LocalAgentSetupCTA, SetupReplayModal } from "./LocalAgentSetupCTA";
 import { C } from "../utils/colors";
 import { fmt, isActive, plural, replayOutcome, runDisplayName, isoTimestamp, safeDecodeParam, spanErrorReason } from "../utils/helpers";
 import type { RunStatus } from "../utils/helpers";
+import { captureCompletion, observationReplayUnavailable } from "../../../src/spans/normalized";
 import { useQueryClient } from "@tanstack/react-query";
 import { parseReplayMetadata } from "../utils/types";
 import { deleteRun, renameRun } from "../api/runs";
@@ -43,7 +44,7 @@ import { AnnotationCreatePopover, TraceAnnotations } from "./TraceAnnotations";
 import { useAnnotations } from "../hooks/use-annotations";
 import type { Annotation, AnnotationKind } from "../hooks/use-annotations";
 import { useAgentForEvent } from "../hooks/use-agents";
-import { useRunPhantomEvent } from "../hooks/use-runphantom-ws";
+import { useRunPhantomConnectionStatus, useRunPhantomEvent } from "../hooks/use-runphantom-ws";
 import { getCostBreakdown, getPricingSnapshot, getPricingUsageByModel, subscribePricing, fmtCost, fmtRate } from "../utils/costs";
 import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
 import { useDialogFocus } from "../hooks/use-dialog-focus";
@@ -58,6 +59,7 @@ type SpansBroadcast = {
 };
 
 type LiveEventBroadcast = {
+  persistedId?: number;
   traceId?: string;
   spanId?: string | null;
   type?: string;
@@ -65,6 +67,54 @@ type LiveEventBroadcast = {
   timestamp?: number;
   metadata?: string | Record<string, unknown> | null;
 };
+
+type DetailData = { run: Run; spans: Span[]; liveEvents: LiveEvent[]; subAgents: SubAgent[] };
+type DetailContext = {
+  lifecycle: object; route: string; tab: string; agentTab: string;
+  spanId: string | null; view: string; agentId: string | null;
+};
+type LiveObservation = { sequence: number; event: LiveEvent; persisted: boolean };
+type LiveCoverage = "current-store" | "saved-cache" | "legacy";
+type LiveView = {
+  base: LiveEvent[]; overlay: LiveObservation[]; coverage: LiveCoverage;
+  lifecycle: object | null; generation: number; coveredThrough: number;
+};
+type DetailOwner = {
+  request: number; generation: number; controller: AbortController;
+  sequence: number; context: DetailContext; pending: boolean;
+};
+type DetailLifecycle = {
+  runId: string; preloaded: boolean; mounted: boolean; generation: number;
+  owner: DetailOwner | null; publication: DetailOwner | null;
+  sequence: number;
+};
+
+function persistedLiveId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function liveViewEvents(view: LiveView): LiveEvent[] {
+  const events = [...view.base];
+  // Cache IDs belong to a historical store, so only a current-store base can
+  // acknowledge a native broadcast. Identical rows with different IDs survive.
+  const seen = new Set(view.coverage === "current-store" ? view.base.map(event => event.id) : []);
+  for (const observation of view.overlay) {
+    if (observation.persisted) {
+      if (seen.has(observation.event.id)) continue;
+      seen.add(observation.event.id);
+    }
+    events.push(observation.event);
+  }
+  return view.coverage === "current-store"
+    ? events.sort((a, b) => a.timestamp - b.timestamp || a.id - b.id)
+    : events;
+}
+
+function containsDetailContext(data: DetailData, context: DetailContext): boolean {
+  return (!context.spanId || data.spans.some(span => span.id === context.spanId))
+    && (context.view !== "convo" || !!data.run.convo_id)
+    && (!context.agentId || data.subAgents.some(agent => agent.root_span_id === context.agentId));
+}
 
 function handleHorizontalTabKeys(event: ReactKeyboardEvent<HTMLDivElement>): void {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -94,7 +144,7 @@ function toLiveEvent(event: LiveEventBroadcast | undefined): LiveEvent | null {
     return null;
   }
   return {
-    id: event.timestamp,
+    id: persistedLiveId(event.persistedId) ? event.persistedId : event.timestamp,
     trace_id: event.traceId,
     span_id: event.spanId ?? null,
     type: event.type,
@@ -325,12 +375,13 @@ function Badge({ label, copyValue }: { label: string; copyValue?: string }) {
   );
 }
 
-function StatsLine({ stats, model, spans, active, startedAt }: {
+function StatsLine({ stats, model, spans, active, startedAt, completionUnavailable }: {
   stats: { spans: number; tools: number; llms: number; errors: number; dur: number; agents?: number; inTokens?: number; outTokens?: number };
   model?: string | null;
   spans?: Span[];
   active?: boolean;
   startedAt?: number;
+  completionUnavailable?: boolean;
 }) {
   const [showCost, setShowCost] = useState(false);
   const costRef = useRef<HTMLSpanElement>(null);
@@ -344,10 +395,10 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
 
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    if (!active) return;
+    if (!active || completionUnavailable) return;
     const i = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(i);
-  }, [active]);
+  }, [active, completionUnavailable]);
 
   const breakdown = useMemo(() => {
     if (!spans) return [];
@@ -389,12 +440,12 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
   const durMin = Math.floor(durSec / 60);
   const durRemSec = durSec % 60;
   const hasTokens = inTok > 0 || outTok > 0;
-  const hasPricingUsage = breakdown.length > 0;
+  const hasCost = breakdown.length > 0;
   const known = breakdown.filter(row => row.breakdown !== null);
   const unavailableCount = breakdown.length - known.length;
   const totalCost = known.reduce((sum, row) => sum + row.breakdown!.totalCost, 0);
   const availableTotal = known.length > 0 && Number.isFinite(totalCost);
-  const label = availableTotal ? `${unavailableCount ? "Known estimates" : "Estimated cost"} ${fmtCost(totalCost)}${unavailableCount ? ` · ${unavailableCount} unavailable` : ""}` : "Estimate unavailable";
+  const costLabel = availableTotal ? `${unavailableCount ? "Known estimates" : "Estimated cost"} ${fmtCost(totalCost)}${unavailableCount ? ` · ${unavailableCount} unavailable` : ""}` : "Estimate unavailable";
 
   // Where the stats wrap, the separator after the last stat on a line has
   // nothing to separate; index.css hides it on the stat marked here.
@@ -429,8 +480,10 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
           to whole seconds it read "6s" beside a span tree root of "6.2s", "0s"
           beside "420ms", and "205m" for a 3h run. Only the live tick animates;
           everything else goes through fmt(), exactly like the span tree. */}
-      <Stat last={!hasTokens && !hasPricingUsage}><Badge label="duration" /><span>{
-        !durValid
+      <Stat last={!hasTokens && !hasCost}><Badge label="duration" /><span data-run-duration>{
+        completionUnavailable
+          ? "Unavailable"
+          : !durValid
           ? "—"
           : !ticking || liveDur < 1000 || liveDur >= 3_600_000
             ? fmt(liveDur)
@@ -438,12 +491,12 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
               ? <><NumberFlow value={durMin} />m <NumberFlow value={durRemSec} />s</>
               : <><NumberFlow value={durSec} />s</>
       }</span></Stat>
-      {hasTokens && <Stat last={!hasPricingUsage}><Badge label="tokens" /><span><NumberFlow value={inTok} {...TOKEN_NUMBER_FLOW_TIMING} /> in / <NumberFlow value={outTok} {...TOKEN_NUMBER_FLOW_TIMING} /> out</span></Stat>}
-      {hasPricingUsage && (
+      {hasTokens && <Stat last={!hasCost}><Badge label="tokens" /><span><NumberFlow value={inTok} {...TOKEN_NUMBER_FLOW_TIMING} /> in / <NumberFlow value={outTok} {...TOKEN_NUMBER_FLOW_TIMING} /> out</span></Stat>}
+      {hasCost && (
         <Stat last>
           <span ref={costRef} className="relative">
             <button ref={costButtonRef} type="button" className="min-h-11 min-w-11 rounded px-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2" aria-expanded={showCost} aria-controls={costPanelId} onClick={() => setShowCost(open => !open)}>
-              <span aria-live="polite">{label}</span>
+              <span aria-live="polite">{costLabel}</span>
             </button>
             {showCost && (
               <div ref={costPanelRef} id={costPanelId} role="region" aria-label="Nominal cost estimates" className="fixed z-50 rounded-lg p-3 shadow-xl overflow-y-auto text-[12px]"
@@ -713,6 +766,7 @@ function ViewHeader({
   const parentName = breadcrumb?.parentName;
   const onFork = fork?.onFork;
   const userMessage = fork?.userMessage;
+  const replayUnavailable = allSpans?.some(span => observationReplayUnavailable(span.normalized?.capture)) === true;
   const queryClient = useQueryClient();
   const replayMeta = run ? parseReplayMetadata(run) : null;
   const traceModelFromMetadata = replayMeta?.replay?.model ?? null;
@@ -780,7 +834,7 @@ function ViewHeader({
   }, [queryClient, run]);
 
   useEffect(() => {
-    if (!optionsOpen || !run?.id || !agentConfigured) return;
+    if (replayUnavailable || !optionsOpen || !run?.id || !agentConfigured) return;
     fetch("/api/replay/context", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ runId: run.id, eventName: run.event_name }),
@@ -790,7 +844,7 @@ function ViewHeader({
         setContextEdits(Object.fromEntries(Object.entries(data.context).map(([k, v]) => [k, String(v)])));
       }
     }).catch(() => {});
-  }, [optionsOpen, run?.id, run?.event_name, agentConfigured]);
+  }, [optionsOpen, run?.id, run?.event_name, agentConfigured, replayUnavailable]);
 
   useEffect(() => {
     if (!optionsOpen) return;
@@ -812,10 +866,11 @@ function ViewHeader({
     };
   }, [optionsOpen]);
   const displayTitle = cleanTitle(title);
+  const completionUnavailable = run?.capture_completion === "unavailable" || allSpans?.some(span => captureCompletion(span.normalized?.capture) === "unavailable") === true;
   const status: RunStatus = (run && replayOutcome(run)) || (active ? "live" : stats.errors > 0 ? "failed" : "complete");
-  const statusLabel = { live: "Run live", failed: "Run failed", cancelled: "Run cancelled", complete: "Run complete" }[status];
-  const statusColor = status === "live" ? C.green : status === "failed" ? C.red : C.fg1;
-  const statusBackground = status === "live"
+  const statusLabel = completionUnavailable ? "Completion unavailable" : { live: "Run live", failed: "Run failed", cancelled: "Run cancelled", complete: "Run complete" }[status];
+  const statusColor = completionUnavailable ? C.fg1 : status === "live" ? C.green : status === "failed" ? C.red : C.fg1;
+  const statusBackground = completionUnavailable ? "var(--rp-ink-wash)" : status === "live"
     ? "color-mix(in oklch, var(--rp-success) 12%, transparent)"
     : status === "failed"
       ? "color-mix(in oklch, var(--rp-danger) 10%, transparent)"
@@ -839,7 +894,7 @@ function ViewHeader({
                   {statusLabel}
                 </span>
               </div>
-              <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
+              <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
             </div>
           </div>
         </>
@@ -854,7 +909,7 @@ function ViewHeader({
             </div>
             <MoreMenu runId={run?.id} />
           </div>
-          <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
+          <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
         </div>
       ) : (
         <>
@@ -971,14 +1026,14 @@ function ViewHeader({
                   return <>
                   <div className="rp-clipped-ring flex items-stretch rounded-md overflow-hidden" style={{ border: `1px solid var(--rp-ink-a10)` }}>
                     <button
-                      disabled={agentRegistryStatus !== "success"}
+                      disabled={replayUnavailable || agentRegistryStatus !== "success"}
                       className="flex items-center gap-1.5 text-[11px] px-3 py-1 font-medium transition-colors rp-hover-wash disabled:opacity-50"
                       style={{
                         color: C.fg3,
                         background: "var(--rp-ink-a06)",
                       }}
                       onClick={() => {
-                        if (agentRegistryStatus !== "success") return;
+                        if (replayUnavailable || agentRegistryStatus !== "success") return;
                         if (agentConfigured) {
                           onFork(undefined, forkMode, forkModel || undefined);
                         } else {
@@ -996,10 +1051,11 @@ function ViewHeader({
                       aria-expanded={optionsOpen}
                       aria-controls={optionsOpen ? replayOptionsId : undefined}
                       aria-haspopup="dialog"
-                      disabled={agentRegistryStatus !== "success"}
+                      disabled={replayUnavailable || agentRegistryStatus !== "success"}
                       className="flex items-center justify-center px-1.5 transition-colors rp-hover-wash disabled:opacity-50"
                       style={{ color: C.fg1, background: "var(--rp-ink-a06)", borderLeft: "1px solid var(--rp-ink-a10)" }}
                       onClick={() => {
+                        if (replayUnavailable) return;
                         setAnnotationPopoverOpen(false);
                         setOptionsOpen(!optionsOpen);
                       }}
@@ -1008,13 +1064,13 @@ function ViewHeader({
                       <ChevronDown className="h-3.5 w-3.5" />
                     </button>
                   </div>
-                  {agentRegistryStatus !== "success" && <ReplayRegistryNotice status={agentRegistryStatus} onRetry={refetchAgents} />}
+                  {!replayUnavailable && agentRegistryStatus !== "success" && <ReplayRegistryNotice status={agentRegistryStatus} onRetry={refetchAgents} />}
                   <SetupReplayModal
-                    open={setupModalOpen}
+                    open={setupModalOpen && !replayUnavailable}
                     onClose={() => setSetupModalOpen(false)}
                     eventName={run?.event_name ?? undefined}
                   />
-                  {optionsOpen && (
+                  {optionsOpen && !replayUnavailable && (
                     <div
                       id={replayOptionsId}
                       data-replay-options
@@ -1081,7 +1137,7 @@ function ViewHeader({
                         </div>
                       )}
                       <button
-                        disabled={agentRegistryStatus !== "success"}
+                        disabled={replayUnavailable || agentRegistryStatus !== "success"}
                         className="w-full py-1.5 rounded text-[11px] font-medium transition-colors hover:brightness-110 disabled:opacity-50"
                         style={{
                           background: "var(--rp-ink-a08)",
@@ -1089,7 +1145,7 @@ function ViewHeader({
                           border: `1px solid var(--rp-ink-a10)`,
                         }}
                         onClick={() => {
-                          if (agentRegistryStatus !== "success") return;
+                          if (replayUnavailable || agentRegistryStatus !== "success") return;
                           if (!agentConfigured) {
                             setOptionsOpen(false);
                             setSetupModalOpen(true);
@@ -1112,10 +1168,11 @@ function ViewHeader({
               </div>
             )}
           </div>
+          {!active && onFork && replayUnavailable && <div role="status" className="basis-full text-[10px]" style={{ color: C.fg1 }}>Replay unavailable for partial, unverified observations.</div>}
           {/* Not on the stats row after a separator: at laptop widths the ids
               wrapped and left the separator dangling at the end of the stats. */}
           <div className="flex flex-col gap-1.5 text-[11px]">
-            <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
+            <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
             {run && (run.id || run.user_id || run.convo_id) && (
               <span className="rp-meta-ids flex min-w-0 max-w-full flex-wrap items-center gap-1.5" style={{ color: C.fg0 }}>
                 {run.user_id && <span className="inline-flex items-center gap-1" title={run.user_id}><Badge label="user" copyValue={run.user_id} />{run.user_id.length > 12 ? run.user_id.slice(0, 12) + "…" : run.user_id}</span>}
@@ -1359,7 +1416,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   const runSpansTabId = `${tabIdPrefix}-run-spans`;
   const runConversationTabId = `${tabIdPrefix}-run-conversation`;
   const runPanelId = `${tabIdPrefix}-run-panel`;
-  const [data, setData] = useState<{ run: Run; spans: Span[]; liveEvents: LiveEvent[]; subAgents: SubAgent[] } | null>(
+  const [data, setData] = useState<DetailData | null>(
     initialData ? { run: initialData.run, spans: initialData.spans, liveEvents: initialData.liveEvents ?? [], subAgents: initialData.subAgents ?? [] } : null
   );
   const dataRef = useRef(data);
@@ -1381,7 +1438,8 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   const [loading, setLoading] = useState(!initialData);
   const [notFound, setNotFound] = useState(false);
   const [agentTab, setAgentTab] = useState<"chat" | "tree">("chat");
-  const [liveEvents, setLiveEvents] = useState<LiveEvent[]>(initialData?.liveEvents ?? []);
+  const [liveView, setLiveView] = useState<LiveView>({ base: initialData?.liveEvents ?? [], overlay: [], coverage: "legacy", lifecycle: null, generation: 0, coveredThrough: 0 });
+  const liveEvents = useMemo(() => liveViewEvents(liveView), [liveView]);
   const [anthropicModels, setAnthropicModels] = useState<string[]>([]);
   const annotationsApi = useAnnotations(runId);
   const autoSavedAnnotationIdsRef = useRef<Set<string>>(new Set());
@@ -1467,36 +1525,119 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   // new one: the URL showed trace B while the pane rendered trace A. Every write
   // below is gated on the request still being the current one.
   const detailRequestRef = useRef(0);
-  const detailAbortRef = useRef<AbortController | null>(null);
+  const lifecycle = useMemo<DetailLifecycle>(() => ({
+    runId, preloaded: !!initialData, mounted: false, generation: 0,
+    owner: null, publication: null, sequence: 0,
+  }), [runId, initialData]);
+  const currentLifecycleRef = useRef<DetailLifecycle | null>(null);
+  const context = useMemo<DetailContext>(() => ({
+    lifecycle, route: pathname + search, tab: activeTab, agentTab,
+    spanId: selectedSpanId, view: runView, agentId: focusedAgent,
+  }),
+    [lifecycle, pathname, search, activeTab, selectedSpanId, runView, focusedAgent, agentTab]);
+  const contextRef = useRef(context);
+  const [publishedContext, setPublishedContext] = useState<DetailContext | null>(null);
+  const [contextSnapshot, setContextSnapshot] = useState<{ context: DetailContext; data: DetailData } | null>(null);
 
-  const fetchData = useCallback(async () => {
-    if (initialData || isRunDeleting(runId)) return; // Keep the visible trace during deletion.
-    detailAbortRef.current?.abort();
+  const connectionStatus = useRunPhantomConnectionStatus();
+  const previousConnectionStatus = useRef(connectionStatus);
+
+  const retireDetail = useCallback(() => {
+    // An old passive cleanup must not invalidate a new run's layout-owned read.
+    if (currentLifecycleRef.current === lifecycle) ++detailRequestRef.current;
+    ++lifecycle.generation;
+    const owner = lifecycle.owner;
+    lifecycle.owner = lifecycle.publication = null;
+    owner?.controller.abort();
+  }, [lifecycle]);
+
+  useLayoutEffect(() => {
+    currentLifecycleRef.current = lifecycle;
+    lifecycle.mounted = true;
+    return () => { lifecycle.mounted = false; retireDetail(); };
+  }, [lifecycle, retireDetail]);
+
+  useLayoutEffect(() => {
+    contextRef.current = context;
+    if (data?.run.id === runId && containsDetailContext(data, context)) {
+      setContextSnapshot({ context, data });
+    }
+  }, [context, data, runId]);
+
+  const fetchData = useCallback(async function refresh(): Promise<void> {
+    const live = () => lifecycle.mounted && currentLifecycleRef.current === lifecycle
+      && !lifecycle.preloaded && !isRunDeleting(lifecycle.runId);
+    if (!live()) return;
+    if (lifecycle.owner) { lifecycle.owner.pending = true; return; }
     const controller = new AbortController();
-    detailAbortRef.current = controller;
-    const requestId = ++detailRequestRef.current;
-    const isCurrent = () => detailRequestRef.current === requestId && !controller.signal.aborted;
+    const owner: DetailOwner = {
+      request: ++detailRequestRef.current, generation: lifecycle.generation, controller,
+      sequence: lifecycle.sequence, context: contextRef.current, pending: false,
+    };
+    lifecycle.owner = owner;
+    const isCurrent = () => live() && lifecycle.owner === owner && owner.generation === lifecycle.generation
+      && detailRequestRef.current === owner.request && !controller.signal.aborted;
+    // Starting the queued transport does not revoke a completed read's React
+    // publication. Retirement or a newer completion does revoke it.
+    const canPublish = () => live() && lifecycle.publication === owner
+      && owner.generation === lifecycle.generation && !controller.signal.aborted;
+    const publishFailure = () => {
+      lifecycle.publication = owner;
+      setData(previous => canPublish() ? null : previous);
+      setNotFound(previous => canPublish() ? true : previous);
+    };
     try {
-      const res = await fetch(`/api/runs/detail/${runId}`, { signal: controller.signal });
+      const res = await fetch(`/api/runs/detail/${lifecycle.runId}`, { signal: controller.signal });
       if (!isCurrent()) return;
       if (res.status === 404) {
-        setData(null);
-        setNotFound(true);
+        publishFailure();
         return;
       }
       if (!res.ok) throw new Error(`Could not load run (${res.status})`);
-      const j = await res.json();
+      const j = await res.json() as DetailData;
       if (!isCurrent()) return;
-      setData(j);
-      setNotFound(false);
-      if (j.liveEvents) setLiveEvents(j.liveEvents);
+      lifecycle.publication = owner;
+      setData(previous => canPublish() ? j : previous);
+      setNotFound(previous => canPublish() ? false : previous);
+      setPublishedContext(previous => canPublish() ? owner.context : previous);
+      const source = res.headers.get("X-RunPhantom-Live-Events");
+      setLiveView(previous => {
+        if (!canPublish()) return previous;
+        // The ledger and its watermark are state, not external receipts retired
+        // by render-time evaluation. Replaying/discarding this pure calculation
+        // cannot acknowledge a frame outside React. Frame updaters reconcile
+        // against React's preceding view state; only its commit changes the UI.
+        const sameGeneration = previous.lifecycle === lifecycle && previous.generation === owner.generation;
+        const overlay = sameGeneration ? previous.overlay.filter(observation => observation.sequence > owner.sequence) : [];
+        // Unclassified HTTP still advances the base. Its pre-start overlay is
+        // replaced as legacy best effort, never acknowledged by numeric IDs.
+        // Post-start frames remain separate; exact-once needs both native IDs
+        // and the matching daemon's truthful classification.
+        return {
+          base: j.liveEvents ?? [], overlay,
+          coverage: source === "current-store" || source === "saved-cache" ? source : "legacy",
+          lifecycle, generation: owner.generation, coveredThrough: owner.sequence,
+        };
+      });
     } catch {
       if (!isCurrent()) return;
-      setData(null);
-      setNotFound(true);
+      publishFailure();
+    } finally {
+      if (isCurrent()) {
+        setLoading(previous => canPublish() ? false : previous);
+        lifecycle.owner = null;
+        if (owner.pending && live()) void refresh();
+      }
     }
-    finally { if (isCurrent()) setLoading(false); }
-  }, [runId, initialData]);
+  }, [lifecycle]);
+
+  useEffect(() => {
+    const recovered = previousConnectionStatus.current !== "connected" && connectionStatus === "connected";
+    previousConnectionStatus.current = connectionStatus;
+    // Spans committed before the handshake or during an outage have no replayed
+    // notification. Reload the snapshot without resetting the selected view.
+    if (recovered) void fetchData();
+  }, [connectionStatus, fetchData]);
 
   useEffect(() => {
     // The selected view owns navigation: the menu that started deletion may
@@ -1514,8 +1655,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
     const unsubscribe = subscribeRunDeletions(() => {
       const deleting = isRunDeleting(runId);
       if (deleting) {
-        ++detailRequestRef.current;
-        detailAbortRef.current?.abort();
+        retireDetail();
       } else if (wasDeleting) {
         void fetchData(); // A failed delete leaves the trace selected and live.
       }
@@ -1523,29 +1663,44 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
     });
     return () => {
       unsubscribe();
-      detailAbortRef.current?.abort();
+      retireDetail();
     };
-  }, [runId, fetchData]);
+  }, [runId, fetchData, retireDetail]);
 
   useEffect(() => {
     if (initialData) return;
     setLoading(true);
     setNotFound(false);
     setData(null);
-    setLiveEvents([]); setFocusedAgent(null); setAgentTab("chat"); setLocalTab("chat"); setLocalSelectedSpanId(null); setEditModal(null); fetchData();
+    setLiveView({ base: [], overlay: [], coverage: "legacy", lifecycle: null, generation: 0, coveredThrough: 0 }); setPublishedContext(null); setFocusedAgent(null); setAgentTab("chat"); setLocalTab("chat"); setLocalSelectedSpanId(null); setEditModal(null); fetchData();
   }, [runId, fetchData, initialData]);
 
   useEffect(() => {
     if (!routeBase || !selectedSpanId || !data?.spans.length) return;
     if (!data.spans.some((s) => s.id === selectedSpanId)) {
+      if (publishedContext !== context) {
+        if (lifecycle.owner?.context !== context) void fetchData();
+        return;
+      }
       navigate(`${traceSpansPath(routeBase, runId)}${searchQuery}`, { replace: true });
     }
-  }, [data?.spans, navigate, routeBase, runId, searchQuery, selectedSpanId]);
+  }, [context, data?.spans, fetchData, lifecycle, navigate, publishedContext, routeBase, runId, searchQuery, selectedSpanId]);
 
   useEffect(() => {
     if (!routeBase || runView !== "convo" || !data?.run) return;
-    if (!data.run.convo_id) navigate(`${tracePath(routeBase, runId)}${searchQuery}`, { replace: true });
-  }, [data?.run, navigate, routeBase, runId, runView, searchQuery]);
+    if (!data.run.convo_id) {
+      if (publishedContext !== context) {
+        if (lifecycle.owner?.context !== context) void fetchData();
+        return;
+      }
+      navigate(`${tracePath(routeBase, runId)}${searchQuery}`, { replace: true });
+    }
+  }, [context, data?.run, fetchData, lifecycle, navigate, publishedContext, routeBase, runId, runView, searchQuery]);
+
+  useEffect(() => {
+    if (!focusedAgent || !data || data.subAgents.some(agent => agent.root_span_id === focusedAgent)) return;
+    if (publishedContext !== context && lifecycle.owner?.context !== context) void fetchData();
+  }, [context, data, fetchData, focusedAgent, lifecycle, publishedContext]);
 
   useLayoutEffect(() => {
     stickToBottomContextRef.current?.stopScroll();
@@ -1586,9 +1741,22 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   });
 
   useRunPhantomEvent<LiveEventBroadcast | undefined>("live", (data) => {
-    if (initialData || data?.traceId !== runId) return; // No WebSocket updates for pre-loaded data
+    if (initialData || data?.traceId !== runId || !lifecycle.mounted || isRunDeleting(runId)) return;
     const event = toLiveEvent(data);
-    if (event) setLiveEvents(p => [...p, event]);
+    if (!event) return;
+    const generation = lifecycle.generation;
+    const observation: LiveObservation = { sequence: ++lifecycle.sequence, event, persisted: persistedLiveId(data.persistedId) };
+    setLiveView(previous => {
+      if (!lifecycle.mounted || currentLifecycleRef.current !== lifecycle || generation !== lifecycle.generation) return previous;
+      const sameGeneration = previous.lifecycle === lifecycle && previous.generation === generation;
+      if (sameGeneration && (observation.sequence <= previous.coveredThrough || previous.overlay.includes(observation))) return previous;
+      // A failed deletion resumes the same run. Its last committed display
+      // survives retirement; the monotonic sequence lets the next read replace
+      // that older prefix without treating a different run's state as current.
+      return previous.lifecycle === lifecycle
+        ? { ...previous, generation, overlay: [...previous.overlay, observation] }
+        : { base: [], overlay: [observation], coverage: "legacy", lifecycle, generation, coveredThrough: 0 };
+    });
   });
 
   // Extract last user message for fork pre-fill (must be before early returns — rules of hooks).
@@ -1635,7 +1803,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   }, []);
 
   const createAnnotationAndSave = useCallback(async (
-    input: { span_id?: string | null; kind: AnnotationKind; note?: string; source?: "user" | "claude-code" | "codex" }
+    input: { span_id?: string | null; kind: AnnotationKind; note?: string; source?: "user" | "claude-code" | "codex" | "opencode" }
   ) => {
     const created = await annotationsApi.create({ ...input, source: input.source ?? "user" });
     if (created) saveAnnotationPreview(created);
@@ -1652,15 +1820,18 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   if (notFound || !data?.run) return <TraceNotFound runId={runId} backPath={routeBase ?? "/runs"} />;
 
   const { run, spans, subAgents } = data;
+  const paneData = publishedContext !== context && contextSnapshot?.context === context ? contextSnapshot.data : data;
+  const paneSpans = paneData.spans;
+  const paneConvoId = paneData.run.convo_id;
   const replayMeta = parseReplayMetadata(run);
 
   // If focused on a sub-agent, show that sub-agent's view
-  const agent = focusedAgent ? subAgents.find(a => a.root_span_id === focusedAgent) : null;
+  const agent = focusedAgent ? paneData.subAgents.find(a => a.root_span_id === focusedAgent) : null;
 
   if (agent) {
     const agentSpanSet = new Set(agent.span_ids);
     // Exclude the root tool call span — it's the parent invocation, not part of the sub-agent's work
-    const agentSpans = spans.filter(s => agentSpanSet.has(s.id) && s.id !== agent.root_span_id);
+    const agentSpans = paneSpans.filter(s => agentSpanSet.has(s.id) && s.id !== agent.root_span_id);
     const agentTools = agentSpans.filter(s => s.span_type === "TOOL_CALL");
     const agentLLMs = agentSpans.filter(s => s.span_type?.includes("LLM"));
     const agentErrs = agentSpans.filter(s => s.status === "ERROR");
@@ -1712,6 +1883,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   }
 
   // Normal run view
+  const replayUnavailable = spans.some(span => observationReplayUnavailable(span.normalized?.capture));
   const active = isActive(run);
   const tools = spans.filter(s => s.span_type === "TOOL_CALL");
   const llms = spans.filter(s => s.span_type?.includes("LLM"));
@@ -1772,6 +1944,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
           userMessage: lastUserMessage,
         } : undefined}
       />
+      {routeBase && <div className="px-4 py-2 text-xs"><Link className="text-[color:var(--rp-focus)] underline underline-offset-2" to={`/evaluations?view=evidence&anchorKind=run&anchorId=${encodeURIComponent(runId)}`}>Reported completion evidence</Link></div>}
       <TraceAnnotations
         annotations={annotationsApi.annotations}
         freshIds={annotationsApi.freshIds}
@@ -1781,14 +1954,14 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
       <div role="tablist" aria-label="Run views" aria-orientation="horizontal" onKeyDown={handleHorizontalTabKeys} className="flex-shrink-0 flex" style={{ borderBottom: `1px solid ${C.border}`, paddingLeft: 16 }}>
         <button type="button" id={runOverviewTabId} className="rp-tab" role="tab" aria-selected={activeTab === "chat"} aria-controls={runPanelId} tabIndex={activeTab === "chat" ? 0 : -1} style={tabStyle("chat")} onClick={goOverview}>Overview</button>
         <button type="button" id={runSpansTabId} className="rp-tab" role="tab" aria-selected={activeTab === "tree"} aria-controls={runPanelId} tabIndex={activeTab === "tree" ? 0 : -1} style={tabStyle("tree")} onClick={goSpans}>Span Tree</button>
-        {run.convo_id && (
+        {paneConvoId && (
           <button type="button" id={runConversationTabId} className="rp-tab" role="tab" aria-selected={activeTab === "convo"} aria-controls={runPanelId} tabIndex={activeTab === "convo" ? 0 : -1} style={tabStyle("convo")} onClick={goConvo}>Conversation</button>
         )}
       </div>
       {activeTab === "tree" ? (
         <div id={runPanelId} role="tabpanel" aria-labelledby={runSpansTabId} className="flex-1 relative min-h-0 overflow-auto sb" style={{ padding: 16 }}>
           <SpanTree
-            spans={spans}
+            spans={paneSpans}
             selectedSpanId={selectedSpanId}
             onSelectSpan={selectSpan}
             annotations={annotationsApi.annotations}
@@ -1802,13 +1975,13 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
       ) : (
         <StickToBottom id={runPanelId} role="tabpanel" aria-labelledby={activeTab === "convo" ? runConversationTabId : runOverviewTabId} className="flex-1 relative min-h-0" resize={prefersReducedMotion ? "instant" : "smooth"} initial={false} contextRef={stickToBottomContextRef}>
           <StickToBottom.Content className="sb">
-            {activeTab === "chat" && <ChatFlow spans={spans} liveEvents={liveEvents} subAgents={subAgents} onDiveIn={setFocusedAgent} isActive={active} lastUpdatedAt={run.last_updated_at} onEditMessage={onForkStarted && !active ? (msg) => setEditModal({ userMessage: msg }) : undefined} replayError={replayMeta?.replay?.error ?? null} />}
-            {activeTab === "convo" && run.convo_id && <ConvoDetail convoId={run.convo_id} onOpenTurn={openConversationTurn} />}
+            {activeTab === "chat" && <ChatFlow spans={spans} liveEvents={liveEvents} subAgents={subAgents} onDiveIn={setFocusedAgent} isActive={active} lastUpdatedAt={run.last_updated_at} onEditMessage={onForkStarted && !active && !replayUnavailable ? (msg) => setEditModal({ userMessage: msg }) : undefined} replayError={replayMeta?.replay?.error ?? null} />}
+            {activeTab === "convo" && paneConvoId && <ConvoDetail convoId={paneConvoId} onOpenTurn={openConversationTurn} />}
           </StickToBottom.Content>
           <ScrollToBottomButton />
         </StickToBottom>
       )}
-      {editModal && onForkStarted && (
+      {editModal && onForkStarted && !replayUnavailable && (
         <EditReplayModal
           userMessage={editModal.userMessage}
           model={model}
