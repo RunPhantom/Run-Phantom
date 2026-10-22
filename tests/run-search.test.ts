@@ -241,4 +241,61 @@ describe("full-store run search", () => {
     expect(await child.exited, error).toBe(0);
     expect(JSON.parse(output).runs[0].id).toBe("compiled-run");
   }, 30_000);
+
+  test("typed predicates combine legacy filters on one actual span and reject malformed ASTs before work", async () => {
+    run("split"); span("split", { model: "model-a", provider: "provider-a" });
+    span("split", { id: "slow", model: "model-b", provider: "provider-b" });
+    run("exact"); span("exact", { model: "model-a", provider: "provider-a", output: "private typed output" });
+    const db = getDrizzleDb().$client;
+    db.query("UPDATE spans SET duration_ms=10,attributes=? WHERE run_id='split' AND id='root'").run('{"gen_ai.usage.cost_usd":0,"tags":["target"]}');
+    db.query("UPDATE spans SET duration_ms=3000,attributes=? WHERE (run_id='split' AND id='slow') OR run_id='exact'").run('{"gen_ai.usage.cost_usd":0,"tags":["target"]}');
+    const filter = { version: 1, all: [
+      { field: "duration_ms", op: "gt", value: 2000 }, { field: "captured_cost_usd", op: "eq", value: 0 },
+      { field: "tag", op: "eq", value: "target" },
+    ] };
+    const result = await searchRuns({ model: "model-a", provider: "provider-a", filter });
+    expect(result.runs.map(row => row.id)).toEqual(["exact"]);
+    expect(JSON.stringify(result)).not.toContain("private typed output");
+    for (const invalidFilter of [{ version: 9, all: [] }, { version: 1, all: [{ field: "sql", op: "eq", value: "1=1" }] }, '["x"]']) {
+      expect(await searchRuns({ filter: invalidFilter }).catch(error => error)).toMatchObject({ status: 400, code: "invalid_search" });
+    }
+    expect(_runSearchInternal.activeWorkers()).toBe(0);
+  });
+
+  test("typed keyset cursors bind canonical meaning and the current store", async () => {
+    for (const id of ["a", "b", "c"]) { run(id); span(id, { model: "model-a", provider: "provider-a" }); }
+    const clauses = [{ field: "model", op: "eq", value: "model-a" }, { field: "provider", op: "eq", value: "provider-a" }];
+    const filter = { version: 1, all: clauses };
+    const first = await searchRuns({ filter, limit: 1 });
+    expect(first.runs[0].id).toBe("c");
+    expect(JSON.parse(Buffer.from(first.nextCursor!, "base64url").toString()).v).toBe(2);
+    const second = await searchRuns({ filter: { version: 1, all: [...clauses].reverse() }, cursor: first.nextCursor, limit: 1 });
+    expect(second.runs[0].id).toBe("b");
+    for (const query of [{ filter: { version: 1, all: [{ field: "model", op: "eq", value: "other" }] } }, { filter, q: "changed" }, {}]) {
+      expect(await searchRuns({ ...query, cursor: first.nextCursor }).catch(error => error)).toMatchObject({ status: 400 });
+    }
+    expect(await searchRuns({ filter, cursor: first.nextCursor }, { dbPath: path.join(directory, "other-store.db") }).catch(error => error)).toMatchObject({ status: 400 });
+    expect(_runSearchInternal.activeWorkers()).toBe(0);
+  });
+
+  test("typed HTTP and MCP filters select captured values and refuse unknown predicates", async () => {
+    run("api-typed"); span("api-typed", { model: "literal%_model" });
+    run("api-other"); span("api-other", { model: "other" });
+    const filter = { version: 1, all: [{ field: "model", op: "eq", value: "literal%_model" }] };
+    const { server } = await createServer(0);
+    server.listen(0, "127.0.0.1"); await once(server, "listening");
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const mcp = await runMcpServer({ url: origin, transport: serverTransport });
+    const client = new Client({ name: "typed-search-test", version: "1" }); await client.connect(clientTransport);
+    try {
+      const response = await fetch(`${origin}/api/runs/search?${new URLSearchParams({ filter: JSON.stringify(filter) })}`);
+      expect(response.status).toBe(200); expect((await response.json()).runs.map((row: { id: string }) => row.id)).toEqual(["api-typed"]);
+      const malformed = JSON.stringify({ version: 1, all: [{ field: "model", op: "regex", value: ".*" }] });
+      expect((await fetch(`${origin}/api/runs/search?${new URLSearchParams({ filter: malformed })}`)).status).toBe(400);
+      const result = await client.callTool({ name: "search_runs", arguments: { filter } });
+      expect(JSON.parse((result.content as { text: string }[])[0].text).runs.map((row: { id: string }) => row.id)).toEqual(["api-typed"]);
+      expect(await client.callTool({ name: "search_runs", arguments: { filter: { version: 1, all: [{ field: "payload", op: "eq", value: "x" }] } } }).catch(error => error)).toMatchObject({ code: ErrorCode.InvalidParams });
+    } finally { await client.close(); await mcp.close(); await new Promise<void>(resolve => server.close(() => resolve())); }
+  });
 });

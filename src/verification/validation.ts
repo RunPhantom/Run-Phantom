@@ -1,9 +1,13 @@
 import {
-  PROTOCOL_VERSION, CAUSAL_PROTOCOL_VERSION, CAUSAL_CAPABILITY, relativeTargetKey, relativeTargets, VERIFICATION_LIMITS as L,
-  type AppCommand, type BrowserMessage, type Coverage, type FlowStep, type Predicate, type RelativeTarget,
+  PROTOCOL_VERSION, BUSINESS_CAPABILITY, BUSINESS_LIMITS, CAUSAL_PROTOCOL_VERSION, CAUSAL_CAPABILITY, SEMANTIC_PROTOCOL_VERSION, SEMANTIC_CAPABILITY, SOURCE_PROTOCOL_VERSION, SOURCE_CAPABILITY, TREE_PROTOCOL_VERSION, TREE_CAPABILITY, SEMANTIC_REF_PATTERN, normalizeSemanticText, relativeTargetKey, relativeTargets, VERIFICATION_LIMITS as L,
+  type AppCommand, type BrowserMessage, type Coverage, type FlowStep, type Predicate, type RelativeTarget, type SemanticQuery, type VerificationCapability,
 } from "./protocol";
+import { parseFlowAnchor } from "./flow-anchors";
 import { isSensitiveKey } from "./redaction";
 import { sanitizeWithReport } from "./serialization";
+import { parseControlSourceObservation } from "./build/source";
+import { parsePerformancePredicate } from "./performance";
+import { PERFORMANCE_PROTOCOL_VERSION, PERFORMANCE_CAPABILITY } from "./protocol";
 
 export class VerificationInputError extends Error {
   readonly status = 400;
@@ -89,6 +93,10 @@ export function validateOrigin(value: unknown): string {
 export function parseCommand(value: unknown): AppCommand {
   const obj = record(value, "command");
   switch (obj.type) {
+    case "performance":
+      keys(obj, ["type", "phase"], "performance command");
+      if (obj.phase !== "begin" && obj.phase !== "capture") invalid("performance phase must be begin or capture");
+      return { type: "performance", phase: obj.phase };
     case "snapshot": {
       keys(obj, ["type", "selector"], "snapshot command");
       const selector = optionalString(obj, "selector", L.MAX_SELECTOR_LENGTH);
@@ -103,6 +111,21 @@ export function parseCommand(value: unknown): AppCommand {
     case "state":
       keys(obj, ["type", "store"], "state command");
       return { type: "state", store: text(obj.store, "store", L.MAX_NAME_LENGTH) };
+    case "find":
+      keys(obj, ["type", "query"], "semantic query command");
+      return { type: "find", query: parseSemanticQuery(obj.query) };
+    case "semantic-snapshot":
+      keys(obj, ["type"], "semantic snapshot command");
+      return { type: "semantic-snapshot" };
+    case "semantic-tree":
+      keys(obj, ["type"], "semantic tree command");
+      return { type: "semantic-tree" };
+    case "ref-click": case "ref-fill": {
+      keys(obj, obj.type === "ref-fill" ? ["type", "ref", "value"] : ["type", "ref"], "live reference command");
+      const ref = text(obj.ref, "live reference", 38);
+      if (!SEMANTIC_REF_PATTERN.test(ref)) invalid("invalid opaque live reference");
+      return obj.type === "ref-click" ? { type: "ref-click", ref } : { type: "ref-fill", ref, value: text(obj.value, "fill value", L.MAX_TEXT_LENGTH, true) };
+    }
     case "causal-click": {
       keys(obj, ["type", "selector", "targets"], "causal click command");
       const selector = text(obj.selector, "selector", L.MAX_SELECTOR_LENGTH);
@@ -114,6 +137,33 @@ export function parseCommand(value: unknown): AppCommand {
     }
     default: return invalid("unsupported command type");
   }
+}
+
+export function parseSemanticQuery(value: unknown): SemanticQuery {
+  const obj = record(value, "semantic query");
+  const literal = (raw: unknown, label: string): string => {
+    const input = text(raw, label, 256);
+    if ([...input].some(char => { const code = char.codePointAt(0)!; return code >= 0xd800 && code <= 0xdfff; })) invalid("query contains an unpaired surrogate");
+    const output = normalizeSemanticText(input);
+    if (!output || new TextEncoder().encode(output).byteLength > 1024) invalid("query text is empty or exceeds its UTF-8 bound");
+    const safe = sanitizeWithReport(output);
+    if (safe.redacted || safe.truncation) invalid("semantic queries cannot contain credentials");
+    return output;
+  };
+  if (obj.kind === "test-id") {
+    keys(obj, ["kind", "testId"], "test-id query");
+    return { kind: "test-id", testId: literal(obj.testId, "test id") };
+  }
+  const exact = Object.hasOwn(obj, "exact") ? bool(obj.exact, "query exact") : true;
+  if (obj.kind === "role") {
+    keys(obj, ["kind", "role", "name", "exact"], "role query");
+    const role = literal(obj.role, "role").toLowerCase();
+    if (!/^[a-z][a-z0-9-]{0,63}$/.test(role)) invalid("invalid semantic role");
+    return { kind: "role", role, exact, ...(Object.hasOwn(obj, "name") ? { name: literal(obj.name, "name") } : {}) };
+  }
+  if (obj.kind === "name") { keys(obj, ["kind", "name", "exact"], "name query"); return { kind: "name", name: literal(obj.name, "name"), exact }; }
+  if (obj.kind === "label") { keys(obj, ["kind", "label", "exact"], "label query"); return { kind: "label", label: literal(obj.label, "label"), exact }; }
+  return invalid("unsupported semantic query strategy");
 }
 
 export function parseRelativeTarget(raw: unknown): RelativeTarget {
@@ -146,6 +196,8 @@ export function parsePredicate(value: unknown): Predicate {
     if (depth > L.MAX_PREDICATE_DEPTH || ++nodes > L.MAX_PREDICATE_NODES) invalid("predicate exceeds its complexity limit");
     const obj = record(raw, "predicate");
     switch (obj.kind) {
+      case "performance":
+        try { return parsePerformancePredicate(obj); } catch { return invalid("unsupported or invalid numeric performance lab predicate"); }
       case "relative": {
         keys(obj, ["kind", "target", "relation", "equals"], "relative predicate");
         const target = parseRelativeTarget(obj.target);
@@ -165,6 +217,36 @@ export function parsePredicate(value: unknown): Predicate {
         return { kind: "network", urlContains: text(obj.urlContains, "urlContains", L.MAX_TEXT_LENGTH),
           ...(method === undefined ? {} : { method: method.toUpperCase() }),
           ...(Object.hasOwn(obj, "status") ? { status: integer(obj.status, "status", 100, 599) } : {}) };
+      }
+      case "business-response": {
+        keys(obj, ["kind", "urlContains", "method", "operationId", "operationPath", "path", "equals", "phase", "witness"], "business response predicate");
+        const path = (value: unknown, label: string): string => {
+          const result = text(value, label, 256, true);
+          const parts = result === "" ? [] : result.split(".");
+          if (parts.length > 16 || parts.some(part => !part || forbiddenKeys.has(part) || isSensitiveKey(part))) invalid("business paths cannot contain unsupported or credential-bearing segments");
+          return result;
+        };
+        if (!Object.hasOwn(obj, "equals")) invalid("business response requires equals");
+        size(obj.equals, BUSINESS_LIMITS.BODY_BYTES, "business expectation");
+        if (!["response", "acceptance", "final"].includes(String(obj.phase))) invalid("unsupported business contract phase");
+        const method = optionalString(obj, "method", 16);
+        if (method !== undefined && !/^[A-Za-z]+$/.test(method)) invalid("business method must contain only letters");
+        let witness;
+        if (Object.hasOwn(obj, "witness")) {
+          const w = record(obj.witness, "business witness");
+          if (w.kind !== "state" && w.kind !== "signal") invalid("business witness must be a declared state or signal");
+          keys(w, ["kind", w.kind === "state" ? "store" : "name", "operationPath", "path"], "business witness");
+          const identity = text(w.kind === "state" ? w.store : w.name, "witness identity", L.MAX_NAME_LENGTH);
+          if (isSensitiveKey(identity)) invalid("business witness cannot read credentials");
+          witness = { kind: w.kind, ...(w.kind === "state" ? { store: identity } : { name: identity }), operationPath: path(w.operationPath, "witness operation path"), path: path(w.path, "witness value path") } as import("./protocol").BusinessWitness;
+        }
+        const parsed = { kind: "business-response" as const, urlContains: text(obj.urlContains, "urlContains", L.MAX_TEXT_LENGTH),
+          ...(method === undefined ? {} : { method: method.toUpperCase() }), operationId: text(obj.operationId, "operation identity", L.MAX_NAME_LENGTH),
+          operationPath: path(obj.operationPath, "operation path"), path: path(obj.path, "business value path"), equals: obj.equals,
+          phase: obj.phase as "response" | "acceptance" | "final", ...(witness ? { witness } : {}) };
+        const safe = sanitizeWithReport(parsed);
+        if (safe.redacted || safe.truncation) invalid("business contracts cannot contain credentials or unavailable values");
+        return parsed;
       }
       case "console":
         keys(obj, ["kind", "level", "absent"], "console predicate");
@@ -219,10 +301,11 @@ export function parseFlowSteps(value: unknown): FlowStep[] {
   size(value, L.MAX_FRAME_BYTES, "flow steps");
   return value.map((raw) => {
     const obj = record(raw, "flow step");
-    keys(obj, ["command", "predicate"], "flow step");
+    keys(obj, ["command", "predicate", "anchor"], "flow step");
     const predicate = parsePredicate(obj.predicate);
     assertSafePredicate(predicate);
     const command = Object.hasOwn(obj, "command") ? parseCommand(obj.command) : undefined;
+    if (command && ["find", "semantic-snapshot", "semantic-tree", "ref-click", "ref-fill"].includes(command.type)) invalid("semantic discovery and live references cannot be saved in flows; refresh them in the current session");
     const targets = relativeTargets(predicate);
     if (targets.length && command?.type !== "click" && command?.type !== "causal-click") invalid("saved relative checks require an explicit click action");
     if (targets.length && command?.type === "causal-click"
@@ -232,7 +315,11 @@ export function parseFlowSteps(value: unknown): FlowStep[] {
     if (command?.type === "fill") invalid("saved flows cannot contain fill commands; use live fill so entered values are never persisted");
     if (command?.type === "state" && isSensitiveKey(command.store)) invalid("saved flows cannot read credential-bearing stores");
     if (command && "selector" in command && command.selector !== undefined) assertSafeSelector(command.selector);
-    const step = { ...(command === undefined ? {} : { command }), predicate };
+    const anchor = Object.hasOwn(obj, "anchor") ? parseFlowAnchor(obj.anchor) : undefined;
+    if (anchor && command?.type !== "click" && command?.type !== "causal-click") invalid("durable anchors require a saved click action");
+    if (anchor?.kind === "css" && command && "selector" in command && anchor.selector !== command.selector) invalid("CSS anchor must preserve the exact action selector");
+    if (anchor?.kind === "semantic" && targets.length) invalid("semantic anchors do not support CSS-addressed relative baselines; keep the CSS action");
+    const step = { ...(command === undefined ? {} : { command }), predicate, ...(anchor ? { anchor } : {}) };
     const sanitized = sanitizeWithReport(step);
     if (sanitized.redacted || sanitized.truncation) invalid("saved flow contains a secret or exceeds the safe persistence limits");
     return step;
@@ -248,12 +335,14 @@ export function parseCoverage(value: unknown): Coverage {
 }
 
 const eventFields: Record<string, string[]> = {
+  "network.body": ["requestId", "source", "state", "format", "bytes", "chunks", "body", "redacted"],
   "network.start": ["requestId", "url", "method", "initiator"],
   network: ["requestId", "url", "method", "status", "ok", "durationMs", "initiator", "error", "requestBody", "responseBody"],
   console: ["level", "message", "stack"], route: ["url"], signal: ["name", "data"],
   state: ["store", "value"], dom: ["selector", "count"],
   "observer.error": ["observer", "message"], "capture.loss": ["reason"], "action.boundary": [],
   "action.reading": ["phase", "target", "value", "available"],
+  "action.source": ["observation"],
 };
 function parseEvent(raw: unknown): Extract<BrowserMessage, { type: "event" }>["event"] {
   const obj = record(raw, "event");
@@ -262,7 +351,19 @@ function parseEvent(raw: unknown): Extract<BrowserMessage, { type: "event" }>["e
   if (!Object.hasOwn(eventFields, type)) invalid("unsupported event type");
   const data = record(obj.data, "event data");
   keys(data, eventFields[type], "event data");
-  if (type === "network.start" || type === "network") {
+  if (type === "network.body") {
+    text(data.requestId, "requestId", L.MAX_NAME_LENGTH);
+    if (data.source !== "sdk-reported") invalid("body source must be SDK-reported");
+    if (!["pending", "complete", "truncated", "timeout", "aborted", "opaque", "unsupported", "unavailable"].includes(String(data.state))) invalid("unsupported body lifecycle");
+    if (!["json", "sse", "ndjson", "none"].includes(String(data.format))) invalid("unsupported body format");
+    integer(data.bytes, "body bytes", 0, BUSINESS_LIMITS.RAW_BYTES);
+    integer(data.chunks, "body chunks", 0, BUSINESS_LIMITS.CHUNKS);
+    if (Object.hasOwn(data, "redacted")) bool(data.redacted, "body redaction");
+    if (data.state === "pending" && (data.bytes !== 0 || data.chunks !== 0 || Object.hasOwn(data, "body"))) invalid("pending body cannot claim retained content");
+    if (data.state !== "complete" && Object.hasOwn(data, "body")) invalid("incomplete body cannot retain partial content");
+    if (data.state === "complete" && (!Object.hasOwn(data, "body") || data.format === "none")) invalid("complete body requires structured content");
+    if (Object.hasOwn(data, "body")) size(data.body, BUSINESS_LIMITS.BODY_BYTES, "response body");
+  } else if (type === "network.start" || type === "network") {
     text(data.requestId, "requestId", L.MAX_NAME_LENGTH);
     text(data.url, "network URL", L.MAX_TEXT_LENGTH);
     text(data.method, "network method", 16);
@@ -291,7 +392,11 @@ function parseEvent(raw: unknown): Extract<BrowserMessage, { type: "event" }>["e
     if (!["network", "console", "dom", "state", "signal", "route"].includes(String(data.observer))) invalid("unsupported observer");
     text(data.message, "observer error", L.MAX_TEXT_LENGTH, true);
   } else if (type === "capture.loss") text(data.reason, "capture loss reason", L.MAX_TEXT_LENGTH);
-  else if (type === "action.reading") {
+  else if (type === "action.source") {
+    if (Object.hasOwn(obj, "truncated")) invalid("source context cannot claim a truncated pointer");
+    try { data.observation = parseControlSourceObservation(data.observation); }
+    catch { invalid("invalid control source context"); }
+  } else if (type === "action.reading") {
     if (data.phase !== "before" && data.phase !== "after") invalid("unsupported action reading phase");
     data.target = parseRelativeTarget(data.target);
     const available = bool(data.available, "reading available");
@@ -299,7 +404,7 @@ function parseEvent(raw: unknown): Extract<BrowserMessage, { type: "event" }>["e
     if (!available && Object.hasOwn(data, "value")) invalid("unavailable action readings cannot claim a value");
   }
   const actionId = optionalString(obj, "actionId", L.MAX_NAME_LENGTH);
-  if (["action.boundary", "action.reading"].includes(type) && actionId === undefined) invalid("action capture requires actionId");
+  if (["action.boundary", "action.reading", "action.source"].includes(type) && actionId === undefined) invalid("action capture requires actionId");
   size(obj, L.MAX_EVENT_BYTES, "event");
   return { type, data, ...(actionId === undefined ? {} : { actionId }),
     ...(Object.hasOwn(obj, "truncated") ? { truncated: bool(obj.truncated, "truncated") } : {}) };
@@ -310,9 +415,34 @@ export function parseBrowserMessage(value: unknown): BrowserMessage {
   const obj = record(value, "browser message");
   switch (obj.type) {
     case "hello": {
+      if (obj.version === TREE_PROTOCOL_VERSION) {
+        keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello message");
+        if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 5 || !obj.capabilities.includes(TREE_CAPABILITY)
+          || new Set(obj.capabilities).size !== obj.capabilities.length || obj.capabilities.some(entry => ![CAUSAL_CAPABILITY, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, TREE_CAPABILITY, BUSINESS_CAPABILITY].includes(entry))) invalid("unsupported or duplicate tree capabilities");
+        return { type: "hello", version: TREE_PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
+      }
+      if (obj.version === PERFORMANCE_PROTOCOL_VERSION) {
+        keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello");
+        if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 6 || !obj.capabilities.includes(PERFORMANCE_CAPABILITY)
+          || new Set(obj.capabilities).size !== obj.capabilities.length || obj.capabilities.some(entry => ![CAUSAL_CAPABILITY, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, TREE_CAPABILITY, PERFORMANCE_CAPABILITY, BUSINESS_CAPABILITY].includes(entry))) invalid("unsupported or duplicate performance capabilities");
+        return { type: "hello", version: PERFORMANCE_PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
+      }
+      // Version 4 is shared by source and response evidence; each stays explicitly opt-in.
+      if (obj.version === SOURCE_PROTOCOL_VERSION) {
+        keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello");
+        if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 4 || (!obj.capabilities.includes(SOURCE_CAPABILITY) && !obj.capabilities.includes(BUSINESS_CAPABILITY))
+          || new Set(obj.capabilities).size !== obj.capabilities.length || obj.capabilities.some(entry => ![CAUSAL_CAPABILITY, SEMANTIC_CAPABILITY, SOURCE_CAPABILITY, BUSINESS_CAPABILITY].includes(entry))) invalid("unsupported or duplicate version 4 capabilities");
+        return { type: "hello", version: SOURCE_PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
+      }
       if (obj.version === PROTOCOL_VERSION) {
         keys(obj, ["type", "version", "token", "coverage"], "hello");
         return { type: "hello", version: PROTOCOL_VERSION, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage) };
+      }
+      if (obj.version === SEMANTIC_PROTOCOL_VERSION) {
+        keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello");
+        if (!Array.isArray(obj.capabilities) || obj.capabilities.length > 2 || new Set(obj.capabilities).size !== obj.capabilities.length
+          || obj.capabilities.some((entry) => entry !== CAUSAL_CAPABILITY && entry !== SEMANTIC_CAPABILITY)) invalid("unsupported or duplicate verification capabilities");
+        return { type: "hello", version: obj.version, token: text(obj.token, "token", 512), coverage: parseCoverage(obj.coverage), capabilities: obj.capabilities as VerificationCapability[] };
       }
       if (obj.version !== CAUSAL_PROTOCOL_VERSION) invalid("unsupported verification protocol version");
       keys(obj, ["type", "version", "token", "coverage", "capabilities"], "hello");

@@ -187,9 +187,26 @@ test("release audit: mobile route headings clear the sidebar trigger", async ({ 
     });
     expect(sidebarToggleBox, `${route.path} sidebar trigger should render`).not.toBeNull();
     expect(routeLabelBox.width, `${route.path} label should render`).toBeGreaterThan(0);
-    expect(routeLabelBox.x, `${route.path} label should clear the sidebar trigger`).toBeGreaterThanOrEqual(
-      sidebarToggleBox!.x + sidebarToggleBox!.width + 4,
-    );
+    const trigger = sidebarToggleBox!;
+    const clear = routeLabelBox.x >= trigger.x + trigger.width + 4 ||
+      routeLabelBox.x + routeLabelBox.width + 4 <= trigger.x ||
+      routeLabelBox.y >= trigger.y + trigger.height + 4 ||
+      routeLabelBox.y + routeLabelBox.height + 4 <= trigger.y;
+    expect(clear, `${route.path} label should clear the sidebar trigger on its actual row`).toBe(true);
+    expect(routeLabelBox.x).toBeGreaterThanOrEqual(0);
+    expect(routeLabelBox.x + routeLabelBox.width).toBeLessThanOrEqual(390);
+    expect(routeLabelBox.y).toBeGreaterThanOrEqual(0);
+    expect(routeLabelBox.y + routeLabelBox.height).toBeLessThanOrEqual(844);
+    for (const [name, locator] of [["label", routeLabel], ["trigger", sidebarToggle]] as const) {
+      const unobscured = await locator.evaluate(element => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const rect = element instanceof HTMLButtonElement ? element.getBoundingClientRect() : range.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+        return hit !== null && (hit === element || element.contains(hit));
+      });
+      expect(unobscured, `${route.path} ${name} should be unobscured and reachable`).toBe(true);
+    }
   }
 });
 
@@ -318,7 +335,7 @@ test("release audit: replay reports actionable setup state through SSE", async (
   expect(body).toContain("/setup-agent-replay");
 });
 
-test("release audit: settings tabs, secrets, agents, and 320px reflow work end to end", async ({ page, runPhantom }) => {
+test("release audit: settings tabs, secrets, agents, and 320px reflow work end to end", async ({ page, runPhantom }, testInfo) => {
   await page.setViewportSize({ width: 320, height: 720 });
   await page.goto(`${runPhantom.url}/settings`);
 
@@ -359,6 +376,43 @@ test("release audit: settings tabs, secrets, agents, and 320px reflow work end t
     document: document.documentElement.scrollWidth,
   }));
   expect(widths.document).toBe(widths.viewport);
+
+  const [secretsResponse] = await Promise.all([
+    page.waitForResponse(response => response.url() === `${runPhantom.url}/api/secrets` && response.request().method() === "GET"),
+    keysTab.click(),
+  ]);
+  expect(secretsResponse.status()).toBe(200);
+  expect(await secretsResponse.json()).toMatchObject({ keys: { openai: { configured: false, source: null, stored: false } } });
+  const openAiUsage = keysPanel.getByText("Used for Ask Agent and chat when those features call OpenAI.", { exact: true });
+  const oldOpenAiUsage = keysPanel.getByText("Used for Ask Agent and demo chat when those features call OpenAI.", { exact: true });
+  for (const { width, height, name } of [
+    { width: 320, height: 720, name: "320px" },
+    { width: 1440, height: 1000, name: "desktop" },
+  ]) {
+    await page.setViewportSize({ width, height });
+    await expect(keysTab).toHaveAttribute("aria-selected", "true");
+    await expect(openAiKey).toHaveValue("");
+    await expect(keysPanel.getByText("saved", { exact: true })).toHaveCount(0);
+    await expect(keysPanel.getByText("from env", { exact: true })).toHaveCount(0);
+    await expect(openAiUsage).toBeVisible();
+    await expect(oldOpenAiUsage).toHaveCount(0);
+    await openAiUsage.scrollIntoViewIfNeeded();
+    const keyPanelWidths = await page.evaluate(() => ({
+      viewport: window.innerWidth,
+      document: document.documentElement.scrollWidth,
+    }));
+    expect(keyPanelWidths.document).toBe(keyPanelWidths.viewport);
+    const textBounds = await openAiUsage.evaluate(element => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const bounds = range.getBoundingClientRect();
+      return { x: bounds.x, width: bounds.width, viewport: window.innerWidth };
+    });
+    expect(textBounds.width).toBeGreaterThan(0);
+    expect(textBounds.x).toBeGreaterThanOrEqual(0);
+    expect(textBounds.x + textBounds.width).toBeLessThanOrEqual(textBounds.viewport);
+    await page.screenshot({ path: testInfo.outputPath(`settings-openai-unconfigured-${name}.png`) });
+  }
 });
 
 test("release audit: Run Phantom renders a high-contrast daylight identity", async ({ page, runPhantom }) => {

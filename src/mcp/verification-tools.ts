@@ -2,21 +2,36 @@ import { ErrorCode, McpError, type Tool } from "@modelcontextprotocol/sdk/types.
 import { parseCommand, parseFlowSteps, parsePredicate } from "../verification/validation";
 
 const text = { type: "string", minLength: 1 };
+const queryText = { ...text, maxLength: 256 };
+const refText = { type: "string", pattern: "^rpref_[0-9a-f]{32}$" };
+const querySchema = { oneOf: [
+  { type: "object", required: ["kind", "role"], properties: { kind: { const: "role" }, role: queryText, name: queryText, exact: { type: "boolean", default: true } }, additionalProperties: false },
+  { type: "object", required: ["kind", "name"], properties: { kind: { const: "name" }, name: queryText, exact: { type: "boolean", default: true } }, additionalProperties: false },
+  { type: "object", required: ["kind", "label"], properties: { kind: { const: "label" }, label: queryText, exact: { type: "boolean", default: true } }, additionalProperties: false },
+  { type: "object", required: ["kind", "testId"], properties: { kind: { const: "test-id" }, testId: queryText }, additionalProperties: false },
+] };
 const targetSchema = { oneOf: [
   { type: "object", required: ["kind", "selector"], properties: { kind: { const: "element" }, selector: text }, additionalProperties: false },
   { type: "object", required: ["kind", "store", "path"], properties: { kind: { const: "state" }, store: text, path: { type: "string" } }, additionalProperties: false },
 ] };
 const commandSchema = {
   oneOf: [
+    { type: "object", required: ["type", "phase"], properties: { type: { const: "performance" }, phase: { enum: ["begin", "capture"] } }, additionalProperties: false },
     { type: "object", required: ["type"], properties: { type: { const: "snapshot" }, selector: text }, additionalProperties: false },
     { type: "object", required: ["type", "selector"], properties: { type: { const: "click" }, selector: text }, additionalProperties: false },
     { type: "object", required: ["type", "selector", "value"], properties: { type: { const: "fill" }, selector: text, value: { type: "string" } }, additionalProperties: false },
     { type: "object", required: ["type", "store"], properties: { type: { const: "state" }, store: text }, additionalProperties: false },
     { type: "object", required: ["type", "selector", "targets"], properties: { type: { const: "causal-click" }, selector: text, targets: { type: "array", minItems: 1, maxItems: 20, items: { $ref: "#/$defs/target" } } }, additionalProperties: false },
+    { type: "object", required: ["type", "query"], properties: { type: { const: "find" }, query: { $ref: "#/$defs/query" } }, additionalProperties: false },
+    { type: "object", required: ["type"], properties: { type: { const: "semantic-snapshot" } }, additionalProperties: false },
+    { type: "object", required: ["type"], properties: { type: { const: "semantic-tree" } }, additionalProperties: false },
+    { type: "object", required: ["type", "ref"], properties: { type: { const: "ref-click" }, ref: refText }, additionalProperties: false },
+    { type: "object", required: ["type", "ref", "value"], properties: { type: { const: "ref-fill" }, ref: refText, value: { type: "string" } }, additionalProperties: false },
   ],
 };
 const predicateSchema = {
   oneOf: [
+    ...[["clsMaxSessionScore", "longFrameBlockingMaxMs"], ["resourceCount", "resourceTransferBytes"]].map((metrics, index) => ({ type: "object", required: ["kind", "metric", "op", "value"], properties: { kind: { const: "performance" }, metric: { enum: metrics }, op: { enum: ["lte", "gte"] }, value: { type: index === 0 ? "number" : "integer", minimum: 0, ...(index === 1 ? { maximum: Number.MAX_SAFE_INTEGER } : {}) } }, additionalProperties: false })),
     { type: "object", required: ["kind", "urlContains"], properties: { kind: { const: "network" }, urlContains: text, method: text, status: { type: "integer", minimum: 100, maximum: 599 } }, additionalProperties: false },
     { type: "object", required: ["kind", "level", "absent"], properties: { kind: { const: "console" }, level: { enum: ["error", "warn"] }, absent: { type: "boolean" } }, additionalProperties: false },
     { type: "object", required: ["kind", "name"], properties: { kind: { const: "signal" }, name: text }, additionalProperties: false },
@@ -28,7 +43,7 @@ const predicateSchema = {
   ],
 };
 const cursor = { type: "integer", minimum: 0, description: "Exclusive observation cursor returned by app_observe or app_act; events at this cursor are excluded." };
-const definitions = { command: commandSchema, predicate: predicateSchema, target: targetSchema };
+const definitions = { command: commandSchema, predicate: predicateSchema, target: targetSchema, query: querySchema };
 
 export const VERIFICATION_TOOLS: Tool[] = [
   {
@@ -43,12 +58,12 @@ export const VERIFICATION_TOOLS: Tool[] = [
   },
   {
     name: "app_act",
-    description: "Issue one explicit snapshot, click, fill, registered-store read, or opt-in causal-click to a connected app. Causal-click requires negotiated causal-readings support and captures declared state paths or DOM counts in the same synchronous SDK turn; unsupported runtimes refuse before executing. Source is SDK-reported, not trusted browser execution. Capture the returned cursor and use app_assert. Live fill values are not persisted or saved in flows.",
+    description: "Issue an explicit app command. Find by literal role/name/label/test-id or take a semantic-snapshot, then use an exact live ref-click/ref-fill. Semantic references require semantic-refs; refs expire after 60 seconds and never survive document replacement or disconnect. semantic-tree requires the separately negotiated tree capability and returns a bounded projected observation without issuing handles or saving a verdict. Names approximate part of ARIA; bounded results declare observable scope and incomplete coverage. Ambiguous discovery never selects a unique ref. Semantic refs and all filled values are live-only. Existing snapshot/click/fill/state and opt-in causal-click remain supported. Performance begin/capture requires explicit performance-evidence SDK opt-in; it reads bounded native lab samples, never INP or causal improvement. Causal-click captures declared synchronous readings. Source is SDK-reported, not trusted browser execution. Capture the returned cursor and use app_assert for supported checks.",
     inputSchema: { type: "object", required: ["sessionId", "command"], properties: { sessionId: text, command: { $ref: "#/$defs/command" } }, $defs: definitions, additionalProperties: false },
   },
   {
     name: "app_assert",
-    description: "Evaluate and persist a run-linked pass/fail/inconclusive report. Supports network, console, signal, current state/DOM, nested allOf/anyOf, and opt-in relative changed/increased/decreased/becomes against a matching causal-click target and returned cursor. Relative checks require captured pre/action/post readings; already-true expectations or later background changes cannot prove the click. SDK-reported synchronous transitions do not prove asynchronous business completion. Saved context includes expectations, readings, coverage and bounded quiet facts, with redaction/truncation marked.",
+    description: "Evaluate and persist a run-linked pass/fail/inconclusive report. Supports network, console, signal, current state/DOM, nested allOf/anyOf, and opt-in relative changed/increased/decreased/becomes against a matching causal-click target and returned cursor. Performance lte/gte compares one closed native lab metric after a matching begin: CLS session maximum, native long-frame blocking maximum, completed resource count or transfer bytes. Unknown/lost/malformed native populations are inconclusive; document and interaction metrics are display-only. Relative checks require captured pre/action/post readings; already-true expectations or later background changes cannot prove the click. SDK-reported synchronous transitions do not prove asynchronous business completion. Saved context includes expectations, readings, coverage and bounded quiet facts, with redaction/truncation marked.",
     inputSchema: { type: "object", required: ["sessionId", "predicate"], properties: { sessionId: text, predicate: { $ref: "#/$defs/predicate" }, since: cursor, name: text }, $defs: definitions, additionalProperties: false },
   },
   {
