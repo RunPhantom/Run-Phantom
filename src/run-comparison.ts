@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { deriveCapturedAgentDefinitions } from "./agent-definitions";
 import { outputCompletionEvidence } from "./spans/completion";
 import { COMPARISON_FIELDS, RUN_COMPARISON_LIMITS as L, type ComparisonField, type ComparisonFieldName, type ComparisonRow,
   type ComparisonRowState, type ComparisonSpanLink, type ComparisonValue, type RunComparison, type CapturedComparisonSpan, type CapturedComparisonRun } from "./run-comparison-protocol";
@@ -9,7 +10,7 @@ export class RunComparisonError extends Error {
   constructor(message: string, public readonly code = "invalid_comparison", public readonly status = 400) { super(message); }
 }
 interface Options { baseline: string; candidate: string; offset: number; limit: number }
-const SPAN_TEXT = ["id", "run_id", "parent_span_id", "name", "span_type", "status", "input_payload", "output_payload", "model", "provider", "attributes"] as const;
+const SPAN_TEXT = ["id", "run_id", "parent_span_id", "name", "span_type", "status", "input_payload", "output_payload", "model", "provider", "attributes", "otlp_evidence"] as const;
 const RUN_TEXT = ["id", "name", "display_name", "event_name"];
 const NUMBERS = ["start_time_ms", "end_time_ms", "duration_ms", "input_tokens", "output_tokens"];
 const UNAVAILABLE = /\[(?:REDACTED|TRUNCATED|UNSERIALIZABLE|CIRCULAR|UNAVAILABLE|COMPACTED)\]|__REDACTED__/i;
@@ -68,7 +69,7 @@ export function getRunComparison(client: Database, query: unknown): RunCompariso
     }
     const acquire = (id: string): CapturedComparisonRun => {
       const run = client.prepare("SELECT id, COALESCE(display_name, name, event_name) AS name FROM runs WHERE id = ?").get(id) as { id: string; name: string | null };
-      const payloads = ["input_payload", "output_payload", "attributes"];
+      const payloads = ["input_payload", "output_payload", "attributes", "otlp_evidence"];
       const fields = SPAN_TEXT.map(field => payloads.includes(field)
         ? `CASE WHEN length(CAST(${field} AS BLOB)) <= ${L.fieldBytes} THEN ${field} ELSE NULL END AS ${field}` : field);
       const flags = payloads.map(field => `COALESCE(length(CAST(${field} AS BLOB)) > ${L.fieldBytes}, 0) AS ${field === "input_payload" ? "input" : field === "output_payload" ? "output" : field}_oversized`);
@@ -257,6 +258,8 @@ export function compareCapturedRuns(baseline: CapturedComparisonRun, candidate: 
   const result: RunComparison = { format: "runphantom-run-comparison/v1", baseline: summary(baseline, completeA), candidate: summary(candidate, completeB), counts,
     rows: [], totalRows: aligned.length, offset, nextOffset: offset + limit < aligned.length ? offset + limit : null,
     warnings: ["Structural correspondence and exact captured text differences do not establish workflow identity or root cause."], equality: "exact captured text" };
+  const baselineDefinitions = deriveCapturedAgentDefinitions(baseline.spans), candidateDefinitions = deriveCapturedAgentDefinitions(candidate.spans);
+  if (baselineDefinitions || candidateDefinitions) result.agentDefinitions = { baseline: baselineDefinitions ?? null, candidate: candidateDefinitions ?? null };
   if (!completeA || !completeB) result.warnings.push("At least one captured run is incomplete. Missing observations cannot establish that an action did not occur.");
   if (counts.ambiguous) result.warnings.push("Ambiguous groups include their unresolved descendants; those spans are not counted as paired, added, or removed.");
   if (counts.unavailableFields) result.warnings.push("Missing, incomplete, oversized, or redacted fields remain unavailable. Unchanged counts require every compared field to be available.");

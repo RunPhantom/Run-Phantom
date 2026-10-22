@@ -155,6 +155,9 @@ Replay does not restore arbitrary process checkpoints.
 For a connected web application, the **Verification** workspace can also check
 explicit browser outcomes and retain the resulting evidence. See the
 [application verification guide](./src/verification/README.md).
+React applications can opt into bounded control source context, retained before
+dispatch and shown with saved checks. The optional development source adapter
+supports React DOM JSX while keeping source context separate from the verdict.
 
 <details>
 <summary><strong>Trace search and import behavior</strong></summary>
@@ -339,6 +342,7 @@ and verification requirements.
 | [Replay setup](./skills/setup-agent-replay/SKILL.md) | Project-owned replay endpoints and configuration. |
 | [Application verification](./src/verification/README.md) | Connected browser sessions, outcomes, and saved flows. |
 | [Regression evaluations](./src/evaluations/README.md) | Datasets, frozen evidence, grading, reports, and repeated trials. |
+| [Captured definition versions](./src/agent-definitions.md) | Exact prompt/configuration hashes, partial capture, private projections and frozen report provenance. |
 | [Shared team service](./src/team/README.md) | Accounts, project roles, ingestion, deployment, and operational limits. |
 | [Environment reference](./.env.example) | Local configuration and optional provider features. |
 | [Research and source audit](./RESEARCH.md) | Inspected architecture references and the limits of the comparison evidence. |

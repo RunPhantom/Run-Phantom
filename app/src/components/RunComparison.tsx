@@ -4,10 +4,58 @@ import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { apiJson } from "../api/request";
 import { C } from "../utils/colors";
 import type { ComparisonField, ComparisonFieldName, ComparisonRow, ComparisonSpanLink, ComparisonValue, RunComparison as Comparison } from "../../../src/run-comparison-protocol";
+import { DEFINITION_COMPONENTS, type CapturedAgentDefinition, type CapturedAgentDefinitions } from "../../../src/agent-definitions-protocol";
+import styles from "./RunComparison.module.css";
 
 const labels: Record<ComparisonFieldName, string> = { name: "Name", span_type: "Span kind", status: "Status", model: "Model", provider: "Provider",
   input_payload: "Input", output_payload: "Output", duration_ms: "Duration (ms)", input_tokens: "Input tokens", output_tokens: "Output tokens" };
 const buttonClass = "min-h-8 rounded border px-2.5 text-xs transition-colors hover:bg-[color:var(--rp-ink-wash)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2";
+const componentLabels = { prompt: "Prompt", tools: "Tools", model: "Model", providers: "Providers", runtime: "Runtime" };
+const reasonLabels: Record<CapturedAgentDefinition["reasons"][number], string> = { capture_missing: "Capture missing", capture_unavailable: "Capture unavailable", capture_ambiguous: "Capture ambiguous", capture_invalid: "Capture invalid", capture_partial: "Capture partial", capture_redacted: "Capture redacted", capture_oversized: "Capture oversized", source_receipt_missing: "Original source receipt unavailable", source_receipt_loss: "Original source receipt has loss", source_identity_unavailable: "Source span identity unavailable" };
+function DefinitionRecord({ record, side, runId }: { record: CapturedAgentDefinition; side: "baseline" | "candidate"; runId: string }) {
+  return <details className={styles.record} data-definition-record>
+    <summary className={styles.summary}><span className={record.complete ? styles.complete : styles.partial}>{record.complete ? "Complete capture" : "Partial capture"}</span>
+      <span className={styles.id}>{record.sourceSpanId ?? "Source unavailable"}</span></summary>
+    <div className={styles.body}>
+      <p>{record.provenance === "explicit-v1" ? "Explicit v1 capture" : "Legacy observed attributes"}</p>
+      <p className={styles.id}>{record.semanticVersion}</p>
+      <dl className={styles.hashes}>
+        <div><dt>Version</dt><dd><code data-definition-hash="version">{record.sha256 ?? "Unavailable"}</code></dd></div>
+        {DEFINITION_COMPONENTS.map(component => <div key={component}><dt>{componentLabels[component]}</dt><dd>
+          <code data-definition-hash={component}>{record.components[component].sha256 ?? `Unavailable · ${record.components[component].status}`}</code>
+        </dd></div>)}
+      </dl>
+      {record.reasons.length > 0 && <ul className={styles.reasons}>{record.reasons.map(reason => <li key={reason}>{reasonLabels[reason]}</li>)}</ul>}
+      {record.sourceSpanId && <a className={styles.source} target="_blank" rel="noreferrer" aria-label={`Open ${side} definition source span in a new tab`}
+        href={`/runs/${encodeURIComponent(runId)}/span/${encodeURIComponent(record.sourceSpanId)}`}>Open captured span ↗</a>}
+    </div>
+  </details>;
+}
+function DefinitionSide({ records, side, runId }: { records: CapturedAgentDefinitions | null; side: "baseline" | "candidate"; runId: string }) {
+  return <article className={styles.side} data-definition-side={side}><h4>{side === "baseline" ? "Baseline" : "Candidate"}</h4>
+    {records?.records.length ? records.records.map((record, index) => <DefinitionRecord key={record.sourceSpanId ?? `unavailable-${index}`} record={record} side={side} runId={runId} />)
+      : <p className={styles.hint}>Definition capture unavailable</p>}
+    {!!records?.omittedRecords && <p className={styles.hint}>{records.omittedRecords} definition records omitted by the retained metadata limit.</p>}
+    {!!records?.unavailableAttributes && <p className={styles.hint}>{records.unavailableAttributes} span attribute captures unavailable.</p>}
+  </article>;
+}
+function Definitions({ comparison }: { comparison: Comparison }) {
+  const evidence = comparison.agentDefinitions;
+  if (!evidence) return null;
+  const a = evidence.baseline?.records, b = evidence.candidate?.records;
+  // A single complete configuration on each side can be compared. Multiple
+  // captured sources remain separate records; equal hashes do not pair runs.
+  const comparable = evidence.baseline?.complete && evidence.candidate?.complete && a?.length === 1 && b?.length === 1;
+  const changed = comparable ? DEFINITION_COMPONENTS.filter(key => a[0].components[key].sha256 !== b[0].components[key].sha256).map(key => componentLabels[key]) : [];
+  return <section className={styles.definitions} aria-label="Captured agent definitions">
+    <h3 className={styles.title}>Captured definitions</h3>
+    <p className={styles.hint}>Safe configuration hashes from captured span evidence. Partial captures retain unavailable versions.</p>
+    <p className={styles.result}>{comparable ? a[0].sha256 === b[0].sha256 ? "Same captured configuration" : "Captured configuration changed" : "Complete configuration comparison unavailable"}</p>
+    {changed.length > 0 && <p className={styles.hint}>Changed components: {changed.join(", ")}</p>}
+    <div className={styles.sides}><DefinitionSide records={evidence.baseline} side="baseline" runId={comparison.baseline.id} />
+      <DefinitionSide records={evidence.candidate} side="candidate" runId={comparison.candidate.id} /></div>
+  </section>;
+}
 function Evidence({ evidence }: { evidence: ComparisonValue }) {
   if (evidence.unavailable) return <span style={{ color: C.fg1 }}>Unavailable · {evidence.unavailable}</span>;
   return <><pre className="whitespace-pre-wrap break-all text-[11px] leading-relaxed">{String(evidence.value)}</pre>
@@ -91,6 +139,7 @@ export function RunComparison({ baselineRunId, candidateRunId }: { baselineRunId
         <p className="text-[11px]" style={{ color: C.fg1 }}>{current.data.counts.paired} paired spans · ambiguous spans: {current.data.counts.ambiguousBaselineSpans} baseline / {current.data.counts.ambiguousCandidateSpans} candidate · {current.data.counts.unavailableFields} unavailable field comparisons</p>
         <p className="text-[11px]" style={{ color: C.fg1 }}>Exact captured text comparison. Links open the original evidence in a new tab.</p>
         {current.data.warnings.map(warning => <p key={warning} className="text-[11px]" style={{ color: C.fg1 }}>{warning}</p>)}
+        <Definitions comparison={current.data} />
         {current.data.rows.length ? <div className="space-y-2">{current.data.rows.map(row => <Difference key={row.id} row={row} />)}</div>
           : <p className="text-xs">No comparison rows on this page. Empty evidence cannot establish equivalence.</p>}
         <div className="flex flex-wrap items-center gap-2 text-[11px]">

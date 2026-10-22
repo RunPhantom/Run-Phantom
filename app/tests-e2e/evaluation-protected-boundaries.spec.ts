@@ -41,7 +41,7 @@ test("protected evaluations: user sees missing graph/modality evidence and downl
   for (const experiment of [complete, incomplete, image]) {
     await page.getByRole("combobox", { name: "View experiment", exact: true }).selectOption(experiment.id);
     await expect(results.getByRole("article", { name: `Checkout result: ${experiment.verdict}`, exact: true })).toBeVisible();
-    await expect(results.getByText(new RegExp(`${experiment.summary.pass} / 1 cases passed`))).toBeVisible();
+    await expect(results.getByText(new RegExp(`${experiment.summary.pass} / 1 case passed`))).toBeVisible();
     const pending = page.waitForEvent("download");
     await results.getByRole("button", { name: "Download JSON report", exact: true }).click();
     const download = await pending, destination = testInfo.outputPath(`${experiment.id}.before.json`);
