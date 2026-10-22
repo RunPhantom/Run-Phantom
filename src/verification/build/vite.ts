@@ -1,5 +1,6 @@
 import ts from "typescript";
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { SOURCE_ATTRIBUTE, sourceFile } from "./source";
 
@@ -79,7 +80,10 @@ export function runPhantomSourceProvenance(options: SourceProvenanceOptions = {}
       const build = config.build ??= {}; const rollup = build.rollupOptions ??= {};
       rollup.output = Array.isArray(rollup.output) ? rollup.output.map(privateMap) : privateMap(rollup.output ?? {});
     },
-    configResolved(config: { root: string; command: "serve" | "build" }) { root = config.root; command = config.command; },
+    configResolved(config: { root: string; command: "serve" | "build"; resolve?: { preserveSymlinks?: boolean } }) {
+      // Match Vite's resolved module identity while honoring explicit symlink preservation.
+      root = config.resolve?.preserveSymlinks ? config.root : realpathSync.native(config.root); command = config.command;
+    },
     transform(code: string, id: string) { return transformSource(code, id, root, command, options); },
   };
 }
