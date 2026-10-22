@@ -1,6 +1,9 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { callVerificationTool, VERIFICATION_TOOLS } from "./verification-tools";
 import { callEvaluationTool, EVALUATION_TOOLS } from "./evaluation-tools";
+import { parseSearchFilter, SearchFilterError } from "../search-filter";
+import { callPermissionPromptTool, permissionPromptTools } from "./permission-prompt-tool";
+import { callBrowserTool, BROWSER_TOOLS } from "./browser-tools";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -15,6 +18,8 @@ import {
 } from "../agent-chat";
 
 const TOOLS = [
+  { name: "search_span_hits", description: "Search captured spans using literal text and closed typed predicates on the same occurrence. Returns separately bounded, redacted snippets and UTF16 highlights; absent or oversized complete fields are unavailable. At most50 hits per page. Follow the resource-bound nextCursor.", inputSchema: { type: "object", additionalProperties: false, properties: { q: {type:"string",maxLength:256}, model:{type:"string",maxLength:256},provider:{type:"string",maxLength:256},status:{type:"string",enum:["all","running","completed","failed"]},filter:{type:"object"},limit:{type:"integer",minimum:1,maximum:50},cursor:{type:"string",maxLength:4096} } } },
+  { name: "search_suggestions", description: "List at most20 captured local model, provider or valid tag suggestions for a literal prefix. Contains no payloads and makes no remote provider calls.", inputSchema: {type:"object",additionalProperties:false,required:["field"],properties:{field:{type:"string",enum:["model","provider","tag"]},prefix:{type:"string",maxLength:256},limit:{type:"integer",minimum:1,maximum:20}}} },
   {
     name: "search_runs",
     description: "Search all local run history with literal text across run metadata and span names, inputs and outputs. Returns bounded run summaries without payloads, newest started_at first. Text matching folds ASCII case and treats other Unicode literally. Filter model/provider exactly on the same span. Follow nextCursor while hasMore; refresh after runs change. Use get_run_outline or get_span_payload to inspect evidence.",
@@ -25,6 +30,21 @@ const TOOLS = [
         status: { type: "string", enum: ["all", "running", "completed", "failed"] },
         model: { type: "string", maxLength: 256 },
         provider: { type: "string", maxLength: 256 },
+        filter: {
+          type: "object", additionalProperties: false, required: ["version", "all"],
+          properties: {
+            version: { type: "integer", const: 1 },
+            all: { type: "array", maxItems: 12, items: {
+              type: "object", additionalProperties: false, required: ["field", "op", "value"],
+              properties: {
+                field: { type: "string", enum: ["status", "model", "provider", "duration_ms", "captured_cost_usd", "tag"] },
+                op: { type: "string", enum: ["eq", "ne", "lt", "lte", "gt", "gte"] },
+                value: { type: ["string", "number"] },
+              },
+            } },
+          },
+          description: "Bounded captured predicates. All span conditions, including legacy model/provider, match one span; unavailable metrics and tags never prove zero or absence.",
+        },
         limit: { type: "integer", minimum: 1, maximum: 100, description: "Page size, default 50." },
         cursor: { type: "string", maxLength: 4096, description: "Opaque nextCursor from the preceding page." },
       },
@@ -225,7 +245,7 @@ function textResult(body: unknown) {
 
 function currentAnnotationSource(): AgentAnnotationSource {
   const explicit = process.env.RUNPHANTOM_ANNOTATION_SOURCE;
-  if (explicit === "claude-code" || explicit === "codex") return explicit;
+  if (explicit === "claude-code" || explicit === "codex" || explicit === "opencode") return explicit;
   return agentAnnotationSource(parseAgentProvider(process.env.RUNPHANTOM_AGENT_PROVIDER) ?? getAgentProvider());
 }
 
@@ -321,18 +341,38 @@ export function registerTraceReadTools(
   backendUrl: string,
 ) {
   mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [...TOOLS, ...VERIFICATION_TOOLS, ...EVALUATION_TOOLS].map((t) => ({ ...t })),
+    tools: [...TOOLS, ...VERIFICATION_TOOLS, ...EVALUATION_TOOLS, ...BROWSER_TOOLS, ...permissionPromptTools()].map((t) => ({ ...t })),
   }));
 
   mcp.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
     const { name, arguments: args = {} } = req.params;
+    const permissionPromptResult = callPermissionPromptTool(name, args);
+    if (permissionPromptResult) return permissionPromptResult;
+    const browserResult = await callBrowserTool(name, args, backendUrl);
+    if (browserResult) return browserResult;
     const verificationResult = await callVerificationTool(name, args, backendUrl);
     if (verificationResult) return verificationResult;
     const evaluationResult = await callEvaluationTool(name, args, backendUrl);
     if (evaluationResult) return evaluationResult;
     switch (name) {
+      case "search_span_hits":
+      case "search_suggestions": {
+        const allowed = name === "search_span_hits" ? ["q","model","provider","status","filter","limit","cursor"] : ["field","prefix","limit"];
+        if(Object.keys(args).some(key=>!allowed.includes(key))) throw new McpError(ErrorCode.InvalidParams,"Search fields are invalid");
+        const params=new URLSearchParams();
+        for(const [key,value] of Object.entries(args)) {
+          if(key==="filter") {try {params.set(key,JSON.stringify(parseSearchFilter(value)));} catch {throw new McpError(ErrorCode.InvalidParams,"Typed filters are invalid");}}
+          else if(key==="limit") {const max=name==="search_span_hits"?50:20;if(typeof value!=="number"||!Number.isInteger(value)||value<1||value>max)throw new McpError(ErrorCode.InvalidParams,"Search page limit is invalid");params.set(key,String(value));}
+          else {if(typeof value!=="string")throw new McpError(ErrorCode.InvalidParams,"Search values must be strings");params.set(key,value);}
+        }
+        return textResult(await callBackend(backendUrl,`/api/runs/${name==="search_span_hits"?"search-hits":"search-suggestions"}?${params}`,extra.signal));
+      }
       case "search_runs": {
         const params = new URLSearchParams();
+        if (args.filter !== undefined) {
+          try { params.set("filter", JSON.stringify(parseSearchFilter(args.filter))); }
+          catch (error) { if (error instanceof SearchFilterError) throw new McpError(ErrorCode.InvalidParams, error.message); throw error; }
+        }
         for (const key of ["q", "status", "model", "provider", "cursor"] as const) {
           if (args[key] === undefined) continue;
           if (typeof args[key] !== "string") throw new McpError(ErrorCode.InvalidParams, `${key} must be a string`);

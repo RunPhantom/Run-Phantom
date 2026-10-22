@@ -1,13 +1,16 @@
 import { normalizeOtelId } from "./ids";
+import { inferSpanType, type CaptureVisibilityV1 } from "./spans/adapters/capture-visibility";
 import { normalizeSpan } from "./spans/normalize";
 import type { NormalizedSpan } from "./spans/normalized";
+import { isCapturedCategoricalTag } from "./captured-tags";
+import { SEARCH_FILTER_LIMITS } from "./search-protocol";
 import { captureOtlpEvidence, type OtlpEvidence } from "./spans/otlp-evidence";
 
 export interface ParsedSpan {
   traceId: string; spanId: string; parentSpanId?: string; name: string; spanType: string;
   status: string; inputPayload?: string; outputPayload?: string; startTimeMs: number;
   endTimeMs: number; durationMs: number; model?: string; provider?: string;
-  inputTokens?: number; outputTokens?: number; attributes: Record<string, string | number | boolean>;
+  inputTokens?: number; outputTokens?: number; attributes: Record<string, string | number | boolean | string[]>;
   eventId?: string; eventName?: string; userId?: string; convoId?: string;
   replayRunId?: string;
   otlpEvidence: OtlpEvidence;
@@ -17,6 +20,7 @@ export interface ParsedSpan {
    * fields without re-parsing `input_payload` strings. See `src/spans/`.
    */
   normalized: NormalizedSpan;
+  captureVisibility?: CaptureVisibilityV1;
 }
 
 /**
@@ -75,81 +79,43 @@ function getAttr(attrs: any[], key: string): string | number | boolean | undefin
 function collectAttrs(
   attrs: any[] | undefined,
   into: Record<string, string | number | boolean>,
+  unavailableTags = false,
 ): void {
   for (const a of attrs ?? []) {
     if (typeof a?.key !== "string") continue;
+    if (unavailableTags && a.key === "tags") { into.tags = "[UNAVAILABLE]"; continue; }
     const v = anyValue(a.value);
     if (v !== undefined) into[a.key] = v;
   }
 }
 
+// Only an explicit span tags array supplies complete membership evidence.
+// Other composites and legacy JSON strings retain their scalar representation.
+function capturedTags(attrs: any[], droppedAttributesCount: unknown): string[] | "[UNAVAILABLE]" | undefined {
+  let wire: any, occurrences = 0;
+  for (const attribute of attrs) if (attribute?.key === "tags") { occurrences++; wire = attribute.value; }
+  if (occurrences > 1) return "[UNAVAILABLE]";
+  if (!wire || typeof wire !== "object" || !Object.hasOwn(wire, "arrayValue")) return undefined;
+  if (droppedAttributesCount !== undefined && (typeof droppedAttributesCount !== "number"
+    || !Number.isSafeInteger(droppedAttributesCount) || droppedAttributesCount !== 0)) return "[UNAVAILABLE]";
+  if (Object.keys(wire).length !== 1 || !wire.arrayValue || typeof wire.arrayValue !== "object"
+    || Array.isArray(wire.arrayValue) || Object.keys(wire.arrayValue).some(key => key !== "values")) return "[UNAVAILABLE]";
+  const values = Object.hasOwn(wire.arrayValue, "values") ? wire.arrayValue.values : [];
+  if (!Array.isArray(values) || values.length > SEARCH_FILTER_LIMITS.tags) return "[UNAVAILABLE]";
+  const tags: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const tag = value?.stringValue;
+    if (!value || Object.keys(value).length !== 1 || !isCapturedCategoricalTag(tag) || seen.has(tag)) return "[UNAVAILABLE]";
+    seen.add(tag);
+    tags.push(tag);
+  }
+  return tags;
+}
+
 function first(attrs: any[], ...keys: string[]): string | number | boolean | undefined {
   for (const k of keys) { const v = getAttr(attrs, k); if (v !== undefined) return v; }
   return undefined;
-}
-
-function inferSpanType(
-  operationId?: string,
-  traceloopKind?: string,
-  hasToolName = false,
-  runPhantomSpanKind?: string,
-  attrs: Record<string, string | number | boolean> = {},
-): "LLM_GENERATION" | "TOOL_CALL" | "AGENT_ROOT" | "TRACE" | "INTERNAL" {
-  // Prefer an explicit Run Phantom role over operation-name heuristics.
-  if (runPhantomSpanKind === "agent_root") return "AGENT_ROOT";
-  if (runPhantomSpanKind === "trace") return "TRACE";
-  if (runPhantomSpanKind === "llm_call") return "LLM_GENERATION";
-  if (runPhantomSpanKind === "tool_call") return "TOOL_CALL";
-
-  // Fall back to provider-neutral and factual third-party conventions.
-  if (hasToolName) return "TOOL_CALL";
-  if (traceloopKind === "tool") return "TOOL_CALL";
-  if (traceloopKind === "llm") return "LLM_GENERATION";
-  switch (attrs["openinference.span.kind"]) {
-    case "LLM": return "LLM_GENERATION";
-    case "TOOL": return "TOOL_CALL";
-    case "AGENT": return "AGENT_ROOT";
-    case "CHAIN": return "TRACE";
-    case "EMBEDDING": case "RETRIEVER": case "RERANKER":
-    case "GUARDRAIL": case "EVALUATOR": case "PROMPT": return "INTERNAL";
-  }
-  if (attrs["gen_ai.operation.name"] === "execute_tool") return "TOOL_CALL";
-  if (attrs["gen_ai.operation.name"] === "invoke_agent") return "AGENT_ROOT";
-  if (attrs["gen_ai.operation.name"] === "invoke_workflow") return "TRACE";
-  if (isGenAiInferenceSpan(attrs)) return "LLM_GENERATION";
-  if (typeof attrs["lk.chat_ctx"] === "string") return "LLM_GENERATION";
-  if (typeof operationId === "string") {
-    if (operationId === "ai.toolCall") return "TOOL_CALL";
-    if (operationId === "chat" || operationId === "llm" || operationId === "generation" || operationId === "response") return "LLM_GENERATION";
-    if (operationId === "ConverseCommand" || operationId === "InvokeModelCommand") return "LLM_GENERATION";
-    if (operationId.includes("Stream") || operationId.includes("Generate") ||
-        operationId.includes("stream") || operationId.includes("generate")) return "LLM_GENERATION";
-  }
-  return "INTERNAL";
-}
-
-function isGenAiInferenceSpan(attrs: Record<string, string | number | boolean>): boolean {
-  const operationName = attrs["gen_ai.operation.name"];
-  if (
-    operationName === "chat" ||
-    operationName === "text_completion" ||
-    operationName === "generate_content"
-  ) {
-    return true;
-  }
-
-  // Legacy OpenLLMetry provider spans emitted this shape before the current
-  // OTel GenAI message attributes existed. Treat chat/completion calls as LLMs,
-  // but avoid broad `gen_ai.*` matching so embeddings/retrievals remain INTERNAL
-  // until Run Phantom supports them explicitly.
-  const requestType = attrs["llm.request.type"];
-  if (requestType === "chat" || requestType === "completion") return true;
-
-  return hasIndexedAttr(attrs, "gen_ai.prompt.") || hasIndexedAttr(attrs, "gen_ai.completion.");
-}
-
-function hasIndexedAttr(attrs: Record<string, string | number | boolean>, prefix: string): boolean {
-  return Object.keys(attrs).some((key) => key.startsWith(prefix));
 }
 
 function status(code: number | string | undefined): string {
@@ -227,13 +193,14 @@ function stripNul<T extends string | undefined>(value: T): T {
     : value) as T;
 }
 
-export function parseOtlpRequest(body: any): ParsedSpan[] {
+export function parseOtlpRequest(body: any, ambiguousTags?: WeakSet<object>): ParsedSpan[] {
   const spans: ParsedSpan[] = [];
   if (!body?.resourceSpans) return spans;
   for (const rs of body.resourceSpans) {
     for (const ss of rs.scopeSpans ?? []) {
       for (const s of ss.spans ?? []) {
         const attrs = s.attributes ?? [];
+        const tags = ambiguousTags?.has(s) ? "[UNAVAILABLE]" : capturedTags(attrs, s.droppedAttributesCount);
         // BigInt() throws SyntaxError on anything non-numeric, so a single bad
         // timestamp from one exporter used to abort the whole batch with a 500.
         // Yield NaN instead and let the ingest validator reject that span with a
@@ -253,7 +220,7 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
         if (typeof ss.scope?.version === "string" && ss.scope.version) {
           allAttrs["otel.scope.version"] = ss.scope.version;
         }
-        collectAttrs(attrs, allAttrs);
+        collectAttrs(attrs, allAttrs, tags === "[UNAVAILABLE]");
         for (const [k, v] of Object.entries(allAttrs)) {
           if (typeof v === "string") allAttrs[k] = stripNul(v);
         }
@@ -283,7 +250,9 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
         // Adapters know which attributes hold the canonical input/output payload
         // for their SDK and produce a typed `normalized` view in a single pass,
         // so downstream consumers don't need to coalesce or try/catch-and-guess.
+        const otlpEvidence = captureOtlpEvidence(s, rs, ss);
         const match = normalizeSpan({
+          traceId: normalizeOtelId(s.traceId, 16) ?? s.traceId, spanId: normalizeOtelId(s.spanId, 8) ?? s.spanId, otlpEvidence,
           spanName: name,
           attrs: allAttrs,
           spanType,
@@ -345,16 +314,22 @@ export function parseOtlpRequest(body: any): ParsedSpan[] {
             s.parentSpanId ??
             undefined,
           name, spanType,
-          status: status(s.status?.code),
+          // Imported observations do not acquire an ended-runtime guarantee from OTLP's UNSET default.
+          status: match.normalized.capture?.contract === "runphantom.codex-hook.observation/v1"
+            ? "UNSET"
+            : typeof allAttrs.captureContract === "string" && allAttrs.captureContract.startsWith("runphantom.cursor-hook.observation/")
+              ? status(s.status?.code) === "ERROR" ? "ERROR" : "UNSET"
+              : status(s.status?.code),
           inputPayload: stripNul(inputPayload), outputPayload: stripNul(outputPayload),
           startTimeMs: startMs, endTimeMs: endMs,
-          durationMs: numericAttr(getAttr(attrs, "traceloop.entity.duration_ms")) ?? (endMs - startMs),
+          durationMs: match.normalized.capture?.contract === "runphantom.codex-hook.observation/v1" ? 0 : numericAttr(getAttr(attrs, "traceloop.entity.duration_ms")) ?? (endMs - startMs),
           model, provider,
           inputTokens: typeof inputTokens === "number" ? inputTokens : undefined,
           outputTokens: typeof outputTokens === "number" ? outputTokens : undefined,
-          attributes: allAttrs,
+          attributes: tags === undefined ? allAttrs : { ...allAttrs, tags },
           eventId, eventName, userId, convoId, replayRunId,
-          otlpEvidence: captureOtlpEvidence(s, rs, ss),
+          otlpEvidence,
+          ...(match.captureVisibility ? { captureVisibility: match.captureVisibility } : {}),
           normalized: match.normalized,
         });
       }

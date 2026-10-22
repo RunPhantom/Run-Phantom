@@ -53,7 +53,7 @@ const savedAnnotationPreviewSchema = z.object({
   id: z.string(),
   kind: z.enum(["issue", "good", "note"]),
   note: z.string().nullable(),
-  source: z.enum(["user", "claude-code", "codex"]),
+  source: z.enum(["user", "claude-code", "codex", "opencode"]),
   span_id: z.string().nullable(),
   created_at: z.number(),
 });

@@ -1,6 +1,11 @@
 import { getCachedRun, getDrizzleDb, runInTransaction } from "./db";
 import { importAnnotations, parseImportedAnnotations, MAX_IMPORTED_ANNOTATIONS, type Annotation } from "./annotations";
 import { OTLP_EVIDENCE_LIMITS, validateOtlpEvidence } from "./spans/otlp-evidence";
+import { publicCaptureMetadata } from "./spans/adapters/capture-visibility";
+import { withholdAgentDefinitionCapture } from "./agent-definitions";
+import { guardSpanForExport } from "./guard-evidence";
+import { parseJsonEvidence } from "./evaluations/json-evidence";
+import { hasDuplicateJsonKeys } from "./json-keys";
 
 export const TRACE_FORMAT = "runphantom-trace/v1";
 export const TRACE_EVIDENCE_FORMAT = "runphantom-trace/v2";
@@ -81,7 +86,7 @@ function checkExportRows(runId: string, selections: readonly (readonly [string, 
   }
 }
 
-function exportCachedTrace(runId: string): CachedTrace | null {
+function exportCachedTrace(runId: string, publicProjection: boolean): CachedTrace | null {
   const client = getDrizzleDb().$client;
   const size = client.prepare("SELECT length(CAST(data AS BLOB)) AS bytes FROM saved_run_cache WHERE id = ?").get(runId) as { bytes: number } | null;
   if (!size) return null;
@@ -103,11 +108,19 @@ function exportCachedTrace(runId: string): CachedTrace | null {
     exportNotice: "Legacy saved trace: payloads reflect the cached view and may be compacted. Only annotations still present in this store are included.",
   };
   parseTrace(trace);
+  if (publicProjection) trace.spans = spans.map(span => publicCaptureMetadata(guardSpanForExport(withholdAgentDefinitionCapture(span))));
+  boundedJson(trace);
   return trace;
 }
 
 /** Prefer persisted raw evidence; identify saved-cache fallback as a cached view. */
 export function exportTrace(runId: string): ExportedTrace | null {
+  return retainedTrace(runId, true);
+}
+
+// Import equality uses the original admitted private fields. Public projection
+// cannot decide whether an identical private import would replace those rows.
+function retainedTrace(runId: string, publicProjection: boolean): ExportedTrace | null {
   return runInTransaction(() => {
     const client = getDrizzleDb().$client;
     const hasRun = client.prepare("SELECT 1 FROM runs WHERE id = ?").get(runId);
@@ -115,7 +128,7 @@ export function exportTrace(runId: string): ExportedTrace | null {
     // Match saved detail behavior, including a placeholder with no persisted
     // spans. Cache evidence remains explicitly labelled even when it includes v2.
     if (!hasRun || !hasSpans) {
-      const cached = exportCachedTrace(runId);
+      const cached = exportCachedTrace(runId, publicProjection);
       if (cached) return cached;
     }
     if (!hasRun) return null;
@@ -130,15 +143,18 @@ export function exportTrace(runId: string): ExportedTrace | null {
     const run = client.prepare(`SELECT ${RUN_COLUMNS.join(", ")} FROM runs WHERE id = ?`).get(runId) as Row;
     const withEvidence = Boolean(client.prepare("SELECT 1 FROM spans WHERE run_id = ? AND otlp_evidence IS NOT NULL LIMIT 1").get(runId));
     const spanColumns = withEvidence ? SPAN_EVIDENCE_COLUMNS : SPAN_COLUMNS;
+    const spans = client.prepare(`SELECT ${spanColumns.join(", ")} FROM spans WHERE run_id = ? ORDER BY start_time_ms, id`).all(runId) as Row[];
     const trace: PortableTrace = {
       format: withEvidence ? TRACE_EVIDENCE_FORMAT : TRACE_FORMAT,
       run,
-      spans: client.prepare(`SELECT ${spanColumns.join(", ")} FROM spans WHERE run_id = ? ORDER BY start_time_ms, id`).all(runId) as Row[],
+      spans,
       // Numeric live-event IDs belong to the exporting database, not the trace.
       liveEvents: client.prepare(`SELECT ${EVENT_COLUMNS.join(", ")} FROM live_events WHERE trace_id = ? ORDER BY timestamp, id`).all(runId) as Row[],
       annotations: client.prepare("SELECT id, run_id, span_id, kind, note, source, created_at FROM annotations WHERE run_id = ? ORDER BY created_at, id").all(runId) as Annotation[],
     };
     parseTrace(trace);
+    if (publicProjection) trace.spans = spans.map(span => publicCaptureMetadata(guardSpanForExport(withholdAgentDefinitionCapture(span))));
+    boundedJson(trace);
     return trace;
   });
 }
@@ -170,7 +186,11 @@ function parseTrace(value: unknown) {
       if (!has(span, "otlp_evidence")) invalid(`spans[${index}].otlp_evidence is required in v2`);
       if (span.otlp_evidence !== null) {
         if (typeof span.otlp_evidence !== "string" || Buffer.byteLength(span.otlp_evidence) > OTLP_EVIDENCE_LIMITS.bytes) invalid(`spans[${index}].otlp_evidence exceeds bounded evidence limits`);
-        try { validateOtlpEvidence(JSON.parse(span.otlp_evidence as string)); }
+        try {
+          const receipt = parseJsonEvidence(span.otlp_evidence);
+          if (hasDuplicateJsonKeys(span.otlp_evidence)) throw new TypeError("ambiguous receipt");
+          validateOtlpEvidence(receipt);
+        }
         catch { invalid(`spans[${index}].otlp_evidence is invalid or contains credentials`); }
       }
     } else if (span.otlp_evidence !== undefined && span.otlp_evidence !== null) invalid("OTLP evidence requires runphantom-trace/v2");
@@ -217,7 +237,7 @@ export function importTrace(value: unknown): { runId: string; spansImported: num
     restoredRun.last_updated_at = run.last_updated_at ?? existing?.last_updated_at ?? restoredRun.started_at;
     if (existing) {
       let captured: ExportedTrace | null = null;
-      try { captured = exportTrace(runId); } catch (error) {
+      try { captured = retainedTrace(runId, false); } catch (error) {
         if (!(error instanceof InvalidTraceImportError)) throw error;
       }
       const same = (left: Row, right: Row, columns: readonly string[]) => columns.every(field => left[field] === right[field]);
