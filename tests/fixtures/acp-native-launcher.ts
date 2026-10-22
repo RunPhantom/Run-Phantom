@@ -2,7 +2,6 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync, realpathSync, statSync, writeFileSync, lstatSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 export interface AcpCompilerClose { code: number | null; signal: NodeJS.Signals | null; }
 export interface AcpCompilerLaunch { child: ChildProcess; closed: Promise<AcpCompilerClose>; }
@@ -82,7 +81,7 @@ export function ownAcpCompiler(directory: string) {
 export function createNativeAcpFixture(directory: string) {
   const owner = ownAcpCompiler(directory);
   return { ...owner, get primaryError() { return owner.primaryError; }, async compile(bunExecutable: string): Promise<string> {
-    const source = path.dirname(fileURLToPath(import.meta.url));
+    const source = __dirname;
     const entry = path.join(directory, "controlled-entry.ts");
     const executable = path.join(directory, process.platform === "win32" ? "controlled acp.exe" : "controlled acp");
     await owner.run(() => {
