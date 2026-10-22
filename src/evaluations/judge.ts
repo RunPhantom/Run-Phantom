@@ -158,7 +158,10 @@ export async function evaluateRubric(
         const userData = JSON.stringify({ referenceInput: frozenCaseInput, candidateOutput: snapshot.output.value });
         const system = `${instructions}\n\nScoring rubric:\n${rule.rubric}`;
         const body = rule.provider === "openai" ? {
-          model: rule.model, max_tokens: 512, temperature: 0, response_format: { type: "json_object" },
+          model: rule.model,
+          ...(/^(?:gpt-[56](?:[.-]|$)|o[1-9](?:[.-]|$))/.test(rule.model)
+            ? { max_completion_tokens: 512 } : { max_tokens: 512, temperature: 0 }),
+          response_format: { type: "json_object" },
           messages: [{ role: "system", content: system }, { role: "user", content: userData }],
         } : {
           model: rule.model, max_tokens: 512, temperature: 0, system,

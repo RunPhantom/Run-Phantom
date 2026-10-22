@@ -50,10 +50,9 @@ export function captureOtlpEvidence(span: unknown, resourceSpans: unknown, scope
   const text = (value: unknown): string | null => {
     if (value === undefined || value === null) return null;
     if (typeof value !== "string") { capture.invalidValues++; return null; }
-    if (value.length > OTLP_EVIDENCE_LIMITS.text) { capture.truncatedValues++; return "[TRUNCATED]"; }
     const noNul = value.replace(/\0/g, "\uFFFD");
     if (noNul !== value) capture.invalidValues++;
-    const safe = redactText(noNul);
+    const safe = redactText(noNul, defaultIsSensitiveKey);
     if (safe !== noNul) capture.redactedValues++;
     if (safe.length > OTLP_EVIDENCE_LIMITS.text) { capture.truncatedValues++; return "[TRUNCATED]"; }
     return safe;
@@ -162,13 +161,13 @@ export function captureOtlpEvidence(span: unknown, resourceSpans: unknown, scope
     for (let i = 0; i < Math.min(links.length, OTLP_EVIDENCE_LIMITS.links); i++) {
       const link = own(links, String(i)), traceId = own(link, "traceId"), spanId = own(link, "spanId");
       if (typeof traceId !== "string" || typeof spanId !== "string" || !traceId.length || !spanId.length
-        || traceId.length > 1024 || spanId.length > 1024 || redactText(traceId) !== traceId || redactText(spanId) !== spanId) {
+        || traceId.length > 1024 || spanId.length > 1024 || redactText(traceId, defaultIsSensitiveKey) !== traceId || redactText(spanId, defaultIsSensitiveKey) !== spanId) {
         capture.invalidValues++; capture.droppedLinks++; continue;
       }
       const normalizedTraceId = normalizeOtelId(traceId, 16) ?? traceId, normalizedSpanId = normalizeOtelId(spanId, 8) ?? spanId;
       if (!normalizedTraceId.length || !normalizedSpanId.length || normalizedTraceId.length > 1024 || normalizedSpanId.length > 1024
         || normalizedTraceId.includes("\0") || normalizedSpanId.includes("\0")
-        || redactText(normalizedTraceId) !== normalizedTraceId || redactText(normalizedSpanId) !== normalizedSpanId) {
+        || redactText(normalizedTraceId, defaultIsSensitiveKey) !== normalizedTraceId || redactText(normalizedSpanId, defaultIsSensitiveKey) !== normalizedSpanId) {
         capture.invalidValues++; capture.droppedLinks++; continue;
       }
       evidence.links.push({ traceId: normalizedTraceId, spanId: normalizedSpanId,
@@ -200,7 +199,7 @@ export function validateOtlpEvidence(input: unknown): asserts input is OtlpEvide
   };
   const text = (value: unknown, nullable = false, maximum: number = OTLP_EVIDENCE_LIMITS.text) => {
     if (nullable && value === null) return;
-    if (typeof value !== "string" || value.length > maximum || value.includes("\0") || redactText(value) !== value) fail();
+    if (typeof value !== "string" || value.length > maximum || value.includes("\0") || redactText(value, defaultIsSensitiveKey) !== value) fail();
   };
   const count = (value: unknown, nullable = true) => { if ((!nullable || value !== null) && !uint32(value)) fail(); };
   const nanos = (value: unknown) => { if (value !== null && !decimal(value, false)) fail(); };

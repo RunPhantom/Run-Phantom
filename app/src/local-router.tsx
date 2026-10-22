@@ -17,6 +17,8 @@ import { NotFoundPage } from "./pages/NotFoundPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { VerificationPage } from "./pages/VerificationPage";
 import { EvaluationsPage } from "./pages/EvaluationsPage";
+import { ReviewQueuesRoute } from "./components/review-queues/ReviewQueuesRoute";
+import { PromptsPage } from "./pages/PromptsPage";
 import { RouteError } from "./components/RouteError";
 import { sendRunPhantomMessage, useRunPhantomConnectionStatus } from "./hooks/use-runphantom-ws";
 import { useAgentUiCommands } from "./hooks/use-agent-ui-commands";
@@ -81,7 +83,7 @@ function AppLayout() {
             </div>
           </header>
           <div
-            className={`flex min-h-0 flex-1 transition-opacity duration-200 ${showDisconnectedNotice ? "pointer-events-none select-none opacity-45" : ""}`}
+            className={`flex min-h-0 flex-1 transition-opacity duration-200 has-[[data-debug-launcher]]:pb-11 ${showDisconnectedNotice ? "pointer-events-none select-none opacity-45" : ""}`}
             aria-hidden={showDisconnectedNotice}
           >
             <div className="flex-1 min-w-0 overflow-auto">
@@ -141,6 +143,8 @@ export const localRoutes: RouteObject[] = [
       { path: "settings", element: <SettingsPage />, errorElement: <RouteError /> },
       { path: "verification", element: <VerificationPage />, errorElement: <RouteError /> },
       { path: "evaluations", element: <EvaluationsPage />, errorElement: <RouteError /> },
+      { path: "review-queues", element: <ReviewQueuesRoute />, errorElement: <RouteError /> },
+      { path: "prompts", element: <PromptsPage />, errorElement: <RouteError /> },
       { path: "*", element: <NotFoundPage />, errorElement: <RouteError /> },
     ],
   },
