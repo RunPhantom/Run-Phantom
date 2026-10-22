@@ -1,6 +1,11 @@
 import { Worker } from "node:worker_threads";
+import { acquireSearchCapacity, searchCapacity } from "./search-capacity";
+import { createHash } from "node:crypto";
+import { resolve as resolvePath } from "node:path";
 import { getDbPath } from "./db";
 import { runSearchWorker, type RunSearchWork } from "./run-search-worker";
+import { compileSearchFilter, parseSearchFilter, SearchFilterError, type SearchFilter } from "./search-filter";
+import { hasDuplicateJsonKeys } from "./json-keys";
 
 export const RUN_SEARCH_LIMITS = { queryChars: 256, pageSize: 100, responseBytes: 120_000, timeoutMs: 5_000, workers: 2 } as const;
 export type RunSearchStatus = "running" | "completed" | "failed";
@@ -23,8 +28,8 @@ export interface RunSearchSummary {
   live_event_count: number;
 }
 export interface RunSearchResult { runs: RunSearchSummary[]; nextCursor: string | null; hasMore: boolean; elapsedMs: number }
-interface SearchCursor { v: 1; startedAt: number; id: string }
-interface SearchInput { q: string; status?: RunSearchStatus; model: string; provider: string; limit: number; cursor?: SearchCursor }
+interface SearchCursor { v: 1 | 2; startedAt: number; id: string; key?: string }
+interface SearchInput { q: string; status?: RunSearchStatus; model: string; provider: string; limit: number; cursor?: SearchCursor; filter?: SearchFilter; cursorKey?: string }
 interface ExecutionOptions { signal?: AbortSignal; dbPath?: string; timeoutMs?: number; maxBytes?: number }
 
 export class RunSearchError extends Error {
@@ -32,7 +37,7 @@ export class RunSearchError extends Error {
 }
 const invalid = (message: string): never => { throw new RunSearchError(message, "invalid_search", 400); };
 
-function parseInput(value: unknown): SearchInput {
+function parseInput(value: unknown, dbPath: string): SearchInput {
   if (!value || typeof value !== "object" || Array.isArray(value)) return invalid("Search parameters must be an object");
   const input = value as Record<string, unknown>;
   const field = (key: string, max: number = RUN_SEARCH_LIMITS.queryChars): string => {
@@ -46,6 +51,19 @@ function parseInput(value: unknown): SearchInput {
   const provider = field("provider");
   const rawStatus = field("status");
   if (rawStatus && rawStatus !== "all" && !["running", "completed", "failed"].includes(rawStatus)) return invalid("status must be running, completed, failed, or all");
+  let filter: SearchFilter | undefined, cursorKey: string | undefined;
+  if (input.filter !== undefined) {
+    try {
+      const typed = parseSearchFilter(input.filter);
+      const legacy = [
+        ...(model ? [{ field: "model", op: "eq", value: model }] : []),
+        ...(provider ? [{ field: "provider", op: "eq", value: provider }] : []),
+        ...(rawStatus && rawStatus !== "all" ? [{ field: "status", op: "eq", value: rawStatus }] : []),
+      ];
+      filter = parseSearchFilter({ version: 1, all: [...typed.all, ...legacy] });
+      cursorKey = createHash("sha256").update(JSON.stringify([dbPath, "runs", q, filter])).digest("hex");
+    } catch (error) { if (error instanceof SearchFilterError) return invalid(error.message); throw error; }
+  }
   const rawLimit = input.limit === undefined ? 50 : input.limit;
   if ((typeof rawLimit !== "string" && typeof rawLimit !== "number") || rawLimit === "" || !Number.isInteger(Number(rawLimit)) || Number(rawLimit) < 1 || Number(rawLimit) > RUN_SEARCH_LIMITS.pageSize) return invalid("limit must be an integer from 1 to 100");
   const encoded = field("cursor", 4096);
@@ -56,13 +74,14 @@ function parseInput(value: unknown): SearchInput {
       const raw = Buffer.from(encoded, "base64url").toString("utf8");
       if (Buffer.from(raw).toString("base64url") !== encoded) throw new Error();
       const parsed: unknown = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || hasDuplicateJsonKeys(raw)) throw new Error();
       const c = parsed as Record<string, unknown>;
-      if (c.v !== 1 || typeof c.startedAt !== "number" || !Number.isFinite(c.startedAt) || typeof c.id !== "string" || !c.id || c.id.length > 1024 || c.id.includes("\0")) throw new Error();
-      cursor = { v: 1, startedAt: c.startedAt as number, id: c.id };
+      const keys = cursorKey ? ["v", "startedAt", "id", "key"] : ["v", "startedAt", "id"];
+      if (Object.keys(c).length !== keys.length || Object.keys(c).some(key => !keys.includes(key)) || c.v !== (cursorKey ? 2 : 1) || (cursorKey && c.key !== cursorKey) || typeof c.startedAt !== "number" || !Number.isFinite(c.startedAt) || typeof c.id !== "string" || !c.id || c.id.length > 1024 || c.id.includes("\0")) throw new Error();
+      cursor = { v: cursorKey ? 2 : 1, startedAt: c.startedAt as number, id: c.id, ...(cursorKey ? { key: cursorKey } : {}) };
     } catch { return invalid("Invalid search cursor; refresh the results"); }
   }
-  return { q, model, provider, status: rawStatus && rawStatus !== "all" ? rawStatus as RunSearchStatus : undefined, limit: Number(rawLimit), cursor };
+  return { q, model, provider, status: rawStatus && rawStatus !== "all" ? rawStatus as RunSearchStatus : undefined, limit: Number(rawLimit), cursor, filter, cursorKey };
 }
 
 function buildQuery(input: SearchInput): { sql: string; params: (string | number)[] } {
@@ -80,7 +99,10 @@ function buildQuery(input: SearchInput): { sql: string; params: (string | number
     const contains = (column: string) => { params.push(input.q); return `instr(lower(${column}), lower(?)) > 0`; };
     where.push(`(${runFields.map(contains).join(" OR ")} OR EXISTS (SELECT 1 FROM spans s WHERE s.run_id = r.id AND (${spanFields.map(contains).join(" OR ")})))`);
   }
-  if (input.model || input.provider) {
+  if (input.filter) {
+    const typed = compileSearchFilter(input.filter, "local");
+    where.push(typed.sql); params.push(...typed.params);
+  } else if (input.model || input.provider) {
     const match = [];
     if (input.model) { match.push("s.model = ?"); params.push(input.model); }
     if (input.provider) { match.push("s.provider = ?"); params.push(input.provider); }
@@ -88,9 +110,11 @@ function buildQuery(input: SearchInput): { sql: string; params: (string | number
   }
   const failed = "EXISTS (SELECT 1 FROM spans s WHERE s.run_id = r.id AND s.status = 'ERROR')";
   const finished = "(EXISTS (SELECT 1 FROM spans s WHERE s.run_id = r.id AND s.parent_span_id IS NULL) AND NOT EXISTS (SELECT 1 FROM spans s WHERE s.run_id = r.id AND s.parent_span_id IS NULL AND (s.status IS NULL OR s.status NOT IN ('OK', 'ERROR'))))";
-  if (input.status === "failed") where.push(failed);
-  if (input.status === "completed") where.push(`NOT ${failed} AND ${finished}`);
-  if (input.status === "running") where.push(`NOT ${failed} AND NOT ${finished}`);
+  if (!input.filter) {
+    if (input.status === "failed") where.push(failed);
+    if (input.status === "completed") where.push(`NOT ${failed} AND ${finished}`);
+    if (input.status === "running") where.push(`NOT ${failed} AND NOT ${finished}`);
+  }
   params.push(input.limit + 1);
   return {
     params,
@@ -109,28 +133,28 @@ function buildQuery(input: SearchInput): { sql: string; params: (string | number
   };
 }
 
-let activeWorkers = 0;
 
 /** Keyset pages are stable for a static store; refresh after new or updated runs.
  * Deadlines are checked between rows; an executing SQLite step may finish later.
  * Capacity stays occupied after callers leave until the read actually finishes. */
 export async function searchRuns(value: unknown = {}, options: ExecutionOptions = {}): Promise<RunSearchResult> {
-  const input = parseInput(value);
+  const dbPath = resolvePath(options.dbPath ?? getDbPath());
+  const input = parseInput(value, dbPath);
   if (options.signal?.aborted) throw new RunSearchError("Search cancelled", "cancelled", 499);
-  if (activeWorkers >= RUN_SEARCH_LIMITS.workers) throw new RunSearchError("Search is busy; retry shortly", "search_busy", 503);
+  const release = acquireSearchCapacity("local", RUN_SEARCH_LIMITS.workers);
+  if (!release) throw new RunSearchError("Search is busy; retry shortly", "search_busy", 503);
   const started = Date.now();
   const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(1, Math.min(RUN_SEARCH_LIMITS.timeoutMs, options.timeoutMs!)) : RUN_SEARCH_LIMITS.timeoutMs;
   const maxBytes = Number.isFinite(options.maxBytes) ? Math.max(1024, Math.min(RUN_SEARCH_LIMITS.responseBytes, options.maxBytes!)) : RUN_SEARCH_LIMITS.responseBytes;
   const cancellation = new SharedArrayBuffer(4);
-  const workerData: RunSearchWork = { ...buildQuery(input), dbPath: options.dbPath ?? getDbPath(), limit: input.limit, maxBytes, started, deadline: started + timeoutMs, cancellation };
-  activeWorkers++;
+  const workerData: RunSearchWork = { ...buildQuery(input), dbPath, cursorKey: input.cursorKey, limit: input.limit, maxBytes, started, deadline: started + timeoutMs, cancellation };
   let worker: Worker;
   try { worker = new Worker(`(${runSearchWorker.toString()})()`, { eval: true, workerData }); }
-  catch (error) { activeWorkers--; throw error; }
+  catch (error) { release(); throw error; }
   return new Promise<RunSearchResult>((resolve, reject) => {
     let settled = false;
-    let released = false;
-    const release = () => { if (!released) { released = true; activeWorkers--; } };
+    let response: { ok: boolean; result?: RunSearchResult; error?: string; code?: string } | undefined;
+    let workerError: Error | undefined;
     const settle = (error?: Error, result?: RunSearchResult) => {
       if (settled) return;
       settled = true;
@@ -142,13 +166,16 @@ export async function searchRuns(value: unknown = {}, options: ExecutionOptions 
     const timer = setTimeout(() => settle(new RunSearchError("Search timed out; narrow the query or filters", "timeout", 504)), timeoutMs);
     options.signal?.addEventListener("abort", abort, { once: true });
     worker.once("message", (message: { ok: boolean; result?: RunSearchResult; error?: string; code?: string }) => {
-      release();
-      settle(message.ok ? undefined : new RunSearchError(message.error ?? "Search failed", message.code ?? "query_failed", message.code === "timeout" ? 504 : 500), message.result);
+      response = message;
     });
-    worker.once("error", error => { settle(new RunSearchError(error.message, "worker_failed", 500)); });
-    worker.once("exit", () => { release(); settle(new RunSearchError("Search worker exited before completing", "worker_failed", 500)); });
+    worker.once("error", error => { workerError = new RunSearchError(error.message, "worker_failed", 500); });
+    worker.once("exit", () => {
+      release();
+      if (response) settle(response.ok ? undefined : new RunSearchError(response.error ?? "Search failed", response.code ?? "query_failed", response.code === "timeout" ? 504 : 500), response.result);
+      else settle(workerError ?? new RunSearchError("Search worker exited before completing", "worker_failed", 500));
+    });
     if (options.signal?.aborted) abort();
   });
 }
 
-export const _runSearchInternal = { activeWorkers: () => activeWorkers };
+export const _runSearchInternal = { activeWorkers: () => searchCapacity("local") };

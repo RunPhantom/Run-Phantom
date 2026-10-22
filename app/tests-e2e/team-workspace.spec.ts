@@ -16,6 +16,50 @@ message Value { string string_value=1; } message Attribute { string key=1; Value
 message Status { int32 code=3; } message Span { bytes trace_id=1; bytes span_id=2; string name=5; fixed64 start_time_unix_nano=7; fixed64 end_time_unix_nano=8; repeated Attribute attributes=9; Status status=15; }
 message ScopeSpans { repeated Span spans=2; } message ResourceSpans { repeated ScopeSpans scope_spans=2; } message Request { repeated ResourceSpans resource_spans=1; }`).root.lookupType("Request");
 
+test("typed Team search isolates suggestions and histories and discards revoked viewer hits without local fallback",async({page,browser,team})=>{
+  const project=await setup(page,team,"Typed search A"), prefix=`/projects/${project}`;
+  const other=await mutate<{id:string}>(page.request,team.url,"/projects",{name:"Typed search B"});
+  const capture=async(projectId:string,model:string)=>{
+    const key=await mutate<{token:string}>(page.request,team.url,`/projects/${projectId}/keys`,{label:"Synthetic search exporter"});
+    const attributes=[{key:"input.value",value:{stringValue:"scope-A literal%_東京"}},{key:"gen_ai.request.model",value:{stringValue:model}},{key:"gen_ai.provider.name",value:{stringValue:"synthetic-provider"}},{key:"gen_ai.usage.cost_usd",value:{doubleValue:0}},{key:"tags",value:{arrayValue:{values:[{stringValue:"東京%_"}]}}}];
+    expect((await page.request.post(team.url+"/api/team/ingest/v1/traces",{headers:{Authorization:`Bearer ${key.token}`},data:{resourceSpans:[{scopeSpans:[{spans:[{traceId:id(71),spanId:id(171).slice(-16),name:"Scoped typed capture",startTimeUnixNano:"1800000000000000000",endTimeUnixNano:"1800000000000000000",status:{code:1},attributes},{traceId:id(72),spanId:id(172).slice(-16),name:"Captured cost unavailable",startTimeUnixNano:"1800000000000000000",endTimeUnixNano:"1800000000000000000",status:{code:1},attributes:attributes.filter(a=>a.key!=="gen_ai.usage.cost_usd")}]}]}]}})).ok()).toBe(true);
+  };
+  await capture(project,"scope-model-A");await capture(other.id,"scope-model-B");
+  await page.goto(`${team.url}/team/projects/${project}/traces`);await page.getByRole("button",{name:"Advanced filters",exact:true}).click();
+  await page.getByLabel("Filter field",{exact:true}).selectOption("captured_cost_usd");await page.getByLabel("Filter value",{exact:true}).fill("0");await page.getByRole("button",{name:"Add filter",exact:true}).click();await expect(page.getByRole("status")).toContainText("1 trace loaded");
+  await page.getByLabel("Search traces",{exact:true}).fill("scope-A");await page.getByRole("button",{name:"Save search",exact:true}).click();
+  await expect(page.getByLabel("Recent searches",{exact:true})).toContainText("scope-A");
+  await page.goto(`${team.url}/team/projects/${other.id}/traces`);await page.getByRole("button",{name:"Advanced filters",exact:true}).click();
+  await expect(page.getByLabel("Recent searches",{exact:true})).not.toContainText("scope-A");await page.getByLabel("Filter value",{exact:true}).fill("scope");
+  await expect(page.locator('datalist option[value="scope-model-B"]')).toHaveCount(1);await expect(page.locator('datalist option[value="scope-model-A"]')).toHaveCount(0);
+  const invitation=await mutate<{token:string}>(page.request,team.url,`${prefix}/invites`,{email:"typed-viewer@example.test",role:"viewer"});
+  const context=await browser.newContext(), viewer=await context.newPage(), fallback:string[]=[];
+  viewer.on("request",request=>{const pathname=new URL(request.url()).pathname;if(pathname.startsWith("/api/")&&!pathname.startsWith("/api/team/"))fallback.push(pathname);});
+  let release=()=>{};
+  try {
+    await accept(viewer,team,invitation.token,"typed-viewer@example.test");await viewer.goto(`${team.url}/team/projects/${project}/traces`);
+    await viewer.getByRole("button",{name:"Advanced filters",exact:true}).click();await viewer.getByLabel("Search traces",{exact:true}).fill("scope-A");await viewer.getByLabel("Search result type",{exact:true}).selectOption("span-hits");
+    await viewer.getByLabel("Filter field",{exact:true}).selectOption("captured_cost_usd");await viewer.getByLabel("Filter value",{exact:true}).fill("0");await viewer.getByRole("button",{name:"Add filter",exact:true}).click();
+    await expect(viewer.locator("[data-span-hit]")).toHaveCount(1);await viewer.getByRole("button",{name:"Save search",exact:true}).click();await expect(viewer.getByLabel("Recent searches",{exact:true})).toContainText("scope-A");
+    mkdirSync(evidence,{recursive:true});await viewer.screenshot({path:path.join(evidence,"desktop-typed-private-spans.png"),fullPage:true});
+    let acquired=()=>{};const acquiredPromise=new Promise<void>(resolve=>{acquired=resolve;}), gate=new Promise<void>(resolve=>{release=resolve;});
+    await viewer.route(`**/api/team/projects/${project}/search-hits?*`,async route=>{const response=await route.fetch();acquired();await gate;try{await route.fulfill({response});}catch{}});
+    await viewer.getByLabel("Search traces",{exact:true}).fill("scope");await acquiredPromise;
+    const members=await (await page.request.get(`${team.url}/api/team${prefix}/members`)).json();const member=members.items.find((item:{user:{email:string}})=>item.user.email==="typed-viewer@example.test");
+    await mutate(page.request,team.url,`${prefix}/members/${member.user.id}`,undefined,"DELETE");
+    const denied=viewer.waitForResponse(response=>response.url().includes("/search-suggestions?")&&response.status()===404);
+    await viewer.getByLabel("Filter field",{exact:true}).selectOption("model");
+    await viewer.getByLabel("Filter value",{exact:true}).fill("scope-after-revoke");await denied;release();
+    await expect(viewer.getByRole("link",{name:"Return to projects",exact:true})).toBeVisible();await expect(viewer.locator("[data-span-hit]")).toHaveCount(0);await expect(viewer.getByText("No matching traces",{exact:true})).toHaveCount(0);
+    expect(await viewer.evaluate(()=>Object.keys(sessionStorage).filter(key=>key.startsWith("runphantom:search:team:")).length)).toBe(0);expect(fallback).toEqual([]);
+    mkdirSync(evidence,{recursive:true});await viewer.screenshot({path:path.join(evidence,"typed-search-revoked-viewer.png"),fullPage:true});
+  } finally {release();await context.close();}
+  await page.getByRole("button",{name:"Sign out",exact:true}).click();await expect(page.getByRole("button",{name:"Sign in",exact:true})).toBeVisible();expect(await page.evaluate(()=>Object.keys(sessionStorage).filter(key=>key.startsWith("runphantom:search:team:")).length)).toBe(0);
+  await page.getByLabel("Email",{exact:true}).fill("owner@example.test");await page.getByLabel("Password",{exact:true}).fill(password);await page.getByRole("button",{name:"Sign in",exact:true}).click();
+  await expect(page.getByRole("button",{name:"Sign out",exact:true})).toBeVisible();
+  await page.goto(`${team.url}/team/projects/${project}/traces`);await page.getByRole("button",{name:"Advanced filters",exact:true}).click();await expect(page.getByLabel("Recent searches",{exact:true}).locator("button")).toHaveCount(0);await expect(page.getByRole("status")).toContainText("2 traces loaded");
+});
+
 async function mutate<T>(request: APIRequestContext, url: string, endpoint: string, body?: unknown, method = "POST"): Promise<T> {
   const session = await (await request.get(`${url}/api/team/session`)).json();
   const response = await request.fetch(`${url}/api/team${endpoint}`, { method, headers: { Origin: url, ...(session.csrfToken ? { "X-RunPhantom-CSRF": session.csrfToken } : {}) }, ...(body === undefined ? {} : { data: body }) });
@@ -195,4 +239,58 @@ test("team ignores a late key issuance response after project permission denial"
     releaseCreate(); await expect(admin.getByRole("button", { name: "Create ingestion key", exact: true })).toBeEnabled(); await expect(admin.getByRole("textbox", { name: "Ingestion key", exact: true })).toHaveCount(0);
     releaseRole(); await expect(admin.getByRole("heading", { name: "Administrator access required", exact: true })).toBeVisible();
   } finally { releaseCreate(); releaseRole(); await context.close(); }
+});
+
+
+test("team navigation preserves project and role context across mobile keyboard and zoomed views", async ({ page, team }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const project = await setup(page, team, "Reference workspace");
+  await expect(page.getByRole("heading", { name: "Reference workspace", exact: true })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Project navigation" })).toContainText("Audit log");
+  const capture = async (name: string) => {
+    if (process.env.RUNPHANTOM_F44_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.RUNPHANTOM_F44_SCREENSHOTS, `${name}.png`), fullPage: true });
+  };
+  await capture("team-overview-desktop");
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    const menu = page.getByRole("button", { name: "Open project navigation" });
+    await menu.click();
+    await expect(page.getByRole("link", { name: "Overview", exact: true })).toBeFocused();
+    await page.keyboard.press("Escape"); await expect(menu).toBeFocused(); await expect(menu).toHaveAttribute("aria-expanded", "false");
+    await menu.click(); await page.getByRole("link", { name: "Members", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Project members", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open project navigation" })).toHaveAttribute("aria-expanded", "false");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await capture(`team-members-${width}`);
+    await page.goto(`${team.url}/team/projects/${project}`);
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.evaluate(() => { document.documentElement.style.zoom = "2"; });
+  await expect(page.getByRole("heading", { name: "Reference workspace", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await capture("team-overview-css-200");
+  await page.evaluate(() => { document.documentElement.style.zoom = ""; });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  expect(await page.locator(".team-row-link").count()).toBe(0);
+  await page.getByRole("link", { name: "Ingestion keys", exact: true }).click();
+  const transition = await page.getByRole("button", { name: "Create ingestion key", exact: true }).evaluate(element => getComputedStyle(element).transitionDuration);
+  expect(transition.split(",").every(value => parseFloat(value) === 0)).toBe(true);
+});
+
+test("team authentication presents recoverable validation without changing route scope", async ({ page, team }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${team.url}/team/login`);
+  await expect(page.getByRole("heading", { name: "Set up your team workspace", exact: true })).toBeVisible();
+  if (process.env.RUNPHANTOM_F44_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.RUNPHANTOM_F44_SCREENSHOTS, "team-setup-mobile.png"), fullPage: true });
+  await page.getByLabel("Setup code").fill("wrong-bootstrap-code");
+  await page.getByLabel("Email", { exact: true }).fill("fixture-owner@example.test");
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Create owner account", exact: true }).click();
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(page.getByLabel("Email", { exact: true })).toHaveValue("fixture-owner@example.test");
+  await expect(page).toHaveURL(/\/team\/login$/);
+  await expect(page.getByRole("link", { name: "Back to traces", exact: true })).toHaveCount(0);
+  await page.getByRole("link", { name: "Have an invitation code?", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Join your project", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

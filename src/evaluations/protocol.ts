@@ -1,3 +1,4 @@
+import type { CapturedAgentDefinitions } from "../agent-definitions-protocol";
 /** Versioned evaluation contracts. Independent implementation of the documented research concepts. */
 export const EVALUATION_VERSION = 1 as const;
 export const SNAPSHOT_VERSION = 1 as const;
@@ -27,7 +28,7 @@ export interface RuleResult {
   status: Status; source: "code" | "llm"; evaluatorVersion: string; score: number | null;
   reason: string; actual: unknown; expected: unknown; spanIds: string[]; redacted: boolean; truncated: boolean;
 }
-export interface PayloadUnavailable { input: boolean; output: boolean; attributes: boolean }
+export interface PayloadUnavailable { input: boolean; output: boolean; attributes: boolean; otlpEvidence?: boolean }
 /** Exact stored identities with acquisition-time payload withholding. No coalesced display metrics. */
 export interface SnapshotRun {
   id: string; name?: string | null; display_name?: string | null; event_name?: string | null;
@@ -38,7 +39,7 @@ export interface SnapshotSpan {
   status?: string | null; input_payload: string | null; output_payload: string | null;
   start_time_ms?: number | null; end_time_ms?: number | null; duration_ms?: number | null;
   model?: string | null; provider?: string | null; input_tokens?: number | null; output_tokens?: number | null;
-  attributes: string | null; unavailable?: PayloadUnavailable;
+  attributes: string | null; otlp_evidence?: string | null; unavailable?: PayloadUnavailable;
 }
 export interface SnapshotMetrics {
   inputTokens: number | null; outputTokens: number | null; totalTokens: number | null;
@@ -57,6 +58,7 @@ export interface Snapshot {
   toolsComplete: boolean; metrics: SnapshotMetrics;
   models: Array<{ provider: string; model: string; requests: number; errorSpans: number | null; inputTokens: number | null; outputTokens: number | null; costUsd: number | null }>;
   redacted: boolean; truncated: boolean;
+  agentDefinitions?: CapturedAgentDefinitions;
 }
 export interface DatasetCaseDraft {
   id?: string; name: string; input?: string; sourceRunId?: string; sourceSpanId?: string; tags?: string[]; rules: Rule[];

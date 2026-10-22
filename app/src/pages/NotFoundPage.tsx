@@ -16,23 +16,23 @@ export function NotFoundPage() {
 
   return (
     <div className="flex h-full items-center justify-center px-6">
-      <div className="max-w-sm text-center">
-        <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)]">
+      <div className="w-full max-w-md">
+        <div className="mb-6 grid h-10 w-10 place-items-center rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-accent-soft)]">
           <Compass className="h-5 w-5" style={{ color: C.fg1 }} />
         </div>
-        <h1 className="text-[15px] font-medium" style={{ color: C.fg4 }}>Page not found</h1>
+        <h1 className="font-display text-[28px] font-semibold leading-9 tracking-tight" style={{ color: C.fg4 }}>Page not found</h1>
         <p className="mt-2 text-sm leading-relaxed" style={{ color: C.fg1 }}>
           Nothing in Run Phantom matches this address.
         </p>
         <code
-          className="mt-3 block truncate rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] px-2 py-1.5 text-[11px]"
+          className="mt-5 block break-all rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] px-2 py-1.5 text-[11px]"
           style={{ color: C.fg0 }}
         >
           {location.pathname}
         </code>
         <button
           type="button"
-          className="rp-hover-wash mt-4 rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] px-3 py-1.5 text-xs font-medium text-[color:var(--rp-ink-strong)] transition-colors"
+          className="rp-hover-wash mt-6 min-h-[44px] rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] px-3 py-1.5 text-xs font-medium text-[color:var(--rp-ink-strong)] transition-colors"
           onClick={() => navigate("/runs", { replace: true })}
         >
           Back to traces

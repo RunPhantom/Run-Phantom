@@ -9,6 +9,7 @@ export interface RunSearchWork {
   started: number;
   deadline: number;
   cancellation: SharedArrayBuffer;
+  cursorKey?: string;
 }
 
 // Keep this function self-contained: its compiled JavaScript is also the worker
@@ -25,7 +26,7 @@ export async function runSearchWorker(): Promise<void> {
     if (Date.now() >= work.deadline) throw new Error("Search timed out; narrow the query or filters");
   };
   const cursorFor = (row: RunSearchSummary) => {
-    const cursor = Buffer.from(JSON.stringify({ v: 1, startedAt: row.started_at, id: row.id })).toString("base64url");
+    const cursor = Buffer.from(JSON.stringify({ v: work.cursorKey ? 2 : 1, startedAt: row.started_at, id: row.id, ...(work.cursorKey ? { key: work.cursorKey } : {}) })).toString("base64url");
     if (cursor.length > 4096) throw new Error("Run identity exceeds the search cursor byte limit");
     return cursor;
   };
