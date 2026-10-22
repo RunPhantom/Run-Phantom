@@ -6,7 +6,7 @@ import { writeFile } from "node:fs/promises";
 import { createSelectedMaskedRecorder, installMaskedRecorder, parseProducerPull, type MaskedProducer, type SelectedRecorderClient } from "../../src/verification/browser/recorder";
 import { parseRecordingBatch, type RecordingBatch } from "../../src/verification/recording-types";
 import { startRecordingPlayerHost } from "./recording-player-host";
-import type { RecordingLease } from "../../src/verification/recording";
+import type { RecordingLease } from "../../src/verification/recording-types";
 import { recordingSourcePins } from "./recording-source-pins";
 
 const privateToken = "SYNTHETIC_RECORDING_SECRET_3917";

@@ -1,10 +1,8 @@
 import type { SpanAdapter } from "./types";
-import type { ClaudeHookCaptureViewV1 } from "./claude-hook";
+import type { CodexHookCaptureView } from "../hook-capture-types";
+export type { CodexHookCaptureView } from "../hook-capture-types";
 import { parseBoundedHookJson } from "../../coding-hooks/shared";
 
-export interface CodexHookCaptureView extends Omit<ClaudeHookCaptureViewV1, "contract"> {
-  contract: "runphantom.codex-hook.observation/v1";
-}
 const contract = "runphantom.codex-hook.observation/v1";
 const allowed = new Set(["captureContract", "source", "entityKind", "coverage", "producerVerified", "runtimeVerified", "reportedPhase", "runphantom.span.kind", "gen_ai.provider.name", "runphantom.conversation.id", "turnId", "gen_ai.request.model", "runphantom.input", "runphantom.output", "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "cachedInputTokens", "reasoningOutputTokens", "usageAccounting", "otel.scope.name", "otel.scope.version", "otel.status.code"]);
 /** A read label is producer-reported evidence, never execution or replay authority. */

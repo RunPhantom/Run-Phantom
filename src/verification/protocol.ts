@@ -294,7 +294,7 @@ export type BrowserMessage =
   | { type: "hello"; version: typeof PROTOCOL_VERSION; token: string; coverage: Coverage }
   | { type: "hello"; version: typeof CAUSAL_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: Array<typeof CAUSAL_CAPABILITY> }
   | { type: "hello"; version: typeof SEMANTIC_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
-  | { type: "hello"; version: typeof SOURCE_PROTOCOL_VERSION | typeof BUSINESS_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
+  | { type: "hello"; version: typeof SOURCE_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
   | { type: "hello"; version: typeof TREE_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
   | { type: "hello"; version: typeof PERFORMANCE_PROTOCOL_VERSION; token: string; coverage: Coverage; capabilities: VerificationCapability[] }
   | { type: "event"; event: Omit<RuntimeEvent, "t"> }

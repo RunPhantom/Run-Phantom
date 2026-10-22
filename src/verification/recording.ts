@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Database } from "bun:sqlite";
-import { parseRecordingBatch, RecordingInputError, RECORDING_LIMITS as L, type RecordingBatch, type RecordingReason, type RecordingStatus, type RecordingSummary } from "./recording-types";
+import { parseRecordingBatch, RecordingInputError, RECORDING_LIMITS as L, type RecordingBatch, type RecordingLease, type RecordingReason, type RecordingStatus, type RecordingSummary } from "./recording-types";
+export type { RecordingLease } from "./recording-types";
 
 /** Private inactive fixture only; canonical installation belongs to the native migration owner. */
 export const RECORDING_STORAGE_SQL = `-- INACTIVE F37 schema proposal. ROOT assigns the actual canonical prefix/index; never request-time DDL.
@@ -76,7 +77,6 @@ type Head = {
 };
 type StoredBatch = { sequence: number; data: string | null; digest: string; event_count: number; first_epoch_ms: number; last_epoch_ms: number };
 export type RecordingAdmission = { runId: string; sessionId: string; engine: RecordingSummary["engine"]; engineVersion: string; startedAt: number; clockOffsetMs: number | null; clockUncertaintyMs: number | null };
-export type RecordingLease = { summary: RecordingSummary; token: string };
 export type RecordingPublication = { accepted: true; duplicate: boolean } | { accepted: false; reason: "stale" | "capacity" };
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const token = () => randomBytes(32).toString("hex");

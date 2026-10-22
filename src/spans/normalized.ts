@@ -1,7 +1,5 @@
-import type { CursorHookCaptureView } from "./adapters/cursor-hook";
-import type { ClaudeHookCaptureView } from "./adapters/claude-hook";
-import type { CodexHookCaptureView } from "./adapters/codex-hook";
-export type HookCaptureView = ClaudeHookCaptureView | CursorHookCaptureView | CodexHookCaptureView;
+import type { HookCaptureView } from "./hook-capture-types";
+export type { HookCaptureView } from "./hook-capture-types";
 
 /** Producer observations can withhold completion authority, never establish it. */
 export function captureCompletion(capture: HookCaptureView | undefined): "unavailable" | null {

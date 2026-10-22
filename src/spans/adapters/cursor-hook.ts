@@ -1,7 +1,7 @@
 import type { AdapterInput, AdapterMatch, SpanAdapter } from "./types";
-import type { ClaudeHookCaptureViewV1 } from "./claude-hook";
+import type { CursorHookCaptureView } from "../hook-capture-types";
+export type { CursorHookCaptureView } from "../hook-capture-types";
 import { parseBoundedHookJson } from "../../coding-hooks/shared";
-export interface CursorHookCaptureView extends Omit<ClaudeHookCaptureViewV1, "contract" | "sourceKind"> { contract: "runphantom.cursor-hook.observation/v1"; sourceKind: "hook"; }
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const kinds = { session: "AGENT_ROOT", prompt: "INTERNAL", tool: "TOOL_CALL", assistant: "LLM_GENERATION" } as const;
 const keys = "captureContract,captureModel,coverage,coverageReasons,currentCapturePolicy,entityKind,producerVerified,reportedDurationMs,reportedPhase,retainedBody,retainedEntitySha256,runtimeVerified,source,sourceKind,usage";

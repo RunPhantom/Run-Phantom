@@ -4706,7 +4706,8 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},

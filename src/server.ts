@@ -828,6 +828,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
   let acpTransitioning = false;
   const closeHttp = server.close.bind(server);
   let shutdownTask: Promise<void> | undefined;
+  let httpCloseError: Error | undefined;
   function closeServer(): Promise<void> {
     if (shutdownTask) return shutdownTask;
     acpTransitioning = true;
@@ -839,7 +840,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
     try { hookOwner.store.rotateOwner(); } catch (error) { revocationError = error instanceof Error ? error : new Error("Hook revocation unavailable"); } finally { hookOwner.revoke(); }
     const nativeClosed = acpSessions.close();
     // Stop accepting HTTP synchronously, then join all owned work before its shared peers.
-    const httpClosed = new Promise<Error | undefined>((resolve) => closeHttp((error) => resolve(error)));
+    const httpClosed = new Promise<Error | undefined>((resolve) => closeHttp((error) => { httpCloseError = error; resolve(error); }));
     shutdownTask = (async () => {
       try {
         await Promise.all([nativeClosed, browserAutomation.close(), hookController.close(), evidenceImports.shutdown(), comparisons?.close(), ...hookManagementWork]);
@@ -858,7 +859,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
     return shutdownTask;
   }
   server.close = (callback) => {
-    void closeServer().then(() => callback?.(), (error: Error) => callback?.(error));
+    void closeServer().then(() => callback?.(httpCloseError), (error: Error) => callback?.(error));
     return server;
   };
 
