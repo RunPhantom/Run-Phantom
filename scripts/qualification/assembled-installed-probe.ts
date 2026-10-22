@@ -35,8 +35,13 @@ export async function observeDatabaseFile(pid: number, dbPath: string) {
   let openByProcess = false;
   if (process.platform === "darwin") {
     const listing = await new Promise<string>((resolve, reject) => {
-      execFile("/usr/sbin/lsof", ["-a", "-p", String(pid), "-F", "pfin"], { timeout: 3000, maxBuffer: 128 * 1024 },
-        (error, stdout) => error ? reject(error instanceof Error ? error : new Error("assembly_database_descriptor_observation_failed")) : resolve(stdout));
+      // Unrelated descriptors must not consume this file observation's output budget.
+      execFile("/usr/sbin/lsof", ["-a", "-p", String(pid), "-F", "pfin", "--", file], { timeout: 3000, maxBuffer: 128 * 1024 },
+        (error, stdout, stderr) => {
+          const noMatch = error?.code === 1 && !error.killed && !error.signal && stdout === "" && stderr === "";
+          if (error && !noMatch) reject(error instanceof Error ? error : new Error("assembly_database_descriptor_observation_failed"));
+          else resolve(stdout);
+        });
     });
     let inode = "";
     for (const line of listing.split("\n")) {

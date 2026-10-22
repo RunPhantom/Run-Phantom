@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, realpath, rename, rm, stat, writeFile, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createManifest, HOSTS, type Receipt } from "../../scripts/qualification/assembled-contracts";
@@ -91,11 +91,27 @@ test("native artifact format checks distinguish real host executable from cross-
   expect(await nativeArtifactMatches(fake, host)).toBe(false);
 });
 
-test("actual database descriptor distinguishes the opened file from a same-path replacement", async () => {
+test("bounded actual database descriptor distinguishes the opened file from a same-path replacement", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "phantom-default-db-identity-")); directories.push(directory);
   const file = path.join(directory, "owned.db"), database = new Database(file, { create: true });
+  const unrelated: FileHandle[] = [];
   try {
     database.exec("CREATE TABLE actual_owned_control (id INTEGER PRIMARY KEY)");
+    if (process.platform === "darwin") {
+      // Force an unfiltered native listing past 128 KiB without changing the observer's limit.
+      let parent = await realpath(directory);
+      while (Buffer.byteLength(parent) < 739) {
+        parent = path.join(parent, "x".repeat(Math.min(180, 740 - Buffer.byteLength(parent) - 1)));
+        await mkdir(parent);
+      }
+      let unrelatedPathBytes = 0;
+      for (let index = 0; index < 160; index++) {
+        const other = path.join(parent, `unrelated-${String(index).padStart(3, "0")}-${"x".repeat(150)}`);
+        unrelated.push(await open(other, "wx"));
+        unrelatedPathBytes += Buffer.byteLength(`n${other}\n`);
+      }
+      expect(unrelatedPathBytes).toBeGreaterThan(128 * 1024);
+    }
     const observed = await observeDatabaseFile(process.pid, file);
     expect(observed.inode).toBe((await stat(file, { bigint: true })).ino.toString());
     if (process.platform === "darwin" || process.platform === "linux") {
@@ -106,5 +122,9 @@ test("actual database descriptor distinguishes the opened file from a same-path 
       expect(observed.openByProcess).toBeNull();
       expect(observed.coverage).toContain("unavailable");
     }
-  } finally { database.close(); }
+  } finally {
+    const closed = await Promise.allSettled([Promise.resolve().then(() => database.close()), ...unrelated.map(handle => handle.close())]);
+    const failures = closed.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+    if (failures.length) throw new AggregateError(failures, "Owned database descriptor fixture cleanup failed");
+  }
 });
