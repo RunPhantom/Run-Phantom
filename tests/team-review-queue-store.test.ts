@@ -152,6 +152,7 @@ test("first exact promotion receipt survives later quota exhaustion and admin de
   } finally {db.close();}
 });
 
+// Serializing and hashing 10000 actual items takes ~3.5s locally and 5.4s on CI runners, above the 5s default.
 test("10000 actual native rows keep metadata pages50 and source windows5 with stable scoped cursors", () => {
   const {store,scope,scopeB,sql}=fixture(), queue=store.createReviewQueue(scope,{name:"10000 frozen items"}), initial=store.insertReviewItem(scope,queue.id,{runId}), db=sql();
   try {
@@ -177,7 +178,7 @@ test("10000 actual native rows keep metadata pages50 and source windows5 with st
     expect(()=>store.listReviewItems(scopeB,queue.id,{cursor:page.nextCursor!})).toThrow("not found");
     expect(()=>store.listReviewItems(scope,queue.id,{limit:51})).toThrow("50");
   } finally {db.close();}
-});
+}, 20_000);
 
 test("re-intaken promoted membership explicitly refuses replacing an existing curated case ID",()=> {
   const {store,scope,capture}=fixture(),{queue,approved,request}=curated(store,scope),receipt=store.promoteReviewItems(scope,request);
