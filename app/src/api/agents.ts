@@ -8,6 +8,8 @@ export interface AgentEntry {
   lastSeenPort?: number;
   input?: Record<string, string>;
   prefillFromTrace?: Record<string, string>;
+  /** Models the registered replay agent declares it supports (agents.yaml / GET /health). */
+  models?: string[];
 }
 
 export type AgentsRegistry = Record<string, AgentEntry>;

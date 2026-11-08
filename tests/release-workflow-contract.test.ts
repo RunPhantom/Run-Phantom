@@ -34,7 +34,8 @@ describe("release workflow contracts", () => {
 
   test("functional LLM defaults use current supported model identifiers", () => {
     const server = read("src/server.ts");
-    const replayUi = read("app/src/components/RunDetail.tsx");
+    // The replay picker's fallback models live beside the option builder.
+    const replayUi = read("app/src/utils/replay-models.ts");
     const replaySkill = read("skills/setup-agent-replay/SKILL.md");
     const anthropicExample = read("examples/anthropic-chat/server.ts");
 
