@@ -135,7 +135,7 @@ function SpanTooltip({
   return (
     <div
       data-span-tooltip
-      className="rp-pop pointer-events-auto fixed z-[9999] flex flex-col overflow-hidden rounded-md border border-rp-line bg-rp-surface shadow-e3"
+      className="pointer-events-auto fixed z-[9999] flex flex-col overflow-hidden rounded-md border border-rp-line bg-rp-surface shadow-e3"
       style={{
         left,
         top,
@@ -333,7 +333,7 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
   const gridMs = gridIntervals.find(g => dur / g <= targetGrids) ?? dur / targetGrids;
 
   return (
-    <div ref={containerRef} data-trace-timeline data-layout={compact ? "compact" : "named"} className="rp-clipped-ring rp-fade-rise mb-4 min-w-0 overflow-hidden rounded-lg border border-rp-line bg-rp-surface">
+    <div ref={containerRef} data-trace-timeline data-layout={compact ? "compact" : "named"} className="rp-clipped-ring mb-4 min-w-0 overflow-hidden rounded-lg border border-rp-line bg-rp-surface">
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-rp-line py-1 pl-4 pr-1">
         <span className="rp-eyebrow"><span aria-hidden="true" className="rp-eyebrow-marker" />Trajectory</span>
         <span className="rp-meta mr-auto">{plural(layout.entries.length, "span")} &middot; {layout.elapsedMs === null ? "Time unavailable" : fmt(layout.elapsedMs)}{compact && ` · ${plural(rowCount, "row")}`}</span>

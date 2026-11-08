@@ -283,7 +283,7 @@ function ErrorsTooltip({ spans }: { spans: Span[] }) {
         // Padding rather than margin bridges the gap, so moving the pointer
         // onto the tooltip to scroll it does not fire mouseleave on the way.
         <div className="absolute left-0 top-full z-50 pt-1">
-          <div className="rp-pop flex flex-col overflow-hidden rounded-md border border-rp-danger-border bg-rp-surface shadow-e3"
+          <div className="flex flex-col overflow-hidden rounded-md border border-rp-danger-border bg-rp-surface shadow-e3"
             style={{
               width: "min(380px, calc(100vw - 32px))", maxHeight,
             }}>
@@ -496,7 +496,7 @@ function StatsLine({ stats, model, spans, active, startedAt, completionUnavailab
               <span aria-live="polite">{costLabel}</span>
             </button>
             {showCost && (
-              <div ref={costPanelRef} id={costPanelId} role="region" aria-label="Nominal cost estimates" className="rp-pop fixed z-50 overflow-y-auto rounded-md border border-rp-line bg-rp-surface p-4 text-[12px] shadow-e3"
+              <div ref={costPanelRef} id={costPanelId} role="region" aria-label="Nominal cost estimates" className="fixed z-50 overflow-y-auto rounded-md border border-rp-line bg-rp-surface p-4 text-[12px] shadow-e3"
                 style={{ ...costPosition, maxHeight: "min(400px, calc(100vh - 32px))", visibility: costPosition ? "visible" : "hidden" }}>
                 <div className="rp-eyebrow mb-2">Nominal input/output estimates</div>
                 <p className="mb-3 whitespace-normal leading-5 text-rp-ink-muted">OpenRouter catalogue quotes; actual provider and tier billing may differ. Cache, audio, discounts, and other fees are excluded. Reported cost stays separate.</p>

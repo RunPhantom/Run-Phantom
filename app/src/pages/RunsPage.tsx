@@ -425,7 +425,7 @@ export function RunsPage() {
                       {isMobile && (
                         <button
                           type="button"
-                          className="flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-rp-surface px-4 text-left text-[13px] font-medium text-rp-ink transition-colors duration-250 ease-standard hover:bg-rp-row-hover"
+                          className="flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-rp-surface py-2 pl-12 pr-4 text-left text-[13px] font-medium text-rp-ink transition-colors duration-250 ease-standard hover:bg-rp-row-hover"
                           onClick={() => navigate("/runs")}
                         >
                           <ArrowLeft aria-hidden="true" className="h-3.5 w-3.5 text-rp-ink-muted" />
