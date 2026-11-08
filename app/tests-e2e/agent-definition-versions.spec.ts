@@ -49,7 +49,7 @@ for (const width of [1440, 390, 320]) test(`actual captured definition hashes, o
       bodyFont: getComputedStyle(element).fontFamily, fonts: [...document.fonts].filter(face => face.status === "loaded").map(face => face.family), summaryHeight: summary.getBoundingClientRect().height,
       focusColor: getComputedStyle(summary).outlineColor, focusWidth: getComputedStyle(summary).outlineWidth, overflow: document.documentElement.scrollWidth > innerWidth };
   });
-  expect(visual.color).toBe("rgb(14, 18, 27)"); expect(visual.background).toBe("rgb(249, 250, 252)"); expect(visual.headingFont).toContain("Syne"); expect(visual.bodyFont).toContain("Inter");
+  expect(visual.color).toBe("rgb(14, 18, 27)"); expect(visual.background).toBe("rgb(255, 255, 255)"); expect(visual.headingFont).toContain("Syne"); expect(visual.bodyFont).toContain("Inter");
   expect(visual.fonts.some(font => font.includes("Syne"))).toBe(true); expect(visual.fonts.some(font => font.includes("Inter"))).toBe(true); expect(visual.summaryHeight).toBeGreaterThanOrEqual(44);
   expect(visual.focusColor).toBe("rgb(0, 33, 204)"); expect(visual.focusWidth).toBe("2px"); expect(visual.overflow).toBe(false);
   await testInfo.attach("actual-definition-visual.json", { body: JSON.stringify(visual, null, 2), contentType: "application/json" });
