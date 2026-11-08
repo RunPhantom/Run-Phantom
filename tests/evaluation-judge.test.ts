@@ -108,6 +108,37 @@ describe.serial("bounded optional model judges", () => {
     }
   });
 
+  test("gpt-6.1-terra judges at medium reasoning with room for reasoning tokens and no sampling parameters", async () => {
+    let calls = 0;
+    const result = await evaluateRubric({ ...openaiRule, model: "gpt-6.1-terra" }, snapshot(), snapshot().input, { fetch: fetchStub((_url, init) => {
+      calls++;
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      expect(body).toMatchObject({ model: "gpt-6.1-terra", reasoning_effort: "medium", max_completion_tokens: 4096, response_format: { type: "json_object" } });
+      for (const field of ["max_tokens", "temperature", "tools"]) expect(body).not.toHaveProperty(field);
+      return Response.json({ model: "gpt-6.1-terra", choices: [{ index: 0, message: { role: "assistant", content: JSON.stringify({ score: 0.95, reason: "Correct." }), refusal: null, annotations: [] }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 86, completion_tokens: 40, completion_tokens_details: { reasoning_tokens: 9 } }, service_tier: "default" });
+    }) });
+    expect(calls).toBe(1);
+    expect(result).toMatchObject({ status: "pass", score: 0.95 });
+  });
+
+  test("claude-sonnet-5-5 judges without temperature and with its lowest thinking setting", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const judge = (model: string) => evaluateRubric({ ...anthropicRule, model }, snapshot(), snapshot().input, { fetch: fetchStub((_url, init) => {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>; bodies.push(body);
+      // claude-sonnet-5-5 answers HTTP 400 to temperature, top_p, top_k and thinking disabled.
+      if (model === "claude-sonnet-5-5" && (Object.hasOwn(body, "temperature") || (body.thinking as { type?: string } | undefined)?.type === "disabled")) return Response.json({ type: "error" }, { status: 400 });
+      return reply("anthropic", { score: 0.7, reason: "Mostly correct." });
+    }) });
+    expect(await judge("claude-sonnet-5-5")).toMatchObject({ status: "fail", score: 0.7 });
+    expect(bodies[0]).toMatchObject({ model: "claude-sonnet-5-5", max_tokens: 512, thinking: { type: "between_tools" } });
+    expect(bodies[0]).not.toHaveProperty("temperature");
+    expect((bodies[0].output_config as { format: { type: string } }).format.type).toBe("json_schema");
+    expect(await judge("claude-sonnet-4-6")).toMatchObject({ status: "fail", score: 0.7 });
+    expect(bodies[1]).toMatchObject({ model: "claude-sonnet-4-6", temperature: 0 });
+    expect(bodies[1]).not.toHaveProperty("thinking");
+  });
+
   test("threshold is inclusive and explicit empty context remains distinguishable from missing", async () => {
     const candidate = snapshot(); candidate.input = ""; candidate.output.value = "";
     const result = await evaluateRubric(openaiRule, candidate, "", { fetch: fetchStub(() => reply("openai", { score: 0.8, reason: "At threshold." })) });

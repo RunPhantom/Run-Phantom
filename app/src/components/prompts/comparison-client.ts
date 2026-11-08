@@ -1,4 +1,4 @@
-import type { ComparisonReceipt, ComparisonPage, ComparisonAttempt } from "../../../../src/prompts/comparison-types";
+import { COMPARISON_MODELS, type ComparisonReceipt, type ComparisonPage, type ComparisonAttempt } from "../../../../src/prompts/comparison-types";
 import type { PromptClient } from "./client";
 
 export type { ComparisonReceipt, ComparisonPage, ComparisonAttempt };
@@ -11,8 +11,9 @@ const text = (value: unknown, maximum: number): string => { if (typeof value !==
 const id = (value: unknown): string => { const parsed = text(value, 36); if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(parsed)) throw invalid(); return parsed; };
 const target = (value: Record<string, unknown>) => {
   const provider = value.provider, model = text(value.model, 128);
-  if (provider === "openai" && !["gpt-5.4", "gpt-4.1"].includes(model) || provider === "anthropic" && !["claude-opus-4-6", "claude-sonnet-4-6"].includes(model) || provider !== "openai" && provider !== "anthropic") throw invalid();
-  return { provider, model };
+  const known = COMPARISON_MODELS.find(candidate => candidate.provider === provider && candidate.model === model);
+  if (!known) throw invalid();
+  return { provider: known.provider, model: known.model };
 };
 function attempt(value: unknown, position: number): void {
   const row = object(value); target(row); if (integer(row.position, 3) !== position) throw invalid();
@@ -27,7 +28,7 @@ function attempt(value: unknown, position: number): void {
   }
 }
 export function comparisonCapabilities(value: unknown): ComparisonCapabilities {
-  const input = object(value); if (input.enabled !== true || input.invoiceAvailable !== false || !Array.isArray(input.models) || input.models.length !== 4 || integer(input.generation) < 1) throw invalid();
+  const input = object(value); if (input.enabled !== true || input.invoiceAvailable !== false || !Array.isArray(input.models) || input.models.length !== COMPARISON_MODELS.length || integer(input.generation) < 1) throw invalid();
   const seen = new Set<string>();
   for (const value of input.models) {
     const model = object(value), parsed = target(model), key = `${parsed.provider}:${parsed.model}`;
@@ -71,10 +72,10 @@ export function comparisonRequest(client: PromptClient, signal: AbortSignal) {
 export function comparisonExport(value: unknown, expectedId: string): unknown {
   const input = object(value); if (input.format !== "runphantom-model-comparison/v1" || comparisonReceipt(input.operation).id !== expectedId) throw invalid(); return input;
 }
-export function comparisonOutput(attempt: ComparisonAttempt): { output: string | null; input: number | null; outputTokens: number | null; controlled: boolean; truncated: boolean } {
-  if (!attempt.payload) return { output: null, input: null, outputTokens: null, controlled: false, truncated: false };
+export function comparisonOutput(attempt: ComparisonAttempt): { output: string | null; input: number | null; outputTokens: number | null; reasoningTokens: number | null; controlled: boolean; truncated: boolean } {
+  if (!attempt.payload) return { output: null, input: null, outputTokens: null, reasoningTokens: null, controlled: false, truncated: false };
   const payload = object(attempt.payload), usage = object(payload.usage), categories = object(usage.categories);
   const count = (field: string) => { const value = object(categories[field]).count; return value === null ? null : integer(value); };
-  return { output: text(payload.output, 8192), input: count("input"), outputTokens: count("output"), controlled: payload.provenance === "controlled-http-fixture",
-    truncated: payload.finishReason === "length" || payload.finishReason === "max_tokens" };
+  return { output: text(payload.output, 8192), input: count("input"), outputTokens: count("output"), reasoningTokens: categories.reasoning === undefined ? null : count("reasoning"),
+    controlled: payload.provenance === "controlled-http-fixture", truncated: payload.finishReason === "length" || payload.finishReason === "max_tokens" };
 }

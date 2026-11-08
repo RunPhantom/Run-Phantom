@@ -1,21 +1,17 @@
 import { createHash } from "node:crypto";
 import { literalPromptCompilation, promptId, promptInteger, promptObject, promptText, boundedPromptResult, type PromptRevision } from "./protocol";
+import { COMPARISON_MODELS, COMPARISON_TARGET_LIMIT, comparisonModelSettings, type ComparisonTarget, type ComparisonRequest, type FrozenComparisonRequest, type ComparisonFamily } from "./comparison-types";
 
 export const COMPARISON_POLICY = "runphantom-model-comparison/v1" as const;
-export const COMPARISON_LIMITS = Object.freeze({ targets: 4, active: 2, queued: 8, inputBytes: 16384, providerResponseBytes: 65536,
+export const COMPARISON_LIMITS = Object.freeze({ targets: COMPARISON_TARGET_LIMIT, active: 2, queued: 8, inputBytes: 16384, providerResponseBytes: 65536,
   frozenRequestBytes: 24576, attemptPayloadBytes: 8192, responseBytes: 65536, requestBytes: 65536,
   outputTokens: 1024, attemptMs: 30000, operationsPerScope: 100, operationsGlobal: 1000, attemptsGlobal: 4000,
   controlsGlobal: 1000, retainedBytes: 33554432, operationBudgetMicrousd: 1000000, providerBudgetMicrousd: 30000000, listPage: 50 });
-export const COMPARISON_MODELS = Object.freeze([
-  Object.freeze({ provider: "openai", model: "gpt-5.4" }), Object.freeze({ provider: "openai", model: "gpt-4.1" }),
-  Object.freeze({ provider: "anthropic", model: "claude-opus-4-6" }), Object.freeze({ provider: "anthropic", model: "claude-sonnet-4-6" }),
-] as const);
-import type { ComparisonTarget, ComparisonRequest, FrozenComparisonRequest, ComparisonFamily } from "./comparison-types";
+export { COMPARISON_MODELS } from "./comparison-types";
 export type { ComparisonProvider, ComparisonTarget, ComparisonOptions, ComparisonRequest, FrozenComparisonRequest, ComparisonFamily } from "./comparison-types";
 export function comparisonFamily(targetValue: ComparisonTarget): ComparisonFamily {
   const target = comparisonTarget(targetValue);
-  return Object.freeze({ ...target, version: "standard-text/v1", endpoint: target.provider === "openai" ? "chat-completions" : "messages",
-    reasoningEffort: target.model === "gpt-5.4" ? "none" : null, thinking: target.provider === "anthropic" ? "disabled" : null,
+  return Object.freeze({ ...target, version: "standard-text/v1", endpoint: target.provider === "openai" ? "chat-completions" : "messages", ...comparisonModelSettings(target),
     tier: target.provider === "openai" ? "default" : "standard_only", inferenceGeo: target.provider === "anthropic" ? "global" : null, store: false });
 }
 const messages = { invalid_request: "Comparison request is invalid.", limit_refused: "Comparison exceeds its limit.",

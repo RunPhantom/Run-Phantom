@@ -63,8 +63,9 @@ export function createComparisonProviderClient(client: ClientOptions = {}) {
       if (!Number.isFinite(remaining) || remaining <= 0 || remaining > COMPARISON_LIMITS.attemptMs) throw new ComparisonProviderError("timeout", false);
       const timer = setTimeout(() => timeout.abort(), remaining), signal = AbortSignal.any([input.signal, timeout.signal]);
       const family = comparisonFamily(target);
-      const body = target.provider === "openai" ? { model: target.model, messages: [{ role: "user", content: compiled }], max_completion_tokens: outputTokens, temperature: input.options.temperature, stream: false, store: false, service_tier: "default", ...(family.reasoningEffort ? { reasoning_effort: family.reasoningEffort } : {}) }
-        : { model: target.model, messages: [{ role: "user", content: compiled }], max_tokens: outputTokens, temperature: input.options.temperature, stream: false, thinking: { type: "disabled" }, service_tier: "standard_only", inference_geo: "global" };
+      const temperature = family.temperature === "requested" ? { temperature: input.options.temperature } : {};
+      const body = target.provider === "openai" ? { model: target.model, messages: [{ role: "user", content: compiled }], max_completion_tokens: outputTokens, ...temperature, stream: false, store: false, service_tier: "default", ...(family.reasoningEffort ? { reasoning_effort: family.reasoningEffort } : {}) }
+        : { model: target.model, messages: [{ role: "user", content: compiled }], max_tokens: outputTokens, ...temperature, stream: false, thinking: { type: family.thinking }, service_tier: "standard_only", inference_geo: "global" };
       const headers: Record<string, string> = target.provider === "openai" ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
         : { "Content-Type": "application/json", "x-api-key": token, "anthropic-version": "2023-06-01" };
       let sent = false;

@@ -2,6 +2,27 @@ import type { FrozenRateRevision } from "../pricing/protocol";
 
 export type ComparisonProvider = "openai" | "anthropic";
 export interface ComparisonTarget { readonly provider: ComparisonProvider; readonly model: string }
+export const COMPARISON_TARGET_LIMIT = 4;
+/** Browser-safe so the UI and daemon share one allowlist. */
+export const COMPARISON_MODELS = Object.freeze([
+  Object.freeze({ provider: "openai", model: "gpt-5.4" }), Object.freeze({ provider: "openai", model: "gpt-4.1" }),
+  Object.freeze({ provider: "anthropic", model: "claude-opus-4-6" }), Object.freeze({ provider: "anthropic", model: "claude-sonnet-4-6" }),
+  Object.freeze({ provider: "openai", model: "gpt-6.1-terra" }), Object.freeze({ provider: "anthropic", model: "claude-sonnet-5-5" }),
+] as const);
+export interface ComparisonModelSettings {
+  readonly reasoningEffort: "none" | "medium" | null; readonly thinking: "disabled" | "between_tools" | null; readonly temperature: "requested" | "provider_default";
+}
+/**
+ * gpt-6.1-terra only accepts the default temperature (1) once reasoning is on, and claude-sonnet-5-5 rejects any
+ * temperature and `thinking: disabled` with HTTP 400; `between_tools` is its lowest setting and returns text only
+ * when no tools are sent (developers.openai.com/api/docs/models/gpt-6.1-terra, platform.claude.com/docs/en/models/sonnet-5-5/whats-new-sonnet-5-5).
+ */
+export function comparisonModelSettings(target: ComparisonTarget): ComparisonModelSettings {
+  if (target.provider === "anthropic") return target.model === "claude-sonnet-5-5"
+    ? { reasoningEffort: null, thinking: "between_tools", temperature: "provider_default" } : { reasoningEffort: null, thinking: "disabled", temperature: "requested" };
+  return target.model === "gpt-6.1-terra" ? { reasoningEffort: "medium", thinking: null, temperature: "provider_default" }
+    : { reasoningEffort: target.model === "gpt-5.4" ? "none" : null, thinking: null, temperature: "requested" };
+}
 export interface ComparisonOptions { readonly maxOutputTokens: number; readonly temperature: number }
 export interface ComparisonRequest {
   readonly operationKey: string; readonly promptId: string; readonly revision: number; readonly variables: Readonly<Record<string, string>>;
@@ -13,7 +34,7 @@ export interface FrozenComparisonRequest extends ComparisonRequest {
 }
 export interface ComparisonFamily extends ComparisonTarget {
   readonly version: "standard-text/v1"; readonly endpoint: "chat-completions" | "messages";
-  readonly reasoningEffort: "none" | null; readonly thinking: "disabled" | null;
+  readonly reasoningEffort: ComparisonModelSettings["reasoningEffort"]; readonly thinking: ComparisonModelSettings["thinking"]; readonly temperature: ComparisonModelSettings["temperature"];
   readonly tier: "default" | "standard_only"; readonly inferenceGeo: "global" | null; readonly store: false;
 }
 export interface FrozenExecution extends FrozenComparisonRequest { readonly rates: readonly FrozenRateRevision[] }
