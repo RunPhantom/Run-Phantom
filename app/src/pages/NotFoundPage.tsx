@@ -1,6 +1,6 @@
 import { useLocation, useNavigate } from "react-router-dom";
-import { Compass } from "lucide-react";
-import { C } from "../utils/colors";
+import { Button } from "@/components/ui/button";
+import { EmptyPanel } from "@/components/ui/empty-panel";
 
 /**
  * Shown for a URL that matches no route.
@@ -15,29 +15,26 @@ export function NotFoundPage() {
   const location = useLocation();
 
   return (
-    <div className="flex h-full items-center justify-center px-6">
-      <div className="w-full max-w-md">
-        <div className="mb-6 grid h-10 w-10 place-items-center rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-accent-soft)]">
-          <Compass className="h-5 w-5" style={{ color: C.fg1 }} />
-        </div>
-        <h1 className="font-display text-[28px] font-semibold leading-9 tracking-tight" style={{ color: C.fg4 }}>Page not found</h1>
-        <p className="mt-2 text-sm leading-relaxed" style={{ color: C.fg1 }}>
-          Nothing in Run Phantom matches this address.
-        </p>
-        <code
-          className="mt-5 block break-all rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] px-2 py-1.5 text-[11px]"
-          style={{ color: C.fg0 }}
-        >
-          {location.pathname}
-        </code>
-        <button
-          type="button"
-          className="rp-hover-wash mt-6 min-h-[44px] rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] px-3 py-1.5 text-xs font-medium text-[color:var(--rp-ink-strong)] transition-colors"
-          onClick={() => navigate("/runs", { replace: true })}
-        >
-          Back to traces
-        </button>
-      </div>
+    <div className="flex h-full items-center justify-center px-5 py-10 sm:px-10">
+      <EmptyPanel
+        className="w-full max-w-xl animate-fade-rise"
+        titleAs="h1"
+        eyebrow="404 / No matching route"
+        title="Page not found"
+        description={
+          <>
+            <p>Nothing in Run Phantom matches this address.</p>
+            <code className="rp-meta mt-4 block break-all rounded-control border border-rp-line bg-rp-canvas-blue px-3 py-2 text-rp-ink">
+              {location.pathname}
+            </code>
+          </>
+        }
+        action={
+          <Button variant="primary" onClick={() => navigate("/runs", { replace: true })}>
+            Back to traces
+          </Button>
+        }
+      />
     </div>
   );
 }

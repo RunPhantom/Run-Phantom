@@ -3,6 +3,14 @@
 @tailwind utilities;
 
 @font-face {
+  font-family: "Geist Mono";
+  src: url("/fonts/GeistMono-Variable-latin.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
   font-family: "Syne";
   src: url("/fonts/syne-variable.ttf") format("truetype");
   font-style: normal;
@@ -15,7 +23,7 @@
 
   --font-sans: "Inter Variable", "Inter", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", sans-serif;
   --font-display: "Syne", var(--font-sans);
-  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --rp-numeric: tabular-nums slashed-zero;
 
   --rp-text-micro: 12px;   --rp-lh-micro: 18px;   --rp-ls-micro: 0em;
@@ -28,6 +36,21 @@
   --rp-weight-regular: 400;
   --rp-weight-medium: 500;
   --rp-weight-semibold: 600;
+
+  --rp-blue: #0021CC;
+  --rp-blue-hover: #001AA3;
+  --rp-blue-active: #001680;
+  --rp-line: #D9DEEA;
+  --rp-line-muted: #E8ECF5;
+  --rp-line-strong: #7C8494;
+  --rp-wash: #EEF2FF;
+  --rp-wash-border: #B9C4F1;
+  --rp-line-dashed: #BFC8DF;
+  --rp-canvas-grey: #F8FAFB;
+  --rp-canvas-blue: #F8FAFF;
+  --rp-row-hover: #F6F7FA;
+  --rp-ink-subtle: #5C6578;
+  --rp-index: #777E8E;
 
   --rp-n0: #FFFFFF;
   --rp-n1: #FFFFFF;
@@ -87,6 +110,7 @@
   --rp-wash-5: rgb(14 18 27 / 0.160);
 
   --rp-scrim:  rgb(14 18 27 / 0.550);
+  --rp-scrim-soft: rgb(14 18 27 / 0.32);
 
   --rp-ink-wash: var(--rp-wash-3);
   --rp-ink-wash-strong: var(--rp-wash-4);
@@ -116,13 +140,10 @@
   --rp-elev-inset:
     inset 0 1px 2px 0 rgb(var(--rp-shadow-rgb) / 0.06),
     inset 0 1px 1px 0 rgb(var(--rp-shadow-rgb) / 0.04);
-  --rp-elev-1:
-    0 0 0 1px rgb(var(--rp-shadow-rgb) / 0.045),
-    0 1px 1px -0.5px rgb(var(--rp-shadow-rgb) / 0.06);
+  --rp-elev-1: 0 0 0 1px rgb(var(--rp-shadow-rgb) / 0.045);
   --rp-elev-2:
     0 0 0 1px rgb(var(--rp-shadow-rgb) / 0.05),
-    0 1px 1px -0.5px rgb(var(--rp-shadow-rgb) / 0.05),
-    0 2px 4px -2px rgb(var(--rp-shadow-rgb) / 0.05);
+    0 1px 2px 0 rgb(var(--rp-shadow-rgb) / 0.04);
   --rp-elev-3:
     0 0 0 1px rgb(var(--rp-shadow-rgb) / 0.06),
     0 1px 1px -0.5px rgb(var(--rp-shadow-rgb) / 0.05),
@@ -152,10 +173,11 @@
 
   --rp-highlight-top: inset 0 1px 0 0 rgb(255 255 255 / 0.70);
 
+  --rp-radius-control: 2px;
   --rp-radius-sm: 4px;
   --rp-radius-md: 5px;
   --rp-radius-lg: 7px;
-  --rp-radius-xl: 12px;
+  --rp-radius-xl: 8px;
   --rp-radius-full: 9999px;
 
   --rp-accent: #0021CC;
@@ -262,6 +284,12 @@
   --rp-ease-hover: cubic-bezier(0.25, 0.1, 0.25, 1);
   --rp-ease-drawer: cubic-bezier(0.22, 1, 0.36, 1);
 
+  --rp-dur-standard: 250ms;
+  --rp-dur-rise: 200ms;
+  --rp-dur-spring: 350ms;
+  --rp-rise-distance: 6px;
+  --rp-ease-spring: linear(0 0%, 0.0272 2.5%, 0.0924 5%, 0.1771 7.5%, 0.2695 10%, 0.3617 12.5%, 0.4492 15%, 0.5296 17.5%, 0.6015 20%, 0.6648 22.5%, 0.7198 25%, 0.7669 27.5%, 0.8069 30%, 0.8407 32.5%, 0.8691 35%, 0.8927 37.5%, 0.9123 40%, 0.9285 42.5%, 0.9419 45%, 0.9528 47.5%, 0.9618 50%, 0.9691 52.5%, 0.975 55%, 0.9799 57.5%, 0.9838 60%, 0.987 62.5%, 0.9895 65%, 0.9916 67.5%, 0.9933 70%, 0.9946 72.5%, 0.9957 75%, 0.9965 77.5%, 0.9972 80%, 0.9978 82.5%, 0.9982 85%, 0.9986 87.5%, 0.9989 90%, 0.9991 92.5%, 0.9993 95%, 0.9994 97.5%, 1 100%);
+
   --rp-motion-hover-in: 0ms;
   --rp-motion-hover-out: 120ms;
   --rp-motion-press: 120ms;
@@ -306,7 +334,7 @@
 
   --rp-dur-instant: 0ms;
   --rp-dur-press: 90ms;
-  --rp-dur-hover: 180ms;
+  --rp-dur-hover: 250ms;
   --rp-dur-tooltip: 125ms;
   --rp-dur-pop: 200ms;
   --rp-dur-panel: 280ms;
@@ -314,6 +342,95 @@
   --rp-ease-panel: cubic-bezier(0.22, 1, 0.36, 1);
   --rp-ease-standard: cubic-bezier(0.25, 0.1, 0.25, 1);
 
+  }
+}
+
+@layer components {
+  .rp-page-title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: clamp(28px, 1.25vw + 18px, 36px);
+    line-height: 1.12;
+    letter-spacing: -0.039em;
+    color: var(--rp-ink);
+    text-wrap: balance;
+  }
+  .rp-section-title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 22px;
+    line-height: 1.2;
+    letter-spacing: -0.027em;
+    color: var(--rp-ink);
+  }
+  .rp-subsection-title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 17px;
+    line-height: 1.35;
+    letter-spacing: -0.02em;
+    color: var(--rp-ink);
+  }
+  .rp-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 16px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--rp-ink-muted);
+  }
+  .rp-eyebrow[data-tone="accent"] { color: var(--rp-blue); }
+  .rp-eyebrow-marker {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    background: var(--rp-blue);
+  }
+  .rp-lede {
+    margin: 0;
+    max-width: 70ch;
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--rp-ink-muted);
+  }
+  .rp-meta {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 16px;
+    letter-spacing: 0.02em;
+    color: var(--rp-ink-muted);
+    font-variant-numeric: tabular-nums slashed-zero;
+  }
+  .rp-num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums slashed-zero;
+  }
+  .rp-field-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 16px;
+    color: var(--rp-ink);
+  }
+  .rp-select {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='M4 6l4 4 4-4' stroke='%23525866' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-position: right 10px center;
+    background-repeat: no-repeat;
+    background-size: 16px 16px;
+  }
+  .rp-field-hint {
+    font-size: 12px;
+    line-height: 18px;
+    color: var(--rp-ink-muted);
   }
 }
 
@@ -387,7 +504,7 @@ h1, h2, h3 {
    so the active tab's own styling is left alone. */
 .rp-tab[aria-selected="false"]:hover {
   color: var(--rp-ink-strong) !important;
-  background: var(--rp-ink-a04) !important;
+  background: var(--rp-row-hover) !important;
 }
 
 /*
@@ -414,27 +531,57 @@ h1, h2, h3 {
 
 .skip-link {
   position: fixed;
-  left: 16px;
+  left: 12px;
   top: 12px;
   z-index: 10000;
-  transform: translateY(-160%);
-  border: 2px solid var(--rp-ink-strong);
-  border-radius: 8px;
-  background: var(--rp-surface);
-  color: var(--rp-ink-strong);
-  padding: 10px 14px;
-  font-weight: 650;
-  box-shadow: 0 10px 30px var(--rp-ink-a18);
-  transition: transform 120ms ease;
+  transform: translateY(-180%);
+  border: 0;
+  border-radius: var(--rp-radius-control);
+  background: var(--rp-blue);
+  color: var(--rp-on-solid);
+  padding: 12px 20px;
+  font-weight: 600;
+  transition: transform var(--rp-dur-standard) var(--rp-ease-standard);
 }
 
 .skip-link:focus {
   transform: translateY(0);
 }
 
+.skip-link:focus-visible {
+  outline-color: var(--rp-on-solid) !important;
+  outline-offset: -4px !important;
+}
+
 input.secret-input-saved:focus::placeholder {
   color: transparent !important;
   opacity: 0 !important;
+}
+
+@keyframes rp-fade-rise {
+  from { opacity: 0; transform: translateY(var(--rp-rise-distance)); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes rp-pop-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.rp-fade-rise { animation: rp-fade-rise var(--rp-dur-rise) var(--rp-ease-standard) both; }
+.rp-pop {
+  transform-origin: var(--radix-popper-transform-origin, top center);
+  animation: rp-pop-in var(--rp-dur-spring) var(--rp-ease-spring) both;
+}
+.rp-ease {
+  transition-duration: var(--rp-dur-standard);
+  transition-timing-function: var(--rp-ease-standard);
+}
+@media (prefers-reduced-motion: reduce) {
+  .rp-fade-rise,
+  .rp-pop,
+  .animate-fade-rise,
+  .animate-pop-in {
+    animation: none;
+  }
 }
 
 @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:.3} }
@@ -692,6 +839,7 @@ pre { white-space: pre-wrap; word-break: break-word; font-family: var(--font-mon
 /* Keyboard-driven navigation collapses every state transition to zero. See
    utils/nav-modality.ts — the attribute flips on nav keys and back on pointer use. */
 html[data-nav="key"] {
+  --rp-dur-standard: 0ms;
   --rp-motion-instant: 0ms;
   --rp-motion-state: 0ms;
   --rp-dur-hover: 0ms;

@@ -1010,20 +1010,14 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
 
 function FloatingAskButton({ provider, onOpen }: { provider: AgentProviderId; onOpen: () => void }) {
   return (
-    <div data-debug-launcher className="rp-clipped-ring group fixed bottom-0 right-0 z-40">
-      <div className="pointer-events-none absolute -top-14 right-16 grid h-12 w-12 scale-75 place-items-center rounded-full border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] opacity-0 shadow-[0_16px_40px_var(--rp-ink-a18),0_8px_26px_var(--rp-ink-a20)] transition-[opacity,transform] duration-300 motion-reduce:transition-none group-hover:-translate-y-2 group-hover:-rotate-6 group-hover:scale-100 group-hover:opacity-100 [&>img]:brightness-0">
-        <ProviderMark provider="claude" open={true} />
-      </div>
-      <div className="pointer-events-none absolute -top-12 right-3 grid h-11 w-11 scale-75 place-items-center rounded-full border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] opacity-0 shadow-[0_16px_40px_var(--rp-ink-a18)] transition-[opacity,transform] duration-300 delay-75 motion-reduce:transition-none group-hover:-translate-y-3 group-hover:rotate-12 group-hover:scale-100 group-hover:opacity-100">
-        <ProviderMark provider="codex" open />
-      </div>
+    <div data-debug-launcher className="fixed bottom-4 right-4 z-40">
       <button
         type="button"
         onClick={onOpen}
-        className="flex h-11 items-center gap-2 rounded-tl-[15px] rounded-r-none rounded-bl-none border border-r-0 border-b-0 border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] px-[26px] text-sm font-medium text-[color:var(--rp-ink-strong)] shadow-[0_26px_70px_var(--rp-ink-a18),0_8px_22px_var(--rp-ink-a12)] transition-[transform,background-color,border-color,color,box-shadow] hover:-translate-y-0.5 hover:border-[color:var(--rp-border-strong)] hover:bg-[color:var(--rp-surface-raised)] hover:shadow-[0_32px_90px_var(--rp-ink-a22),0_10px_30px_var(--rp-ink-a15)] active:translate-y-0"
+        className="flex h-10 items-center gap-2 rounded-control border border-rp-line bg-white px-4 text-[13px] font-medium text-rp-ink shadow-e2 transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash"
         title={`Ask ${providerLabel(provider)}`}
       >
-        <Terminal className="h-4 w-4 text-[color:var(--rp-accent)]" />
+        <Terminal aria-hidden="true" className="h-4 w-4 text-rp-blue" />
         <span>{`Ask ${providerLabel(provider)}`}</span>
       </button>
     </div>
@@ -1194,10 +1188,6 @@ function ProviderGlyph({ provider, size }: { provider: AgentProviderId; size: "s
       {provider === "opencode" ? "OC" : provider === "claude" ? "CC" : "CX"}
     </span>
   );
-}
-
-function ProviderMark({ provider, open }: { provider: AgentProviderId; open: boolean }) {
-  return <span className={open ? "" : "opacity-80"}><ProviderGlyph provider={provider} size="medium" /></span>;
 }
 
 function SmallProviderIcon({ provider }: { provider: AgentProviderId }) {

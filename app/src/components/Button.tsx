@@ -1,14 +1,10 @@
-import { C } from "../utils/colors";
-
 export function Button({ children, onClick, className = "" }: {
   children: React.ReactNode; onClick?: () => void; className?: string;
 }) {
   return (
     <button
-      className={`text-[11px] font-mono font-medium px-2.5 py-1.5 rounded transition-colors ${className}`}
-      style={{ color: C.fg4, background: "var(--rp-surface-raised)", border: "1px solid var(--rp-border)" }}
-      onMouseEnter={e => { e.currentTarget.style.background = "var(--rp-surface-selected)"; }}
-      onMouseLeave={e => { e.currentTarget.style.background = "var(--rp-surface-raised)"; }}
+      type="button"
+      className={`inline-flex items-center gap-1.5 rounded-control border border-rp-line bg-white px-2.5 py-1.5 text-xs font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash ${className}`}
       onClick={onClick}
     >
       {children}
