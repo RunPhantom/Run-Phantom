@@ -1303,14 +1303,16 @@ function ScrollToBottomButton() {
   const prefersReducedMotion = usePrefersReducedMotion();
   if (isAtBottom) return null;
   return (
-    <button
-      type="button"
-      onClick={() => scrollToBottom({ animation: prefersReducedMotion ? "instant" : "smooth" })}
-      className="rp-fade-rise absolute bottom-3 left-1/2 z-10 flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-control border border-rp-line bg-rp-surface px-3 text-[12px] font-medium text-rp-ink shadow-e2 transition-[background-color,border-color,color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash hover:text-rp-blue"
-    >
-      <ArrowDown aria-hidden="true" size={12} />
-      Scroll to bottom
-    </button>
+    <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center">
+      <button
+        type="button"
+        onClick={() => scrollToBottom({ animation: prefersReducedMotion ? "instant" : "smooth" })}
+        className="rp-fade-rise pointer-events-auto flex h-8 items-center gap-1.5 rounded-control border border-rp-line bg-rp-surface px-3 text-[12px] font-medium text-rp-ink shadow-e2 transition-[background-color,border-color,color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash hover:text-rp-blue"
+      >
+        <ArrowDown aria-hidden="true" size={12} />
+        Scroll to bottom
+      </button>
+    </div>
   );
 }
 
