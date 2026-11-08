@@ -15,8 +15,11 @@ requested row. Provider invoices and account balances are unavailable.
 Spending is disabled by default. The trusted server operator can configure
 `RUNPHANTOM_COMPARISON_OPENAI_BUDGET_USD` and
 `RUNPHANTOM_COMPARISON_ANTHROPIC_BUDGET_USD`, each between zero and thirty USD
-with at most six fractional digits. Provider credentials use the existing
-`OPENAI_API_KEY` and `ANTHROPIC_API_KEY` environment configuration. An HTTP body
+with at most six fractional digits. Provider credentials use the same keys as
+the rest of Run Phantom: `OPENAI_API_KEY` (or `RUNPHANTOM_OPENAI_API_KEY`) and
+`ANTHROPIC_API_KEY` from the environment first, otherwise the key saved in
+**Settings**. Saving or removing a key takes effect at the next admission without
+a restart; budgets still default to zero. An HTTP body
 cannot supply credentials, a provider URL, a database or another project's role.
 The ceiling accounts for all retained comparison work in that owner database,
 including other Team projects; it is not a statement of provider account credit.

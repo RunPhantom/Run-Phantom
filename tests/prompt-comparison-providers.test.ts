@@ -1,5 +1,9 @@
 import { test, expect } from "bun:test";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createComparisonProviderClient } from "../src/prompts/providers";
+import { deleteStoredSecret, RUNPHANTOM_SECRET_STORE_PATH_ENV, setStoredSecret } from "../src/secret-store";
 
 const options = { maxOutputTokens: 128, temperature: 0 };
 const target = { provider: "openai", model: "gpt-5.4" } as const;
@@ -71,4 +75,33 @@ test("an owned deadline aborts a real held HTTP response and retains uncertain-s
     try { await client.execute({ target, compiled: "bounded", options, signal: new AbortController().signal, remainingMs: 25 }); } catch (error) { failure = error; }
     expect(failure).toMatchObject({ code: "timeout", requestMayHaveBeenSent: true }); expect(calls).toBe(1);
   } finally { await server.stop(true); }
+});
+
+test("a key saved in Settings enables comparisons and removing it stops dispatch without a restart", async () => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "rp-comparison-secret-")));
+  const names = [RUNPHANTOM_SECRET_STORE_PATH_ENV, "OPENAI_API_KEY", "RUNPHANTOM_OPENAI_API_KEY"], prior = names.map(name => process.env[name]);
+  for (const name of names) delete process.env[name];
+  process.env[RUNPHANTOM_SECRET_STORE_PATH_ENV] = join(directory, "store", "secrets.json");
+  const authorizations: (string | null)[] = [];
+  const transport = async (_url: string | URL, init: RequestInit) => {
+    authorizations.push(new Headers(init.headers).get("authorization"));
+    return Response.json({ model: "gpt-5.4", choices: [{ message: { content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 1 } });
+  };
+  try {
+    const client = createComparisonProviderClient({ transport, provenance: "controlled-http-fixture" });
+    expect(client.available("openai")).toBe(false);
+    setStoredSecret("openai", "settings-saved-token");
+    expect(client.available("openai")).toBe(true);
+    expect((await client.execute({ target, compiled: "small", options, signal: new AbortController().signal })).output).toBe("ok");
+    expect(authorizations).toEqual(["Bearer settings-saved-token"]);
+    deleteStoredSecret("openai");
+    expect(client.available("openai")).toBe(false);
+    let failure: unknown;
+    try { await client.execute({ target, compiled: "small", options, signal: new AbortController().signal }); } catch (error) { failure = error; }
+    expect(failure).toMatchObject({ code: "unavailable", requestMayHaveBeenSent: false });
+    expect(authorizations).toHaveLength(1);
+  } finally {
+    names.forEach((name, index) => { if (prior[index] === undefined) delete process.env[name]; else process.env[name] = prior[index]; });
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

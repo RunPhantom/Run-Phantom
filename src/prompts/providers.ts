@@ -3,6 +3,7 @@ import { readerLimits } from "../evaluations/evidence-reader/limits";
 import { COMPARISON_LIMITS, comparisonJson, comparisonTarget, comparisonFamily, type ComparisonOptions, type ComparisonProvider, type ComparisonTarget } from "./comparison-protocol";
 import { promptInteger, promptText } from "./protocol";
 import type { ComparisonUsage } from "./spend-ledger";
+import { getEffectiveSecret } from "../secret-store";
 
 export type ComparisonProvenance = "official-provider" | "controlled-http-fixture";
 export type ProviderFailure = "unavailable" | "cancelled" | "timeout" | "provider_error" | "invalid_response" | "response_limit" | "protected_content";
@@ -42,17 +43,24 @@ async function responseJson(response: Response, signal: AbortSignal): Promise<un
 /** Constructor injection is private qualification plumbing; no request or runtime environment can select a URL. */
 export function createComparisonProviderClient(client: ClientOptions = {}) {
   const transport = client.transport ?? ((url, init) => fetch(url, init)), provenance = client.provenance ?? "official-provider";
+  // Same precedence as every other provider feature: environment first, then the key saved in Settings.
+  const credential = (provider: ComparisonProvider): string | null => {
+    let token: string | null | undefined;
+    if (client.credentials) token = client.credentials[provider];
+    else { try { token = getEffectiveSecret(provider); } catch { token = null; } }
+    return typeof token === "string" && token.length > 0 && token.length <= 4096 && !/[\r\n\0]/.test(token) ? token : null;
+  };
   return {
-    available(provider: ComparisonProvider): boolean { const token = client.credentials?.[provider] ?? (client.credentials ? undefined : process.env[provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY"]); return typeof token === "string" && token.length > 0 && token.length <= 4096 && !/[\r\n\0]/.test(token); },
+    available(provider: ComparisonProvider): boolean { return credential(provider) !== null; },
     async execute(input: { target: ComparisonTarget; compiled: string; options: ComparisonOptions; signal: AbortSignal; remainingMs?: number }): Promise<ComparisonProviderResult> {
       const target = comparisonTarget(input.target), compiled = promptText(input.compiled, COMPARISON_LIMITS.inputBytes), outputTokens = promptInteger(input.options.maxOutputTokens, COMPARISON_LIMITS.outputTokens);
       if (!Number.isFinite(input.options.temperature) || input.options.temperature < 0 || input.options.temperature > 1) throw new ComparisonProviderError("provider_error", false);
-      if (!this.available(target.provider)) throw new ComparisonProviderError("unavailable", false);
+      const token = credential(target.provider);
+      if (token === null) throw new ComparisonProviderError("unavailable", false);
       if (input.signal.aborted) throw new ComparisonProviderError("cancelled", false);
       const timeout = new AbortController(), remaining = input.remainingMs ?? COMPARISON_LIMITS.attemptMs;
       if (!Number.isFinite(remaining) || remaining <= 0 || remaining > COMPARISON_LIMITS.attemptMs) throw new ComparisonProviderError("timeout", false);
       const timer = setTimeout(() => timeout.abort(), remaining), signal = AbortSignal.any([input.signal, timeout.signal]);
-      const token = client.credentials?.[target.provider] ?? process.env[target.provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY"]!;
       const family = comparisonFamily(target);
       const body = target.provider === "openai" ? { model: target.model, messages: [{ role: "user", content: compiled }], max_completion_tokens: outputTokens, temperature: input.options.temperature, stream: false, store: false, service_tier: "default", ...(family.reasoningEffort ? { reasoning_effort: family.reasoningEffort } : {}) }
         : { model: target.model, messages: [{ role: "user", content: compiled }], max_tokens: outputTokens, temperature: input.options.temperature, stream: false, thinking: { type: "disabled" }, service_tier: "standard_only", inference_geo: "global" };
