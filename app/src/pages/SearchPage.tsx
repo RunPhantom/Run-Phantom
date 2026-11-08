@@ -216,7 +216,7 @@ export function SearchPage() {
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <Eyebrow marker tone="accent">Search / Captured runs</Eyebrow>
-              <h1 className="rp-subsection-title mt-2">Local Search</h1>
+              <h1 className="rp-subsection-title mt-2">Local search</h1>
             </div>
             <Badge mono tone="outline" className="mt-0.5" aria-label={`${count}${currentResult?.hasMore ? " or more" : ""} results loaded`}>
               {count}{currentResult?.hasMore ? "+" : ""}
@@ -231,7 +231,7 @@ export function SearchPage() {
               maxLength={256}
               value={query}
               onChange={(event) => updateFilter("q", event.target.value)}
-              placeholder="Search by title, event, user, conversation, or id"
+              placeholder="Title, user or run ID"
               className={`pl-9 pr-9 ${query ? "border-rp-blue" : ""}`}
             />
             {query && <button type="button" className="rp-ease absolute right-1.5 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-control text-rp-ink-muted hover:bg-rp-row-hover hover:text-rp-ink" onClick={() => updateFilter("q", "")} aria-label="Clear search">
@@ -295,7 +295,7 @@ export function SearchPage() {
       </div>
       <div className={`${isMobile && !selectedId ? "hidden" : ""} min-w-0 flex-1`}>
         {selectedId ? <div className="flex h-full flex-col">
-          {isMobile && <button type="button" className="rp-ease flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-white px-5 py-2 text-left text-[13px] font-medium text-rp-ink hover:bg-rp-row-hover" onClick={() => navigate(`/search${querySuffix}`)}>
+          {isMobile && <button type="button" className="rp-ease flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-white px-4 py-2 text-left text-[13px] font-medium text-rp-ink hover:bg-rp-row-hover" onClick={() => navigate(`/search${querySuffix}`)}>
             <ArrowLeft aria-hidden="true" className="size-3.5 text-rp-blue" /><span>Back to search</span>
           </button>}
           <div className="min-h-0 flex-1 overflow-auto"><RunDetail key={selectedId} runId={selectedId} routeBase="/search" /></div>

@@ -50,7 +50,7 @@ test("evaluation workspace: find saved experiments without changing original out
   for (const width of [390, 320, 768, 1024, 1280]) {
     await page.setViewportSize({ width, height: 900 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
-    await expect(page.getByRole("navigation", { name: "Evaluation workspaces", exact: true }).getByRole("link", { name: "Prompt lab", exact: true })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Evaluation workspaces", exact: true }).getByRole("link", { name: "Prompts", exact: true })).toBeVisible();
   }
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: testInfo.outputPath("evaluation-workspace-mobile.png"), fullPage: true });
@@ -89,9 +89,9 @@ test("evaluation workspace: navigation keeps revision links and connects real cu
   await page.getByRole("textbox", { name: "New queue name", exact: true }).fill("Checkout curation");
   await page.getByRole("button", { name: "Create queue", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "Review queue", exact: true })).not.toHaveValue("");
-  await nav.getByRole("link", { name: "Prompt lab", exact: true }).click();
+  await nav.getByRole("link", { name: "Prompts", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Prompts", exact: true })).toBeVisible();
-  await expect(nav.getByRole("link", { name: "Prompt lab", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(nav.getByRole("link", { name: "Prompts", exact: true })).toHaveAttribute("aria-current", "page");
   await nav.getByRole("link", { name: "Regression workbench", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Evaluations", exact: true })).toBeVisible();
   await page.reload();

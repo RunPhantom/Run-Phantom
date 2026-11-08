@@ -31,7 +31,7 @@ export function NotFoundPage() {
         }
         action={
           <Button variant="primary" onClick={() => navigate("/runs", { replace: true })}>
-            Back to traces
+            Back to runs
           </Button>
         }
       />

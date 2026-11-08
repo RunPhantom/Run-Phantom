@@ -6,6 +6,7 @@
 .prompt-heading .prompt-eyebrow::before { content: ""; flex: none; width: 7px; height: 7px; background: var(--rp-blue); }
 .prompt-status { min-height: 28px; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--rp-ink-muted); margin-bottom: 16px; }
 .prompt-status svg { color: var(--rp-success); }
+.prompt-status:empty { min-height: 0; margin-bottom: 0; }
 .prompt-layout { display: grid; grid-template-columns: 220px minmax(300px, 1.4fr) minmax(260px, 1fr); gap: 24px; align-items: start; }
 .prompt-library, .prompt-editor, .prompt-preview { min-width: 0; background: var(--rp-surface); border: 1px solid var(--rp-line); border-radius: var(--rp-radius-lg); padding: 24px; animation: rp-fade-rise var(--rp-dur-rise) var(--rp-ease-standard) both; }
 .prompt-section-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px; }

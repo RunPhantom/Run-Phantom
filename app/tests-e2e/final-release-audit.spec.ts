@@ -141,7 +141,9 @@ test("release audit: run detail is usable at a 390px viewport", async ({ page, r
   const backLabelBox = await page.getByText("Back to runs", { exact: true }).boundingBox();
   expect(sidebarToggleBox).not.toBeNull();
   expect(backLabelBox).not.toBeNull();
-  expect(backLabelBox!.x).toBeGreaterThanOrEqual(sidebarToggleBox!.x + sidebarToggleBox!.width + 4);
+  const clearsToggle = backLabelBox!.y >= sidebarToggleBox!.y + sidebarToggleBox!.height
+    || backLabelBox!.x >= sidebarToggleBox!.x + sidebarToggleBox!.width + 4;
+  expect(clearsToggle, "the back label must not sit under the sidebar trigger").toBe(true);
 
   for (const name of ["Annotate", "Debug", "Download", "Save", "Replay", "More actions"]) {
     const button = page.getByRole("button", { name, exact: true });
@@ -165,8 +167,8 @@ test("release audit: mobile route headings clear the sidebar trigger", async ({ 
 
   const routes = [
     { path: "/runs", label: "connected", role: "status" as const },
-    { path: "/search", label: "Local Search", role: "heading" as const },
-    { path: "/saved", label: "Saved Runs", role: "heading" as const },
+    { path: "/search", label: "Local search", role: "heading" as const },
+    { path: "/saved", label: "Saved runs", role: "heading" as const },
     { path: "/settings", label: "Settings", role: "heading" as const },
   ];
 
@@ -248,7 +250,7 @@ test("release audit: mobile search uses a list-to-detail flow", async ({ page, r
   await seedRunPhantomFixtures(runPhantom.url);
 
   await page.goto(`${runPhantom.url}/search`);
-  const searchField = page.getByPlaceholder("Search by title, event, user, conversation, or id");
+  const searchField = page.getByPlaceholder("Title, user or run ID");
   await expect(searchField).toBeVisible({ timeout: 10_000 });
   await page.locator(`[data-run-id="${FIXTURE_PRIMARY_RUN_ID}"]`).click();
   await expect(page.getByRole("button", { name: "Back to search" })).toBeVisible();
@@ -264,9 +266,9 @@ test("release audit: mobile saved runs use a list-to-detail flow", async ({ page
 
   await page.goto(`${runPhantom.url}/saved/${FIXTURE_PRIMARY_RUN_ID}`);
   await expect(page.getByRole("button", { name: "Back to saved runs" })).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByText("Saved Runs", { exact: true })).toBeHidden();
+  await expect(page.getByText("Saved runs", { exact: true })).toBeHidden();
   await page.getByRole("button", { name: "Back to saved runs" }).click();
-  await expect(page.getByText("Saved Runs", { exact: true })).toBeVisible();
+  await expect(page.getByText("Saved runs", { exact: true })).toBeVisible();
 });
 
 test("release audit: reduced motion removes the empty-state entrance animation", async ({ page, runPhantom }) => {
@@ -341,10 +343,10 @@ test("release audit: settings tabs, secrets, agents, and 320px reflow work end t
   await page.goto(`${runPhantom.url}/settings`);
 
   await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible({ timeout: 10_000 });
-  const keysTab = page.getByRole("tab", { name: "API Keys" });
+  const keysTab = page.getByRole("tab", { name: "API keys" });
   await expect(keysTab).toHaveAttribute("aria-selected", "true");
 
-  const keysPanel = page.getByRole("tabpanel", { name: "API Keys" });
+  const keysPanel = page.getByRole("tabpanel", { name: "API keys" });
   await expect(keysPanel.getByRole("note")).toContainText("send the selected trace content");
   const openAiKey = keysPanel.getByLabel("OpenAI", { exact: true });
   await openAiKey.fill("test-key-stored-only-in-the-isolated-playwright-home");
@@ -355,11 +357,11 @@ test("release audit: settings tabs, secrets, agents, and 320px reflow work end t
 
   await keysTab.focus();
   await page.keyboard.press("ArrowRight");
-  const agentsTab = page.getByRole("tab", { name: "Agent Endpoints" });
+  const agentsTab = page.getByRole("tab", { name: "Agent endpoints" });
   await expect(agentsTab).toBeFocused();
   await expect(agentsTab).toHaveAttribute("aria-selected", "true");
 
-  const agentsPanel = page.getByRole("tabpanel", { name: "Agent Endpoints" });
+  const agentsPanel = page.getByRole("tabpanel", { name: "Agent endpoints" });
   await agentsPanel.getByLabel("Agent name").fill("test-agent");
   await agentsPanel.getByLabel("Replay endpoint URL").fill("http://127.0.0.1:65530/replay");
   await agentsPanel.getByRole("button", { name: "Add agent endpoint" }).click();

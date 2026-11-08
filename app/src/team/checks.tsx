@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { Plus } from "lucide-react";
+import { buttonVariants } from "../components/ui/button";
 import { downloadTeamJson, projectApi, projectPath, type Check, type CheckReport, type CheckSummary, type DeterministicRule, type RunSummary } from "../api/team";
 import { buildRule, emptyRule, ruleLabel, type RuleDraft } from "../components/evaluations/RuleEditor";
 import { useProject, useTeam, useTeamPages, useTeamQuery } from "./context";
@@ -9,7 +11,7 @@ export function ChecksPage() { return <Routes><Route index element={<CheckList /
 function CheckList() {
   const project = useProject(); const checks = useTeamPages<CheckSummary>([project.id, "checks"], `${projectApi(project.id)}/checks`);
   const items = checks.data?.pages.flatMap(page => page.items) ?? [];
-  return <div className="team-page"><Heading title="Saved checks" action={project.role !== "viewer" && <Link className="team-text-link" to={`${projectPath(project.id)}/checks/new`}>Create check</Link>}>Deterministic checks preserve their reference, candidate evidence and machine results.</Heading><ErrorNotice error={checks.error} retry={() => void checks.refetch()} />{checks.isPending && <Loading />}
+  return <div className="team-page"><Heading title="Saved checks" action={project.role !== "viewer" && <Link className={buttonVariants({ variant: "default" })} to={`${projectPath(project.id)}/checks/new`}><Plus aria-hidden="true" />Create check</Link>}>Deterministic checks preserve their reference, candidate evidence and machine results.</Heading><ErrorNotice error={checks.error} retry={() => void checks.refetch()} />{checks.isPending && <Loading />}
     {!checks.error && <div className="team-list">{items.map(check => <Link className="team-row team-row-link" key={check.id} to={`${projectPath(project.id)}/checks/${encodeURIComponent(check.id)}`}><div><strong>{check.name}</strong><p className="team-muted">{check.author.email} · <DateTime value={check.createdAt} /> · {check.counts.total} candidates</p></div><Badge value={check.status} /></Link>)}</div>}
     {!checks.isPending && !checks.error && !items.length && <Empty title="Make expectations explicit"><p>Save a reference trace, choose candidate captures and define deterministic rules. Missing evidence stays inconclusive.</p>{project.role === "viewer" ? <p>An editor or admin can create a check for this project.</p> : <Link to={`${projectPath(project.id)}/checks/new`}>Create your first check</Link>}</Empty>}<More available={checks.hasNextPage} busy={checks.isFetchingNextPage} onClick={() => void checks.fetchNextPage()} />
   </div>;

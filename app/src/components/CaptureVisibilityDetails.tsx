@@ -17,7 +17,7 @@ export function CaptureVisibilityDetails({ span }: { span: Span }) {
   return (
     <section aria-label={title} data-capture-span={span.id} className="min-w-0 rounded-sm border border-rp-line bg-rp-surface text-rp-ink">
       <details>
-        <summary className="cursor-pointer px-3 py-2.5 text-[13px] font-medium transition-colors duration-250 ease-standard hover:bg-rp-row-hover" style={{ minHeight: 44, overflowWrap: "anywhere" }}>
+        <summary className="rp-disclosure cursor-pointer px-3 py-2.5 text-[13px] font-medium transition-colors duration-250 ease-standard hover:bg-rp-row-hover" style={{ minHeight: 44, overflowWrap: "anywhere" }}>
           {title}{state ? ` · ${state}` : retrieval?.collection ? ` · ${retrieval.collection}` : ""}
         </summary>
         <div className="px-3 pb-3 space-y-3 text-xs" style={{ overflowWrap: "anywhere" }}>
@@ -27,7 +27,7 @@ export function CaptureVisibilityDetails({ span }: { span: Span }) {
           {retrieval?.filter && <div><div className="mb-1 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted">Captured filter</div><pre className="m-0 whitespace-pre-wrap break-words rounded-sm border border-rp-line bg-rp-canvas-blue p-2 font-mono">{retrieval.filter}</pre></div>}
           {stream && <div className="space-y-2">
             <p className="m-0">{stream.coverage === "complete" ? "All declared chunks were captured." : stream.chunks.length ? "Partial observed chunks are retained. Completion is not established by this text." : "No chunk text was captured."}</p>
-            {stream.chunks.length > 0 && <details><summary style={{ minHeight: 44, cursor: "pointer", paddingTop: 12 }}>Observed chunks ({stream.chunks.length})</summary>
+            {stream.chunks.length > 0 && <details><summary className="rp-disclosure" style={{ minHeight: 44, cursor: "pointer", paddingTop: 12 }}>Observed chunks ({stream.chunks.length})</summary>
               <ol className="m-0 pl-5 space-y-1">{stream.chunks.map(chunk => <li key={chunk.sequence}><span className="whitespace-pre-wrap">{chunk.text ?? "Text not captured"}</span></li>)}</ol>
             </details>}
             {stream.duplicateChunkCount > 0 && <p className="m-0">{stream.duplicateChunkCount} repeated chunk observations were combined.</p>}

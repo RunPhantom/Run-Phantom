@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "../ui/button";
 import "./evaluation-workspace.css";
@@ -10,7 +11,15 @@ const views = [
 ] as const;
 
 export function EvaluationNavigation({ active, onView }: { active: Workspace; onView?: (view: "regression" | "evidence" | "findings") => void }) {
-  return <nav aria-label="Evaluation workspaces" className="evaluation-navigation">
+  const nav = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const element = nav.current;
+    const current = element?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!element || !current || element.scrollWidth <= element.clientWidth) return;
+    const navBox = element.getBoundingClientRect(), currentBox = current.getBoundingClientRect();
+    if (currentBox.left < navBox.left || currentBox.right > navBox.right) element.scrollLeft += currentBox.left - navBox.left - 20;
+  }, [active]);
+  return <nav ref={nav} aria-label="Evaluation workspaces" className="evaluation-navigation">
     <div className="evaluation-navigation-primary">
       {views.map(view => onView
         ? <Button key={view.id} variant="ghost" aria-current={active === view.id ? "page" : undefined} onClick={() => onView(view.id)}>{view.label}</Button>
@@ -18,7 +27,7 @@ export function EvaluationNavigation({ active, onView }: { active: Workspace; on
     </div>
     <div className="evaluation-navigation-curation">
       <Link to="/review-queues" aria-current={active === "queues" ? "page" : undefined}>Review queues</Link>
-      <Link to="/prompts" aria-current={active === "prompts" ? "page" : undefined}>Prompt lab</Link>
+      <Link to="/prompts" aria-current={active === "prompts" ? "page" : undefined}>Prompts</Link>
     </div>
   </nav>;
 }

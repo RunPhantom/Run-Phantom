@@ -4,6 +4,7 @@ import { runPath } from "../utils/navigation";
 import { RunListItem, useShortRunIds } from "../components/RunList";
 import { RunDetail } from "../components/RunDetail";
 import { EmptyState } from "../components/EmptyState";
+import { EmptyPanel } from "@/components/ui/empty-panel";
 import { ReplayView } from "../components/ReplayView";
 import { RunComparison } from "../components/RunComparison";
 import { useReplay } from "../hooks/use-replay";
@@ -333,8 +334,8 @@ export function RunsPage() {
                 className={cn("size-1.5 rounded-full", wsConnected ? "bg-rp-success" : "bg-rp-danger")} />
               <span className={cn("rp-eyebrow", !wsConnected && "text-rp-danger")}>{wsConnected ? "connected" : "disconnected"}</span>
             </div>
-            <button type="button" aria-label="Clear all runs"
-              className="min-h-7 rounded-control px-2 text-[12px] font-medium text-rp-ink-muted transition-[background-color,color] duration-250 ease-standard hover:bg-rp-danger-soft hover:text-rp-danger"
+            <button type="button" aria-label="Clear all runs" disabled={runs.length === 0}
+              className="min-h-7 rounded-control px-2 text-[12px] font-medium text-rp-ink-muted transition-[background-color,color] duration-250 ease-standard hover:bg-rp-danger-soft hover:text-rp-danger disabled:pointer-events-none disabled:text-rp-ink-faint"
               onClick={handleClear}>
               Clear
             </button>
@@ -425,10 +426,10 @@ export function RunsPage() {
                       {isMobile && (
                         <button
                           type="button"
-                          className="flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-rp-surface py-2 pl-12 pr-4 text-left text-[13px] font-medium text-rp-ink transition-colors duration-250 ease-standard hover:bg-rp-row-hover"
+                          className="rp-ease flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-white px-4 py-2 text-left text-[13px] font-medium text-rp-ink hover:bg-rp-row-hover"
                           onClick={() => navigate("/runs")}
                         >
-                          <ArrowLeft aria-hidden="true" className="h-3.5 w-3.5 text-rp-ink-muted" />
+                          <ArrowLeft aria-hidden="true" className="size-3.5 text-rp-blue" />
                           <span>Back to runs</span>
                         </button>
                       )}
@@ -505,6 +506,18 @@ export function RunsPage() {
                     </div>
                   );
                 })()
+              : runsLoaded && runsError
+                ? (
+                  <div className="flex h-full items-center justify-center px-5 py-10 sm:px-10">
+                    <EmptyPanel
+                      className="w-full max-w-xl animate-fade-rise"
+                      tone="danger"
+                      eyebrow="Runs / Not loaded"
+                      title="Runs could not be loaded"
+                      description="The run list request failed, so this workspace cannot show which runs are stored. Use Retry in the run list once the local daemon is reachable."
+                    />
+                  </div>
+                )
               : runsLoaded
                 ? <EmptyState onSeeDemoTraces={openDemoTrace} />
                 : (

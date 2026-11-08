@@ -2,7 +2,8 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { QueryClient, QueryClientProvider, useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, useParams } from "react-router-dom";
 import { TeamApiError, TeamClient, projectApi, teamQuery, type Page, type Project, type SessionResponse } from "../api/team";
-import { ErrorNotice, Loading } from "./common";
+import { ErrorNotice, Heading, Loading, TeamBrand } from "./common";
+import { buttonVariants } from "../components/ui/button";
 import { ProjectContext } from "./project-context";
 import { discardTeamSearchHistory, synchronizeTeamSearchSession } from "../utils/search-state";
 
@@ -88,7 +89,9 @@ export function TeamProvider({ children }: { children: ReactNode }) {
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void load(); }, 30_000);
     return () => { active = false; controller.abort(); clearInterval(timer); };
   }, [client, attempt]);
-  return <QueryClientProvider client={queries}>{session ? <TeamContext.Provider value={{ client, session, acceptSession, notice, permissionRevisions, clearSession: () => { acceptSession(signedOut); setNotice(""); } }}>{children}</TeamContext.Provider> : <main className="team-auth"><ErrorNotice error={error} retry={() => setAttempt(n => n + 1)} />{!error && <Loading />}</main>}</QueryClientProvider>;
+  return <QueryClientProvider client={queries}>{session ? <TeamContext.Provider value={{ client, session, acceptSession, notice, permissionRevisions, clearSession: () => { acceptSession(signedOut); setNotice(""); } }}>{children}</TeamContext.Provider> : <main className="team-auth"><header className="team-auth-bar"><TeamBrand /></header>{error instanceof TeamApiError && error.status === 404 && error.code === "request_failed"
+    ? <div className="team-auth-content"><Heading eyebrow="Team mode / Not served here" title="No team server at this address">This Run Phantom server runs the local workspace only. Open the address of your team server to sign in.</Heading><a href="/runs" className={`${buttonVariants({ variant: "default" })} mt-6`}>Open local workspace</a></div>
+    : <><ErrorNotice error={error} retry={() => setAttempt(n => n + 1)} />{!error && <Loading />}</>}</main>}</QueryClientProvider>;
 }
 
 export function useTeamQuery<T>(key: readonly unknown[], path: string, poll = 0) {
