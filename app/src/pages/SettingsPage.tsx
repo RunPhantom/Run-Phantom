@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Cpu, FlaskConical, Key, Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { LocalAgentSetupCTA } from "../components/LocalAgentSetupCTA";
 import { SecretInput } from "../components/SecretInput";
 import {
@@ -19,25 +19,30 @@ import {
   type SecretStatuses,
 } from "../api/secrets";
 import { useRunPhantomEvent } from "../hooks/use-runphantom-ws";
-import { C } from "../utils/colors";
+import { Button } from "@/components/ui/button";
+import { StatusPill } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Eyebrow } from "@/components/ui/typography";
 import "./settings.css";
 import { fetchPrices, modelPricingConsentEnabled, setModelPricingConsent } from "../utils/costs";
 
 type Tab = "agents" | "keys" | "debug";
 
-const TABS: { id: Tab; label: string; icon: typeof Cpu }[] = [
-  { id: "keys", label: "API Keys", icon: Key },
-  { id: "agents", label: "Agent Endpoints", icon: Cpu },
-  { id: "debug", label: "Debug", icon: FlaskConical },
+const TABS: { id: Tab; label: string }[] = [
+  { id: "keys", label: "API Keys" },
+  { id: "agents", label: "Agent Endpoints" },
+  { id: "debug", label: "Debug" },
 ];
 
 function SectionBlock({
+  eyebrow,
   title,
   description,
   panelId,
   labelledBy,
   children,
 }: {
+  eyebrow: string;
   title: string;
   description?: string;
   panelId: string;
@@ -50,18 +55,18 @@ function SectionBlock({
       role="tabpanel"
       aria-labelledby={labelledBy}
       tabIndex={0}
-      className="settings-panel"
-      style={{ borderColor: C.border, background: C.surface }}
+      className="settings-panel animate-fade-rise"
     >
-      <h2 className="settings-panel-title" style={{ color: C.fg4 }}>
+      <Eyebrow marker tone="accent">{eyebrow}</Eyebrow>
+      <h2 className="rp-section-title mt-3">
         {title}
       </h2>
       {description && (
-        <p className="settings-description" style={{ color: C.fg1 }}>
+        <p className="rp-lede mt-2">
           {description}
         </p>
       )}
-      <div className="space-y-3">{children}</div>
+      <div className="mt-6 space-y-4">{children}</div>
     </section>
   );
 }
@@ -118,18 +123,19 @@ export function SettingsPage() {
 
   return (
     <div className="settings-workspace flex h-full min-h-0 flex-col lg:flex-row">
-      <div className="border-b p-5 lg:w-64 lg:flex-shrink-0 lg:border-b-0 lg:border-r lg:p-6" style={{ borderColor: C.border }}>
-        <h1 id={tablistLabelId} className="settings-title mb-2 pl-10 lg:pl-0" style={{ color: C.fg4 }}>
+      <div className="border-b border-rp-line bg-white px-5 py-6 lg:w-64 lg:flex-shrink-0 lg:border-b-0 lg:border-r lg:px-5 lg:py-8">
+        <Eyebrow marker tone="accent">Settings / Local</Eyebrow>
+        <h1 id={tablistLabelId} className="rp-subsection-title mt-2">
           Settings
         </h1>
-        <p className="settings-subtitle pl-10 lg:pl-0">Your local workspace</p>
+        <p className="rp-field-hint mt-1">Stored by the daemon on this machine.</p>
         <nav
           role="tablist"
           aria-labelledby={tablistLabelId}
           aria-orientation="vertical"
-          className="grid gap-2"
+          className="mt-5 grid gap-1"
         >
-          {TABS.map(({ id, label, icon: Icon }, index) => (
+          {TABS.map(({ id, label }, index) => (
             <button
               key={id}
               id={`runphantom-settings-tab-${id}`}
@@ -146,23 +152,20 @@ export function SettingsPage() {
               // reader announces a tab that controls nothing.
               aria-controls={tab === id ? `runphantom-settings-panel-${id}` : undefined}
               tabIndex={tab === id ? 0 : -1}
-              className="rp-tab flex min-h-[44px] items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-[background-color,border-color,color] duration-150"
-              style={{
-                color: tab === id ? C.fg4 : C.fg1,
-                background: tab === id ? C.selected : C.surface,
-                borderColor: tab === id ? C.selectedBorder : C.border,
-              }}
+              className={`rp-tab rp-ease flex min-h-10 items-center gap-3 rounded-sm px-3 text-left text-[14px] ${tab === id ? "bg-rp-wash font-semibold text-rp-blue" : "text-rp-ink-soft hover:bg-rp-row-hover"}`}
             >
-              <Icon className="h-3.5 w-3.5 flex-shrink-0" style={{ opacity: tab === id ? 0.92 : 0.55 }} />
-              <span className="text-[12px]">{label}</span>
+              <span aria-hidden="true" className={`font-mono text-[11px] tabular-nums ${tab === id ? "text-rp-blue" : "text-rp-index"}`}>{String(index + 1).padStart(2, "0")}</span>
+              <span>{label}</span>
             </button>
           ))}
         </nav>
       </div>
 
-      <div className="min-h-0 min-w-0 flex-1 overflow-auto p-5 lg:p-8">
-        <div className="mx-auto w-full max-w-2xl pb-16 lg:mx-0 lg:max-w-3xl">
+      <div className="min-h-0 min-w-0 flex-1 overflow-auto px-5 py-8 sm:px-10 sm:py-11">
+        <div className="w-full max-w-3xl pb-16">
           <SectionBlock
+            key={tab}
+            eyebrow={currentTabConfig.id === "keys" ? "Providers / Write-only keys" : currentTabConfig.id === "agents" ? "Replay / Local endpoints" : "Local UI state"}
             title={currentTabConfig.label}
             description={
               currentTabConfig.id === "keys"
@@ -290,43 +293,42 @@ function AgentEndpointsSection() {
       />
 
       {loading && <p role="status" className="settings-description">Loading registered endpoints…</p>}
-      {error && <div role="alert" className="settings-feedback settings-error"><p>{error}</p>{!loaded ? <button type="button" onClick={() => void reload()} disabled={busy}>Try loading again</button> : null}</div>}
+      {error && <div role="alert" className="settings-feedback settings-error"><p>{error}</p>{!loaded ? <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => void reload()} disabled={busy}>Try loading again</Button> : null}</div>}
       {notice && <p role="status" className="settings-feedback">{notice}</p>}
       {!loading && !error && Object.keys(agents).length === 0 && <p className="settings-description">No replay endpoints registered. Start with the setup prompt or add an existing endpoint below.</p>}
       {Object.keys(agents).length > 0 && (
-        <div className="overflow-hidden rounded-2xl" style={{ border: `1px solid ${C.border}` }}>
-          {Object.entries(agents).map(([name, config], index) => {
+        <div className="overflow-hidden rounded-lg border border-rp-line bg-white">
+          <div className="hidden grid-cols-[minmax(92px,160px)_minmax(0,1fr)_auto_36px] gap-3 border-b border-rp-line bg-rp-canvas px-4 py-2 sm:grid">
+            <span className="rp-eyebrow">Name</span>
+            <span className="rp-eyebrow">Replay URL</span>
+            <span className="rp-eyebrow">Health</span>
+            <span className="sr-only">Actions</span>
+          </div>
+          {Object.entries(agents).map(([name, config]) => {
             const status = health[name] ?? "unavailable";
             return (
               <div
                 key={name}
-                className="group grid gap-2 px-3 py-3 sm:grid-cols-[auto_minmax(92px,120px)_minmax(0,1fr)_auto_auto] sm:items-center"
-                style={{
-                  borderTop: index > 0 ? `1px solid ${C.border}` : undefined,
-                  background: index % 2 === 0 ? C.surface : C.elevated,
-                }}
+                className="rp-ease group grid grid-cols-[minmax(0,1fr)_auto_36px] items-center gap-x-3 gap-y-1 border-b border-rp-line-muted px-4 py-3 last:border-b-0 hover:bg-rp-row-hover sm:grid-cols-[minmax(92px,160px)_minmax(0,1fr)_auto_36px] sm:gap-y-0"
               >
-                <div
-                  className={`h-2 w-2 rounded-full flex-shrink-0 ${status === "online" ? "pulse-dot" : ""}`}
-                  style={{ background: status === "online" ? C.green : C.fg0, opacity: status === "online" ? 0.85 : 0.5 }}
-                />
-                <span className="min-w-[84px] text-[12px] font-medium" style={{ color: C.fg3 }}>
+                <span className="min-w-0 break-words text-[13px] font-medium text-rp-ink">
                   {name}
                 </span>
-                <span className="flex-1 truncate font-mono text-[11px]" style={{ color: C.fg1 }}>
-                  {config.url}
+                <span title={config.url || undefined} className={`rp-meta order-last col-span-3 min-w-0 truncate sm:order-none sm:col-span-1 ${config.url ? "text-rp-ink-soft" : "text-rp-ink-muted"}`}>
+                  {config.url || "No URL registered"}
                 </span>
-                <span className="min-w-[48px] text-right text-[10px]" style={{ color: status === "online" ? C.green : C.fg0 }}>
+                <StatusPill status={status === "online" ? "success" : "neutral"} live={status === "online"} className="justify-self-start">
                   {status}
-                </span>
+                </StatusPill>
                 <button
                   type="button"
-                  className="min-h-[44px] rounded-xl px-3 py-2 text-left transition-colors hover:bg-[color:var(--rp-ink-wash)] sm:justify-self-end sm:px-2 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                  className="rp-ease grid size-9 place-items-center justify-self-end rounded-sm text-rp-ink-muted hover:bg-rp-danger-soft hover:text-rp-danger sm:opacity-0 sm:focus-visible:opacity-100 sm:group-hover:opacity-100"
                   disabled={busy || loading || !loaded}
                   onClick={() => void removeAgent(name)}
                   aria-label={`Remove ${name}`}
+                  title={`Remove ${name}`}
                 >
-                  <Trash2 className="h-3 w-3" style={{ color: C.fg1 }} />
+                  <Trash2 aria-hidden="true" className="size-3.5" />
                 </button>
               </div>
             );
@@ -335,21 +337,20 @@ function AgentEndpointsSection() {
       )}
 
       <form
-        className="grid gap-3 rounded-2xl border p-4 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.6fr)_auto] sm:items-end"
-        style={{ borderColor: C.border, background: C.elevated }}
+        className="grid gap-4 rounded-lg border border-rp-line bg-white p-5 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.6fr)_auto] sm:items-end"
         onSubmit={(event) => {
           event.preventDefault();
           void addAgent();
         }}
       >
-        <div className="min-w-0">
-          <label className="mb-1.5 block text-[11px] font-medium" style={{ color: C.fg2 }} htmlFor="runphantom-agent-name">
+        <p className="rp-eyebrow sm:col-span-3">Add an existing endpoint</p>
+        <div className="grid min-w-0 gap-1.5">
+          <label className="rp-field-label" htmlFor="runphantom-agent-name">
             Agent name
           </label>
-          <input
+          <Input
             id="runphantom-agent-name"
-            className="min-h-[44px] w-full min-w-0 rounded-xl border px-3 py-2 font-mono text-[12px] outline-none transition-colors"
-            style={{ background: C.surface, color: C.fg3, borderColor: C.border }}
+            className="font-mono text-[13px]"
             required
             disabled={busy || loading || !loaded}
             maxLength={128}
@@ -358,14 +359,13 @@ function AgentEndpointsSection() {
             onChange={(event) => setNewName(event.target.value)}
           />
         </div>
-        <div className="min-w-0">
-          <label className="mb-1.5 block text-[11px] font-medium" style={{ color: C.fg2 }} htmlFor="runphantom-agent-url">
+        <div className="grid min-w-0 gap-1.5">
+          <label className="rp-field-label" htmlFor="runphantom-agent-url">
             Replay endpoint URL
           </label>
-          <input
+          <Input
             id="runphantom-agent-url"
-            className="min-h-[44px] w-full min-w-0 rounded-xl border px-3 py-2 font-mono text-[12px] outline-none transition-colors"
-            style={{ background: C.surface, color: C.fg3, borderColor: C.border }}
+            className="font-mono text-[13px]"
             required
             disabled={busy || loading || !loaded}
             placeholder="http://localhost:5860/replay"
@@ -373,18 +373,15 @@ function AgentEndpointsSection() {
             onChange={(event) => setNewUrl(event.target.value)}
           />
         </div>
-        <button
+        <Button
           type="submit"
           aria-label="Add agent endpoint"
           disabled={busy || loading || !loaded || !newName.trim() || !newUrl.trim()}
-          className="min-h-[44px] rounded-xl border px-4 py-2 transition-colors rp-hover-wash"
-          style={{ background: C.surface, color: C.fg2, borderColor: C.border }}
+          loading={busy}
         >
-          <span className="flex items-center justify-center gap-2 text-[12px] font-medium">
-            <Plus className="h-3 w-3" />
-            {busy ? "Saving…" : "Add"}
-          </span>
-        </button>
+          {!busy && <Plus aria-hidden="true" />}
+          {busy ? "Saving…" : "Add"}
+        </Button>
       </form>
     </>
   );
@@ -488,15 +485,15 @@ function KeysSection() {
     <>
       <div
         role="note"
-        className="rounded-xl border px-3 py-2 text-[11px] leading-relaxed"
-        style={{ color: C.fg2, borderColor: C.border, background: C.elevated }}
+        className="rounded-lg border border-rp-line-muted bg-rp-canvas-blue px-4 py-3 text-[13px] leading-6 text-rp-ink-soft"
       >
-        Provider-backed Ask Agent and summaries send the selected trace content to the configured external provider. Model discovery contacts Anthropic. Optional model pricing contacts OpenRouter only after you enable it below. Capture, browsing, saved data, and registered local replay otherwise stay local unless the replay endpoint itself calls a provider.
+        <Eyebrow className="mb-1.5">Data boundary</Eyebrow>
+        <p>Provider-backed Ask Agent and summaries send the selected trace content to the configured external provider. Model discovery contacts Anthropic. Optional model pricing contacts OpenRouter only after you enable it below. Capture, browsing, saved data, and registered local replay otherwise stay local unless the replay endpoint itself calls a provider.</p>
       </div>
-      <label className="flex min-h-11 items-start gap-3 rounded-xl border px-3 py-2.5" style={{ borderColor: C.border, background: C.elevated }}>
+      <label className="rp-ease flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border border-rp-line bg-white px-4 py-3.5 hover:border-rp-wash-border">
         <input
           type="checkbox"
-          className="mt-0.5 h-4 w-4 accent-[color:var(--rp-accent)]"
+          className="mt-0.5 size-4 shrink-0 cursor-pointer accent-[color:var(--rp-blue)]"
           checked={modelPricingEnabled}
           onChange={(event) => {
             const enabled = event.target.checked;
@@ -506,14 +503,15 @@ function KeysSection() {
           }}
         />
         <span className="min-w-0">
-          <span className="block text-[12px] font-medium" style={{ color: C.fg3 }}>Fetch public model pricing</span>
-          <span className="mt-0.5 block text-[11px] leading-relaxed" style={{ color: C.fg1 }}>
+          <span className="block text-[13px] font-medium text-rp-ink">Fetch public model pricing</span>
+          <span className="mt-0.5 block text-[12px] leading-5 text-rp-ink-muted">
             Contacts OpenRouter for public price metadata. No trace content, prompts, or API keys are included.
           </span>
         </span>
       </label>
       {!statuses && !statusError && <p role="status" className="settings-description">Checking saved key status…</p>}
-      {statusError && <div role="alert" className="settings-feedback settings-error"><p>{statusError}</p><button type="button" onClick={() => setStatusAttempt(value => value + 1)}>Try loading key status again</button></div>}
+      {statusError && <div role="alert" className="settings-feedback settings-error"><p>{statusError}</p><Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => setStatusAttempt(value => value + 1)}>Try loading key status again</Button></div>}
+      <div className="divide-y divide-rp-line-muted rounded-lg border border-rp-line bg-white px-5">
       <SecretInput
         label="Anthropic"
         placeholder="sk-ant-..."
@@ -540,11 +538,11 @@ function KeysSection() {
         onClear={canClearSecret("openai") ? () => void clearSecret("openai") : undefined}
         getKeyUrl="https://platform.openai.com/api-keys"
       />
+      </div>
       {saveError && (
         <div
           role="alert"
-          className="rounded-xl border px-3 py-2 text-[11px]"
-          style={{ color: C.red, borderColor: "color-mix(in srgb, var(--rp-danger) 24%, white 76%)", background: "color-mix(in srgb, var(--rp-danger) 8%, white 92%)" }}
+          className="rounded-sm border border-rp-danger-border bg-rp-danger-soft px-3 py-2 text-[13px] text-rp-danger"
         >
           {saveError}
         </div>
@@ -570,23 +568,23 @@ function DebugSection() {
 
   return (
     <>
-      <div className="flex flex-col gap-4 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between" style={{ borderColor: C.border, background: C.elevated }}>
+      <div className="flex flex-col gap-4 rounded-lg border border-rp-line bg-white p-5 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 flex-col">
-          <span className="text-[12px]" style={{ color: C.fg3 }}>
+          <span className="text-[14px] font-medium text-rp-ink">
             Coding-agent onboarding
           </span>
-          <span className="mt-0.5 text-[11px]" style={{ color: C.fg1 }}>
+          <span className="mt-1 text-[13px] leading-5 text-rp-ink-muted">
             Show the local coding agent connection screen again.
           </span>
         </div>
-        <button
+        <Button
           type="button"
-          className="min-h-[44px] rounded-xl px-4 py-2 text-[11px] font-mono transition-colors rp-hover-wash"
-          style={{ color: reset ? C.green : C.fg2, background: C.surface, border: `1px solid ${C.border}` }}
+          variant="outline"
+          className={reset ? "border-rp-success-border bg-rp-success-soft text-rp-success hover:border-rp-success-border hover:bg-rp-success-soft" : undefined}
           onClick={resetChatOnboarding}
         >
-          {reset ? "reset" : "show again"}
-        </button>
+          {reset ? "Reset" : "Show again"}
+        </Button>
       </div>
     </>
   );
