@@ -4,7 +4,6 @@ import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { Streamdown } from "streamdown";
 import { Copy, Check } from "lucide-react";
-import { C } from "../utils/colors";
 
 const plugins = { cjk, code, math };
 
@@ -22,18 +21,16 @@ function CodeBlock({ children, ...props }: React.HTMLAttributes<HTMLPreElement>)
   };
 
   return (
-    <div className="relative group my-2 rounded-lg overflow-hidden"
-      style={{ background: "var(--rp-ink-a04)", border: `1px solid var(--rp-ink-a08)` }}>
+    <div className="group relative my-2 overflow-hidden rounded-sm border border-rp-line bg-rp-canvas-blue">
       <button
         type="button"
         aria-label={copied ? "Code copied" : "Copy code"}
-        className="absolute right-2 top-2 grid min-h-6 min-w-6 place-items-center rounded opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-        style={{ background: "var(--rp-ink-a08)" }}
+        className="absolute right-2 top-2 grid min-h-7 min-w-7 place-items-center rounded-control border border-rp-line bg-rp-surface opacity-0 transition-[opacity,background-color] duration-250 ease-standard hover:bg-rp-wash focus-visible:opacity-100 group-hover:opacity-100"
         onClick={handleCopy}
       >
-        {copied ? <Check className="size-3" style={{ color: C.green }} /> : <Copy className="size-3" style={{ color: C.fg1 }} />}
+        {copied ? <Check aria-hidden="true" className="size-3 text-rp-success" /> : <Copy aria-hidden="true" className="size-3 text-rp-ink-muted" />}
       </button>
-      <pre className="p-3 text-[11px] font-mono overflow-auto sb" style={{ color: C.fg3 }} {...props}>
+      <pre className="sb overflow-auto p-3 font-mono text-[12px] leading-5 text-rp-ink" {...props}>
         {children}
       </pre>
     </div>
@@ -46,8 +43,7 @@ const components = {
       return <code className={className} {...props}>{children}</code>;
     }
     return (
-      <code className="px-1 py-0.5 rounded text-[0.9em]"
-        style={{ background: "var(--rp-ink-a06)", color: C.fg3 }}
+      <code className="rounded-sm border border-rp-line-muted bg-rp-canvas-blue px-1 py-0.5 font-mono text-[0.88em] text-rp-ink"
         {...props}>
         {children}
       </code>

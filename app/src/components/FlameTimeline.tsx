@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Copy, Check, X } from "lucide-react";
-import { C, spanColor } from "../utils/colors";
+import { cn } from "@/lib/utils";
 import { displayPayload, fmt, plural, tryJson } from "../utils/helpers";
 import { setMeridian, clearMeridian } from "../utils/meridian";
 import type { Span, SubAgent } from "../utils/types";
@@ -17,15 +17,20 @@ function timingLabel(span: Span): string {
     ? fmt(span.duration_ms) : "Time unavailable";
 }
 
-function spanTypeInfo(span: Span): { color: string; label: string } {
-  if (span.span_type === "TRACE") return { color: C.purple, label: "TRACE" };
-  if (span.span_type === "TOOL_CALL") return { color: C.orange, label: "TOOL" };
-  if (span.span_type?.includes("LLM")) return { color: C.fg1, label: "LLM" };
-  return { color: C.fg0, label: "SPAN" };
+function spanTypeInfo(span: Span): { className: string; label: string } {
+  if (span.span_type === "TRACE") return { className: "bg-[color:var(--rp-n4)] text-rp-ink", label: "TRACE" };
+  if (span.span_type === "TOOL_CALL") return { className: "bg-[color:var(--rp-n4)] text-rp-ink", label: "TOOL" };
+  if (span.span_type?.includes("LLM")) return { className: "bg-rp-wash text-rp-blue", label: "LLM" };
+  return { className: "bg-[color:var(--rp-n4)] text-rp-ink-muted", label: "SPAN" };
 }
 
-const LLM_BAR_COLOR = "color-mix(in srgb, var(--rp-info) 38%, white 62%)";
-const LLM_LABEL_COLOR = "color-mix(in srgb, var(--rp-info) 72%, var(--rp-ink-soft) 28%)";
+// Blue is the model, ink is the agent acting (tools, sub-agents), red is a
+// failure. A per-name hue palette made healthy tool bars read as status colours.
+const BAR_STYLE = {
+  llm: { background: "var(--rp-wash)", border: "1px solid var(--rp-wash-border)", color: "var(--rp-blue)" },
+  action: { background: "var(--rp-ink-soft)", border: "1px solid var(--rp-ink-soft)", color: "#FFFFFF" },
+  error: { background: "var(--rp-danger)", border: "1px solid var(--rp-danger)", color: "#FFFFFF" },
+} as const;
 
 function TooltipPayloadBlock({
   label,
@@ -44,16 +49,15 @@ function TooltipPayloadBlock({
 
   return (
     <div
-      className="px-3 py-1.5 flex flex-col min-h-0"
-      style={{ flex: 1, ...(showTopBorder ? { borderTop: `1px solid ${C.border}` } : {}) }}
+      className={cn("flex min-h-0 flex-col px-3 py-2", showTopBorder && "border-t border-rp-line")}
+      style={{ flex: 1 }}
     >
       <div className="flex items-center justify-between gap-2 mb-0.5 flex-shrink-0">
-        <div className="text-[9px] uppercase tracking-wide font-medium" style={{ color: C.fg0 }}>{label}</div>
+        <div className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted">{label}</div>
         <button
           type="button"
           aria-label={copied ? `Copied ${label}` : `Copy ${label}`}
-          className="flex-shrink-0 rounded p-1 transition-colors hover:bg-[color:var(--rp-ink-wash)]"
-          style={{ color: copied ? C.green : C.fg0 }}
+          className={cn("flex-shrink-0 rounded-sm p-1 transition-colors duration-250 ease-standard hover:bg-rp-row-hover", copied ? "text-rp-success" : "text-rp-ink-muted hover:text-rp-ink")}
           title="Copy"
           onClick={(e) => {
             e.stopPropagation();
@@ -66,9 +70,8 @@ function TooltipPayloadBlock({
         </button>
       </div>
       <pre
-        className="text-[10px] font-mono leading-relaxed whitespace-pre-wrap break-words"
+        className={cn("whitespace-pre-wrap break-words font-mono text-[11px] leading-[18px]", isErr ? "text-rp-danger" : "text-rp-ink-soft")}
         style={{
-          color: isErr ? C.red : C.fg1,
           flex: 1,
           minHeight: 0,
           overflow: "auto",
@@ -132,37 +135,31 @@ function SpanTooltip({
   return (
     <div
       data-span-tooltip
-      className="fixed z-[9999] rounded-lg shadow-2xl overflow-hidden flex flex-col pointer-events-auto"
+      className="pointer-events-auto fixed z-[9999] flex flex-col overflow-hidden rounded-md border border-rp-line bg-rp-surface shadow-e3"
       style={{
         left,
         top,
         width: W,
         maxHeight: maxH,
-        background: C.elevated,
-        border: `1px solid ${C.borderLight}`,
       }}
       onMouseEnter={onPointerEnter}
       onMouseLeave={onPointerLeave}
       onFocusCapture={onPointerEnter}
       onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) onPointerLeave(); }}
     >
-      <div className="px-3 py-2 flex items-center gap-2 flex-shrink-0" style={{ borderBottom: `1px solid ${C.border}` }}>
-        <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded"
-          style={{
-            color: type.color,
-            background: C.selected,
-          }}>
+      <div className="flex flex-shrink-0 items-center gap-2 border-b border-rp-line py-1 pl-3 pr-1">
+        <span className={cn("rounded-sm px-1.5 py-0.5 font-mono text-[10px] font-medium tracking-[0.08em]", type.className)}>
           {type.label}
         </span>
-        <span className="text-[11px] font-mono font-medium truncate flex-1" style={{ color: C.fg4 }}>{span.name}</span>
-        <button type="button" aria-label="Close span details" className="min-h-11 min-w-11 flex items-center justify-center flex-shrink-0 rounded rp-hover-wash" style={{ color: C.fg2 }} onClick={onDismiss}><X className="size-4" /></button>
+        <span className="flex-1 truncate font-mono text-[12px] font-medium text-rp-ink" title={span.name}>{span.name}</span>
+        <button type="button" aria-label="Close span details" className="flex min-h-11 min-w-11 flex-shrink-0 items-center justify-center rounded-control text-rp-ink-muted transition-colors duration-250 ease-standard hover:bg-rp-row-hover hover:text-rp-ink" onClick={onDismiss}><X aria-hidden="true" className="size-4" /></button>
       </div>
-      <div className="px-3 py-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] font-mono flex-shrink-0" style={{ borderBottom: `1px solid ${C.border}` }}>
-        <span style={{ color: C.fg2 }}>{timingLabel(span)}</span>
-        <span style={{ color: isErr ? C.red : C.green }}>{span.status}</span>
-        {span.model && <span style={{ color: C.fg1 }}>{span.model}</span>}
+      <div className="flex flex-shrink-0 flex-wrap gap-x-4 gap-y-1 border-b border-rp-line px-3 py-2 font-mono text-[11px] tabular-nums">
+        <span className="text-rp-ink">{timingLabel(span)}</span>
+        <span className={isErr ? "text-rp-danger" : "text-rp-success"}>{span.status}</span>
+        {span.model && <span className="text-rp-ink-muted">{span.model}</span>}
         {(inTok > 0 || outTok > 0) && (
-          <span style={{ color: C.fg1 }}>{inTok.toLocaleString()} in / {outTok.toLocaleString()} out</span>
+          <span className="text-rp-ink-muted">{inTok.toLocaleString()} in / {outTok.toLocaleString()} out</span>
         )}
       </div>
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
@@ -176,13 +173,12 @@ function SpanTooltip({
           />
         ) : null}
       </div>
-      {onOpenSpan && <button type="button" className="min-h-11 px-3 text-left text-xs rp-hover-wash" style={{ color: C.accent, borderTop: `1px solid ${C.border}` }} onClick={onOpenSpan}>Open span in tree</button>}
+      {onOpenSpan && <button type="button" className="min-h-11 border-t border-rp-line px-3 text-left text-[12px] font-medium text-rp-blue transition-colors duration-250 ease-standard hover:bg-rp-wash" onClick={onOpenSpan}>Open span in tree</button>}
     </div>
   );
 }
 
 export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { spans: Span[]; subAgents?: SubAgent[]; onDiveIn?: (rootSpanId: string) => void }) {
-  const colorMap = useMemo(() => new Map<string, string>(), []);
   const vizSpans = useMemo(() => spans.filter(s => s.span_type === "TRACE" || s.span_type === "TOOL_CALL" || s.span_type?.includes("LLM")), [spans]);
   const subAgentSpanIds = useMemo(() => new Set(subAgents.flatMap(a => a.span_ids)), [subAgents]);
   const layout = useMemo(() => buildCondensedTimeline(vizSpans, subAgents), [vizSpans, subAgents]);
@@ -337,13 +333,13 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
   const gridMs = gridIntervals.find(g => dur / g <= targetGrids) ?? dur / targetGrids;
 
   return (
-    <div ref={containerRef} data-trace-timeline data-layout={compact ? "compact" : "named"} className="rp-clipped-ring rounded-lg mb-4 min-w-0" style={{ background: C.surface, border: `1px solid ${C.border}`, overflow: "hidden" }}>
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-3 py-1.5" style={{ borderBottom: `1px solid ${C.border}` }}>
-        <span className="text-xs font-medium" style={{ color: C.fg2 }}>Trajectory</span>
-        <span className="text-xs font-mono" style={{ color: C.fg1 }}>{plural(layout.entries.length, "span")} &middot; {layout.elapsedMs === null ? "Time unavailable" : fmt(layout.elapsedMs)}{compact && ` · ${plural(rowCount, "row")}`}</span>
-        <button type="button" aria-pressed={compact} className="min-h-11 px-2 text-xs rounded rp-hover-wash" style={{ color: compact ? C.accent : C.fg2, background: compact ? C.selected : undefined, border: `1px solid ${C.border}` }} onClick={() => { setCompact(!compact); setHovered(null); clearMeridian(); }}>Compact layout</button>
+    <div ref={containerRef} data-trace-timeline data-layout={compact ? "compact" : "named"} className="rp-clipped-ring mb-4 min-w-0 overflow-hidden rounded-lg border border-rp-line bg-rp-surface">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-rp-line py-1 pl-4 pr-1">
+        <span className="rp-eyebrow"><span aria-hidden="true" className="rp-eyebrow-marker" />Trajectory</span>
+        <span className="rp-meta mr-auto">{plural(layout.entries.length, "span")} &middot; {layout.elapsedMs === null ? "Time unavailable" : fmt(layout.elapsedMs)}{compact && ` · ${plural(rowCount, "row")}`}</span>
+        <button type="button" aria-pressed={compact} className={cn("ml-auto min-h-11 rounded-control border px-3 text-[12px] font-medium transition-[background-color,border-color,color] duration-250 ease-standard", compact ? "border-rp-wash-border bg-rp-wash text-rp-blue" : "border-transparent text-rp-ink-muted hover:bg-rp-row-hover hover:text-rp-ink")} onClick={() => { setCompact(!compact); setHovered(null); clearMeridian(); }}>Compact layout</button>
       </div>
-      {(layout.omittedCount > 0 || layout.unavailableTimeCount > 0 || layout.unavailableParentCount > 0 || layout.cycleCount > 0 || layout.duplicateCount > 0 || layout.windowCapped || layout.groupingUnavailable || layout.unavailableInvocationCount > 0) && <p data-timeline-coverage className="px-3 py-2 text-xs leading-relaxed" style={{ color: C.fg1 }}>
+      {(layout.omittedCount > 0 || layout.unavailableTimeCount > 0 || layout.unavailableParentCount > 0 || layout.cycleCount > 0 || layout.duplicateCount > 0 || layout.windowCapped || layout.groupingUnavailable || layout.unavailableInvocationCount > 0) && <p data-timeline-coverage className="border-b border-rp-line-muted bg-rp-canvas-blue px-4 py-2 text-[12px] leading-5 text-rp-ink-muted">
         {layout.omittedCount > 0 && `${layout.omittedCount.toLocaleString()} spans omitted at the 10,000-span layout limit. Unique actions and parent links unavailable in this partial view. `}
         {layout.unavailableTimeCount > 0 && `${plural(layout.unavailableTimeCount, "span")} with time unavailable. `}
         {layout.unavailableParentCount > 0 && `${plural(layout.unavailableParentCount, "parent link")} outside this timeline or unavailable. `}
@@ -353,12 +349,12 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
         {layout.groupingUnavailable && "Invocation grouping unavailable at the layout budget. "}
         {layout.unavailableInvocationCount > 0 && `${plural(layout.unavailableInvocationCount, "invocation identity")} unavailable or ambiguous.`}
       </p>}
-      {compact && layout.invocations.length > 0 && <div className="flex flex-wrap gap-2 px-3 py-2" aria-label="Captured agent invocations">
-        {layout.invocations.map(agent => <button key={agent.rootSpanId} type="button" disabled={!onDiveIn} className="min-h-11 max-w-full px-2 text-xs rounded rp-hover-wash" style={{ color: C.accent, border: `1px solid ${C.border}` }} onClick={() => onDiveIn?.(agent.rootSpanId)} data-invocation-root={agent.rootSpanId} title={`Open captured invocation ${agent.rootSpanId}`}><span className="break-all">{agent.name} · {agent.rootSpanId.slice(-8)}</span></button>)}
+      {compact && layout.invocations.length > 0 && <div className="flex flex-wrap gap-2 px-4 py-2" aria-label="Captured agent invocations">
+        {layout.invocations.map(agent => <button key={agent.rootSpanId} type="button" disabled={!onDiveIn} className="min-h-11 max-w-full rounded-control border border-rp-line bg-white px-3 text-[12px] font-medium text-rp-blue transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash disabled:text-rp-ink-muted" onClick={() => onDiveIn?.(agent.rootSpanId)} data-invocation-root={agent.rootSpanId} title={`Open captured invocation ${agent.rootSpanId}`}><span className="break-all">{agent.name} · {agent.rootSpanId.slice(-8)}</span></button>)}
       </div>}
-      {selectedEntry && selectedEntry.identityAvailable && <div className="flex flex-wrap items-center gap-x-3 px-3 py-1 text-xs" style={{ borderBottom: `1px solid ${C.border}`, color: C.fg2 }}>
+      {selectedEntry && selectedEntry.identityAvailable && <div className="flex flex-wrap items-center gap-x-3 border-b border-rp-line px-4 py-1 text-[12px] text-rp-ink">
         <span className="min-w-0 break-all">Selected: {selectedEntry.span.name}</span>
-        <button type="button" className="min-h-11 text-xs rp-hover-wash px-2 rounded" style={{ color: C.accent }} onClick={() => openSpan(selectedEntry)}>Open selected span in tree</button>
+        <button type="button" className="min-h-11 rounded-control px-2 text-[12px] font-medium text-rp-blue transition-colors duration-250 ease-standard hover:bg-rp-wash" onClick={() => openSpan(selectedEntry)}>Open selected span in tree</button>
       </div>}
 
       {containerW > 0 && (
@@ -372,11 +368,8 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
             const labelHovered = hoveredLabelName === String(row);
             const label = (
               <div
-                className="flex items-center px-3 text-xs font-mono min-w-0 truncate"
-                style={{
-                  height: ROW,
-                  color: labelHovered ? C.fg5 : llmNames.has(name) ? LLM_LABEL_COLOR : spanColor(name, colorMap),
-                }}
+                className={cn("flex min-w-0 items-center truncate px-4 font-mono text-[12px]", llmNames.has(name) ? "text-rp-blue" : "text-rp-ink")}
+                style={{ height: ROW }}
                 title={name}
               >
                 {name}
@@ -391,8 +384,8 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
                 style={{
                   padding: 0,
                   border: 0,
-                  background: labelHovered ? "var(--rp-ink-wash)" : "transparent",
-                  boxShadow: labelHovered ? `inset 2px 0 0 ${spanColor(name, colorMap)}` : undefined,
+                  background: labelHovered ? "var(--rp-row-hover)" : "transparent",
+                  boxShadow: labelHovered ? "inset 2px 0 0 var(--rp-blue)" : undefined,
                   cursor: "pointer",
                   transition: prefersReducedMotion ? "none" : "background 180ms ease, box-shadow 180ms ease",
                 }}
@@ -427,7 +420,7 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
             const x = i * gridMs * pxPerMs;
             return (
               <Fragment key={i}>
-                <div style={{ position: "absolute", left: x, top: 0, bottom: AXIS_H, borderLeft: `1px solid ${C.border}` }} />
+                <div style={{ position: "absolute", left: x, top: 0, bottom: AXIS_H, borderLeft: "1px solid var(--rp-line-muted)" }} />
                 {i > 0 && (
                   // Centred on its gridline, except near the right edge: the last
                   // line sits at the chart's width, so half of a centred label
@@ -438,8 +431,8 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
                       left: x,
                       bottom: 0,
                       transform: x > chartW - LABEL_EDGE_GUARD_PX ? "translateX(-100%)" : "translateX(-50%)",
-                      fontSize: 12,
-                      color: C.fg0,
+                      fontSize: 11,
+                      color: "var(--rp-ink-muted)",
                       fontFamily: "var(--font-mono)",
                       whiteSpace: "nowrap",
                     }}
@@ -456,16 +449,16 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
             const row = rowOf(entry);
             const left = Math.min((entry.left / 100) * chartW, chartW - MIN_BAR_W);
             const w = Math.min(chartW - left, Math.max((entry.width / 100) * chartW, MIN_BAR_W));
-            const color = span.span_type?.includes("LLM") ? LLM_BAR_COLOR : spanColor(span.name, colorMap);
             const isErr = span.status === "ERROR";
             const isLLM = span.span_type?.includes("LLM");
+            const bar = isErr ? BAR_STYLE.error : isLLM ? BAR_STYLE.llm : BAR_STYLE.action;
             const focusBarTool = () => {
               setSelected({ key: entry.key, id: span.id });
               if (entry.identityAvailable && (span.span_type === "TOOL_CALL" || subAgentSpanIds.has(span.id))) {
                 focusTool(span.id);
               }
             };
-            if (!entry.timingAvailable) return <button key={entry.key} type="button" className="timeline-bar absolute text-xs px-2 rounded rp-hover-wash" data-timeline-span-id={span.id} data-timeline-key={entry.key} style={{ left: 0, top: row * ROW, minHeight: ROW, color: C.fg2, border: `1px dashed ${C.border}`, background: C.surface }} aria-label={`Inspect ${span.name}, time unavailable`} onMouseEnter={e => handleBarEnter(entry, e)} onMouseLeave={handleBarLeave} onFocus={e => handleBarEnter(entry, e)} onBlur={handleBarLeave} onClick={e => { handleBarEnter(entry, e); focusBarTool(); }}>Time unavailable</button>;
+            if (!entry.timingAvailable) return <button key={entry.key} type="button" className="timeline-bar absolute rounded-sm px-2 text-[12px] hover:!bg-rp-row-hover" data-timeline-span-id={span.id} data-timeline-key={entry.key} style={{ left: 0, top: row * ROW, minHeight: ROW, color: "var(--rp-ink-muted)", border: "1px dashed var(--rp-line-dashed)", background: "var(--rp-surface)" }} aria-label={`Inspect ${span.name}, time unavailable`} onMouseEnter={e => handleBarEnter(entry, e)} onMouseLeave={handleBarLeave} onFocus={e => handleBarEnter(entry, e)} onBlur={handleBarLeave} onClick={e => { handleBarEnter(entry, e); focusBarTool(); }}>Time unavailable</button>;
             if (isErr && w < 40) {
               const triSize = ERROR_MARKER_W;
               return (
@@ -487,8 +480,8 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
                     focusBarTool();
                   }}
                 >
-                  <svg width={triSize} height={triSize - 1} viewBox="0 0 14 13" className="drop-shadow-sm">
-                    <polygon points="7,0 14,13 0,13" fill={C.red} />
+                  <svg width={triSize} height={triSize - 1} viewBox="0 0 14 13">
+                    <polygon points="7,0 14,13 0,13" fill="var(--rp-danger)" />
                     <text x="7" y="11" textAnchor="middle" fill="var(--rp-canvas)" stroke="var(--rp-canvas)" strokeWidth="0.2"
                       fontSize="9" fontWeight="900" fontFamily="ui-sans-serif, system-ui, sans-serif">!</text>
                   </svg>
@@ -505,8 +498,8 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
                 data-timeline-key={entry.key}
                 data-invocation-root={entry.invocationRootId ?? undefined}
                 data-timeline-row={row}
-                className="timeline-bar absolute flex items-center justify-center rounded-sm cursor-pointer"
-                style={{ left, top: row * ROW + BAR_Y_OFF, width: w, height: BAR_H, backgroundColor: isErr ? C.red : color, zIndex: idx, border: isLLM ? `1px solid ${C.borderLight}` : `1.5px solid ${C.borderLight}`, boxSizing: "border-box", padding: 0 }}
+                className="timeline-bar absolute flex cursor-pointer items-center justify-center rounded-sm"
+                style={{ left, top: row * ROW + BAR_Y_OFF, width: w, height: BAR_H, backgroundColor: bar.background, zIndex: idx, border: bar.border, boxSizing: "border-box", padding: 0 }}
                 onMouseEnter={(e) => handleBarEnter(entry, e)}
                 onMouseLeave={handleBarLeave}
                 onFocus={(e) => handleBarEnter(entry, e)}
@@ -517,11 +510,11 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
                 }}
               >
                 {w >= 40 && (
-                  <span style={{ fontSize: 11, fontWeight: 500, color: isLLM ? C.fg4 : "var(--rp-canvas)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", padding: "0 3px", display: "flex", alignItems: "center", gap: 3 }}>
+                  <span style={{ fontSize: 11, fontWeight: 500, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: bar.color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", padding: "0 3px", display: "flex", alignItems: "center", gap: 3 }}>
                     {isErr && (
                       <svg width="10" height="10" viewBox="0 0 14 13" style={{ flexShrink: 0 }}>
                         <polygon points="7,0 14,13 0,13" fill="var(--rp-canvas)" />
-                        <text x="7" y="11" textAnchor="middle" fill={C.red} fontSize="9" fontWeight="900" fontFamily="ui-sans-serif, system-ui, sans-serif">!</text>
+                        <text x="7" y="11" textAnchor="middle" fill="var(--rp-danger)" fontSize="9" fontWeight="900" fontFamily="ui-sans-serif, system-ui, sans-serif">!</text>
                       </svg>
                     )}
                     {timingLabel(span)}

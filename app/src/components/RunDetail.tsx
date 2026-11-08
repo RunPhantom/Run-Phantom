@@ -11,7 +11,6 @@ import {
   traceSpansPath,
   type TraceRouteBase,
 } from "../utils/navigation";
-import { animated, useSpring } from "@react-spring/web";
 import NumberFlow from "@number-flow/react";
 import { StickToBottom, useStickToBottomContext, type StickToBottomContext } from "use-stick-to-bottom";
 import { Dots } from "./Icons";
@@ -20,9 +19,12 @@ import { ChatFlow } from "./ChatFlow";
 import { SpanTree } from "./SpanTree";
 import { ConvoDetail } from "./ConvoDetail";
 import { SavePopover } from "./SavePopover";
-import { RotateCcw, Bookmark, Download, Pencil, ChevronDown, ArrowDown, ChevronRight, MessageCircle, SearchX } from "lucide-react";
+import { RotateCcw, Bookmark, Download, Pencil, ChevronDown, ArrowDown, ChevronRight, MessageCircle, SearchX, ArrowUpRight } from "lucide-react";
 import { LocalAgentSetupCTA, SetupReplayModal } from "./LocalAgentSetupCTA";
-import { C } from "../utils/colors";
+import { cn } from "@/lib/utils";
+import { buttonVariants } from "@/components/ui/button";
+import { Badge as UiBadge, badgeVariants } from "@/components/ui/badge";
+import { fieldClassName } from "@/components/ui/input";
 import { fmt, isActive, plural, replayOutcome, runDisplayName, isoTimestamp, safeDecodeParam, spanErrorReason } from "../utils/helpers";
 import type { RunStatus } from "../utils/helpers";
 import { captureCompletion, observationReplayUnavailable } from "../../../src/spans/normalized";
@@ -206,7 +208,7 @@ function ErrorMessage({ span }: { span: Span }) {
   const msg = spanErrorReason(span);
   if (!msg) return null;
   return (
-    <div className="text-[10px] font-mono mt-1 whitespace-pre-wrap break-words" style={{ color: C.red }}>
+    <div className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] leading-[18px] text-rp-danger">
       {String(msg).length > 200 ? String(msg).slice(0, 200) + "\u2026" : String(msg)}
     </div>
   );
@@ -276,23 +278,20 @@ function ErrorsTooltip({ spans }: { spans: Span[] }) {
           triggerRef.current?.focus();
         }
       }}>
-      <span style={{ color: C.red }}><NumberFlow value={errorSpans.length} /> error{errorSpans.length !== 1 ? "s" : ""}</span>
+      <span className="font-medium text-rp-danger underline decoration-rp-danger-border decoration-dotted underline-offset-4"><NumberFlow value={errorSpans.length} /> error{errorSpans.length !== 1 ? "s" : ""}</span>
       {show && (
         // Padding rather than margin bridges the gap, so moving the pointer
         // onto the tooltip to scroll it does not fire mouseleave on the way.
         <div className="absolute left-0 top-full z-50 pt-1">
-          <div className="flex flex-col rounded-xl shadow-2xl overflow-hidden"
+          <div className="flex flex-col overflow-hidden rounded-md border border-rp-danger-border bg-rp-surface shadow-e3"
             style={{
               width: "min(380px, calc(100vw - 32px))", maxHeight,
-              background: "var(--rp-surface)",
-              border: "1px solid color-mix(in srgb, var(--rp-danger) 28%, white 72%)",
-              boxShadow: "var(--rp-e3)",
             }}>
-            <div className="px-3 py-2 flex flex-shrink-0 items-center gap-2" style={{ borderBottom: "1px solid color-mix(in srgb, var(--rp-danger) 20%, white 80%)" }}>
-              <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke={C.red} strokeWidth={2.5} strokeLinecap="round">
+            <div className="flex flex-shrink-0 items-center gap-2 border-b border-rp-danger-border bg-rp-danger-soft px-3 py-2">
+              <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--rp-danger)" strokeWidth={2.5} strokeLinecap="round">
                 <circle cx={12} cy={12} r={10} /><line x1={12} y1={8} x2={12} y2={12} /><line x1={12} y1={16} x2={12.01} y2={16} />
               </svg>
-              <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: C.red }}>
+              <span className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-rp-danger">
                 {errorSpans.length} Error{errorSpans.length !== 1 ? "s" : ""}
               </span>
             </div>
@@ -300,14 +299,13 @@ function ErrorsTooltip({ spans }: { spans: Span[] }) {
               <div ref={listRef} role="region" aria-label="Error details" tabIndex={scrollable ? 0 : undefined}
                 className="min-h-0 overflow-auto" onScroll={measure}>
                 {errorSpans.map((s, idx) => (
-                  <div key={s.id} className="px-3 py-2" style={{ borderBottom: idx < errorSpans.length - 1 ? "1px solid color-mix(in srgb, var(--rp-danger) 14%, white 86%)" : "none" }}>
+                  <div key={s.id} className={cn("px-3 py-2.5", idx < errorSpans.length - 1 && "border-b border-rp-line-muted")}>
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="text-[10px] font-mono font-bold px-1 py-0.5 rounded"
-                        style={{ color: s.span_type === "TOOL_CALL" ? C.orange : s.span_type?.includes("LLM") ? C.cyan : C.fg0, background: "var(--rp-ink-wash)" }}>
+                      <span className={cn("rounded-sm px-1 py-0.5 font-mono text-[10px] font-medium tracking-[0.08em]", s.span_type?.includes("LLM") ? "bg-rp-wash text-rp-blue" : "bg-[color:var(--rp-n4)] text-rp-ink-muted")}>
                         {s.span_type === "TOOL_CALL" ? "TOOL" : s.span_type?.includes("LLM") ? "LLM" : "SPAN"}
                       </span>
-                      <span className="text-[11px] font-mono truncate" style={{ color: C.red }}>{s.name}</span>
-                      <span className="text-[9px] font-mono ml-auto flex-shrink-0" style={{ color: C.fg0 }}>{fmt(s.duration_ms)}</span>
+                      <span className="truncate font-mono text-[12px] text-rp-ink">{s.name}</span>
+                      <span className="rp-meta ml-auto flex-shrink-0">{fmt(s.duration_ms)}</span>
                     </div>
                     <ErrorMessage span={s} />
                   </div>
@@ -317,7 +315,7 @@ function ErrorsTooltip({ spans }: { spans: Span[] }) {
                 <div data-errors-overflow-hint aria-hidden="true"
                   className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-center pb-1.5"
                   style={{ height: 44, background: "linear-gradient(to bottom, color-mix(in srgb, var(--rp-surface) 0%, transparent), var(--rp-surface) 72%)" }}>
-                  <span className="flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider" style={{ color: C.fg2 }}>
+                  <span className="flex items-center gap-1 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink">
                     <ArrowDown size={10} strokeWidth={2.5} />Scroll for more
                   </span>
                 </div>
@@ -330,7 +328,7 @@ function ErrorsTooltip({ spans }: { spans: Span[] }) {
   );
 }
 
-const Dot = () => <span data-separator aria-hidden="true" style={{ color: C.fg0, opacity: 0.6 }}>&middot;</span>;
+const Dot = () => <span data-separator aria-hidden="true" className="text-rp-ink-faint">&middot;</span>;
 
 // A stat wraps together with the separator after it, so a wrap can only leave
 // a separator at the end of a line, never at the start of the next one.
@@ -348,7 +346,7 @@ function Badge({ label, copyValue }: { label: string; copyValue?: string }) {
 
   if (!copyValue) {
     return (
-      <span className="rp-meta-label text-[9px] font-medium uppercase tracking-wide" style={{ color: C.fg0, lineHeight: "16px" }}>
+      <span className="rp-meta-label font-mono text-[10px] font-medium uppercase leading-4 tracking-[0.1em]">
         {label}
       </span>
     );
@@ -357,8 +355,7 @@ function Badge({ label, copyValue }: { label: string; copyValue?: string }) {
   return (
     <button
       type="button"
-      className="rp-meta-label rp-meta-copy text-[9px] font-medium uppercase tracking-wide rounded transition-[color,background-color,transform] active:scale-[0.96]"
-      style={{ background: copied ? "color-mix(in srgb, var(--rp-success) 12%, white 88%)" : undefined, color: copied ? C.green : C.fg0, lineHeight: "16px" }}
+      className={cn("rp-meta-label rp-meta-copy rounded-sm font-mono text-[10px] font-medium uppercase leading-4 tracking-[0.1em] transition-[color,background-color] duration-250 ease-standard", copied && "!bg-rp-success-soft !text-rp-success")}
       title={`Copy ${label}`}
       aria-label={`Copy ${label}`}
       onClick={(event) => {
@@ -469,12 +466,12 @@ function StatsLine({ stats, model, spans, active, startedAt, completionUnavailab
   });
 
   return (
-    <div ref={rowRef} className="rp-meta-metrics flex items-center gap-1.5 text-[11px] flex-wrap" style={{ color: C.fg3 }}>
+    <div ref={rowRef} className="rp-meta-metrics flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-rp-ink">
       {model && <Stat><Badge label="model" copyValue={model} /><span>{model}</span></Stat>}
       {stats.tools > 0 && <Stat><span><NumberFlow value={stats.tools} /> tool{stats.tools !== 1 ? "s" : ""}</span></Stat>}
       {(stats.agents ?? 0) > 0 && <Stat><span><NumberFlow value={stats.agents!} /> sub-agent{stats.agents !== 1 ? "s" : ""}</span></Stat>}
       {stats.errors > 0 && spans && <Stat><ErrorsTooltip spans={spans} /></Stat>}
-      {stats.errors > 0 && !spans && <Stat><span style={{ color: C.red }}><NumberFlow value={stats.errors} /> error{stats.errors !== 1 ? "s" : ""}</span></Stat>}
+      {stats.errors > 0 && !spans && <Stat><span className="font-medium text-rp-danger"><NumberFlow value={stats.errors} /> error{stats.errors !== 1 ? "s" : ""}</span></Stat>}
       {/* NumberFlow animates whole seconds, which reads well for a clock ticking
           on a run in flight. A settled duration is a measurement, though: rounded
           to whole seconds it read "6s" beside a span tree root of "6.2s", "0s"
@@ -495,36 +492,36 @@ function StatsLine({ stats, model, spans, active, startedAt, completionUnavailab
       {hasCost && (
         <Stat last>
           <span ref={costRef} className="relative">
-            <button ref={costButtonRef} type="button" className="min-h-11 min-w-11 rounded px-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2" aria-expanded={showCost} aria-controls={costPanelId} onClick={() => setShowCost(open => !open)}>
+            <button ref={costButtonRef} type="button" className="-my-3 min-h-11 min-w-11 rounded-control px-2 text-left text-rp-ink-muted underline decoration-rp-line-dashed decoration-dotted underline-offset-4 transition-colors duration-250 ease-standard hover:text-rp-blue" aria-expanded={showCost} aria-controls={costPanelId} onClick={() => setShowCost(open => !open)}>
               <span aria-live="polite">{costLabel}</span>
             </button>
             {showCost && (
-              <div ref={costPanelRef} id={costPanelId} role="region" aria-label="Nominal cost estimates" className="fixed z-50 rounded-lg p-3 shadow-xl overflow-y-auto text-[12px]"
-                style={{ background: C.elevated, border: `1px solid ${C.borderLight}`, ...costPosition, maxHeight: "min(400px, calc(100vh - 32px))", visibility: costPosition ? "visible" : "hidden" }}>
-                <div className="mb-2 font-medium" style={{ color: C.fg2 }}>Nominal input/output estimates</div>
-                <p className="mb-3 whitespace-normal" style={{ color: C.fg1 }}>OpenRouter catalogue quotes; actual provider and tier billing may differ. Cache, audio, discounts, and other fees are excluded. Reported cost stays separate.</p>
+              <div ref={costPanelRef} id={costPanelId} role="region" aria-label="Nominal cost estimates" className="fixed z-50 overflow-y-auto rounded-md border border-rp-line bg-rp-surface p-4 text-[12px] shadow-e3"
+                style={{ ...costPosition, maxHeight: "min(400px, calc(100vh - 32px))", visibility: costPosition ? "visible" : "hidden" }}>
+                <div className="rp-eyebrow mb-2">Nominal input/output estimates</div>
+                <p className="mb-3 whitespace-normal leading-5 text-rp-ink-muted">OpenRouter catalogue quotes; actual provider and tier billing may differ. Cache, audio, discounts, and other fees are excluded. Reported cost stays separate.</p>
                 {breakdown.map(b => (
                   <div key={b.model === null ? "missing-model" : `model:${b.model}`} className="mb-3 last:mb-0 whitespace-normal break-words">
-                    <div className="font-medium mb-1" style={{ color: C.fg2 }}>{b.model ?? "Model unavailable"}</div>
+                    <div className="mb-1 font-mono text-[12px] font-medium text-rp-ink">{b.model ?? "Model unavailable"}</div>
                     {b.breakdown ? (
-                      <div className="space-y-1" style={{ color: C.fg0 }}>
+                      <div className="space-y-1 text-rp-ink-muted">
                         <div className="flex justify-between gap-4">
                           <span>{b.inTok!.toLocaleString()} input @ {fmtRate(b.breakdown.inRate)}/M</span>
-                          <span style={{ color: C.fg1 }}>{fmtCost(b.breakdown.inCost)}</span>
+                          <span className="rp-num text-rp-ink">{fmtCost(b.breakdown.inCost)}</span>
                         </div>
                         <div className="flex justify-between gap-4">
                           <span>{b.outTok!.toLocaleString()} output @ {fmtRate(b.breakdown.outRate)}/M</span>
-                          <span style={{ color: C.fg1 }}>{fmtCost(b.breakdown.outCost)}</span>
+                          <span className="rp-num text-rp-ink">{fmtCost(b.breakdown.outCost)}</span>
                         </div>
-                        <div className="flex justify-between gap-4 pt-0.5" style={{ borderTop: `1px solid ${C.border}` }}>
-                          <span style={{ color: C.fg1 }}>total</span>
-                          <span style={{ color: C.fg2 }}>{fmtCost(b.breakdown.totalCost)}</span>
+                        <div className="flex justify-between gap-4 border-t border-rp-line pt-1">
+                          <span className="text-rp-ink">total</span>
+                          <span className="rp-num font-medium text-rp-ink">{fmtCost(b.breakdown.totalCost)}</span>
                         </div>
-                        <div style={{ color: C.fg1 }}>Catalogue ID: {b.breakdown.catalogueId}</div>
-                        <div style={{ color: C.fg1 }}>Revision: <span className="font-mono">{b.breakdown.rateRevision}</span></div>
-                        <div style={{ color: C.fg1 }}>Fetched: {b.breakdown.source.observedAt}</div>
+                        <div>Catalogue ID: {b.breakdown.catalogueId}</div>
+                        <div>Revision: <span className="font-mono">{b.breakdown.rateRevision}</span></div>
+                        <div>Fetched: {b.breakdown.source.observedAt}</div>
                       </div>
-                    ) : <p style={{ color: C.fg1 }}>{b.model === null ? "Model identity was not captured." : b.inTok === null || b.outTok === null ? "Input or output token capture is unavailable." : pricing.status === "disabled" ? "Public pricing is disabled. Enable it in Settings." : pricing.status === "loading" || pricing.status === "idle" ? "Public pricing is loading." : pricing.status === "error" ? pricing.error : "No unambiguous exact catalogue price is available."}</p>}
+                    ) : <p className="text-rp-ink-muted">{b.model === null ? "Model identity was not captured." : b.inTok === null || b.outTok === null ? "Input or output token capture is unavailable." : pricing.status === "disabled" ? "Public pricing is disabled. Enable it in Settings." : pricing.status === "loading" || pricing.status === "idle" ? "Public pricing is loading." : pricing.status === "error" ? pricing.error : "No unambiguous exact catalogue price is available."}</p>}
                   </div>
                 ))}
               </div>
@@ -604,7 +601,7 @@ function MoreMenu({ runId }: { runId?: string }) {
 
   return (
     <div ref={ref} className="relative">
-      {deleteError && <p role="alert" className="text-xs" style={{ color: C.red }}>{deleteError}</p>}
+      {deleteError && <p role="alert" className="text-xs text-rp-danger">{deleteError}</p>}
       <button
         ref={triggerRef}
         type="button"
@@ -613,21 +610,18 @@ function MoreMenu({ runId }: { runId?: string }) {
         aria-haspopup="menu"
         aria-controls={open ? menuId : undefined}
         title="More actions"
-        className="flex items-center justify-center w-7 h-7 rounded-md transition-colors hover:bg-[color:var(--rp-ink-wash)]"
-        style={{ color: C.fg1 }}
+        className="flex size-8 items-center justify-center rounded-control border border-transparent text-rp-ink-muted transition-[background-color,border-color,color] duration-250 ease-standard hover:border-rp-line hover:bg-white hover:text-rp-ink"
         onClick={() => setOpen(!open)}
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
       </button>
       {open && (
-        <div id={menuId} role="menu" aria-label="Run actions" className="absolute right-0 top-full mt-1 z-50 rounded-lg overflow-hidden shadow-xl"
-          style={{ background: "var(--rp-surface)", border: "1px solid var(--rp-border)", minWidth: 140 }}>
+        <div id={menuId} role="menu" aria-label="Run actions" className="rp-pop absolute right-0 top-full z-50 mt-1 min-w-[160px] overflow-hidden rounded-md border border-rp-line bg-rp-surface p-1 shadow-e3">
           <button
             ref={deleteRef}
             type="button"
             role="menuitem"
-            className="w-full text-left px-3 py-2 text-[11px] transition-colors hover:bg-[color:var(--rp-ink-wash)]"
-            style={{ color: C.red }}
+            className="w-full rounded-sm px-3 py-2 text-left text-[13px] text-rp-danger transition-colors duration-250 ease-standard hover:bg-rp-danger-soft disabled:opacity-60"
             onClick={handleDelete}
             disabled={deleting}
           >
@@ -636,6 +630,15 @@ function MoreMenu({ runId }: { runId?: string }) {
         </div>
       )}
     </div>
+  );
+}
+
+const HEADER_ACTION = cn(buttonVariants({ variant: "secondary", size: "sm" }), "gap-1.5 px-2.5 [&_svg]:size-3.5");
+
+function runTabClass(selected: boolean) {
+  return cn(
+    "rp-tab -mb-px inline-flex h-10 shrink-0 cursor-pointer items-center border-b-2 px-3 text-[13px] font-medium transition-[color,border-color,background-color] duration-250 ease-standard",
+    selected ? "border-rp-blue text-rp-ink" : "border-transparent text-rp-ink-muted",
   );
 }
 
@@ -656,7 +659,7 @@ function InlineEdit({ value, onConfirm, className, style, inputStyle }: {
     return (
       <span className="inline-flex items-center gap-1">
         <input ref={inputRef} aria-label="Run title" className={`outline-none ${className ?? ""}`}
-          style={{ background: "var(--rp-ink-a08)", border: "1px solid var(--rp-ink-a20)", borderRadius: "var(--rp-r-sm)", padding: "1px 6px", ...style, ...inputStyle }}
+          style={{ background: "var(--rp-surface)", border: "1px solid var(--rp-blue)", borderRadius: 4, padding: "0 6px", ...style, ...inputStyle }}
           value={draft} onChange={e => setDraft(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter") { onConfirm(draft); setEditing(false); } if (e.key === "Escape") setEditing(false); }}
           onBlur={() => setEditing(false)}
@@ -668,7 +671,7 @@ function InlineEdit({ value, onConfirm, className, style, inputStyle }: {
     <button type="button" aria-label={`Rename ${value}`} className={`group/edit inline-flex items-center gap-1 cursor-pointer bg-transparent text-left ${className ?? ""}`} style={style}
       onClick={() => setEditing(true)}>
       {value}
-      <Pencil className="h-2.5 w-2.5 opacity-0 group-hover/edit:opacity-60 transition-opacity" />
+      <Pencil aria-hidden="true" className="size-3 text-rp-ink-muted opacity-0 transition-opacity duration-250 ease-standard group-hover/edit:opacity-100" />
     </button>
   );
 }
@@ -731,10 +734,10 @@ function ReplayRegistryNotice({ status, onRetry }: {
   onRetry: () => Promise<void>;
 }) {
   return (
-    <div role={status === "pending" ? "status" : "alert"} className="text-[11px]" style={{ color: status === "error" ? C.red : C.fg1 }}>
+    <div role={status === "pending" ? "status" : "alert"} className={cn("text-[12px]", status === "error" ? "text-rp-danger" : "text-rp-ink-muted")}>
       {status === "pending" ? "Checking agent replay setup…" : <>
         Could not load agent replay setup.{" "}
-        <button type="button" aria-label="Retry agent replay setup" className="underline" onClick={() => { void onRetry(); }}>Retry</button>
+        <button type="button" aria-label="Retry agent replay setup" className="font-medium text-rp-blue underline-offset-4 hover:underline" onClick={() => { void onRetry(); }}>Retry</button>
       </>}
     </div>
   );
@@ -869,28 +872,23 @@ function ViewHeader({
   const completionUnavailable = run?.capture_completion === "unavailable" || allSpans?.some(span => captureCompletion(span.normalized?.capture) === "unavailable") === true;
   const status: RunStatus = (run && replayOutcome(run)) || (active ? "live" : stats.errors > 0 ? "failed" : "complete");
   const statusLabel = completionUnavailable ? "Completion unavailable" : { live: "Run live", failed: "Run failed", cancelled: "Run cancelled", complete: "Run complete" }[status];
-  const statusColor = completionUnavailable ? C.fg1 : status === "live" ? C.green : status === "failed" ? C.red : C.fg1;
-  const statusBackground = completionUnavailable ? "var(--rp-ink-wash)" : status === "live"
-    ? "color-mix(in oklch, var(--rp-success) 12%, transparent)"
-    : status === "failed"
-      ? "color-mix(in oklch, var(--rp-danger) 10%, transparent)"
-      : "var(--rp-ink-wash)";
+  const statusTone = completionUnavailable ? "neutral" : status === "live" ? "success" : status === "failed" ? "danger" : "neutral";
+  const statusPillClass = badgeVariants({ tone: statusTone });
   return (
-    <div className="flex-shrink-0" style={{ padding: isReplay ? "8px 16px" : "10px 16px", borderBottom: `1px solid ${C.border}` }}>
+    <div className={cn("flex-shrink-0 bg-rp-surface", isReplay ? "px-4 py-2.5" : "px-4 pb-3 pt-4 sm:px-5")}>
       {parentName && onBack ? (
         <>
           <div><Button onClick={onBack}>&larr; Show Parent Agent</Button></div>
-          <div className="mt-3 mb-1"><button className="text-[13px] font-medium cursor-pointer" style={{ color: C.fg1 }} onClick={onBack}>{parentName}</button></div>
+          <div className="mt-3 mb-1"><button className="cursor-pointer text-[13px] font-medium text-rp-ink-muted transition-colors duration-250 ease-standard hover:text-rp-blue" onClick={onBack}>{parentName}</button></div>
           <div className="flex items-start ml-1">
             <svg className="flex-shrink-0" width="12" height="24" viewBox="0 0 12 24" style={{ marginRight: 6, marginTop: 2 }}>
-              <path d="M 1 0 L 1 16 L 12 16" fill="none" stroke={C.fg0} strokeWidth="1" />
+              <path d="M 1 0 L 1 16 L 12 16" fill="none" stroke="var(--rp-line-strong)" strokeWidth="1" />
             </svg>
             <div>
               <div className="flex items-center gap-2 mb-1">
-                <h2 style={{ fontSize: "18px", fontWeight: 600, color: C.fg5 }}>{displayTitle}</h2>
-                {model && <span className="text-[10px] px-2 py-0.5 rounded font-mono" style={{ background: "var(--rp-ink-a04)", color: C.fg1 }}>{model}</span>}
-                <span className="text-[10px] px-2 py-0.5 rounded-full font-medium"
-                  style={{ background: statusBackground, color: statusColor }}>
+                <h2 className="font-display text-[18px] font-semibold tracking-[-0.02em] text-rp-ink">{displayTitle}</h2>
+                {model && <UiBadge tone="neutral" mono>{model}</UiBadge>}
+                <span className={statusPillClass}>
                   {statusLabel}
                 </span>
               </div>
@@ -904,8 +902,8 @@ function ViewHeader({
         <div className="flex flex-col gap-1">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[12px] font-medium" style={{ color: C.fg3 }}>{displayTitle}</span>
-              {model && <span className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: "var(--rp-ink-a04)", color: C.fg0 }}>{model}</span>}
+              <span className="text-[13px] font-semibold text-rp-ink">{displayTitle}</span>
+              {model && <UiBadge tone="neutral" mono>{model}</UiBadge>}
             </div>
             <MoreMenu runId={run?.id} />
           </div>
@@ -915,23 +913,19 @@ function ViewHeader({
         <>
           <div data-run-header className="mb-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             <div data-run-header-title className="flex min-w-[12rem] flex-1 items-center gap-2">
-              <div
-                className={`w-2 h-2 rounded-full flex-shrink-0 ${active ? "pulse-dot" : ""}`}
-                style={{ background: statusColor }}
-                title={statusLabel}
-              />
+              {active && <span aria-hidden="true" className="pulse-dot size-2 flex-shrink-0 rounded-full bg-rp-success" />}
               {onFork && !active ? (
                 <InlineEdit value={displayTitle}
                   onConfirm={handleRename}
-                  className="text-[15px] font-semibold truncate" style={{ color: C.fg4 }}
-                  inputStyle={{ fontSize: 15, fontWeight: 600, color: C.fg4 }} />
+                  className="truncate font-display text-[20px] font-semibold leading-7 tracking-[-0.02em] text-rp-ink"
+                  inputStyle={{ fontSize: 20, fontWeight: 600 }} />
               ) : (
-                <h2 className="truncate" style={{ fontSize: "15px", fontWeight: 600, color: C.fg4 }}>{displayTitle}</h2>
+                <h2 className="truncate font-display text-[20px] font-semibold leading-7 tracking-[-0.02em] text-rp-ink">{displayTitle}</h2>
               )}
               <span
                 data-run-status
-                className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium"
-                style={{ color: statusColor, background: statusBackground }}
+                className={statusPillClass}
+                title={statusLabel}
               >
                 {statusLabel}
               </span>
@@ -942,8 +936,7 @@ function ViewHeader({
                   <>
                     <button
                       ref={annotationBtnRef}
-                      className="flex items-center gap-1.5 text-[11px] px-3 py-1 rounded-md font-medium transition-colors rp-hover-wash"
-                      style={{ color: C.fg3, background: "var(--rp-ink-a06)", border: "1px solid var(--rp-ink-a10)" }}
+                      className={HEADER_ACTION}
                       onClick={() => {
                         setSavePopoverOpen(false);
                         setOptionsOpen(false);
@@ -951,7 +944,7 @@ function ViewHeader({
                       }}
                       title="Annotate run"
                     >
-                      <Pencil className="h-3 w-3" />
+                      <Pencil aria-hidden="true" />
                       Annotate
                     </button>
                     {annotationPopoverOpen && (
@@ -965,8 +958,7 @@ function ViewHeader({
                   </>
                 )}
                 <button
-                  className="flex items-center gap-1.5 text-[11px] px-3 py-1 rounded-md font-medium transition-colors rp-hover-wash"
-                  style={{ color: C.fg3, background: "var(--rp-ink-a06)", border: "1px solid var(--rp-ink-a10)" }}
+                  className={HEADER_ACTION}
                   onClick={() => {
                     setSavePopoverOpen(false);
                     setAnnotationPopoverOpen(false);
@@ -975,34 +967,30 @@ function ViewHeader({
                   }}
                   title="Debug with local agent"
                 >
-                  <MessageCircle className="h-3 w-3" />
+                  <MessageCircle aria-hidden="true" />
                   Debug
                 </button>
                 {run && <Link
-                  className="flex items-center gap-1.5 text-[11px] px-3 py-1 rounded-md font-medium transition-colors rp-hover-wash"
-                  style={{ color: C.fg3, background: "var(--rp-ink-a06)", border: "1px solid var(--rp-ink-a10)" }}
+                  className={HEADER_ACTION}
                   to={`/verification?runId=${encodeURIComponent(run.id)}`}
                 >Verify app</Link>}
                 {run && <Link
-                  className="flex items-center gap-1.5 text-[11px] px-3 py-1 rounded-md font-medium transition-colors rp-hover-wash"
-                  style={{ color: C.fg3, background: "var(--rp-ink-a06)", border: "1px solid var(--rp-ink-a10)" }}
+                  className={HEADER_ACTION}
                   to={`/evaluations?runId=${encodeURIComponent(run.id)}`}
                 >Evaluate run</Link>}
                 {onDownload && (
                   <button
-                    className="flex items-center gap-1.5 text-[11px] px-3 py-1 rounded-md font-medium transition-colors rp-hover-wash"
-                    style={{ color: C.fg3, background: "var(--rp-ink-a06)", border: "1px solid var(--rp-ink-a10)" }}
+                    className={HEADER_ACTION}
                     onClick={onDownload}
                     title="Download trace as JSON"
                   >
-                    <Download className="h-3 w-3" />
+                    <Download aria-hidden="true" />
                     Download
                   </button>
                 )}
                 <button
                   ref={saveBtnRef}
-                  className="flex items-center gap-1.5 text-[11px] px-3 py-1 rounded-md font-medium transition-colors"
-                  style={{ color: isSaved ? C.green : C.fg3, background: isSaved ? "color-mix(in srgb, var(--rp-success) 10%, white 90%)" : "var(--rp-ink-wash)", border: `1px solid ${isSaved ? "color-mix(in srgb, var(--rp-success) 24%, white 76%)" : C.border}` }}
+                  className={cn(HEADER_ACTION, isSaved && "border-rp-wash-border bg-rp-wash text-rp-blue hover:bg-rp-wash")}
                   onClick={() => {
                     setAnnotationPopoverOpen(false);
                     if (!isSaved) handleSave();
@@ -1010,7 +998,7 @@ function ViewHeader({
                   }}
                   title={isSaved ? "Move folder or unsave" : "Save run"}
                 >
-                  <Bookmark className="h-3 w-3" style={isSaved ? { fill: C.green } : {}} />
+                  <Bookmark aria-hidden="true" className={cn(isSaved && "fill-current")} />
                   {isSaved ? "Saved" : "Save"}
                 </button>
                 {savePopoverOpen && (
@@ -1024,14 +1012,10 @@ function ViewHeader({
                 )}
                 {onFork && (() => {
                   return <>
-                  <div className="rp-clipped-ring flex items-stretch rounded-md overflow-hidden" style={{ border: `1px solid var(--rp-ink-a10)` }}>
+                  <div className="rp-clipped-ring flex h-8 items-stretch overflow-hidden rounded-control">
                     <button
                       disabled={replayUnavailable || agentRegistryStatus !== "success"}
-                      className="flex items-center gap-1.5 text-[11px] px-3 py-1 font-medium transition-colors rp-hover-wash disabled:opacity-50"
-                      style={{
-                        color: C.fg3,
-                        background: "var(--rp-ink-a06)",
-                      }}
+                      className="rp-primary-control flex items-center gap-1.5 border border-rp-blue bg-rp-blue px-3 text-[12px] font-medium text-white transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-blue-hover hover:bg-rp-blue-hover disabled:cursor-not-allowed disabled:border-rp-line disabled:bg-[color:var(--rp-n4)] disabled:text-rp-ink-muted"
                       onClick={() => {
                         if (replayUnavailable || agentRegistryStatus !== "success") return;
                         if (agentConfigured) {
@@ -1041,7 +1025,7 @@ function ViewHeader({
                         }
                       }}
                     >
-                      <RotateCcw className="h-3 w-3" />
+                      <RotateCcw aria-hidden="true" className="size-3.5" />
                       Replay
                     </button>
                     <button
@@ -1052,8 +1036,7 @@ function ViewHeader({
                       aria-controls={optionsOpen ? replayOptionsId : undefined}
                       aria-haspopup="dialog"
                       disabled={replayUnavailable || agentRegistryStatus !== "success"}
-                      className="flex items-center justify-center px-1.5 transition-colors rp-hover-wash disabled:opacity-50"
-                      style={{ color: C.fg1, background: "var(--rp-ink-a06)", borderLeft: "1px solid var(--rp-ink-a10)" }}
+                      className="rp-primary-control flex items-center justify-center border border-l-0 border-rp-blue bg-rp-blue px-2 text-white shadow-[inset_1px_0_0_rgb(255_255_255/0.28)] transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-blue-hover hover:bg-rp-blue-hover disabled:cursor-not-allowed disabled:border-rp-line disabled:bg-[color:var(--rp-n4)] disabled:text-rp-ink-muted disabled:shadow-[inset_1px_0_0_var(--rp-line)]"
                       onClick={() => {
                         if (replayUnavailable) return;
                         setAnnotationPopoverOpen(false);
@@ -1076,23 +1059,22 @@ function ViewHeader({
                       data-replay-options
                       role="dialog"
                       aria-label="Replay options"
-                      className="fixed z-[9999] rounded-lg p-3 shadow-xl space-y-3"
+                      className="rp-pop fixed z-[9999] space-y-4 rounded-md border border-rp-line bg-rp-surface p-4 shadow-e3"
                       ref={(el) => {
                         if (!el || !optionsRef.current) return;
                         const btn = optionsRef.current.getBoundingClientRect();
                         el.style.top = `${btn.bottom + 4}px`;
                         el.style.right = `${window.innerWidth - btn.right}px`;
                       }}
-                      style={{ background: "var(--rp-surface)", border: "1px solid var(--rp-border)", boxShadow: "var(--rp-e3)", width: "min(384px, calc(100vw - 32px))" }}>
+                      style={{ width: "min(384px, calc(100vw - 32px))" }}>
                       {agentRegistryStatus === "success" && !agentConfigured && (
                         <LocalAgentSetupCTA eventName={run?.event_name ?? undefined} />
                       )}
                       <div>
-                        <div className="text-[10px] font-medium mb-1" style={{ color: C.fg0 }}>Model</div>
+                        <div className="rp-field-label mb-1.5">Model</div>
                         <select
                           aria-label="Replay model"
-                          className="w-full px-2 py-1.5 rounded text-[11px] font-mono outline-none appearance-none"
-                          style={{ background: "var(--rp-ink-a06)", color: C.fg3, border: "1px solid var(--rp-ink-a10)" }}
+                          className={cn(fieldClassName, "rp-select h-9 cursor-pointer pr-9 font-mono text-[12px]")}
                           value={forkModel}
                           onChange={e => setForkModel(e.target.value)}
                         >
@@ -1107,11 +1089,11 @@ function ViewHeader({
                         </select>
                       </div>
                       <div>
-                        <div className="text-[10px] font-medium mb-1" style={{ color: C.fg0 }}>User message</div>
+                        <div className="rp-field-label mb-1.5">User message</div>
                         <textarea
                           aria-label="Replay user message"
-                          className="w-full px-2 py-1.5 rounded text-[11px] font-mono outline-none resize-y"
-                          style={{ background: "var(--rp-ink-a06)", color: C.fg3, border: `1px solid var(--rp-ink-a10)`, minHeight: 60, maxHeight: 200 }}
+                          className={cn(fieldClassName, "resize-y py-2 font-mono text-[12px] leading-5")}
+                          style={{ minHeight: 72, maxHeight: 200 }}
                           value={forkMsg}
                           onChange={e => setForkMsg(e.target.value)}
                           placeholder="Enter user message..."
@@ -1119,15 +1101,14 @@ function ViewHeader({
                       </div>
                       {Object.keys(contextEdits).length > 0 && (
                         <div>
-                          <div className="text-[10px] font-medium mb-1.5" style={{ color: C.fg0 }}>Context</div>
+                          <div className="rp-field-label mb-1.5">Context</div>
                           <div className="space-y-1.5">
                             {Object.entries(contextEdits).map(([key, val]) => (
                               <div key={key} className="flex items-center gap-2">
-                                <span className="text-[10px] font-mono flex-shrink-0 w-24 truncate" style={{ color: C.fg1 }} title={key}>{key}</span>
+                                <span className="rp-meta w-24 flex-shrink-0 truncate" title={key}>{key}</span>
                                 <input
                                   aria-label={`Replay context ${key}`}
-                                  className="flex-1 min-w-0 px-2 py-1 rounded text-[10px] font-mono outline-none"
-                                  style={{ background: "var(--rp-ink-a06)", color: C.fg3, border: "1px solid var(--rp-ink-a10)" }}
+                                  className={cn(fieldClassName, "h-8 flex-1 px-2 font-mono text-[11px]")}
                                   value={val}
                                   onChange={e => setContextEdits(prev => ({ ...prev, [key]: e.target.value }))}
                                 />
@@ -1138,12 +1119,7 @@ function ViewHeader({
                       )}
                       <button
                         disabled={replayUnavailable || agentRegistryStatus !== "success"}
-                        className="w-full py-1.5 rounded text-[11px] font-medium transition-colors hover:brightness-110 disabled:opacity-50"
-                        style={{
-                          background: "var(--rp-ink-a08)",
-                          color: C.fg4,
-                          border: `1px solid var(--rp-ink-a10)`,
-                        }}
+                        className={cn(buttonVariants({ variant: "primary", size: "sm" }), "w-full")}
                         onClick={() => {
                           if (replayUnavailable || agentRegistryStatus !== "success") return;
                           if (!agentConfigured) {
@@ -1168,13 +1144,13 @@ function ViewHeader({
               </div>
             )}
           </div>
-          {!active && onFork && replayUnavailable && <div role="status" className="basis-full text-[10px]" style={{ color: C.fg1 }}>Replay unavailable for partial, unverified observations.</div>}
+          {!active && onFork && replayUnavailable && <div role="status" className="mb-1 basis-full text-[12px] text-rp-ink-muted">Replay unavailable for partial, unverified observations.</div>}
           {/* Not on the stats row after a separator: at laptop widths the ids
               wrapped and left the separator dangling at the end of the stats. */}
-          <div className="flex flex-col gap-1.5 text-[11px]">
+          <div className="mt-2 flex flex-col gap-1.5 text-[12px]">
             <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
             {run && (run.id || run.user_id || run.convo_id) && (
-              <span className="rp-meta-ids flex min-w-0 max-w-full flex-wrap items-center gap-1.5" style={{ color: C.fg0 }}>
+              <span className="rp-meta-ids flex min-w-0 max-w-full flex-wrap items-center gap-x-3 gap-y-1 text-rp-ink-muted">
                 {run.user_id && <span className="inline-flex items-center gap-1" title={run.user_id}><Badge label="user" copyValue={run.user_id} />{run.user_id.length > 12 ? run.user_id.slice(0, 12) + "…" : run.user_id}</span>}
                 {run.convo_id && <span className="inline-flex items-center gap-1" title={run.convo_id}><Badge label="conversation" copyValue={run.convo_id} />{run.convo_id.length > 12 ? run.convo_id.slice(0, 12) + "…" : run.convo_id}</span>}
                 <span className="inline-flex min-w-0 items-center gap-1"><Badge label="trace" copyValue={run.id} /><span className="min-w-0 truncate" title={run.id}>{run.id}</span></span>
@@ -1246,22 +1222,17 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
   }
 
   return (
-    <div className="fixed inset-0 z-[9998] flex items-center justify-center px-4" style={{ background: "var(--rp-scrim)" }}
+    <div className="fixed inset-0 z-[9998] flex items-center justify-center px-4" style={{ background: "var(--rp-scrim-soft)" }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="edit-replay-title" className="max-h-[calc(100svh-32px)] overflow-auto rounded-xl p-4 space-y-4 w-full max-w-md"
-        style={{
-          background: "var(--rp-surface)",
-          border: "1px solid var(--rp-border)", boxShadow: "var(--rp-e4)",
-        }}>
-        <h2 id="edit-replay-title" className="text-[13px] font-semibold" style={{ color: C.fg3 }}>Edit &amp; Replay</h2>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="edit-replay-title" className="rp-fade-rise max-h-[calc(100svh-32px)] w-full max-w-md space-y-4 overflow-auto rounded-lg border border-rp-line bg-rp-surface p-5 shadow-e4 sm:p-6">
+        <h2 id="edit-replay-title" className="rp-subsection-title">Edit &amp; Replay</h2>
         {agentRegistryStatus !== "success" && <ReplayRegistryNotice status={agentRegistryStatus} onRetry={refetchAgents} />}
 
         <div>
-          <div className="text-[10px] font-medium mb-1" style={{ color: C.fg0 }}>Model</div>
+          <div className="rp-field-label mb-1.5">Model</div>
           <select
             aria-label="Replay model"
-            className="w-full px-2.5 py-2 rounded-lg text-[11px] font-mono outline-none appearance-none"
-            style={{ background: "var(--rp-ink-a06)", color: C.fg3, border: "1px solid var(--rp-ink-a10)" }}
+            className={cn(fieldClassName, "rp-select h-9 cursor-pointer pr-9 font-mono text-[12px]")}
             value={mdl}
             onChange={e => setMdl(e.target.value)}
           >
@@ -1277,12 +1248,12 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
         </div>
 
         <div>
-          <div className="text-[10px] font-medium mb-1" style={{ color: C.fg0 }}>User message</div>
+          <div className="rp-field-label mb-1.5">User message</div>
           <textarea
             autoFocus
             aria-label="Replay user message"
-            className="w-full px-2.5 py-2 rounded-lg text-[11px] font-mono outline-none resize-y"
-            style={{ background: "var(--rp-ink-a06)", color: C.fg3, border: "1px solid var(--rp-ink-a10)", minHeight: 100, maxHeight: 300 }}
+            className={cn(fieldClassName, "resize-y py-2 font-mono text-[12px] leading-5")}
+            style={{ minHeight: 100, maxHeight: 300 }}
             value={msg} onChange={e => setMsg(e.target.value)}
             placeholder="Enter user message..."
           />
@@ -1290,15 +1261,14 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
 
         {Object.keys(contextEdits).length > 0 && (
           <div>
-            <div className="text-[10px] font-medium mb-1.5" style={{ color: C.fg0 }}>Context</div>
+            <div className="rp-field-label mb-1.5">Context</div>
             <div className="space-y-1.5">
               {Object.entries(contextEdits).map(([key, val]) => (
                 <div key={key} className="flex items-center gap-2">
-                  <span className="text-[10px] font-mono flex-shrink-0 w-28 truncate" style={{ color: C.fg1 }} title={key}>{key}</span>
+                  <span className="rp-meta w-28 flex-shrink-0 truncate" title={key}>{key}</span>
                   <input
                     aria-label={`Replay context ${key}`}
-                    className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg text-[10px] font-mono outline-none"
-                    style={{ background: "var(--rp-ink-a06)", color: C.fg3, border: "1px solid var(--rp-ink-a10)" }}
+                    className={cn(fieldClassName, "h-8 flex-1 px-2 font-mono text-[11px]")}
                     value={val}
                     onChange={e => setContextEdits(prev => ({ ...prev, [key]: e.target.value }))}
                   />
@@ -1310,20 +1280,14 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
 
         <div className="flex justify-end gap-2">
           <button
-            className="px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors rp-hover-wash"
-            style={{ color: C.fg1, background: "var(--rp-ink-a04)", border: "1px solid var(--rp-ink-a08)" }}
+            className={buttonVariants({ variant: "secondary", size: "sm" })}
             onClick={onClose}
           >
             Cancel
           </button>
           <button
             disabled={agentRegistryStatus !== "success"}
-            className="px-4 py-1.5 rounded-lg text-[11px] font-medium transition-colors hover:brightness-110 disabled:opacity-50"
-            style={{
-              color: C.fg4,
-              background: "var(--rp-ink-a10)",
-              border: "1px solid var(--rp-ink-a15)",
-            }}
+            className={buttonVariants({ variant: "primary", size: "sm" })}
             onClick={handleReplay}
           >
             Replay
@@ -1337,38 +1301,16 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
 function ScrollToBottomButton() {
   const { isAtBottom, scrollToBottom } = useStickToBottomContext();
   const prefersReducedMotion = usePrefersReducedMotion();
-  const [hovered, setHovered] = useState(false);
-  const [pressed, setPressed] = useState(false);
-  const spring = useSpring({
-    transform: `translateX(-50%) translateY(${hovered ? -2 : 0}px) scale(${pressed ? 0.97 : hovered ? 1.04 : 1})`,
-    // Opaque: this floats over the transcript, and a translucent wash let the
-    // text underneath read straight through the button.
-    background: hovered ? "var(--rp-surface-raised)" : "var(--rp-surface)",
-    borderColor: hovered ? "var(--rp-ink-a22)" : "var(--rp-ink-a15)",
-    boxShadow: hovered ? "var(--rp-e3)" : "var(--rp-e2)",
-    config: { tension: 360, friction: 24 },
-    immediate: prefersReducedMotion,
-  });
   if (isAtBottom) return null;
   return (
-    <animated.button
+    <button
+      type="button"
       onClick={() => scrollToBottom({ animation: prefersReducedMotion ? "instant" : "smooth" })}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => { setHovered(false); setPressed(false); }}
-      onMouseDown={() => setPressed(true)}
-      onMouseUp={() => setPressed(false)}
-      className="absolute bottom-2 left-1/2 z-10 flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium"
-      style={{
-        ...spring,
-        borderWidth: 1,
-        borderStyle: "solid",
-        color: C.fg4,
-        willChange: "transform",
-      }}
+      className="rp-fade-rise absolute bottom-3 left-1/2 z-10 flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-control border border-rp-line bg-rp-surface px-3 text-[12px] font-medium text-rp-ink shadow-e2 transition-[background-color,border-color,color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash hover:text-rp-blue"
     >
-      <ArrowDown size={12} />
+      <ArrowDown aria-hidden="true" size={12} />
       Scroll to bottom
-    </animated.button>
+    </button>
   );
 }
 
@@ -1376,20 +1318,18 @@ export function TraceNotFound({ runId, backPath }: { runId: string; backPath: st
   const navigate = useNavigate();
   return (
     <div className="flex h-full items-center justify-center px-6">
-      <div className="max-w-sm text-center">
-        <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)]">
-          <SearchX className="h-5 w-5" style={{ color: C.fg1 }} />
-        </div>
-        <div className="text-[15px] font-medium" style={{ color: C.fg4 }}>Trace not found</div>
-        <div className="mt-2 text-sm leading-relaxed" style={{ color: C.fg1 }}>
+      <div className="rp-fade-rise w-full max-w-md rounded-lg border border-dashed border-rp-line-dashed bg-rp-surface px-6 py-8 text-center">
+        <p className="rp-eyebrow justify-center"><span aria-hidden="true" className="rp-eyebrow-marker" />Runs / Not found</p>
+        <div className="mt-3 font-display text-[20px] font-semibold tracking-[-0.02em] text-rp-ink">Trace not found</div>
+        <div className="mt-2 text-[13px] leading-6 text-rp-ink-muted">
           This trace is not available in the current workspace. It may have been deleted, cleared, or opened from a different project.
         </div>
-        <code className="mt-3 block truncate rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] px-2 py-1.5 text-[11px]" style={{ color: C.fg0 }}>
+        <code className="rp-meta mt-4 block truncate rounded-sm border border-rp-line bg-rp-canvas-blue px-2 py-1.5" title={runId}>
           {runId}
         </code>
         <button
           type="button"
-          className="mt-4 rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] px-3 py-1.5 text-xs font-medium text-[color:var(--rp-ink-strong)] transition-colors hover:bg-[color:var(--rp-ink-wash-strong)]"
+          className={cn(buttonVariants({ variant: "secondary", size: "sm" }), "mt-5")}
           onClick={() => navigate(backPath, { replace: true })}
         >
           Back to traces
@@ -1816,7 +1756,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
     }
   }, [annotationsApi.annotations, annotationsApi.freshIds, saveAnnotationPreview]);
 
-  if (loading) return <div className="flex items-center justify-center h-full gap-2" style={{ color: C.fg1 }}>Loading <Dots /></div>;
+  if (loading) return <div role="status" className="flex h-full items-center justify-center gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-rp-ink-muted">Loading run <Dots /></div>;
   if (notFound || !data?.run) return <TraceNotFound runId={runId} backPath={routeBase ?? "/runs"} />;
 
   const { run, spans, subAgents } = data;
@@ -1836,13 +1776,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
     const agentLLMs = agentSpans.filter(s => s.span_type?.includes("LLM"));
     const agentErrs = agentSpans.filter(s => s.status === "ERROR");
 
-    const tabStyle = (k: string) => ({
-      padding: "8px 12px", fontSize: "12px", fontWeight: 500, cursor: "pointer" as const,
-      background: "none", border: "none",
-      color: agentTab === k ? C.fg5 : C.fg0,
-      borderBottom: agentTab === k ? `2px solid ${C.fg4}` : "2px solid transparent",
-      transition: "color var(--rp-motion-state) ease, border-color var(--rp-motion-state) ease",
-    });
+    const tabStyle = (k: string) => runTabClass(agentTab === k);
 
     return (
       <div className="h-full flex flex-col">
@@ -1862,16 +1796,16 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
             parentName: runDisplayName(run),
           }}
         />
-        <div role="tablist" aria-label="Sub-agent views" aria-orientation="horizontal" onKeyDown={handleHorizontalTabKeys} className="flex-shrink-0 flex" style={{ borderBottom: `1px solid ${C.border}`, paddingLeft: 16 }}>
-          <button type="button" id={agentOverviewTabId} className="rp-tab" role="tab" aria-selected={agentTab === "chat"} aria-controls={agentPanelId} tabIndex={agentTab === "chat" ? 0 : -1} style={tabStyle("chat")} onClick={() => setAgentTab("chat")}>Overview</button>
-          <button type="button" id={agentSpansTabId} className="rp-tab" role="tab" aria-selected={agentTab === "tree"} aria-controls={agentPanelId} tabIndex={agentTab === "tree" ? 0 : -1} style={tabStyle("tree")} onClick={() => setAgentTab("tree")}>Span Tree</button>
+        <div role="tablist" aria-label="Sub-agent views" aria-orientation="horizontal" onKeyDown={handleHorizontalTabKeys} className="flex flex-shrink-0 gap-1 overflow-x-auto border-b border-rp-line bg-rp-surface px-3 sm:px-4">
+          <button type="button" id={agentOverviewTabId} className={tabStyle("chat")} role="tab" aria-selected={agentTab === "chat"} aria-controls={agentPanelId} tabIndex={agentTab === "chat" ? 0 : -1} onClick={() => setAgentTab("chat")}>Overview</button>
+          <button type="button" id={agentSpansTabId} className={tabStyle("tree")} role="tab" aria-selected={agentTab === "tree"} aria-controls={agentPanelId} tabIndex={agentTab === "tree" ? 0 : -1} onClick={() => setAgentTab("tree")}>Span Tree</button>
         </div>
         {agentTab === "tree" ? (
-          <div id={agentPanelId} role="tabpanel" aria-labelledby={agentSpansTabId} className="flex-1 relative min-h-0 overflow-auto sb" style={{ padding: 16 }}>
+          <div id={agentPanelId} role="tabpanel" aria-labelledby={agentSpansTabId} className="flex-1 relative min-h-0 overflow-auto sb p-3 sm:p-4">
             <SpanTree spans={agentSpans} />
           </div>
         ) : (
-          <StickToBottom id={agentPanelId} role="tabpanel" aria-labelledby={agentOverviewTabId} className="flex-1 relative min-h-0" resize={prefersReducedMotion ? "instant" : "smooth"} initial={false} contextRef={stickToBottomContextRef}>
+          <StickToBottom id={agentPanelId} role="tabpanel" aria-labelledby={agentOverviewTabId} className="relative min-h-0 flex-1 overflow-hidden" resize={prefersReducedMotion ? "instant" : "smooth"} initial={false} contextRef={stickToBottomContextRef}>
             <StickToBottom.Content className="sb">
               {agentTab === "chat" && <ChatFlow spans={agentSpans} liveEvents={[]} subAgents={[]} onDiveIn={setFocusedAgent} />}
             </StickToBottom.Content>
@@ -1908,13 +1842,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
     }
   };
 
-  const tabStyle = (k: string) => ({
-    padding: "8px 12px", fontSize: "12px", fontWeight: 500, cursor: "pointer" as const,
-    background: "none", border: "none",
-      color: activeTab === k ? C.fg5 : C.fg0,
-      borderBottom: activeTab === k ? `2px solid ${C.fg4}` : "2px solid transparent",
-      transition: "color var(--rp-motion-state) ease, border-color var(--rp-motion-state) ease",
-  });
+  const tabStyle = (k: string) => runTabClass(activeTab === k);
 
   return (
     <div className="h-full flex flex-col">
@@ -1944,22 +1872,22 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
           userMessage: lastUserMessage,
         } : undefined}
       />
-      {routeBase && <div className="px-4 py-2 text-xs"><Link className="text-[color:var(--rp-focus)] underline underline-offset-2" to={`/evaluations?view=evidence&anchorKind=run&anchorId=${encodeURIComponent(runId)}`}>Reported completion evidence</Link></div>}
+      {routeBase && <div className="flex flex-shrink-0 bg-rp-surface px-4 pb-1 sm:px-5"><Link className="inline-flex min-h-7 items-center gap-1 text-[12px] font-medium text-rp-blue underline-offset-4 transition-colors duration-250 ease-standard hover:text-rp-blue-hover hover:underline" to={`/evaluations?view=evidence&anchorKind=run&anchorId=${encodeURIComponent(runId)}`}>Reported completion evidence<ArrowUpRight aria-hidden="true" className="size-3" /></Link></div>}
       <TraceAnnotations
         annotations={annotationsApi.annotations}
         freshIds={annotationsApi.freshIds}
         onClearFresh={annotationsApi.clearFresh}
         onDelete={annotationsApi.remove}
       />
-      <div role="tablist" aria-label="Run views" aria-orientation="horizontal" onKeyDown={handleHorizontalTabKeys} className="flex-shrink-0 flex" style={{ borderBottom: `1px solid ${C.border}`, paddingLeft: 16 }}>
-        <button type="button" id={runOverviewTabId} className="rp-tab" role="tab" aria-selected={activeTab === "chat"} aria-controls={runPanelId} tabIndex={activeTab === "chat" ? 0 : -1} style={tabStyle("chat")} onClick={goOverview}>Overview</button>
-        <button type="button" id={runSpansTabId} className="rp-tab" role="tab" aria-selected={activeTab === "tree"} aria-controls={runPanelId} tabIndex={activeTab === "tree" ? 0 : -1} style={tabStyle("tree")} onClick={goSpans}>Span Tree</button>
+      <div role="tablist" aria-label="Run views" aria-orientation="horizontal" onKeyDown={handleHorizontalTabKeys} className="flex flex-shrink-0 gap-1 overflow-x-auto border-b border-rp-line bg-rp-surface px-3 sm:px-4">
+        <button type="button" id={runOverviewTabId} className={tabStyle("chat")} role="tab" aria-selected={activeTab === "chat"} aria-controls={runPanelId} tabIndex={activeTab === "chat" ? 0 : -1} onClick={goOverview}>Overview</button>
+        <button type="button" id={runSpansTabId} className={tabStyle("tree")} role="tab" aria-selected={activeTab === "tree"} aria-controls={runPanelId} tabIndex={activeTab === "tree" ? 0 : -1} onClick={goSpans}>Span Tree</button>
         {paneConvoId && (
-          <button type="button" id={runConversationTabId} className="rp-tab" role="tab" aria-selected={activeTab === "convo"} aria-controls={runPanelId} tabIndex={activeTab === "convo" ? 0 : -1} style={tabStyle("convo")} onClick={goConvo}>Conversation</button>
+          <button type="button" id={runConversationTabId} className={tabStyle("convo")} role="tab" aria-selected={activeTab === "convo"} aria-controls={runPanelId} tabIndex={activeTab === "convo" ? 0 : -1} onClick={goConvo}>Conversation</button>
         )}
       </div>
       {activeTab === "tree" ? (
-        <div id={runPanelId} role="tabpanel" aria-labelledby={runSpansTabId} className="flex-1 relative min-h-0 overflow-auto sb" style={{ padding: 16 }}>
+        <div id={runPanelId} role="tabpanel" aria-labelledby={runSpansTabId} className="flex-1 relative min-h-0 overflow-auto sb p-3 sm:p-4">
           <SpanTree
             spans={paneSpans}
             selectedSpanId={selectedSpanId}
@@ -1973,7 +1901,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
           />
         </div>
       ) : (
-        <StickToBottom id={runPanelId} role="tabpanel" aria-labelledby={activeTab === "convo" ? runConversationTabId : runOverviewTabId} className="flex-1 relative min-h-0" resize={prefersReducedMotion ? "instant" : "smooth"} initial={false} contextRef={stickToBottomContextRef}>
+        <StickToBottom id={runPanelId} role="tabpanel" aria-labelledby={activeTab === "convo" ? runConversationTabId : runOverviewTabId} className="relative min-h-0 flex-1 overflow-hidden" resize={prefersReducedMotion ? "instant" : "smooth"} initial={false} contextRef={stickToBottomContextRef}>
           <StickToBottom.Content className="sb">
             {activeTab === "chat" && <ChatFlow spans={spans} liveEvents={liveEvents} subAgents={subAgents} onDiveIn={setFocusedAgent} isActive={active} lastUpdatedAt={run.last_updated_at} onEditMessage={onForkStarted && !active && !replayUnavailable ? (msg) => setEditModal({ userMessage: msg }) : undefined} replayError={replayMeta?.replay?.error ?? null} />}
             {activeTab === "convo" && paneConvoId && <ConvoDetail convoId={paneConvoId} onOpenTurn={openConversationTurn} />}

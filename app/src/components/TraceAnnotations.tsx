@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { KIND_STYLES, SOURCE_GLYPH, AnnotationChip, ANNOTATION_ARRIVAL_MS, annotationSourceLabel } from "./AnnotationChip";
 import type { Annotation, AnnotationKind } from "../hooks/use-annotations";
 import { DeepLinkedText } from "../utils/deep-links";
+import { cn } from "@/lib/utils";
+import { buttonVariants } from "@/components/ui/button";
+import { fieldClassName } from "@/components/ui/input";
 
 const C = {
-  bg: "var(--rp-canvas)",
   panel: "var(--rp-surface)",
-  border: "var(--rp-border)",
-  fg: "var(--rp-ink-strong)",
+  border: "var(--rp-line)",
+  fg: "var(--rp-ink)",
   muted: "var(--rp-ink-muted)",
 };
 
@@ -27,8 +29,7 @@ export function TraceAnnotations({ annotations, freshIds, onClearFresh, onDelete
       aria-live="polite"
       aria-label="Run annotations"
       style={{
-        padding: "4px 16px",
-        borderBottom: `1px solid ${C.border}`,
+        padding: "6px 20px 8px",
         background: C.panel,
         display: "flex",
         flexDirection: "column",
@@ -83,9 +84,8 @@ function TraceAnnotationRow({
         alignItems: "flex-start",
         padding: "8px 10px",
         border: `1px solid ${style.border}`,
-        borderRadius: "var(--rp-r-lg)",
+        borderRadius: 4,
         background: style.bg,
-        boxShadow: "var(--rp-e-inset)",
       }}
     >
       <span style={{ color: C.muted, width: 14, flex: "0 0 14px", fontSize: 11, textAlign: "center", marginTop: 1 }}>
@@ -94,14 +94,14 @@ function TraceAnnotationRow({
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
           <AnnotationChip annotation={annotation} showLabel />
-          <span style={{ fontSize: 10, color: C.muted }}>{author} · {timeAgo(annotation.created_at)}</span>
+          <span style={{ fontSize: 11, color: C.muted }}>{author} · {timeAgo(annotation.created_at)}</span>
         </div>
         {annotation.note && (
           <div
             style={{
-              fontSize: 12,
+              fontSize: 13,
               color: C.fg,
-              lineHeight: 1.5,
+              lineHeight: 1.55,
               // The composer takes Enter as a newline and the note is stored with
               // it, so the paragraph the user wrote has to survive rendering.
               whiteSpace: "pre-wrap",
@@ -119,6 +119,7 @@ function TraceAnnotationRow({
         aria-label={`Delete ${annotation.kind} annotation`}
         onClick={onDelete}
         title="Delete annotation"
+        className="rounded-sm transition-colors duration-250 ease-standard hover:bg-white/70 hover:!text-rp-ink"
         style={{
           background: "transparent",
           border: 0,
@@ -172,20 +173,19 @@ export function InlineCreateForm({
   return (
     <div
       style={{
-        padding: compact ? "8px" : frameless ? "8px 10px 12px" : "10px",
+        padding: compact ? "10px" : frameless ? "12px 14px 14px" : "12px",
         background: frameless ? "transparent" : "var(--rp-surface)",
         border: frameless ? "none" : `1px solid ${C.border}`,
-        borderRadius: "var(--rp-r-lg)",
+        borderRadius: 5,
         display: "flex",
         flexDirection: "column",
-        gap: 8,
-        boxShadow: frameless ? "none" : "0 1px 0 var(--rp-inset-hairline-soft) inset",
+        gap: 10,
       }}
     >
       {title && (
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: C.fg }}>{title}</div>
-          <span style={{ fontSize: 10, color: C.muted }}>Run note</span>
+          <div className="rp-subsection-title">{title}</div>
+          <span className="rp-eyebrow">Run note</span>
         </div>
       )}
       <div role="group" aria-label="Annotation type" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -198,15 +198,16 @@ export function InlineCreateForm({
               key={k}
               aria-pressed={selected}
               onClick={() => setKind(k)}
+              className="transition-[background-color,border-color,color] duration-250 ease-standard hover:!text-rp-ink"
               style={{
-                padding: "1px 9px",
-                borderRadius: "var(--rp-r-full)",
-                fontSize: 10,
+                padding: "3px 10px",
+                borderRadius: 2,
+                fontSize: 12,
                 fontWeight: 500,
                 lineHeight: "18px",
                 cursor: "pointer",
                 color: selected ? s.fg : C.muted,
-                background: selected ? s.bg : "var(--rp-ink-wash)",
+                background: selected ? s.bg : "var(--rp-surface)",
                 border: `1px solid ${selected ? s.border : C.border}`,
               }}
             >
@@ -216,9 +217,9 @@ export function InlineCreateForm({
           );
         })}
         <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 10, color: C.muted, whiteSpace: "nowrap" }}>
-          <kbd style={{ background: "var(--rp-ink-wash)", padding: "0 4px", borderRadius: 3 }}>⌘↵</kbd> save ·{" "}
-          <kbd style={{ background: "var(--rp-ink-wash)", padding: "0 4px", borderRadius: 3 }}>esc</kbd> cancel
+        <span style={{ fontSize: 11, color: C.muted, whiteSpace: "nowrap" }}>
+          <kbd className="rounded-sm border border-rp-line px-1 font-mono text-[10px]">⌘↵</kbd> save ·{" "}
+          <kbd className="rounded-sm border border-rp-line px-1 font-mono text-[10px]">esc</kbd> cancel
         </span>
       </div>
       <textarea
@@ -231,18 +232,8 @@ export function InlineCreateForm({
           if (e.key === "Escape") { e.preventDefault(); onCancel(); }
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); }
         }}
-        style={{
-          minHeight: 48,
-          padding: "7px 8px",
-          border: `1px solid ${C.border}`,
-          background: C.bg,
-          borderRadius: "var(--rp-r-md)",
-          color: C.fg,
-          fontSize: 12,
-          fontFamily: "inherit",
-          resize: "vertical",
-          outline: "none",
-        }}
+        className={cn(fieldClassName, "resize-y py-2 text-[13px] leading-5")}
+        style={{ minHeight: 64 }}
       />
       {error && (
         <div role="alert" style={{ fontSize: 11, lineHeight: 1.45, color: "var(--rp-danger)" }}>
@@ -253,7 +244,7 @@ export function InlineCreateForm({
         <button
           type="button"
           onClick={onCancel}
-          style={{ padding: "4px 10px", fontSize: 11, background: "transparent", border: `1px solid ${C.border}`, borderRadius: "var(--rp-r-md)", color: C.muted, cursor: "pointer" }}
+          className={buttonVariants({ variant: "secondary", size: "sm" })}
         >
           Cancel
         </button>
@@ -261,7 +252,8 @@ export function InlineCreateForm({
           type="button"
           onClick={save}
           disabled={saving}
-          style={{ padding: "4px 10px", fontSize: 11, background: C.fg, border: `1px solid ${C.fg}`, borderRadius: "var(--rp-r-md)", color: "var(--rp-canvas)", cursor: saving ? "default" : "pointer", fontWeight: 600, opacity: saving ? 0.6 : 1 }}
+          aria-busy={saving || undefined}
+          className={buttonVariants({ variant: "primary", size: "sm" })}
         >
           {saving ? "Saving…" : submitLabel}
         </button>
@@ -310,14 +302,11 @@ export function AnnotationCreatePopover({
         el.style.top = `${btn.bottom + 4}px`;
         el.style.right = `${window.innerWidth - btn.right}px`;
       }}
-      className="fixed z-[9999] rounded-lg p-1.5 shadow-xl"
+      className="rp-pop fixed z-[9999] rounded-md border border-rp-line bg-rp-surface shadow-e3"
       role="dialog"
       aria-label="Annotate run"
       style={{
-        background: "var(--rp-surface)",
-        border: "1px solid var(--rp-border)",
-        boxShadow: "var(--rp-e3)",
-        width: "min(360px, calc(100vw - 32px))",
+        width: "min(380px, calc(100vw - 32px))",
       }}
     >
       <InlineCreateForm
