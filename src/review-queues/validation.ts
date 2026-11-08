@@ -227,7 +227,7 @@ export function parseQueueCreate(value: unknown): { name: string; schema: Review
 }
 export function parseQueueInsert(value: unknown): { runId: string; outputSpanId: string | null } {
   const row = object(value, "source selection"); fields(row, ["runId", "outputSpanId"], "source selection");
-  return { runId: parseId(row.runId), outputSpanId: row.outputSpanId === undefined ? null : parseId(row.outputSpanId) };
+  return { runId: parseId(row.runId), outputSpanId: row.outputSpanId === undefined || row.outputSpanId === null ? null : parseId(row.outputSpanId) };
 }
 export function parsePromotionReceipt(value: unknown): import("./protocol").PromotionReceipt {
   const row = object(value, "promotion receipt");
