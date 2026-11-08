@@ -31,6 +31,12 @@ test("investigation annotations: edited drafts persist through real routes and r
     expect(response.status()).toBe(200);
     return response.json();
   };
+  const savedPreviewId = async () => {
+    const response = await request.get(`${runPhantom.url}/api/saved-runs`);
+    expect(response.status()).toBe(200);
+    const body = await response.json() as { events: Array<{ id: string; properties?: { annotation_preview?: { id: string } } | null }> };
+    return body.events.find(event => event.id === runId)?.properties?.annotation_preview?.id ?? null;
+  };
   const original = await readTrace();
   expect(original.run).toMatchObject(captured.run);
   expect(original.spans).toEqual(captured.spans.map(span => expect.objectContaining(span)));
@@ -136,10 +142,13 @@ test("investigation annotations: edited drafts persist through real routes and r
   await expect(spanNoteText).toHaveCount(0);
   await expect(runAnnotations).toContainText(runNote);
   expect(await readAnnotations()).toEqual([runAnnotation]);
+  // The saved card must not keep quoting a deleted annotation.
+  await expect.poll(savedPreviewId).toBe(runAnnotation.id);
   const runDeleted = page.waitForResponse(response => response.url() === `${annotationsUrl}/${runAnnotation.id}` && response.request().method() === "DELETE");
   await runAnnotations.getByRole("button", { name: "Delete note annotation", exact: true }).click();
   expect((await runDeleted).status()).toBe(200);
   await expect(runAnnotations).toHaveCount(0);
+  await expect.poll(savedPreviewId).toBeNull();
   await page.reload();
   await expect(page).toHaveURL(`${runPhantom.url}/saved/${runId}/span/${spanId}`);
   await expect(runAnnotations).toHaveCount(0);

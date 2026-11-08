@@ -33,6 +33,7 @@ import { parseReplayMetadata } from "../utils/types";
 import { deleteRun, renameRun } from "../api/runs";
 import type { Run, Span, LiveEvent, SubAgent } from "../utils/types";
 import {
+  getSavedAnnotationPreview,
   getSavedEvents,
   isEventSaved,
   removeSavedEvent,
@@ -40,6 +41,7 @@ import {
   type SavedAnnotationPreview,
   type SavedEvent,
   updateSavedEvent,
+  useSavedEvent,
 } from "../api/saved-runs";
 import { parseMessages } from "./MessageList";
 import { AnnotationCreatePopover, TraceAnnotations } from "./TraceAnnotations";
@@ -1757,6 +1759,21 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
       if (annotationsApi.freshIds.has(annotation.id)) saveAnnotationPreview(annotation);
     }
   }, [annotationsApi.annotations, annotationsApi.freshIds, saveAnnotationPreview]);
+
+  // The saved card keeps a copy of one annotation. Deleting that annotation
+  // left the copy behind, so Saved kept quoting a note the run no longer had.
+  const savedForRun = useSavedEvent(runId);
+  useEffect(() => {
+    if (!runId || !annotationsApi.loaded) return;
+    const saved = savedForRun;
+    const preview = saved ? getSavedAnnotationPreview(saved) : null;
+    if (!saved || !preview || annotationsApi.annotations.some(a => a.id === preview.id)) return;
+    const latest = annotationsApi.annotations[annotationsApi.annotations.length - 1];
+    const { annotation_preview: _stale, ...rest } = saved.properties ?? {};
+    updateSavedEvent(runId, {
+      properties: latest ? { ...rest, annotation_preview: annotationToSavedPreview(latest) } : rest,
+    });
+  }, [runId, savedForRun, annotationsApi.loaded, annotationsApi.annotations]);
 
   if (loading) return <div role="status" className="flex h-full items-center justify-center gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-rp-ink-muted">Loading run <Dots /></div>;
   if (notFound || !data?.run) return <TraceNotFound runId={runId} backPath={routeBase ?? "/runs"} />;
