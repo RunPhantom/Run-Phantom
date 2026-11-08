@@ -309,20 +309,20 @@ function AgentEndpointsSection() {
             return (
               <div
                 key={name}
-                className="rp-ease group grid gap-2 border-b border-rp-line-muted px-4 py-3 last:border-b-0 hover:bg-rp-row-hover sm:grid-cols-[minmax(92px,160px)_minmax(0,1fr)_auto_36px] sm:items-center sm:gap-3"
+                className="rp-ease group grid grid-cols-[minmax(0,1fr)_auto_36px] items-center gap-x-3 gap-y-1 border-b border-rp-line-muted px-4 py-3 last:border-b-0 hover:bg-rp-row-hover sm:grid-cols-[minmax(92px,160px)_minmax(0,1fr)_auto_36px] sm:gap-y-0"
               >
                 <span className="min-w-0 break-words text-[13px] font-medium text-rp-ink">
                   {name}
                 </span>
-                <span title={config.url} className="rp-meta min-w-0 truncate text-rp-ink-soft">
-                  {config.url}
+                <span title={config.url || undefined} className={`rp-meta order-last col-span-3 min-w-0 truncate sm:order-none sm:col-span-1 ${config.url ? "text-rp-ink-soft" : "text-rp-ink-muted"}`}>
+                  {config.url || "No URL registered"}
                 </span>
-                <StatusPill status={status === "online" ? "success" : "neutral"} live={status === "online"} className="sm:justify-self-start">
+                <StatusPill status={status === "online" ? "success" : "neutral"} live={status === "online"} className="justify-self-start">
                   {status}
                 </StatusPill>
                 <button
                   type="button"
-                  className="rp-ease grid size-9 place-items-center rounded-sm text-rp-ink-muted hover:bg-rp-danger-soft hover:text-rp-danger sm:justify-self-end sm:opacity-0 sm:focus-visible:opacity-100 sm:group-hover:opacity-100"
+                  className="rp-ease grid size-9 place-items-center justify-self-end rounded-sm text-rp-ink-muted hover:bg-rp-danger-soft hover:text-rp-danger sm:opacity-0 sm:focus-visible:opacity-100 sm:group-hover:opacity-100"
                   disabled={busy || loading || !loaded}
                   onClick={() => void removeAgent(name)}
                   aria-label={`Remove ${name}`}
