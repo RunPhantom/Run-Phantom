@@ -12,7 +12,7 @@ export function AuthPage({ invite = false }: { invite?: boolean }) {
   const [email, setEmail] = useState(""); const [password, setPassword] = useState(""); const [code, setCode] = useState(""); const task = useTask();
   if (session.authenticated && !invite) return <Navigate to="/team" replace />;
   const title = invite ? "Join your project" : setup ? "Set up your team workspace" : "Welcome back";
-  return <main className="team-auth"><TeamBrand /><div className="team-auth-content"><Heading title={title}>{invite ? "Enter the invitation code shared by your project administrator." : setup ? "Create the owner account for this Run Phantom instance." : "Sign in to review captured runs with your team."}</Heading>
+  return <main className="team-auth"><header className="team-auth-bar"><TeamBrand /></header><div className="team-auth-content"><Heading title={title}>{invite ? "Enter the invitation code shared by your project administrator." : setup ? "Create the owner account for this Run Phantom instance." : "Sign in to review captured runs with your team."}</Heading>
     {notice && <p role="status" className="team-notice">{notice}</p>}
     <form className="team-form" onSubmit={event => { event.preventDefault(); void task.run(async () => {
       if (invite) return client.request<{ session: SessionResponse; project: Project }>("/invites/accept", { method: "POST", body: { token: code, email, password } });
