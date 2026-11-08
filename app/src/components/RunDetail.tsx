@@ -26,6 +26,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Badge as UiBadge, badgeVariants } from "@/components/ui/badge";
 import { fieldClassName } from "@/components/ui/input";
 import { fmt, isActive, plural, replayOutcome, runDisplayName, isoTimestamp, safeDecodeParam, spanErrorReason } from "../utils/helpers";
+import { buildReplayModelOptions } from "../utils/replay-models";
 import type { RunStatus } from "../utils/helpers";
 import { captureCompletion, observationReplayUnavailable } from "../../../src/spans/normalized";
 import { useQueryClient } from "@tanstack/react-query";
@@ -156,36 +157,6 @@ function toLiveEvent(event: LiveEventBroadcast | undefined): LiveEvent | null {
     timestamp: event.timestamp,
     metadata: event.metadata ?? null,
   };
-}
-
-const DEFAULT_REPLAY_MODEL_FALLBACKS = [
-  "claude-sonnet-5",
-  "claude-sonnet-4-6",
-  "claude-haiku-4-5-20251001",
-] as const;
-
-function buildReplayModelOptions(opts: {
-  selectedModel?: string | null;
-  runModel?: string | null;
-  metadataModel?: string | null;
-  anthropicModels?: string[];
-}): string[] {
-  const merged = [
-    opts.selectedModel ?? null,
-    opts.runModel ?? null,
-    opts.metadataModel ?? null,
-    ...(opts.anthropicModels ?? []),
-    ...DEFAULT_REPLAY_MODEL_FALLBACKS,
-  ];
-  const seen = new Set<string>();
-  const list: string[] = [];
-  for (const value of merged) {
-    const next = value?.trim();
-    if (!next || seen.has(next)) continue;
-    seen.add(next);
-    list.push(next);
-  }
-  return list;
 }
 
 /** Get token totals per model, only counting root LLM spans to avoid double-counting in ToolLoopAgent */
@@ -787,7 +758,7 @@ function ViewHeader({
   // Live registry lookup — re-renders whenever the server broadcasts
   // `agents_updated` (e.g. after the user runs `runphantom setup` or hits
   // `/api/agents/refresh`).
-  const { configured: agentConfigured, registryStatus: agentRegistryStatus, refetch: refetchAgents } = useAgentForEvent(run?.event_name);
+  const { configured: agentConfigured, config: agentConfig, registryStatus: agentRegistryStatus, refetch: refetchAgents } = useAgentForEvent(run?.event_name);
   const forkMode = "local" as const;
   const [setupModalOpen, setSetupModalOpen] = useState(false);
   const [isSaved, setIsSaved] = useState(() => run ? isEventSaved(run.id) : false);
@@ -831,7 +802,8 @@ function ViewHeader({
     runModel: model,
     metadataModel: traceModelFromMetadata,
     anthropicModels,
-  }), [forkModel, model, traceModelFromMetadata, anthropicModels]);
+    agentModels: agentConfig?.models,
+  }), [forkModel, model, traceModelFromMetadata, anthropicModels, agentConfig?.models]);
   const handleRename = useCallback((name: string) => {
     if (!run) return;
     renameRun(run.id, name)
@@ -1183,7 +1155,7 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
   // Live registry lookup; re-renders on `agents_updated` WS event, so the
   // modal reflects registry changes that happen while it's open (rare but
   // possible if the user runs the slash command in another window).
-  const { configured: agentConfigured, registryStatus: agentRegistryStatus, refetch: refetchAgents } = useAgentForEvent(eventName);
+  const { configured: agentConfigured, config: agentConfig, registryStatus: agentRegistryStatus, refetch: refetchAgents } = useAgentForEvent(eventName);
   const [agentContext, setAgentContext] = useState<Record<string, string>>({});
   const [contextEdits, setContextEdits] = useState<Record<string, string>>({});
 
@@ -1206,7 +1178,8 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
     runModel: model,
     metadataModel: traceModelFromMetadata,
     anthropicModels,
-  }), [mdl, model, traceModelFromMetadata, anthropicModels]);
+    agentModels: agentConfig?.models,
+  }), [mdl, model, traceModelFromMetadata, anthropicModels, agentConfig?.models]);
 
   const handleReplay = () => {
     if (agentRegistryStatus !== "success" || !agentConfigured) return;

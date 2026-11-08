@@ -3,13 +3,13 @@ import { PRICING_VERSION, TOKEN_CATEGORIES, type DetailCategory, type Inclusion,
 const COUNT_ATTRIBUTES: Record<TokenCategory, readonly string[]> = {
   input: ["gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens", "ai.usage.inputTokens", "ai.usage.promptTokens", "ai.usage.prompt_tokens", "llm.token_count.prompt"],
   output: ["gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens", "ai.usage.outputTokens", "ai.usage.completionTokens", "ai.usage.completion_tokens", "llm.token_count.completion"],
-  cache_read: ["gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.input_tokens.cached", "runphantom.usage.cache_read_tokens"],
-  cache_write: ["gen_ai.usage.cache_creation.input_tokens", "runphantom.usage.cache_write_tokens"],
+  cache_read: ["gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.input_tokens.cached", "runphantom.usage.cache_read_tokens", "llm.token_count.prompt_details.cache_read"],
+  cache_write: ["gen_ai.usage.cache_creation.input_tokens", "runphantom.usage.cache_write_tokens", "llm.token_count.prompt_details.cache_write"],
   cache_write_5m: ["runphantom.usage.cache_write_5m_tokens"],
   cache_write_1h: ["runphantom.usage.cache_write_1h_tokens"],
-  reasoning: ["gen_ai.usage.output_tokens.reasoning", "runphantom.usage.reasoning_tokens"],
-  audio_input: ["gen_ai.usage.input_tokens.audio", "runphantom.usage.audio_input_tokens"],
-  audio_output: ["gen_ai.usage.output_tokens.audio", "runphantom.usage.audio_output_tokens"],
+  reasoning: ["gen_ai.usage.output_tokens.reasoning", "runphantom.usage.reasoning_tokens", "llm.token_count.completion_details.reasoning"],
+  audio_input: ["gen_ai.usage.input_tokens.audio", "runphantom.usage.audio_input_tokens", "llm.token_count.prompt_details.audio"],
+  audio_output: ["gen_ai.usage.output_tokens.audio", "runphantom.usage.audio_output_tokens", "llm.token_count.completion_details.audio"],
 };
 
 function ownValue(attributes: Record<string, unknown>, key: string): { present: boolean; value: unknown } {

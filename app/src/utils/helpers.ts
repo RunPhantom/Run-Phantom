@@ -91,6 +91,18 @@ export function runStatus(run: RunActivity, errorCount: number): RunStatus {
   return errorCount > 0 ? "failed" : "complete";
 }
 
+/**
+ * The agent a run belongs to, for grouping and filtering. Instrumentations
+ * without a Run Phantom event name (OpenInference, OpenTelemetry GenAI) name
+ * the agent through their root span, which only counts once that root has
+ * been captured; before then the stored name is a trace id placeholder.
+ */
+export function runAgentName(run: { event_name: string | null; name: string | null; finished?: number | null }): string | null {
+  const eventName = run.event_name?.replace(/^replay:/i, "").trim();
+  if (eventName) return eventName;
+  return run.finished ? run.name?.trim() || null : null;
+}
+
 export function runDisplayName(
   run: { id: string; display_name?: string | null; event_name: string | null; name: string | null },
   fallbackLength = 12,
