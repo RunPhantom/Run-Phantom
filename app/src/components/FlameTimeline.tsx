@@ -181,7 +181,13 @@ function SpanTooltip({
 export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { spans: Span[]; subAgents?: SubAgent[]; onDiveIn?: (rootSpanId: string) => void }) {
   const vizSpans = useMemo(() => spans.filter(s => s.span_type === "TRACE" || s.span_type === "TOOL_CALL" || s.span_type?.includes("LLM")), [spans]);
   const subAgentSpanIds = useMemo(() => new Set(subAgents.flatMap(a => a.span_ids)), [subAgents]);
-  const layout = useMemo(() => buildCondensedTimeline(vizSpans, subAgents), [vizSpans, subAgents]);
+  const undrawnParentIds = useMemo(() => {
+    const drawn = new Set(vizSpans);
+    const ids = new Set<string>();
+    for (const span of spans) if (!drawn.has(span)) ids.add(span.id);
+    return ids;
+  }, [spans, vizSpans]);
+  const layout = useMemo(() => buildCondensedTimeline(vizSpans, subAgents, 0, undrawnParentIds), [vizSpans, subAgents, undrawnParentIds]);
   const hasVizSpans = layout.entries.length > 0;
   const [compact, setCompact] = useState(false);
   const [selected, setSelected] = useState<{ key: string; id: string } | null>(null);
@@ -317,7 +323,7 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
   const scrollViewportW = Math.max((containerW || 300) - labelW, 160);
   const chartW = Math.min(12_000, Math.max(scrollViewportW, dur * MIN_PX_PER_MS, MIN_CHART_W, compact && shortestInterval !== Infinity ? (dur / shortestInterval) * minimumPaintWidth : 0));
   // Paint bounds participate in compact packing, so the minimum visible bar never covers its neighbour.
-  const packed = compact ? buildCondensedTimeline(vizSpans, subAgents, (minimumPaintWidth * dur) / chartW) : layout;
+  const packed = compact ? buildCondensedTimeline(vizSpans, subAgents, (minimumPaintWidth * dur) / chartW, undrawnParentIds) : layout;
   const rowOf = (entry: TimelineEntry) => compact ? packed.entries[entry.sourceIndex].row : unknownRows.get(entry.key) ?? namedRows.get(entry.span.name)!;
   const rows = new Map<number, TimelineEntry[]>();
   for (const entry of layout.entries) {

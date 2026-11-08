@@ -69,7 +69,12 @@ function popLane(heap: Lane[]): Lane {
 }
 
 /** Finite occurrence-preserving layout; names/prompts never supply graph or invocation identity. */
-export function buildCondensedTimeline(spans: readonly Span[], agents: readonly Pick<SubAgent, "root_span_id" | "name" | "span_ids">[] = [], minimumIntervalMs = 0): CondensedTimeline {
+/**
+ * `undrawnParentIds` names spans that exist in the run but are deliberately
+ * left off the timeline (agent/root spans). A parent link to one of them is
+ * known, not unavailable, so it is not reported as missing coverage.
+ */
+export function buildCondensedTimeline(spans: readonly Span[], agents: readonly Pick<SubAgent, "root_span_id" | "name" | "span_ids">[] = [], minimumIntervalMs = 0, undrawnParentIds: ReadonlySet<string> = new Set()): CondensedTimeline {
   if (!Number.isFinite(minimumIntervalMs) || minimumIntervalMs < 0 || minimumIntervalMs > MAX_TIMELINE_WINDOW_MS) throw new RangeError("Invalid timeline paint interval");
   const omittedCount = Math.max(0, spans.length - MAX_TIMELINE_SPANS);
   const admitted = spans.slice(0, MAX_TIMELINE_SPANS);
@@ -88,7 +93,7 @@ export function buildCondensedTimeline(spans: readonly Span[], agents: readonly 
     const parent = entry.span.parent_span_id;
     if (!parent) continue;
     if (!entry.identityAvailable || (counts.get(parent) ?? 0) > 1) entry.parentState = "ambiguous";
-    else if (!byId.has(parent)) entry.parentState = "unavailable";
+    else if (!byId.has(parent)) entry.parentState = undrawnParentIds.has(parent) && !counts.has(parent) ? "root" : "unavailable";
     else { entry.parentIndex = byId.get(parent)!; entry.parentState = "linked"; }
   }
 

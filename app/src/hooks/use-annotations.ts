@@ -128,6 +128,9 @@ export function useAnnotations(runId: string | null | undefined) {
 
   return {
     annotations: annotationsQuery.data ?? [],
+    // False while the empty placeholder stands in for the server list, so
+    // callers never mistake "not fetched yet" for "this run has none".
+    loaded: annotationsQuery.isSuccess && !annotationsQuery.isPlaceholderData,
     freshIds,
     clearFresh,
     create,
