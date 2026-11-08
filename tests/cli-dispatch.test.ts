@@ -62,4 +62,26 @@ describe("CLI dispatch compatibility", () => {
     expect(result.stdout).toContain("runphantom replay register [--cwd=DIR]");
     expect(result.stderr).toBe("");
   }, CLI_TEST_TIMEOUT_MS);
+  test.each(["open", "start", "stop", "status", "serve", "mcp"])("%s --help prints usage instead of acting", verb => {
+    const result = run([verb, "--help"]);
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`runphantom ${verb} — `);
+    expect(result.stdout).toContain("USAGE");
+    expect(result.stderr).toBe("");
+  }, CLI_TEST_TIMEOUT_MS);
+
+  test("hooks --help lists every hook vendor and exits 0", () => {
+    const result = run(["hooks", "--help"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("claude|cursor");
+    expect(result.stdout).toContain("codex --local");
+  }, CLI_TEST_TIMEOUT_MS);
+
+  test("team serve --help prints team usage instead of failing", () => {
+    const result = run(["team", "serve", "--help"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("runphantom team serve");
+    expect(result.stderr).toBe("");
+  }, CLI_TEST_TIMEOUT_MS);
 });
