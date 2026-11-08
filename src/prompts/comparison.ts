@@ -9,6 +9,14 @@ type Owner = Awaited<ReturnType<typeof acquireComparisonOwner>>;
 type ProviderClient = ReturnType<typeof createComparisonProviderClient>;
 interface Entry { store: ComparisonStore; id: string; position: number; fence: ComparisonFence; cancel: AbortController }
 /** Every operation and scope shares the real kernel owner's two fetch slots. */
+/** Names the HTTP refusal class so a rejected key or exhausted credit is not reported as a generic failure. */
+export function providerRefusalReason(error: unknown): "provider_auth" | "provider_rate_limited" | "provider_refused" | "provider_error" {
+  const status = error instanceof ComparisonProviderError ? error.httpStatus : null;
+  if (status === 401 || status === 403) return "provider_auth";
+  if (status === 429) return "provider_rate_limited";
+  if (status === 400 || status === 404 || status === 413 || status === 422) return "provider_refused";
+  return "provider_error";
+}
 export class ComparisonCoordinator {
   readonly #owner: Owner; readonly #client: ProviderClient;
   #pending: Entry[] = []; readonly #running = new Map<Entry, Promise<void>>(); readonly #scheduled: { store: ComparisonStore; id: string }[] = [];
@@ -42,7 +50,7 @@ export class ComparisonCoordinator {
           try {
             const code = error instanceof ComparisonProviderError ? error.code : error instanceof Error && "code" in error ? error.code : undefined;
             if (code === "authority_changed" || code === "deleted" || code === "not_found" || code === "inactive" || !this.#canPublish(entry)) { entry.store.terminatePending(entry.id); return; }
-            entry.store.finish(entry.id, entry.position, entry.fence, { unbilled: error instanceof ComparisonProviderError && !error.billable, status: code === "timeout" ? "timeout" : code === "cancelled" ? "cancelled" : "failed", reason: code === "timeout" || code === "cancelled" ? code : code === "response_limit" || code === "limit_refused" ? "response_limit" : code === "protected_content" || code === "credentials" ? "protected_content" : code === "invalid_response" ? "invalid_response" : "provider_error" });
+            entry.store.finish(entry.id, entry.position, entry.fence, { unbilled: error instanceof ComparisonProviderError && !error.billable, status: code === "timeout" ? "timeout" : code === "cancelled" ? "cancelled" : "failed", reason: code === "timeout" || code === "cancelled" ? code : code === "response_limit" || code === "limit_refused" ? "response_limit" : code === "protected_content" || code === "credentials" ? "protected_content" : code === "invalid_response" ? "invalid_response" : providerRefusalReason(error) });
           } catch { if (!this.#closed) { try { entry.store.terminatePending(entry.id); } catch { /* Invalid owner authority cannot publish or repair persisted content. */ } } }
         }
       }).catch(error => {
