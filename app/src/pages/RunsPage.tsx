@@ -15,7 +15,7 @@ import { fieldClassName } from "@/components/ui/input";
 import { fetchPrices, modelPricingConsentEnabled } from "../utils/costs";
 import { parseReplayMetadata } from "../utils/types";
 import type { Run } from "../utils/types";
-import { runDisplayName, safeDecodeParam } from "../utils/helpers";
+import { runAgentName, runDisplayName, safeDecodeParam } from "../utils/helpers";
 import { useRunPhantomConnected, useRunPhantomMessage } from "../hooks/use-runphantom-ws";
 import { useIsMobile } from "../hooks/use-mobile";
 import { useScrollRestoration } from "../hooks/use-scroll-restoration";
@@ -205,7 +205,7 @@ export function RunsPage() {
   const agentTypes = useMemo(() => {
     const names = new Set<string>();
     for (const r of runs) {
-      const name = (r.event_name ?? "").replace(/^replay:/, "");
+      const name = runAgentName(r);
       if (name) names.add(name);
     }
     return [...names].sort();
@@ -218,10 +218,7 @@ export function RunsPage() {
   const filtered = useMemo(() => {
     let list = runs;
     if (agentFilter !== "all") {
-      list = list.filter(r => {
-        const name = (r.event_name ?? "").replace(/^replay:/, "");
-        return name === agentFilter;
-      });
+      list = list.filter(r => runAgentName(r) === agentFilter);
     }
     if (!search.trim()) return list;
     const q = search.toLowerCase();
