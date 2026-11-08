@@ -123,7 +123,7 @@ test("first handshake queues one fresh snapshot without cancelling the held init
     await held.promise;
     expect((await request.post(runPhantom.url + "/v1/traces", { data: updated.body })).status()).toBe(200);
     await socketAction(page, 0, "open");
-    await expect(page.getByText("Connected", { exact: true }).first()).toBeVisible();
+    await expect(page.locator("[data-connection-status=\"connected\"]")).toBeVisible();
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     release.release();
     await expect(page.getByText("Committed before handshake captured answer", { exact: true })).toHaveCount(1);
@@ -198,7 +198,7 @@ for (const destination of ["another run", "another page"] as const) {
       await page.goto(`${runPhantom.url}/runs/${original.id}`);
       await held.promise;
       await socketAction(page, 0, "open");
-      await expect(page.getByText("Connected", { exact: true }).first()).toBeVisible();
+      await expect(page.locator("[data-connection-status=\"connected\"]")).toBeVisible();
       if (destination === "another run") {
         await page.locator(`[data-run-id="${next.id}"]`).click();
         await expect(page.getByText("Current selected answer", { exact: true })).toHaveCount(1);
