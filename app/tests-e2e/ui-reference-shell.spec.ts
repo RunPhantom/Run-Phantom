@@ -25,7 +25,7 @@ async function expectHeader(page: Page, section: string) {
   const header = page.locator("[data-workspace-header]");
   await expect(header).toBeVisible();
   await expect(header.getByText(section, { exact: true })).toBeVisible();
-  const connection = header.locator("[data-connection-status]");
+  const connection = page.locator("[data-connection-status]");
   await expect(connection).toHaveAttribute("data-connection-status", "connected");
   await expect(connection).toContainText(/connected/i);
   const box = await header.boundingBox();
