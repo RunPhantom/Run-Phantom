@@ -113,12 +113,56 @@ test("main to SubagentStop to main advances one descriptor while forged agent pa
   const second = transcriptRecord({ uuid: "record_2", requestId: "request_2", message: { id: "msg_2", content: [{ type: "text", text: "MAIN_CONTINUES_AFTER_SUBSTOP" }] } }); source(b, [transcriptRecord(), second]); await native(b);
   expect(spans()).toContain("MAIN_CONTINUES_AFTER_SUBSTOP"); const current = db.query("SELECT incarnation_key,source_cursor FROM coding_hook_sessions").get() as { incarnation_key: string; source_cursor: number }; expect(current.incarnation_key).toBe(first.incarnation_key); expect(current.source_cursor).toBeGreaterThan(first.source_cursor);
 });
-test("offline native installation remains disabled without creating a daemon owner or full grant", async () => {
-  const workspace = path.join(directory, "offline"); mkdirSync(workspace);
-  const trap = netServer(); await new Promise<void>(resolve => trap.listen(0, "127.0.0.1", resolve)); const port = (trap.address() as { port: number }).port; await new Promise<void>(resolve => trap.close(() => resolve()));
-  const child = spawn(realpathSync(path.resolve(import.meta.dir, "../bin/runphantom-dev")), ["hooks", "install", "claude", "--local", "--cwd", workspace, "--full", "--consent-full"], { env: { ...process.env, RUNPHANTOM_PORT: String(port), BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", OPENAI_API_KEY: "", RUNPHANTOM_OPENAI_API_KEY: "", ANTHROPIC_API_KEY: "" }, stdio: "pipe" }); let output = "", error = ""; child.stdout.on("data", x => output += x); child.stderr.on("data", x => error += x); child.stdin.end();
-  expect(await new Promise(resolve => child.once("close", resolve))).toBe(0); expect(error).toBe(""); const result = JSON.parse(output); expect(result.policy).toBe("disabled"); expect(result.captureMode).toBe("metadata"); expect(result.transport).toBe("unavailable"); expect(getDrizzleDb().$client.query("SELECT * FROM coding_hook_owner").all()).toEqual([]);
-  const settings = path.join(workspace, ".claude/settings.local.json"), id = installationIdForSettings("local", settings), cap = await readClaudeCapabilityDescriptor(path.join(directory, "profile/coding-hooks/claude", id + ".json"), id); expect(cap.state).toBe("disabled"); expect(cap.token).toBeNull(); expect(cap.ownerGeneration).toBeNull(); expect(cap.origin).toBeNull();
+async function closedPort(): Promise<number> {
+  const trap = netServer(); await new Promise<void>(resolve => trap.listen(0, "127.0.0.1", resolve)); const port = (trap.address() as { port: number }).port; await new Promise<void>(resolve => trap.close(() => resolve())); return port;
+}
+async function cli(args: string[], port: number) {
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(?:KEY|TOKEN|SECRET|PASSWORD|AUTH)/i.test(key)));
+  const child = spawn(realpathSync(path.resolve(import.meta.dir, "../bin/runphantom-dev")), ["hooks", ...args], { env: { ...inherited, RUNPHANTOM_PORT: String(port), BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }, stdio: "pipe" }); let output = "", error = ""; child.stdout.on("data", x => output += x); child.stderr.on("data", x => error += x); child.stdin.end();
+  expect(await new Promise(resolve => child.once("close", resolve))).toBe(0); expect(error).toBe(""); return JSON.parse(output);
+}
+function offlineBinding(name: string): InstallationBinding {
+  const workspace = path.join(directory, name); mkdirSync(workspace);
+  const settingsPath = path.join(workspace, ".claude/settings.local.json"), root = path.join(process.env.CLAUDE_CONFIG_DIR!, "projects");
+  return { installationId: installationIdForSettings("local", settingsPath), scope: "local", captureMode: "metadata", workspace, registeredWorkspace: workspace, transcriptRoot: root, projectDirectory: path.join(root, workspace.replace(/[^A-Za-z0-9.-]+/g, "-")), homeDirectory: realpathSync(process.env.HOME!), settingsPath, executable: realpathSync(path.resolve(import.meta.dir, "../bin/runphantom-dev")) };
+}
+async function stop() { await new Promise<void>((resolve, reject) => server!.close(error => error ? reject(error) : resolve())); server = undefined; }
+async function failingCli(args: string[], port: number) {
+  const child = spawn(realpathSync(path.resolve(import.meta.dir, "../bin/runphantom-dev")), ["hooks", ...args], { env: { ...process.env, RUNPHANTOM_PORT: String(port), BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", OPENAI_API_KEY: "", RUNPHANTOM_OPENAI_API_KEY: "", ANTHROPIC_API_KEY: "" }, stdio: "pipe" }); let output = "", error = ""; child.stdout.on("data", x => output += x); child.stderr.on("data", x => error += x); child.stdin.end();
+  return { status: await new Promise(resolve => child.once("close", resolve)), output, error };
+}
+test("offline installation on a profile no daemon has owned refuses before writing settings, a capability or an owner", async () => {
+  const b = offlineBinding("offline-never-owned");
+  const result = await failingCli(["install", "claude", "--local", "--cwd", b.registeredWorkspace, "--full", "--consent-full"], await closedPort());
+  expect(result.status).toBe(64); expect(result.output).toBe(""); expect(result.error).toContain("has never run on this profile");
+  expect(existsSync(b.settingsPath)).toBe(false); expect(existsSync(capabilityPath(b))).toBe(false);
+  expect(getDrizzleDb().$client.query("SELECT * FROM coding_hook_owner").all()).toEqual([]); expect(getDrizzleDb().$client.query("SELECT * FROM coding_hook_installations").all()).toEqual([]);
+});
+test("an installation made while the daemon was stopped stays disabled, visible to the daemon and removed by product uninstall", async () => {
+  const b = offlineBinding("offline-recorded"); await start(); await stop();
+  const owner = JSON.stringify(getDrizzleDb().$client.query("SELECT * FROM coding_hook_owner").all());
+  const result = await cli(["install", "claude", "--local", "--cwd", b.registeredWorkspace, "--full", "--consent-full"], await closedPort());
+  expect(result.policy).toBe("disabled"); expect(result.captureMode).toBe("metadata"); expect(result.transport).toBe("unavailable");
+  expect(JSON.stringify(getDrizzleDb().$client.query("SELECT * FROM coding_hook_owner").all())).toBe(owner);
+  expect(getDrizzleDb().$client.query("SELECT state,capture_mode FROM coding_hook_installations").all()).toEqual([{ state: "disabled", capture_mode: "metadata" }]);
+  const cap = await readClaudeCapabilityDescriptor(capabilityPath(b), b.installationId); expect(cap.state).toBe("disabled"); expect(cap.token).toBeNull(); expect(cap.ownerGeneration).toBeNull(); expect(cap.origin).toBeNull();
+  expect(readFileSync(b.settingsPath, "utf8")).toContain(b.installationId);
+  const runtime = await start(); source(b); await native(b); expect(spans()).toBe("[]");
+  const doctor = await runtime.codingHooks.management().doctor(b.installationId);
+  expect(doctor.configuration).toBe("installed"); expect(doctor.capturePolicy).toBe("disabled"); expect(doctor.capability).toBe("unavailable");
+  await stop(); expect(await removeConfiguredClaudeHooks(process.env.RUNPHANTOM_DB_PATH)).toBe(1);
+  expect(readFileSync(b.settingsPath, "utf8")).not.toContain(b.installationId); expect(existsSync(capabilityPath(b))).toBe(false);
+});
+test("an installation made while the daemon was stopped activates on the next daemon install and uninstalls cleanly", async () => {
+  const b = offlineBinding("offline-activated"); await start(); await stop();
+  await cli(["install", "claude", "--local", "--cwd", b.registeredWorkspace], await closedPort());
+  const runtime = await start(); source(b); await native(b); expect(spans()).toBe("[]");
+  const installed = await cli(["install", "claude", "--local", "--cwd", b.registeredWorkspace, "--full", "--consent-full"], runtime.port);
+  expect(installed.policy).toBe("active"); expect(installed.transport).toBe("available");
+  await native(b); expect(spans()).toContain("safe exact business result");
+  expect((await cli(["uninstall", "claude", "--local", "--cwd", b.registeredWorkspace], runtime.port)).status).toBe("removed");
+  expect(readFileSync(b.settingsPath, "utf8")).not.toContain(b.installationId); expect(existsSync(capabilityPath(b))).toBe(false);
+  expect(getDrizzleDb().$client.query("SELECT state,capture_mode FROM coding_hook_installations").all()).toEqual([{ state: "disabled", capture_mode: "metadata" }]);
 });
 test("public management adds only registered global scopes and identical catalog registration preserves current capability", async () => {
   const runtime = await start(), first = path.join(directory, "first-project"), second = path.join(directory, "second-project"); mkdirSync(first); mkdirSync(second);

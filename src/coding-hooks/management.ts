@@ -162,7 +162,7 @@ export class ClaudeHookManagement {
         const existing = await lstat(capabilityPath, { bigint: true }).catch(() => null);
         const prior = existing ? await readClaudeCapabilityDescriptor(capabilityPath, binding.installationId, ownerKey) : null;
         if (this.transportOrigin === null || !this.store.isOwnerActive()) {
-          this.store.disableInstallation(binding.installationId);
+          this.store.recordDisabledInstallation(binding, configSha256, registrations);
           const disabled: ClaudeCapabilityDescriptor = { version: CAPABILITY_VERSION, installationId: binding.installationId, capabilityFile: capabilityPath, ownerKey, state: "disabled", token: null, ownerGeneration: null, installationGeneration: null, origin: null };
           await this.writeCapability(directory, disabled);
           const installed = await updateClaudeSettings(binding.settingsPath, "install", authority, this.platform.merge);
@@ -195,8 +195,10 @@ export class ClaudeHookManagement {
     return this.install({ ...before.binding, registeredWorkspace: primary.registeredWorkspace, transcriptRoot: primary.transcriptRoot, projectDirectory: primary.projectDirectory, homeDirectory: primary.homeDirectory }, { registrations, expectedInstallationGeneration: before.row.generation });
   }
   async uninstall(id: string, input?: InstallationBinding): Promise<{ status: "removed" | "configuration_preserved"; capturePolicy: "disabled"; captureVerified: false }> {
-    if (this.store.contextOptions.contextTransport && isHex(id, 32)) this.store.disableInstallation(id);
     if (!isHex(id, 32)) refuse("malformed", 400);
+    // The synchronous context fence rotates the stored token, so ownership of the private file is proven against the token it held before.
+    const fencedTokenSha256 = this.store.contextOptions.contextTransport ? this.store.readInstallation(id)?.row.token_sha256 ?? null : null;
+    if (this.store.contextOptions.contextTransport) this.store.disableInstallation(id);
     if (process.platform === "win32") {
       if (input !== undefined) {
         const known = validateInstallationBinding(input);
@@ -213,7 +215,7 @@ export class ClaudeHookManagement {
       const before = this.store.readInstallation(id), binding = before?.binding ?? known; if (!binding) return { status: "configuration_preserved", capturePolicy: "disabled", captureVerified: false };
       if (before) this.store.disableInstallation(id);
       const removed = await updateClaudeSettings(binding.settingsPath, "uninstall", { installationId: id, executable: binding.executable, capabilityFile: file }, this.platform.merge);
-      try { const descriptor = await readClaudeCapabilityDescriptor(file, id, ownerKey); if (descriptor.state === "disabled" || descriptor.token !== null && before && hookDigest(descriptor.token) === before.row.token_sha256) { const stats = await lstat(file, { bigint: true }); const current = await lstat(file, { bigint: true }); if (sameFile(stats, current)) await unlink(file); } } catch { /* Uncertain private-file ownership is preserved after authority revocation. */ }
+      try { const descriptor = await readClaudeCapabilityDescriptor(file, id, ownerKey); if (descriptor.state === "disabled" || descriptor.token !== null && before && [before.row.token_sha256, fencedTokenSha256].includes(hookDigest(descriptor.token))) { const stats = await lstat(file, { bigint: true }); const current = await lstat(file, { bigint: true }); if (sameFile(stats, current)) await unlink(file); } } catch { /* Uncertain private-file ownership is preserved after authority revocation. */ }
       return { status: removed.status === "accepted" ? "removed" : "configuration_preserved", capturePolicy: "disabled", captureVerified: false };
     });
   }

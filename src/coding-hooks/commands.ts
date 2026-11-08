@@ -9,7 +9,7 @@ import { ClaudeHookManagement } from "./management";
 import { CodingHookStore } from "./store";
 import { parseTransitionV2 } from "./context-v2";
 import { hookVendorForSettings } from "./shared";
-import { hookDigest, isHex } from "./protocol";
+import { HookRefusal, hookDigest, isHex } from "./protocol";
 
 const HOOKS_USAGE = "usage: runphantom hooks install|uninstall|doctor|unregister claude|cursor [--global|--local] [--cwd PATH] [--full --consent-full]\n       runphantom hooks install|doctor|uninstall codex --local --cwd PATH [--full --consent-full] [--port PORT]";
 function command(argv: string[]): HookManagementCommand {
@@ -51,7 +51,10 @@ async function submitHookManagement(input: unknown, offline?: () => Promise<unkn
 }
 export async function manageClaudeHooks(input: HookManagementCommand): Promise<unknown> {
   input = parseHookManagementCommand(input);
-  return submitHookManagement(input, () => executeHookManagement(new ClaudeHookManagement(new CodingHookStore(getDrizzleDb().$client)), input));
+  return submitHookManagement(input, async () => {
+    try { return await executeHookManagement(new ClaudeHookManagement(new CodingHookStore(getDrizzleDb().$client)), input); }
+    catch (error) { if (input.action === "install" && error instanceof HookRefusal && error.reason === "inactive") throw new Error("Run Phantom is not running and has never run on this profile; start it and retry. Hook settings were not changed"); throw error; }
+  });
 }
 /** Current CAS is read from the selected profile; only the running owner can grant activation. */
 export async function manageClaudeContextActivation(installationIds: string[]): Promise<unknown> {

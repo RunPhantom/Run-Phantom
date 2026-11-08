@@ -123,6 +123,16 @@ export class CodingHookStore {
       const binding = { ...before.binding, captureMode: "metadata" as const };
       this.db.query("UPDATE coding_hook_installations SET state='disabled',capture_mode='metadata',generation=?,token_sha256=?,data=?,updated_at=? WHERE id=?").run(random(), hookDigest(randomBytes(32).toString("hex")), encodeInstallationCatalog(binding, before.registrations, before.catalogVersion), Date.now(), id); });
   }
+  /** Offline configuration records the binding it is about to write so uninstall can find it, without a usable token or live owner. A profile no daemon has ever owned has no owner row to reference, so it refuses before anything is written. */
+  recordDisabledInstallation(input: InstallationBinding, configSha256: string, registrationsInput?: SourceRegistration[]): void {
+    const binding = { ...validateInstallationBinding(input), captureMode: "metadata" as const }, registrations = validateCatalog(binding, registrationsInput); if (!isHex(configSha256, 64)) refuse("malformed", 400);
+    this.transaction(() => {
+      if (!this.db.query("SELECT 1 FROM coding_hook_owner WHERE id=1").get()) refuse("inactive", 503);
+      this.checkQuota(); const data = encodeInstallationCatalog(binding, registrations, this.sharedCatalogVersion(binding.installationId, registrations, hookVendorForSettings(binding.settingsPath)));
+      this.db.query("INSERT INTO coding_hook_installations VALUES(?,1,?,?,'disabled',?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,token_sha256=excluded.token_sha256,state='disabled',capture_mode=excluded.capture_mode,scope=excluded.scope,workspace=excluded.workspace,transcript_root=excluded.transcript_root,source_root_key=excluded.source_root_key,config_sha256=excluded.config_sha256,data=excluded.data,updated_at=excluded.updated_at").run(binding.installationId, random(), hookDigest(randomBytes(32).toString("hex")), binding.captureMode, binding.scope, binding.workspace, binding.transcriptRoot, rootKey(binding), configSha256, data, Date.now());
+      this.checkQuota();
+    });
+  }
   fenceInstallationPreservingPolicy(id: string): void {
     this.contextTransaction(() => { const before = this.readInstallation(id); if (!before) return;
       this.db.query("UPDATE coding_hook_installations SET state='disabled',generation=?,token_sha256=?,updated_at=? WHERE id=?").run(random(), hookDigest(randomBytes(32).toString("hex")), Date.now(), id);
