@@ -14,7 +14,9 @@ type LiveOwner = Awaited<ReturnType<typeof acquireComparisonOwner>>;
 export interface ComparisonFence extends PromptFence { readonly comparisonGeneration: number; readonly owner: ComparisonOwnerFence }
 import type { FrozenExecution, ComparisonAttemptStatus, ComparisonAttempt, ComparisonReceipt, ComparisonAttemptSummary, ComparisonSummary, ComparisonPage } from "./comparison-types";
 export type { ComparisonAttemptStatus, ComparisonAttempt, ComparisonReceipt, ComparisonAttemptSummary, ComparisonSummary, ComparisonPage } from "./comparison-types";
-interface StoreOptions { readonly budgets: Readonly<Record<ComparisonProvider, number>>; readonly availability: Readonly<Record<ComparisonProvider, boolean>> }
+/** A function is read at each admission so credentials saved or removed after startup take effect immediately. */
+type Availability = Readonly<Record<ComparisonProvider, boolean>> | ((provider: ComparisonProvider) => boolean);
+interface StoreOptions { readonly budgets: Readonly<Record<ComparisonProvider, number>>; readonly availability: Availability }
 interface Head { id: string; operation_key: string; request_digest: string; frozen_request: string | null; tombstone: number; target_count: number; created_at: number; prompt_generation: number; evidence_generation: number; comparison_generation: number; bounded: number }
 interface Row { position: number; provider: ComparisonProvider; model: string; status: ComparisonAttemptStatus; reason: string | null; payload: string | null; reserve_microusd: number; hold_microusd: number; charge_microusd: number; accounting_state: string; observed_estimate_usd: string | null; budget_breach: number; deadline_at: number; started_at: number | null; finished_at: number | null; bounded: number }
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -56,8 +58,13 @@ export class ComparisonStore {
   constructor(owner: PromptOwner, live: LiveOwner, options: StoreOptions) {
     if (!live.ownsDatabase(owner.database.filename)) throw new ComparisonError("unavailable");
     this.#prompts = new PromptRegistry(owner); this.#owner = owner; this.#db = owner.database; this.#scope = `${owner.scope.kind}:${owner.scope.id}`; this.#live = live;
-    this.#options = Object.freeze({ budgets: Object.freeze({ ...options.budgets }), availability: Object.freeze({ ...options.availability }) });
-    for (const provider of ["openai", "anthropic"] as const) if (!Number.isSafeInteger(options.budgets[provider]) || options.budgets[provider] < 0 || options.budgets[provider] > L.providerBudgetMicrousd || typeof options.availability[provider] !== "boolean") throw new ComparisonError("invalid_request");
+    const availability = options.availability;
+    this.#options = Object.freeze({ budgets: Object.freeze({ ...options.budgets }), availability: typeof availability === "function" ? availability : Object.freeze({ ...availability }) });
+    for (const provider of ["openai", "anthropic"] as const) if (!Number.isSafeInteger(options.budgets[provider]) || options.budgets[provider] < 0 || options.budgets[provider] > L.providerBudgetMicrousd || (typeof availability !== "function" && typeof availability[provider] !== "boolean")) throw new ComparisonError("invalid_request");
+  }
+  #available(provider: ComparisonProvider): boolean {
+    const availability = this.#options.availability;
+    try { return typeof availability === "function" ? availability(provider) === true : availability[provider]; } catch { return false; }
   }
   #get<T>(sql: string, ...parameters: SQLQueryBindings[]): T | null { return this.#db.query(sql).get(...parameters) as T | null; }
   #generation(capability: PromptCapability): ComparisonFence {
@@ -74,7 +81,7 @@ export class ComparisonStore {
       const budgets = this.#budgetTotals();
       return { enabled: true as const, generation: current.comparisonGeneration, limits: L,
         models: COMPARISON_MODELS.map(target => {
-          const budget = budgets[target.provider], available = this.#options.availability[target.provider];
+          const budget = budgets[target.provider], available = this.#available(target.provider);
           const admissionReason = !available ? "credentials_unavailable" : budget.ceilingMicrousd === 0 ? "budget_not_configured"
             : budget.breached ? "overage_fuse" : budget.chargeMicrousd + budget.holdMicrousd >= budget.ceilingMicrousd ? "ceiling_reached" : null;
           return { ...target, family: comparisonFamily(target), available, spendingEnabled: admissionReason === null, admissionReason,
@@ -156,13 +163,13 @@ export class ComparisonStore {
       const targetBytes = input.targets.reduce((total, target) => total + scopeBytes + 36 + Buffer.byteLength(target.provider) + Buffer.byteLength(target.model) + 32 + 64 + L.attemptPayloadBytes + 32 + 64 + 96, 0);
       if (totals.bytes + this.#pendingRetention() + headBytes + targetBytes > L.retainedBytes) throw new ComparisonError("capacity");
       const budget = this.#budgetTotals(), queue = this.#get<{ n: number }>("SELECT count(*) n FROM (SELECT scope_key,comparison_id FROM prompt_comparison_attempts WHERE status='queued' GROUP BY scope_key,comparison_id)")!.n;
-      const held = { openai: 0, anthropic: 0 }; let operationHold = 0;
-      input.targets.forEach((target, index) => { if (this.#options.availability[target.provider]) { held[target.provider] += reservations[index].microusd; operationHold += reservations[index].microusd; } });
+      const held = { openai: 0, anthropic: 0 }, available = { openai: this.#available("openai"), anthropic: this.#available("anthropic") }; let operationHold = 0;
+      input.targets.forEach((target, index) => { if (available[target.provider]) { held[target.provider] += reservations[index].microusd; operationHold += reservations[index].microusd; } });
       const refused = queue >= L.queued || operationHold > input.operationBudgetMicrousd || (["openai", "anthropic"] as const).some(provider => held[provider] > 0 && (budget[provider].breached || budget[provider].holdMicrousd + budget[provider].chargeMicrousd + held[provider] > budget[provider].ceilingMicrousd));
       const id = randomUUID(), now = Date.now();
       this.#db.query("INSERT INTO prompt_comparisons(scope_key,id,operation_key,request_digest,prompt_id,frozen_request,prompt_generation,evidence_generation,comparison_generation,target_count,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)").run(this.#scope, id, input.operationKey, requestDigest, input.promptId, serialized, current.promptGeneration, current.evidenceGeneration, current.comparisonGeneration, input.targets.length, now);
       input.targets.forEach((target, position) => {
-        const status = !this.#options.availability[target.provider] ? "unavailable" : refused ? "budget_refused" : "queued", hold = status === "queued" ? reservations[position].microusd : 0;
+        const status = !available[target.provider] ? "unavailable" : refused ? "budget_refused" : "queued", hold = status === "queued" ? reservations[position].microusd : 0;
         this.#db.query("INSERT INTO prompt_comparison_attempts(scope_key,comparison_id,position,provider,model,status,reason,reserve_microusd,hold_microusd,charge_microusd,accounting_state,deadline_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,0,'not_started',?,?)").run(this.#scope, id, position, target.provider, target.model, status, status === "queued" ? null : status, reservations[position].microusd, hold, now + L.attemptMs, status === "queued" ? null : now);
       });
       return this.#receipt(this.#head(id));
@@ -243,7 +250,7 @@ export class ComparisonStore {
       return { request: receipt.request!, position, remainingMs: attempt.deadlineAt - now };
     });
   }
-  finish(idValue: unknown, positionInput: unknown, fence: ComparisonFence, outcome: { status: "completed"; result: ComparisonProviderResult } | { status: "failed" | "timeout" | "cancelled"; reason: string }): ComparisonReceipt {
+  finish(idValue: unknown, positionInput: unknown, fence: ComparisonFence, outcome: { status: "completed"; result: ComparisonProviderResult } | { status: "failed" | "timeout" | "cancelled"; reason: string; unbilled?: boolean }): ComparisonReceipt {
     const id = promptId(idValue), position = positionValue(positionInput);
     return this.#transaction("edit", fence, () => {
       const head = this.#head(id); if (head.tombstone) throw new ComparisonError("deleted"); const receipt = this.#receipt(head), row = receipt.attempts[position];
@@ -268,7 +275,11 @@ export class ComparisonStore {
           if (!(error instanceof ComparisonError) || error.code !== "limit_refused") throw error;
           status = "failed"; reason = "response_limit";
         }
-      } else { if (!reasons.has(outcome.reason)) throw new ComparisonError("invalid_request"); reason = outcome.reason; }
+      } else {
+        if (!reasons.has(outcome.reason)) throw new ComparisonError("invalid_request"); reason = outcome.reason;
+        // Release the conservative charge only when the provider provably did not meter the attempt.
+        if (outcome.unbilled === true) { charge = 0; state = "not_started"; }
+      }
       const currentBytes = this.#get<{ n: number }>(`SELECT ${attemptContent.map(column => `coalesce(${bytes(column)},0)`).join("+")} n FROM prompt_comparison_attempts WHERE scope_key=? AND comparison_id=? AND position=?`, this.#scope, id, position)!.n;
       const retained = this.#totals().bytes - currentBytes;
       const cleanupBytes = this.#cleanupRetention(id, position);

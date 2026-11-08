@@ -14,7 +14,7 @@ import { createComparisonProviderClient } from "../src/prompts/providers";
 
 let directory: string, db: Database, lease: Awaited<ReturnType<typeof acquireComparisonOwner>>, store: ComparisonStore, prompts: PromptRegistry, coordinator: ComparisonCoordinator;
 let allowed = true, calls = 0, active = 0, peak = 0;
-let responseMode: "normal" | "unavailable" | "oversized" = "normal";
+let responseMode: "normal" | "unavailable" | "oversized" | "unauthorized" = "normal";
 let server: ReturnType<typeof Bun.serve>;
 const controls = new Set<() => void>();
 beforeEach(async () => {
@@ -27,6 +27,7 @@ beforeEach(async () => {
     const body = await request.json() as { model: string; messages: { content: string }[] }; calls++; active++; peak = Math.max(peak, active); expect(body.messages[0].content).toBe("Frozen $& {{literal}}");
     let completed = false; const done = () => { if (!completed) { completed = true; active--; } };
     if (responseMode === "unavailable") { done(); return new Response("controlled upstream unavailable", { status: 503 }); }
+    if (responseMode === "unauthorized") { done(); return new Response("controlled invalid key", { status: 401 }); }
     return new Response(new ReadableStream({ start(controller) {
       const release = () => { controls.delete(release); if (completed) return; const output = responseMode === "oversized" ? "x".repeat(70000) : "Controlled answer", raw = body.model.startsWith("gpt") ? { model: body.model, service_tier: "default", choices: [{ message: { content: output }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 0 } } }
         : { model: body.model, stop_reason: "end_turn", content: [{ type: "text", text: output }], usage: { input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, inference_geo: "global", service_tier: "standard" } }; controller.enqueue(new TextEncoder().encode(JSON.stringify(raw))); controller.close(); done(); };
@@ -103,4 +104,16 @@ test("reopening the same real database recovers uncertain started work without r
   const provider = createComparisonProviderClient({ credentials: { openai: "fixture-token", anthropic: "fixture-token" }, transport: (_url, init) => fetch(server.url, init), provenance: "controlled-http-fixture" }); coordinator = new ComparisonCoordinator(lease, provider);
   const replay = coordinator.submit(store, value, store.capture("edit")); await coordinator.idle();
   expect(replay.id).toBe(operation.id); expect(replay.attempts).toHaveLength(4); expect(replay.attempts.every(row => row.status === "interrupted" && row.payload === null && row.holdMicrousd === 0)).toBe(true); expect(replay.attempts.slice(0, 2).map(row => row.chargeMicrousd)).toEqual(started.attempts.slice(0, 2).map(row => row.chargeMicrousd)); expect(replay.attempts.slice(2).every(row => row.chargeMicrousd === 0)).toBe(true); expect(calls).toBe(2); expect(db.query("SELECT * FROM __drizzle_migrations ORDER BY id").all()).toEqual(history); expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]); expect(prompts.get(value.promptId, 1, prompts.capture("read")).template).toBe("Frozen {{topic}}");
+});
+
+test("a provider that rejects the key releases the conservative charge; an uncertain 503 keeps it", async () => {
+  responseMode = "unauthorized";
+  const rejected = coordinator.submit(store, { ...input(), targets: [COMPARISON_MODELS[1]] }, store.capture("edit")); await coordinator.idle();
+  const refused = store.get(rejected.id, store.capture("read")).attempts[0];
+  expect(refused).toMatchObject({ status: "failed", reason: "provider_error", chargeMicrousd: 0, holdMicrousd: 0, accountingState: "not_started" });
+  responseMode = "unavailable";
+  const uncertain = coordinator.submit(store, { ...input(), targets: [COMPARISON_MODELS[1]] }, store.capture("edit")); await coordinator.idle();
+  const retained = store.get(uncertain.id, store.capture("read")).attempts[0];
+  expect(retained.status).toBe("failed"); expect(retained.accountingState).toBe("conservative"); expect(retained.chargeMicrousd).toBe(retained.reserveMicrousd);
+  expect(calls).toBe(2);
 });

@@ -31,13 +31,12 @@ export async function createComparisonRuntime(database: Database, options: Compa
     const client = options.client ?? createComparisonProviderClient();
     const budgets = options.budgets ?? { openai: comparisonBudgetMicrousd(process.env.RUNPHANTOM_COMPARISON_OPENAI_BUDGET_USD),
       anthropic: comparisonBudgetMicrousd(process.env.RUNPHANTOM_COMPARISON_ANTHROPIC_BUDGET_USD) };
-    const availability = { openai: client.available("openai"), anthropic: client.available("anthropic") };
     // One recovery occurs only after real kernel acquisition, before admitting any HTTP request.
     ComparisonStore.recoverPendingDatabase(database, live);
     const coordinator = new ComparisonCoordinator(live, client);
     return Object.freeze({
       coordinator,
-      scope(scopedOwner: PromptOwner): ComparisonStore { return new ComparisonStore(scopedOwner, live, { budgets, availability }); },
+      scope(scopedOwner: PromptOwner): ComparisonStore { return new ComparisonStore(scopedOwner, live, { budgets, availability: provider => client.available(provider) }); },
       close(): Promise<void> { return coordinator.close(); },
       drained(): Promise<void> { return live.drained(); },
     });
