@@ -1,6 +1,6 @@
 import { test as base, expect } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,7 +9,7 @@ import { once } from "node:events";
 const root = path.resolve(import.meta.dirname, "../..");
 const test = base.extend<{ local: { url: string } }>({
   local: async ({}, use, testInfo) => {
-    const profile = mkdtempSync(path.join(tmpdir(), "runphantom-settings-ui-"));
+    const profile = mkdtempSync(path.join(realpathSync(tmpdir()), "runphantom-settings-ui-"));
     const socket = createServer();
     await new Promise<void>(resolve => socket.listen(0, "127.0.0.1", resolve));
     const port = (socket.address() as { port: number }).port;
