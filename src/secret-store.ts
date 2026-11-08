@@ -292,6 +292,23 @@ function writeStore(store: SecretFile): void {
   if (failure) throw failure;
 }
 
+// Provider clients send the key as an HTTP header value, and comparisons refuse longer keys or keys
+// with control characters (src/prompts/providers.ts). Without this check such a value read as
+// "saved" in Settings while every provider-backed feature reported the provider as unconfigured.
+export const SECRET_VALUE_MAX_LENGTH = 4096;
+
+/** An empty value clears the stored key; a refusal must leave the store unchanged. */
+export function parseSecretValueInput(body: unknown): { ok: true; value: string } | { ok: false; error: string } {
+  const raw = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>).value : undefined;
+  if (raw === undefined || raw === null) return { ok: true, value: "" };
+  if (typeof raw !== "string") return { ok: false, error: "Key must be text." };
+  const value = raw.trim();
+  if (value.length > SECRET_VALUE_MAX_LENGTH) return { ok: false, error: `Key must be at most ${SECRET_VALUE_MAX_LENGTH} characters.` };
+  // eslint-disable-next-line no-control-regex
+  if (/[\s\u0000-\u001f\u007f]/.test(value)) return { ok: false, error: "Key must not contain spaces, line breaks or control characters." };
+  return { ok: true, value };
+}
+
 export function getStoredSecret(key: SecretKey): string | null {
   return readStore()[key] ?? null;
 }

@@ -172,6 +172,17 @@ test("settings keeps saved keys write-only and clears the actual local store", a
   const savedResponse = await page.request.get(`${local.url}/api/secrets`); const body = await savedResponse.text();
   expect(body).not.toContain(synthetic); expect(JSON.parse(body).keys.openai.stored).toBe(true);
   await page.reload(); await expect(panel.getByText("saved", { exact: true })).toBeVisible(); await expect(input).toHaveValue("");
+  // Enter in the empty saved field used to delete the stored key without confirmation.
+  await input.focus(); await input.press("Enter");
+  await expect(panel.getByText("saved", { exact: true })).toBeVisible();
+  expect((await (await page.request.get(`${local.url}/api/secrets`)).json()).keys.openai.stored).toBe(true);
+  await input.fill("fixture key with a space"); await panel.getByRole("button", { name: "Save OpenAI key" }).click();
+  await expect(panel.getByRole("alert")).toContainText("must not contain spaces, line breaks or control characters");
+  expect((await (await page.request.get(`${local.url}/api/secrets`)).json()).keys.openai.stored).toBe(true);
+  await input.fill("");
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect((await input.boundingBox())?.height).toBeGreaterThanOrEqual(40);
+  await page.setViewportSize({ width: 1440, height: 900 });
   await panel.getByRole("button", { name: "Clear saved OpenAI key" }).click(); await expect(panel.getByText("saved", { exact: true })).toHaveCount(0);
   expect((await (await page.request.get(`${local.url}/api/secrets`)).json()).keys.openai.stored).toBe(false);
   await screenshot(page, "settings-keys-desktop");

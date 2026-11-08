@@ -90,7 +90,7 @@ export function SecretInput({
           id={inputId}
           ref={inputRef}
           aria-describedby={describedBy}
-          className={cn(fieldClassName, "h-10 flex-1 font-mono text-[13px]", saved && "secret-input-saved")}
+          className={cn(fieldClassName, "h-10 shrink-0 font-mono text-[13px] sm:flex-1", saved && "secret-input-saved")}
           type={show ? "text" : "password"}
           placeholder={displayPlaceholder}
           value={value}
@@ -104,8 +104,9 @@ export function SecretInput({
           }}
           onKeyDown={e => {
             if (e.key === "Enter") {
+              // Enter in an empty field once deleted the saved key with no confirmation;
+              // removal stays on the explicit Clear button.
               if (canSave) saveAndExitEditMode();
-              else if (canClear) clearSavedKey();
               else e.currentTarget.blur();
             }
           }}
