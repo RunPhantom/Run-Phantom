@@ -269,16 +269,17 @@ test("release audit: mobile saved runs use a list-to-detail flow", async ({ page
   await expect(page.getByText("Saved Runs", { exact: true })).toBeVisible();
 });
 
-test("release audit: reduced motion freezes the empty-state signal field", async ({ page, runPhantom }) => {
+test("release audit: reduced motion removes the empty-state entrance animation", async ({ page, runPhantom }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto(`${runPhantom.url}/runs`);
 
-  const canvas = page.locator("canvas[aria-hidden='true']");
-  await expect(canvas).toBeVisible({ timeout: 10_000 });
-  const firstFrame = await canvas.evaluate((element) => (element as HTMLCanvasElement).toDataURL());
-  await page.waitForTimeout(350);
-  const laterFrame = await canvas.evaluate((element) => (element as HTMLCanvasElement).toDataURL());
-  expect(laterFrame).toBe(firstFrame);
+  await expect(page.getByRole("heading", { name: "No runs captured yet.", exact: true })).toBeVisible({ timeout: 10_000 });
+  const animated = await page.evaluate(() =>
+    Array.from(document.querySelectorAll<HTMLElement>("#runphantom-main .animate-fade-rise, #runphantom-main .rp-fade-rise"))
+      .map((element) => getComputedStyle(element).animationName),
+  );
+  expect(animated.length).toBeGreaterThan(0);
+  expect(animated.every((name) => name === "none")).toBe(true);
 });
 
 test("release audit: reduced motion disables looping status animation", async ({ page, runPhantom }) => {
