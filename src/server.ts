@@ -136,6 +136,7 @@ import { createLocalPromptRegistry } from "./prompts/registry";
 import { createPromptRouter } from "./prompts/router";
 import { createComparisonRuntime, initializeComparisonScope, type ComparisonRuntime, type ComparisonRuntimeOptions } from "./prompts/comparison-runtime";
 import { createComparisonRouter } from "./prompts/comparison-router";
+import { createComparisonProviderClient } from "./prompts/providers";
 import { EvidenceError } from "./evaluations/evidence-protocol";
 import { evidenceBinaryHandler, evidenceJsonBody } from "./evaluations/evidence-router";
 import { EVALUATION_LIMITS } from "./evaluations/protocol";
@@ -805,7 +806,9 @@ export async function createServer(port: number, options: { comparisons?: Compar
   prompts.capture("read");
   let comparisons: ComparisonRuntime | null = null;
   try {
-    comparisons = await createComparisonRuntime(evidenceDatabase, options.comparisons);
+    // Local comparisons use the same key precedence as every other provider feature: environment, then Settings.
+    comparisons = await createComparisonRuntime(evidenceDatabase, { ...options.comparisons,
+      client: options.comparisons?.client ?? createComparisonProviderClient({ resolveCredential: provider => getEffectiveSecret(provider) }) });
     initializeComparisonScope({ database: evidenceDatabase, scope: { kind: "local", id: "local" }, authorize: () => {} });
   } catch { await comparisons?.close(); comparisons = null; }
   const comparisonStore = comparisons?.scope({ database: evidenceDatabase, scope: { kind: "local", id: "local" }, authorize: () => {} }) ?? null;

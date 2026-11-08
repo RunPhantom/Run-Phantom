@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createComparisonProviderClient } from "../src/prompts/providers";
-import { deleteStoredSecret, RUNPHANTOM_SECRET_STORE_PATH_ENV, setStoredSecret } from "../src/secret-store";
+import { deleteStoredSecret, getEffectiveSecret, RUNPHANTOM_SECRET_STORE_PATH_ENV, setStoredSecret } from "../src/secret-store";
 
 const options = { maxOutputTokens: 128, temperature: 0 };
 const target = { provider: "openai", model: "gpt-5.4" } as const;
@@ -88,7 +88,7 @@ test("a key saved in Settings enables comparisons and removing it stops dispatch
     return Response.json({ model: "gpt-5.4", choices: [{ message: { content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 1 } });
   };
   try {
-    const client = createComparisonProviderClient({ transport, provenance: "controlled-http-fixture" });
+    const client = createComparisonProviderClient({ resolveCredential: provider => getEffectiveSecret(provider), transport, provenance: "controlled-http-fixture" });
     expect(client.available("openai")).toBe(false);
     setStoredSecret("openai", "settings-saved-token");
     expect(client.available("openai")).toBe(true);

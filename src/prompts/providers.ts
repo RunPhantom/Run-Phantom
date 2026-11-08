@@ -3,7 +3,6 @@ import { readerLimits } from "../evaluations/evidence-reader/limits";
 import { COMPARISON_LIMITS, comparisonJson, comparisonTarget, comparisonFamily, type ComparisonOptions, type ComparisonProvider, type ComparisonTarget } from "./comparison-protocol";
 import { promptInteger, promptText } from "./protocol";
 import type { ComparisonUsage } from "./spend-ledger";
-import { getEffectiveSecret } from "../secret-store";
 
 export type ComparisonProvenance = "official-provider" | "controlled-http-fixture";
 export type ProviderFailure = "unavailable" | "cancelled" | "timeout" | "provider_error" | "invalid_response" | "response_limit" | "protected_content";
@@ -14,7 +13,8 @@ export class ComparisonProviderError extends Error {
 }
 export interface ComparisonProviderResult { output: string; usage: ComparisonUsage; finishReason: string; provenance: ComparisonProvenance }
 type Transport = (url: string | URL, init: RequestInit) => Promise<Response>;
-interface ClientOptions { credentials?: Partial<Record<ComparisonProvider, string>>; transport?: Transport; provenance?: ComparisonProvenance }
+/** resolveCredential lets the local daemon add its Settings store; Team runtimes must not import local machine secrets. */
+interface ClientOptions { credentials?: Partial<Record<ComparisonProvider, string>>; resolveCredential?: (provider: ComparisonProvider) => string | null | undefined; transport?: Transport; provenance?: ComparisonProvenance }
 const endpoints = Object.freeze({ openai: "https://api.openai.com/v1/chat/completions", anthropic: "https://api.anthropic.com/v1/messages" });
 const object = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ComparisonProviderError("invalid_response", true);
@@ -44,11 +44,11 @@ async function responseJson(response: Response, signal: AbortSignal): Promise<un
 /** Constructor injection is private qualification plumbing; no request or runtime environment can select a URL. */
 export function createComparisonProviderClient(client: ClientOptions = {}) {
   const transport = client.transport ?? ((url, init) => fetch(url, init)), provenance = client.provenance ?? "official-provider";
-  // Same precedence as every other provider feature: environment first, then the key saved in Settings.
   const credential = (provider: ComparisonProvider): string | null => {
     let token: string | null | undefined;
     if (client.credentials) token = client.credentials[provider];
-    else { try { token = getEffectiveSecret(provider); } catch { token = null; } }
+    else if (client.resolveCredential) { try { token = client.resolveCredential(provider); } catch { token = null; } }
+    else token = process.env[provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY"];
     return typeof token === "string" && token.length > 0 && token.length <= 4096 && !/[\r\n\0]/.test(token) ? token : null;
   };
   return {
