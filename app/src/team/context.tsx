@@ -90,7 +90,7 @@ export function TeamProvider({ children }: { children: ReactNode }) {
     return () => { active = false; controller.abort(); clearInterval(timer); };
   }, [client, attempt]);
   return <QueryClientProvider client={queries}>{session ? <TeamContext.Provider value={{ client, session, acceptSession, notice, permissionRevisions, clearSession: () => { acceptSession(signedOut); setNotice(""); } }}>{children}</TeamContext.Provider> : <main className="team-auth"><header className="team-auth-bar"><TeamBrand /></header>{error instanceof TeamApiError && error.status === 404 && error.code === "request_failed"
-    ? <div className="team-auth-content"><Heading eyebrow="Team mode / Not served here" title="No team server at this address">This Run Phantom server runs the local workspace only. Open the address of your team server to sign in.</Heading><a href="/runs" className={`${buttonVariants({ variant: "default" })} mt-6 !text-white`}>Open local workspace</a></div>
+    ? <div className="team-auth-content"><Heading eyebrow="Team mode / Not served here" title="No team server at this address">This Run Phantom server runs the local workspace only. Open the address of your team server to sign in.</Heading><a href="/runs" className={`${buttonVariants({ variant: "default" })} mt-6`}>Open local workspace</a></div>
     : <><ErrorNotice error={error} retry={() => setAttempt(n => n + 1)} />{!error && <Loading />}</>}</main>}</QueryClientProvider>;
 }
 

@@ -1,6 +1,6 @@
 .team-root,.team-auth{color:var(--rp-ink);background:var(--rp-canvas);min-height:100dvh;font-family:var(--font-sans);font-size:14px;line-height:20px}
 .team-root *,.team-auth *{box-sizing:border-box}
-.team-root a,.team-auth a{color:inherit}
+:where(.team-root,.team-auth) a{color:inherit}
 .team-root a:focus-visible,.team-auth a:focus-visible,.team-root button:focus-visible,.team-auth button:focus-visible,.team-root pre:focus-visible,.team-root summary:focus-visible{outline:2px solid var(--rp-blue);outline-offset:-2px}
 
 .team-strip{height:var(--rp-strip-h,28px);padding:0 28px;display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--rp-blue);color:#fff;font-size:12px;line-height:16px;font-weight:500}
