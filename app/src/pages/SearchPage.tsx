@@ -171,9 +171,18 @@ export function SearchPage() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [query, updateFilter]);
 
+  // The page opens the first result for convenience. That choice must follow
+  // a new query: searching "Z-9999" listed one match while the detail pane
+  // still showed the newest run. A run the user opened stays open.
+  const autoSelectedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!currentRunResult?.runs.length || loading || selectedId || isMobile) return;
-    navigate(`${tracePath("/search", currentRunResult.runs[0].id)}${querySuffix}`, { replace: true });
+    if (!currentRunResult || loading || isMobile) return;
+    const keep = selectedId && (selectedId !== autoSelectedRef.current || currentRunResult.runs.some(run => run.id === selectedId));
+    if (keep) return;
+    const first = currentRunResult.runs[0];
+    if (!first && !selectedId) return;
+    autoSelectedRef.current = first?.id ?? null;
+    navigate(first ? `${tracePath("/search", first.id)}${querySuffix}` : `/search${querySuffix}`, { replace: true });
   }, [currentRunResult, loading, isMobile, navigate, selectedId, querySuffix]);
 
   const loadDemoTraces = async () => {
@@ -288,7 +297,7 @@ export function SearchPage() {
             description={hasFilters ? "Try a shorter phrase or clear the filters to browse all captured runs." : "Capture a local agent run or load demo traces to start searching."}
             action={hasFilters ? undefined : <Button type="button" variant="outline" size="sm" loading={demoLoading} onClick={() => void loadDemoTraces()}>{demoLoading ? "Loading demo traces…" : "Load demo traces"}</Button>}
           />}
-          {runs.map((run) => <RunListItem key={run.id} run={run} shortRunIds={shortRunIds} selected={selectedId === run.id} onClick={() => navigate(`${tracePath("/search", run.id)}${querySuffix}`)} />)}
+          {runs.map((run) => <RunListItem key={run.id} run={run} shortRunIds={shortRunIds} selected={selectedId === run.id} onClick={() => { autoSelectedRef.current = null; navigate(`${tracePath("/search", run.id)}${querySuffix}`); }} />)}
           {resource === "span-hits" && <SearchSpanHits items={hits} open={hit=>navigate(`${tracePath("/search",hit.runId)}/span/${encodeURIComponent(hit.spanId)}${querySuffix}`)}/>}
           {currentResult?.hasMore && <Button type="button" variant="outline" size="sm" onClick={() => void loadMore()} disabled={loading} loading={loadingMore} className="w-full">{loadingMore ? "Loading more…" : resource === "span-hits" ? "Load more spans" : "Load more runs"}</Button>}
         </div>
