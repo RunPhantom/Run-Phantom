@@ -1304,23 +1304,27 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
   );
 }
 
+// Rendered as a grid row below the scroll viewport, not overlaid on it: an overlay
+// pinned to the viewport bottom covered the last message whenever the view was
+// close to, but not at, the end. Callers give the StickToBottom root STICK_LAYOUT.
 function ScrollToBottomButton() {
   const { isAtBottom, scrollToBottom } = useStickToBottomContext();
   const prefersReducedMotion = usePrefersReducedMotion();
   if (isAtBottom) return null;
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center">
+    <div data-testid="scroll-to-bottom-gutter" className="flex justify-center border-t border-rp-line bg-rp-surface py-2">
       <button
         type="button"
         onClick={() => scrollToBottom({ animation: prefersReducedMotion ? "instant" : "smooth" })}
-        className="rp-fade-rise pointer-events-auto flex h-8 items-center gap-1.5 rounded-control border border-rp-line bg-rp-surface px-3 text-[12px] font-medium text-rp-ink shadow-e2 transition-[background-color,border-color,color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash hover:text-rp-blue"
+        className={cn(buttonVariants({ variant: "secondary", size: "sm" }), "rp-fade-rise gap-1.5 [&_svg]:size-3")}
       >
-        <ArrowDown aria-hidden="true" size={12} />
+        <ArrowDown aria-hidden="true" />
         Scroll to bottom
       </button>
     </div>
   );
 }
+const STICK_LAYOUT = "relative grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] overflow-hidden";
 
 export function TraceNotFound({ runId, backPath }: { runId: string; backPath: string }) {
   const navigate = useNavigate();
@@ -1828,7 +1832,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
             <SpanTree spans={agentSpans} />
           </div>
         ) : (
-          <StickToBottom id={agentPanelId} role="tabpanel" aria-labelledby={agentOverviewTabId} className="relative min-h-0 flex-1 overflow-hidden" resize={prefersReducedMotion ? "instant" : "smooth"} initial={false} contextRef={stickToBottomContextRef}>
+          <StickToBottom id={agentPanelId} role="tabpanel" aria-labelledby={agentOverviewTabId} className={STICK_LAYOUT} resize={prefersReducedMotion ? "instant" : "smooth"} initial={false} contextRef={stickToBottomContextRef}>
             <StickToBottom.Content className="sb">
               {agentTab === "chat" && <ChatFlow spans={agentSpans} liveEvents={[]} subAgents={[]} onDiveIn={setFocusedAgent} />}
             </StickToBottom.Content>
@@ -1924,7 +1928,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
           />
         </div>
       ) : (
-        <StickToBottom id={runPanelId} role="tabpanel" aria-labelledby={activeTab === "convo" ? runConversationTabId : runOverviewTabId} className="relative min-h-0 flex-1 overflow-hidden" resize={prefersReducedMotion ? "instant" : "smooth"} initial={false} contextRef={stickToBottomContextRef}>
+        <StickToBottom id={runPanelId} role="tabpanel" aria-labelledby={activeTab === "convo" ? runConversationTabId : runOverviewTabId} className={STICK_LAYOUT} resize={prefersReducedMotion ? "instant" : "smooth"} initial={false} contextRef={stickToBottomContextRef}>
           <StickToBottom.Content className="sb">
             {activeTab === "chat" && <ChatFlow spans={spans} liveEvents={liveEvents} subAgents={subAgents} onDiveIn={setFocusedAgent} isActive={active} lastUpdatedAt={run.last_updated_at} onEditMessage={onForkStarted && !active && !replayUnavailable ? (msg) => setEditModal({ userMessage: msg }) : undefined} replayError={replayMeta?.replay?.error ?? null} />}
             {activeTab === "convo" && paneConvoId && <ConvoDetail convoId={paneConvoId} onOpenTurn={openConversationTurn} />}

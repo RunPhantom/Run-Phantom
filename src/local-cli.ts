@@ -788,7 +788,7 @@ async function dispatchRunPhantom(verb: string | undefined, rest: string[]): Pro
       process.exit(0);
       break;
     case "hooks":
-      process.exit(await cmdCodingHooks(process.argv.slice(3)));
+      process.exit(await cmdCodingHooks(process.argv.slice(3), ensureDaemonRunning));
       break;
     case "setup":
       process.exit(await cmdSetup(process.argv.slice(3)));

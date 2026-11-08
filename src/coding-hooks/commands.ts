@@ -30,17 +30,14 @@ function managementPort(): number {
   if (!raw) try { raw = readFileSync(path.join(os.homedir(), ".runphantom/runphantom.port"), "utf8").trim(); } catch { raw = "5947"; }
   if (!raw || !/^[1-9][0-9]{0,4}$/.test(raw) || Number(raw) > 65535) throw new Error("invalid configured daemon port"); return Number(raw);
 }
-async function submitHookManagement(input: unknown, offline?: () => Promise<unknown>): Promise<unknown> {
-  const db = getDrizzleDb().$client, ownerKey = capabilityOwnerKey(realpathSync(db.filename));
+export type HookDaemonStarter = () => Promise<{ port: number }>;
+const refused = (error: unknown) => error instanceof Error && "code" in error && ["ECONNREFUSED", "ConnectionRefused"].includes(String(error.code));
+async function postHookManagement(port: number, ownerKey: string, input: unknown): Promise<unknown> {
   const timer = new AbortController(), timeout = setTimeout(() => timer.abort(), 3000);
   try {
     let response: Response;
-    try { response = await fetch(`http://127.0.0.1:${managementPort()}/api/coding-hooks/claude/manage`, { method: "POST", headers: { "content-type": "application/json", "x-runphantom-hook-owner": ownerKey }, body: JSON.stringify(input), redirect: "error", signal: timer.signal }); }
-    catch (error) {
-      if (!offline || timer.signal.aborted || !(error instanceof Error) || !("code" in error) || !["ECONNREFUSED", "ConnectionRefused"].includes(String(error.code))) throw new Error("Hook management daemon unavailable; current authority was not changed");
-      // Offline configuration is deliberately disabled and cannot begin or borrow daemon ownership.
-      return offline();
-    }
+    try { response = await fetch(`http://127.0.0.1:${port}/api/coding-hooks/claude/manage`, { method: "POST", headers: { "content-type": "application/json", "x-runphantom-hook-owner": ownerKey }, body: JSON.stringify(input), redirect: "error", signal: timer.signal }); }
+    catch (error) { if (!timer.signal.aborted && refused(error)) throw error; throw new Error("Hook management daemon unavailable; current authority was not changed"); }
     if (!response.ok) { await response.body?.cancel(); throw new Error(`Hook management refused (${response.status})`); }
     if (!response.body) throw new Error("Hook management response unavailable");
     const reader = response.body.getReader(), chunks: Uint8Array[] = []; let bytes = 0;
@@ -49,12 +46,35 @@ async function submitHookManagement(input: unknown, offline?: () => Promise<unkn
     } finally { await reader.cancel().catch(() => {}); }
   } finally { clearTimeout(timeout); }
 }
-export async function manageClaudeHooks(input: HookManagementCommand): Promise<unknown> {
+async function submitHookManagement(input: unknown, offline?: (startFailure?: string) => Promise<unknown>, start?: HookDaemonStarter): Promise<unknown> {
+  const ownerKey = capabilityOwnerKey(realpathSync(getDrizzleDb().$client.filename));
+  try { return await postHookManagement(managementPort(), ownerKey, input); }
+  catch (error) {
+    if (!refused(error)) throw error;
+    if (!offline) throw new Error("Hook management daemon unavailable; current authority was not changed");
+  }
+  // Only the running owner can grant capture, so start it rather than writing settings it would have to redo.
+  let startFailure: string | undefined;
+  if (start) {
+    let port: number | undefined;
+    try { port = (await start()).port; } catch (error) { startFailure = error instanceof Error ? error.message : "start failed"; }
+    if (port !== undefined) {
+      try { return await postHookManagement(port, ownerKey, input); }
+      catch (error) { if (!refused(error)) throw error; startFailure = `nothing answered on :${port}`; }
+    }
+  }
+  // Offline configuration is deliberately disabled and cannot begin or borrow daemon ownership.
+  return offline(startFailure);
+}
+export async function manageClaudeHooks(input: HookManagementCommand, start?: HookDaemonStarter): Promise<unknown> {
   input = parseHookManagementCommand(input);
-  return submitHookManagement(input, async () => {
+  return submitHookManagement(input, async startFailure => {
     try { return await executeHookManagement(new ClaudeHookManagement(new CodingHookStore(getDrizzleDb().$client)), input); }
-    catch (error) { if (input.action === "install" && error instanceof HookRefusal && error.reason === "inactive") throw new Error("Run Phantom is not running and has never run on this profile; start it and retry. Hook settings were not changed"); throw error; }
-  });
+    catch (error) {
+      if (input.action === "install" && error instanceof HookRefusal && error.reason === "inactive") throw new Error(`Run Phantom is not running${startFailure ? ` and could not be started (${startFailure})` : ""}, and hooks can only be installed once it has run on this profile. Run \`runphantom start\`, then retry. Hook settings were not changed`);
+      throw error;
+    }
+  }, input.action === "install" && !process.env.RUNPHANTOM_SKIP_START ? start : undefined);
 }
 /** Current CAS is read from the selected profile; only the running owner can grant activation. */
 export async function manageClaudeContextActivation(installationIds: string[]): Promise<unknown> {
@@ -75,13 +95,13 @@ function activationIds(argv: string[]): string[] {
   for (let offset = 2; offset < argv.length; offset += 2) { if (argv[offset] !== "--installation-id" || !isHex(argv[offset + 1], 32)) throw new Error("Invalid selected hook installations"); ids.push(argv[offset + 1]); }
   return ids;
 }
-export async function cmdCodingHooks(argv: string[]): Promise<number> {
+export async function cmdCodingHooks(argv: string[], start?: HookDaemonStarter): Promise<number> {
   if (["-h", "--help", "help"].includes(argv[0])) { console.log(HOOKS_USAGE); return 0; }
   if (argv[1] === "codex") {
     const { cmdCodexHooks } = await import("./codex-install");
     return cmdCodexHooks(argv);
   }
-  try { console.log(JSON.stringify(await (argv[0] === "activate-context-v2" ? manageClaudeContextActivation(activationIds(argv)) : manageClaudeHooks(command(argv))))); return 0; }
+  try { console.log(JSON.stringify(await (argv[0] === "activate-context-v2" ? manageClaudeContextActivation(activationIds(argv)) : manageClaudeHooks(command(argv), start)))); return 0; }
   catch (error) { console.error(error instanceof Error ? error.message : "Hook management unavailable"); return 64; }
   finally { closeDb(); }
 }
