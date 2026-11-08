@@ -79,7 +79,7 @@ function FieldRow({ field }: { field: ComparisonField }) {
 function Difference({ row }: { row: ComparisonRow }) {
   const fields = row.fields.filter(item => item.state !== "same");
   return <details className="rounded-sm border border-rp-line bg-rp-surface" data-comparison-row={row.state}>
-    <summary className="cursor-pointer rounded-sm px-3 py-2.5 text-xs transition-colors duration-250 ease-standard hover:bg-rp-row-hover">
+    <summary className="rp-disclosure cursor-pointer rounded-sm px-3 py-2.5 text-xs transition-colors duration-250 ease-standard hover:bg-rp-row-hover">
       <span className={cn("font-mono text-[11px] font-medium uppercase tracking-[0.08em]", stateTone(row.state))}>{row.state}</span>
       <span className="ml-2 break-all font-mono text-rp-ink">{row.baseline[0]?.name || row.candidate[0]?.name || "Captured spans"}</span>
       {row.reordered && <span className="ml-2 text-rp-ink-muted">order changed</span>}
@@ -90,7 +90,7 @@ function Difference({ row }: { row: ComparisonRow }) {
       {row.reason && <p className="text-xs text-rp-ink-muted">{row.reason}</p>}
       <div className="grid gap-3 sm:grid-cols-2"><SpanLinks links={row.baseline} side="Baseline" /><SpanLinks links={row.candidate} side="Candidate" /></div>
       {fields.map(field => <FieldRow key={field.name} field={field} />)}
-      {row.fields.length > 0 && <details><summary className="cursor-pointer py-1 text-[12px] font-medium text-rp-blue">All captured field comparisons</summary>
+      {row.fields.length > 0 && <details><summary className="rp-disclosure cursor-pointer py-1 text-[12px] font-medium text-rp-blue">All captured field comparisons</summary>
         {row.fields.filter(field => field.state === "same").map(field => <FieldRow key={field.name} field={field} />)}</details>}
     </div>
   </details>;

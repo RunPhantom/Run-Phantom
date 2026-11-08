@@ -543,6 +543,26 @@ h1, h2, h3 {
   background: var(--rp-surface);
 }
 
+.rp-disclosure { list-style: none; }
+.rp-disclosure::-webkit-details-marker { display: none; }
+.rp-disclosure::before {
+  content: "";
+  display: inline-block;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin: 0 10px 2px 2px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  opacity: 0.65;
+  transform: rotate(-45deg);
+  transition: transform var(--rp-dur-standard) var(--rp-ease-standard);
+}
+details[open] > .rp-disclosure::before { transform: rotate(45deg); }
+@media (prefers-reduced-motion: reduce) {
+  .rp-disclosure::before { transition: none; }
+}
+
 .skip-link {
   position: fixed;
   left: 12px;

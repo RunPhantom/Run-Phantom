@@ -13,7 +13,7 @@ export const emptyNote = "rounded-md border border-dashed border-[color:var(--rp
 export const checkLabel = "flex min-h-9 items-start gap-2.5 text-[13px] text-rp-ink";
 export const checkbox = "mt-0.5 size-4 shrink-0 accent-rp-blue";
 export const textLink = "inline-flex items-center gap-1 text-rp-blue underline-offset-2 transition-colors duration-250 ease-standard hover:text-rp-blue-hover hover:underline";
-export const summary = "cursor-pointer select-none py-1 text-[12px] font-medium text-rp-ink-muted transition-colors duration-250 ease-standard hover:text-rp-ink";
+export const summary = "rp-disclosure cursor-pointer select-none py-1 text-[12px] font-medium text-rp-ink-muted transition-colors duration-250 ease-standard hover:text-rp-ink";
 export const well = "overflow-auto rounded-sm border border-rp-line-muted bg-rp-canvas-blue p-3";
 
 export function SectionHead({ eyebrow, title, id, aside, as: Title = "h2" }: {
