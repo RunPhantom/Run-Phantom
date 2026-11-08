@@ -9,7 +9,7 @@ import { comparisonCapabilities, comparisonPage, comparisonReceipt, comparisonRe
 import "./comparison.css";
 import { ComparisonBreadcrumb } from "./ComparisonBreadcrumb";
 import { ComparisonAccounting } from "./ComparisonAccounting";
-import { COMPARISON_TARGET_LIMIT, comparisonModelSettings } from "../../../../src/prompts/comparison-types";
+import { COMPARISON_OUTPUT_TOKEN_LIMIT, COMPARISON_TARGET_LIMIT, comparisonModelSettings } from "../../../../src/prompts/comparison-types";
 
 interface View { key: string; capabilities: ComparisonCapabilities; page: ComparisonPage; selected: ComparisonReceipt | null }
 const pending = (receipt: ComparisonReceipt | null) => !!receipt?.attempts.some(attempt => ["queued", "running"].includes(attempt.status));
@@ -18,6 +18,22 @@ const settingsLabel = (target: { provider: "openai" | "anthropic"; model: string
   return [settings.reasoningEffort === "medium" ? "reasoning medium" : "standard text", settings.temperature === "provider_default" ? "provider temperature" : null].filter(Boolean).join(" · ");
 };
 const usd = (microusd: number) => `$${(microusd / 1000000).toFixed(6)}`;
+const outcomes: Record<string, string> = {
+  provider_auth: "The provider rejected the API key (HTTP 401 or 403). Replace the key in Settings, then run again. Nothing was charged.",
+  provider_refused: "The provider refused the request before generating an answer (HTTP 400, 404, 413 or 422), for example for missing account credit or an unsupported model. Nothing was charged.",
+  provider_rate_limited: "The provider rate-limited the request or the account quota is exhausted (HTTP 429). Try again later. Nothing was charged.",
+  provider_error: "The provider request failed before a usable answer arrived.",
+  budget_refused: "This target's reservation is larger than the operation budget, so no request was sent. Raise the operation budget or lower Maximum output tokens.",
+  response_limit: "The answer exceeded what can be retained for this target.",
+  invalid_response: "The provider answer was not in the expected format.",
+  protected_content: "The answer contained what looks like a credential, so it was not retained.",
+  timeout: "No answer arrived within the 30 second deadline.",
+  cancelled: "The comparison was cancelled.",
+  interrupted: "The daemon restarted before this target finished.",
+  authority_lost: "Access to this comparison changed before it finished.",
+};
+const outcome = (reason: string) => outcomes[reason] ?? `Reason: ${reason.replace(/_/g, " ")}`;
+const failedStates = new Set(["failed", "timeout", "budget_refused", "unavailable", "interrupted", "authority_lost"]);
 const reasons: Record<string, string> = { credentials_unavailable: "Provider access is not configured.", budget_not_configured: "A spending budget is not configured for this server.", overage_fuse: "Observed usage exceeded its reservation. New spending is blocked.", ceiling_reached: "The admitted server budget is fully held or charged." };
 export function Comparison({ client, source, variables, canEdit, canDelete, scopeLabel }: {
   client: PromptClient; source: PromptRevision | null; variables: Record<string, string>; canEdit: boolean; canDelete: boolean; scopeLabel: string;
@@ -100,6 +116,7 @@ export function Comparison({ client, source, variables, canEdit, canDelete, scop
       if (rejected) retry.current = null; else setUnresolved(true); throw cause;
     }
   }
+  const emptyVariables = source?.variableNames.filter(name => !(variables[name] ?? "").trim()) ?? [];
   const selectedModels = current?.capabilities.models.filter(model => chosen.includes(`${model.provider}:${model.model}`)) ?? [];
   const settingsValid = /^[1-9][0-9]*$/.test(outputTokens) && Number(outputTokens) <= 1024 && /^(?:0(?:\.[0-9]+)?|1(?:\.0+)?)$/.test(temperature) && Number.isFinite(Number(temperature)) && Number(temperature) >= 0 && Number(temperature) <= 1
     && /^(?:0|1)(?:\.[0-9]{1,6})?$/.test(budget) && Number(budget) > 0 && Number(budget) <= 1;
@@ -130,7 +147,7 @@ export function Comparison({ client, source, variables, canEdit, canDelete, scop
       <Button size="lg" disabled={unresolved ? busy || !current : !runnable} onClick={() => unresolved ? void perform(run) : setConfirm("run")}><ArrowRight />{unresolved ? "Retry saved comparison" : "Run comparison"}</Button>
     </div><aside className="comparison-history" aria-label="Comparison history"><h3>Saved comparisons <span>{current.page.items.length}</span></h3>
       {!current.page.items.length && <p className="prompt-muted">Your first confirmed comparison will appear here.</p>}
-      <ul>{current.page.items.map(item => <li key={item.id}><button type="button" aria-pressed={current.selected?.id === item.id} disabled={busy || unresolved} onClick={() => void perform(() => load(item.id))}><strong>{item.prompt?.name ?? "Content removed"}</strong><span>{item.prompt ? `Revision ${item.prompt.revision}` : "Accounting receipt retained"} · {item.attempts.length} targets</span><small>{item.attempts.map(attempt => attempt.status.replace(/_/g, " ")).join(" / ")}</small></button></li>)}</ul>
+      <ul>{current.page.items.map(item => <li key={item.id}><button type="button" aria-pressed={current.selected?.id === item.id} disabled={busy || unresolved} onClick={() => void perform(() => load(item.id))}><strong>{item.prompt?.name ?? "Content removed"}</strong><span>{item.prompt ? `Revision ${item.prompt.revision}` : "Accounting receipt retained"} · {item.attempts.length} {item.attempts.length === 1 ? "target" : "targets"}</span><small>{item.attempts.map(attempt => attempt.status.replace(/_/g, " ")).join(" / ")}</small></button></li>)}</ul>
       {current.page.cursor && <Button size="lg" variant="outline" disabled={busy} onClick={() => void perform(async () => { const page = comparisonPage(await request(`?${new URLSearchParams({ cursor: current.page.cursor! })}`)); setView(previous => previous?.key === key ? { ...previous, page: { ...page, items: [...previous.page.items, ...page.items.filter(item => !previous.page.items.some(old => old.id === item.id))].slice(0, 100) } } : previous); })}>Load more comparisons</Button>}
       {canDelete && <Button size="lg" variant="outline" disabled={busy || unresolved} onClick={() => setConfirm("clear")}><Trash2 />Clear comparison content</Button>}
     </aside></div>}
@@ -138,13 +155,14 @@ export function Comparison({ client, source, variables, canEdit, canDelete, scop
       {current.selected.request && <details className="comparison-frozen"><summary>Frozen input and settings</summary><p>SHA-256 {current.selected.request.prompt.templateSha256}</p><p>{current.selected.request.options.maxOutputTokens} output tokens · temperature {current.selected.request.options.temperature} · operation cap {usd(current.selected.request.operationBudgetMicrousd)}</p><p>Frozen rates: {current.selected.request.rates.map(rate => rate.revision).join(" / ")}</p><pre>{current.selected.request.compiled}</pre></details>}
       <div className="comparison-targets">{current.selected.attempts.map(attempt => {
         const output = comparisonOutput(attempt);
-        return <article className="comparison-target" key={attempt.position} aria-label={`Result ${attempt.model}`}><header><h4>{attempt.model}</h4><span className="comparison-state">{attempt.status.replace(/_/g, " ")}</span></header>{attempt.reason && <p className="prompt-muted">Reason: {attempt.reason.replace(/_/g, " ")}</p>}{output.controlled && <p className="comparison-fixture">Controlled HTTP fixture · no paid provider call</p>}{attempt.budgetBreach && <p className="comparison-error">Observed usage breached its reservation. Further spending by this provider is blocked.</p>}
-          {output.truncated && <p className="comparison-error" data-testid={`comparison-truncated-${attempt.position}`}>Stopped at the {current.selected?.request?.options.maxOutputTokens ?? "configured"} output token limit. This answer may be incomplete.{output.reasoningTokens ? ` ${output.reasoningTokens.toLocaleString()} of ${output.outputTokens?.toLocaleString() ?? "the"} output tokens were reasoning; raise Maximum output tokens for visible text.` : ""}</p>}
+        return <article className="comparison-target" key={attempt.position} aria-label={`Result ${attempt.model}`}><header><h4>{attempt.model}</h4><span className="comparison-state" data-tone={failedStates.has(attempt.status) ? "danger" : attempt.status === "cancelled" ? "muted" : undefined}>{attempt.status.replace(/_/g, " ")}</span></header>{attempt.reason && <p className="prompt-muted" data-testid={`comparison-reason-${attempt.position}`}>{outcome(attempt.reason)}</p>}{output.controlled && <p className="comparison-fixture">Controlled HTTP fixture · no paid provider call</p>}{attempt.budgetBreach && <p className="comparison-error">Observed usage breached its reservation. Further spending by this provider is blocked.</p>}
+          {output.truncated && <p className="comparison-error" data-testid={`comparison-truncated-${attempt.position}`}>Stopped at the {current.selected?.request?.options.maxOutputTokens ?? "configured"} output token limit. This answer may be incomplete.{output.reasoningTokens ? ` ${output.reasoningTokens.toLocaleString()} of ${output.outputTokens?.toLocaleString() ?? "the"} output tokens were reasoning; ${(current.selected?.request?.options.maxOutputTokens ?? 0) >= COMPARISON_OUTPUT_TOKEN_LIMIT ? `${COMPARISON_OUTPUT_TOKEN_LIMIT.toLocaleString()} is the comparison maximum, so shorten the task or compare a standard-text model.` : "raise Maximum output tokens for visible text."}` : ""}</p>}
+          {output.shortenedFromBytes !== null && <p className="comparison-error" data-testid={`comparison-shortened-${attempt.position}`}>The full answer was {output.shortenedFromBytes.toLocaleString()} bytes, more than one result can retain. The beginning is shown; usage and charges cover the whole answer.</p>}
           {output.output !== null ? <pre data-testid={`comparison-output-${attempt.position}`}>{output.output}</pre> : <p className="prompt-muted">{["queued", "running"].includes(attempt.status) ? "Waiting for a retained result…" : "No output was retained for this target."}</p>}
           <ComparisonAccounting attempt={attempt} input={output.input} output={output.outputTokens} rateRevision={current.selected?.request?.rates[attempt.position].revision ?? null} />
         </article>;
       })}</div>
     </section>}
-    {confirm && <div className="prompt-dialog-shade"><div ref={dialog} className="prompt-dialog" role="alertdialog" aria-modal="true" aria-labelledby="comparison-confirm-title" aria-describedby="comparison-confirm-description"><h2 id="comparison-confirm-title">{confirm === "run" ? "Send this saved revision?" : "Clear comparison input and output?"}</h2><p id="comparison-confirm-description">{confirm === "run" ? `Send revision ${source?.revision} with its current literal variables to ${selectedModels.length} selected providers. The operation cap is $${budget}. Unsaved editor changes are excluded.` : "This permanently removes comparison input and output in this scope. Spend, idempotency receipts and lifetime capacity remain. Saved prompts and captured reports remain available. This cannot be undone."}</p><div className="prompt-actions"><Button size="lg" variant="outline" onClick={() => setConfirm(null)}>Keep working</Button><Button size="lg" onClick={() => { const action = confirm; setConfirm(null); void perform(action === "run" ? run : clear); }}>{confirm === "run" ? "Confirm run comparison" : "Permanently clear comparisons"}</Button></div></div></div>}
+    {confirm && <div className="prompt-dialog-shade"><div ref={dialog} className="prompt-dialog" role="alertdialog" aria-modal="true" aria-labelledby="comparison-confirm-title" aria-describedby="comparison-confirm-description"><h2 id="comparison-confirm-title">{confirm === "run" ? "Send this saved revision?" : "Clear comparison input and output?"}</h2><p id="comparison-confirm-description">{confirm === "run" ? `Send revision ${source?.revision} with its current literal variables to ${selectedModels.length} selected ${selectedModels.length === 1 ? "model" : "models"} (${selectedModels.map(model => model.model).join(", ")}). The operation cap is $${budget}. Unsaved editor changes are excluded.` : "This permanently removes comparison input and output in this scope. Spend, idempotency receipts and lifetime capacity remain. Saved prompts and captured reports remain available. This cannot be undone."}</p>{confirm === "run" && emptyVariables.length > 0 && <p role="note" className="comparison-error" data-testid="comparison-empty-variables">{emptyVariables.length === 1 ? "This variable is empty" : "These variables are empty"} and will be sent as blank text: {emptyVariables.join(", ")}.</p>}<div className="prompt-actions"><Button size="lg" variant="outline" onClick={() => setConfirm(null)}>Keep working</Button><Button size="lg" onClick={() => { const action = confirm; setConfirm(null); void perform(action === "run" ? run : clear); }}>{confirm === "run" ? "Confirm run comparison" : "Permanently clear comparisons"}</Button></div></div></div>}
   </section>;
 }
