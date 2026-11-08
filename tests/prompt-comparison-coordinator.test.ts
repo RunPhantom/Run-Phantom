@@ -14,7 +14,7 @@ import { createComparisonProviderClient } from "../src/prompts/providers";
 
 let directory: string, db: Database, lease: Awaited<ReturnType<typeof acquireComparisonOwner>>, store: ComparisonStore, prompts: PromptRegistry, coordinator: ComparisonCoordinator;
 let allowed = true, calls = 0, active = 0, peak = 0;
-let responseMode: "normal" | "unavailable" | "oversized" | "unauthorized" = "normal";
+let responseMode: "normal" | "unavailable" | "oversized" | "unauthorized" | "invalid" = "normal";
 let server: ReturnType<typeof Bun.serve>;
 const controls = new Set<() => void>();
 beforeEach(async () => {
@@ -28,6 +28,7 @@ beforeEach(async () => {
     let completed = false; const done = () => { if (!completed) { completed = true; active--; } };
     if (responseMode === "unavailable") { done(); return new Response("controlled upstream unavailable", { status: 503 }); }
     if (responseMode === "unauthorized") { done(); return new Response("controlled invalid key", { status: 401 }); }
+    if (responseMode === "invalid") { done(); return new Response("<html>gateway error</html>", { headers: { "content-type": "application/json" } }); }
     return new Response(new ReadableStream({ start(controller) {
       const release = () => { controls.delete(release); if (completed) return; const output = responseMode === "oversized" ? "x".repeat(70000) : "Controlled answer", raw = body.model.startsWith("gpt") ? { model: body.model, service_tier: "default", choices: [{ message: { content: output }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 0 } } }
         : { model: body.model, stop_reason: "end_turn", content: [{ type: "text", text: output }], usage: { input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, inference_geo: "global", service_tier: "standard" } }; controller.enqueue(new TextEncoder().encode(JSON.stringify(raw))); controller.close(); done(); };
@@ -116,4 +117,10 @@ test("a provider that rejects the key releases the conservative charge; an uncer
   const retained = store.get(uncertain.id, store.capture("read")).attempts[0];
   expect(retained.status).toBe("failed"); expect(retained.accountingState).toBe("conservative"); expect(retained.chargeMicrousd).toBe(retained.reserveMicrousd);
   expect(calls).toBe(2);
+});
+test("an unparseable provider body is recorded as an invalid response, not a generic provider failure", async () => {
+  responseMode = "invalid";
+  const operation = coordinator.submit(store, input(), store.capture("edit")); await coordinator.idle();
+  const receipt = store.get(operation.id, store.capture("read"));
+  expect(receipt.attempts.map(row => [row.status, row.reason])).toEqual(Array.from({ length: 4 }, () => ["failed", "invalid_response"])); expect(calls).toBe(4);
 });

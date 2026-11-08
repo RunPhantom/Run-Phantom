@@ -22,11 +22,12 @@ const messages = { invalid_request: "Comparison request is invalid.", limit_refu
   source_conflict: "The selected prompt revision does not match.", operation_conflict: "Comparison operation key conflicts.",
   authority_changed: "Comparison authority changed. Retry with current access.", not_found: "Comparison not found.",
   unavailable: "Comparison scope is unavailable.", capacity: "Comparison capacity reached.", integrity: "Stored comparison integrity check failed.",
-  deleted: "Comparison content was removed.", budget_refused: "Comparison exceeds the admitted budget." } as const;
+  deleted: "Comparison content was removed.", budget_refused: "Comparison exceeds the admitted budget.",
+  busy: "Comparison queue is full. Retry after running comparisons finish." } as const;
 export class ComparisonError extends Error {
   readonly status: number;
   constructor(readonly code: keyof typeof messages) { super(messages[code]); this.name = "ComparisonError";
-    this.status = code === "not_found" ? 404 : code === "unavailable" ? 403 : ["limit_refused", "capacity"].includes(code) ? 413
+    this.status = code === "not_found" ? 404 : code === "unavailable" ? 403 : code === "busy" ? 429 : ["limit_refused", "capacity"].includes(code) ? 413
       : ["source_conflict", "operation_conflict", "authority_changed", "integrity", "deleted"].includes(code) ? 409 : 400; }
 }
 export function comparisonTarget(value: unknown): ComparisonTarget {

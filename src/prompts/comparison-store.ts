@@ -163,9 +163,12 @@ export class ComparisonStore {
       const targetBytes = input.targets.reduce((total, target) => total + scopeBytes + 36 + Buffer.byteLength(target.provider) + Buffer.byteLength(target.model) + 32 + 64 + L.attemptPayloadBytes + 32 + 64 + 96, 0);
       if (totals.bytes + this.#pendingRetention() + headBytes + targetBytes > L.retainedBytes) throw new ComparisonError("capacity");
       const budget = this.#budgetTotals(), queue = this.#get<{ n: number }>("SELECT count(*) n FROM (SELECT scope_key,comparison_id FROM prompt_comparison_attempts WHERE status='queued' GROUP BY scope_key,comparison_id)")!.n;
+      // A full queue is transient: refuse before inserting so it neither reads as a budget
+      // decision nor consumes one of the scope's lifetime operations.
+      if (queue >= L.queued) throw new ComparisonError("busy");
       const held = { openai: 0, anthropic: 0 }, available = { openai: this.#available("openai"), anthropic: this.#available("anthropic") }; let operationHold = 0;
       input.targets.forEach((target, index) => { if (available[target.provider]) { held[target.provider] += reservations[index].microusd; operationHold += reservations[index].microusd; } });
-      const refused = queue >= L.queued || operationHold > input.operationBudgetMicrousd || (["openai", "anthropic"] as const).some(provider => held[provider] > 0 && (budget[provider].breached || budget[provider].holdMicrousd + budget[provider].chargeMicrousd + held[provider] > budget[provider].ceilingMicrousd));
+      const refused = operationHold > input.operationBudgetMicrousd || (["openai", "anthropic"] as const).some(provider => held[provider] > 0 && (budget[provider].breached || budget[provider].holdMicrousd + budget[provider].chargeMicrousd + held[provider] > budget[provider].ceilingMicrousd));
       const id = randomUUID(), now = Date.now();
       this.#db.query("INSERT INTO prompt_comparisons(scope_key,id,operation_key,request_digest,prompt_id,frozen_request,prompt_generation,evidence_generation,comparison_generation,target_count,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)").run(this.#scope, id, input.operationKey, requestDigest, input.promptId, serialized, current.promptGeneration, current.evidenceGeneration, current.comparisonGeneration, input.targets.length, now);
       input.targets.forEach((target, position) => {
