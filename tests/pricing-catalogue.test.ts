@@ -53,6 +53,26 @@ describe("nominal public catalogue admission", () => {
     expect(selectRateRevision(usage("uni"), catalogue.rates)).toBeNull();
   });
 
+  test("Anthropic API model names match their dotted catalogue identity exactly", () => {
+    // claude-sonnet-5-5 is what the Anthropic Messages API returns as `model`;
+    // the public catalogue lists the same model as anthropic/claude-sonnet-5.5.
+    const catalogue = parseNominalCatalogue({ data: [model("anthropic/claude-sonnet-5.5", "0.000002", "0.00001"), model("anthropic/claude-sonnet-5.5:batch", "0.000001", "0.000005"), model("openai/gpt-6.1-terra", "0.000001", "0.000005")] }, "revision", timestamp);
+    const sonnet = selectRateRevision(usage("claude-sonnet-5-5"), catalogue.rates);
+    expect(sonnet?.model).toBe("anthropic/claude-sonnet-5.5");
+    expect(calculateCost(usage("claude-sonnet-5-5"), sonnet!).totalUsd).toBeCloseTo(200 * 2e-6 + 300 * 1e-5, 12);
+    expect(selectRateRevision(usage("claude-sonnet-5.5"), catalogue.rates)?.model).toBe("anthropic/claude-sonnet-5.5");
+    expect(selectRateRevision(usage("claude-sonnet-5-5:batch"), catalogue.rates)?.model).toBe("anthropic/claude-sonnet-5.5:batch");
+    expect(selectRateRevision(usage("gpt-6-1-terra"), catalogue.rates)).toBeNull();
+    expect(selectRateRevision(usage("claude-sonnet-5"), catalogue.rates)).toBeNull();
+  });
+
+  test("a hyphenated Anthropic alias that another model also claims stays unavailable", () => {
+    const catalogue = parseNominalCatalogue({ data: [model("anthropic/claude-sonnet-5.5"), model("proxy/claude-sonnet-5-5")] }, "revision", timestamp);
+    expect(catalogue.ambiguousAliases).toContain("claude-sonnet-5-5");
+    expect(selectRateRevision(usage("claude-sonnet-5-5"), catalogue.rates)).toBeNull();
+    expect(selectRateRevision(usage("claude-sonnet-5.5"), catalogue.rates)?.model).toBe("anthropic/claude-sonnet-5.5");
+  });
+
   test("duplicate canonical IDs cannot make catalogue order choose a price", () => {
     const catalogue = parseNominalCatalogue({ data: [model(), model("fixture/known", "0.01"), model("fixture/control")] }, "revision", timestamp);
     expect(catalogue.rejectedModels).toBe(2);

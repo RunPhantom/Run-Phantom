@@ -117,6 +117,20 @@ function perMillionPrice(value: unknown): number {
   return amount;
 }
 
+/**
+ * Exact names a provider's own API reports for a catalogue model. Anthropic's
+ * API spells versions with hyphens (claude-sonnet-5-5, claude-opus-4-6) where
+ * the catalogue uses dots (anthropic/claude-sonnet-5.5), so without the
+ * hyphenated spelling no captured Anthropic generation could ever be priced.
+ * Every alias still has to be unique across the whole catalogue.
+ */
+function catalogueAliases(id: string): string[] {
+  const short = id.split("/").pop()!;
+  const aliases = [short];
+  if (id.startsWith("anthropic/") && short.includes(".")) aliases.push(short.replace(/\./g, "-"));
+  return aliases;
+}
+
 /** These are nominal prompt/completion quotes, not actual provider, tier, cache or multimodal bills. */
 export function parseNominalCatalogue(value: unknown, revision: string, observedAt: string): NominalCatalogue {
   revision = text(revision, "revision");
@@ -140,7 +154,7 @@ export function parseNominalCatalogue(value: unknown, revision: string, observed
   const aliasModels = new Map<string, Set<string>>();
   for (const id of identified) {
     identityCounts.set(id, (identityCounts.get(id) ?? 0) + 1);
-    for (const identity of new Set([id, id.split("/").pop()!])) {
+    for (const identity of new Set([id, ...catalogueAliases(id)])) {
       const identities = aliasModels.get(identity) ?? new Set<string>();
       identities.add(id);
       aliasModels.set(identity, identities);
@@ -149,8 +163,8 @@ export function parseNominalCatalogue(value: unknown, revision: string, observed
   const rates: FrozenRateRevision[] = [];
   for (const model of parsed) {
     if (identityCounts.get(model.id) !== 1) { rejectedModels++; continue; }
-    const short = model.id.split("/").pop()!;
-    const aliases = short !== model.id && aliasModels.get(short)?.size === 1 ? [{ provider: NOMINAL_CATALOGUE_PROVIDER, model: short, tier: NOMINAL_CATALOGUE_TIER }] : [];
+    const aliases = catalogueAliases(model.id).filter(alias => alias !== model.id && aliasModels.get(alias)?.size === 1)
+      .map(alias => ({ provider: NOMINAL_CATALOGUE_PROVIDER, model: alias, tier: NOMINAL_CATALOGUE_TIER }));
     const categories = Object.fromEntries(TOKEN_CATEGORIES.map(category => [category, { kind: "not_applicable" }])) as Record<TokenCategory, CategoryRate>;
     rates.push(freezeRateRevision({
       version: PRICING_VERSION, provider: NOMINAL_CATALOGUE_PROVIDER, model: model.id, tier: NOMINAL_CATALOGUE_TIER,
