@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Bookmark, Loader2, Trash2, ChevronDown, FolderPlus, Folder, Check, Search, X, SlidersHorizontal, MessageSquareText } from "lucide-react";
+import { ArrowLeft, Loader2, Trash2, FolderPlus, Folder, Check, Search, X, SlidersHorizontal, MessageSquareText } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { SavePopover } from "../components/SavePopover";
 import { RunDetail, TraceNotFound } from "../components/RunDetail";
@@ -17,7 +17,11 @@ import {
   type SavedEvent,
   updateSavedEvent,
 } from "../api/saved-runs";
-import { C } from "../utils/colors";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { EmptyPanel } from "@/components/ui/empty-panel";
+import { fieldClassName, Select } from "@/components/ui/input";
+import { Eyebrow } from "@/components/ui/typography";
 import { useScrollRestoration } from "../hooks/use-scroll-restoration";
 import { tracePath } from "../utils/navigation";
 import { useIsMobile } from "../hooks/use-mobile";
@@ -92,6 +96,8 @@ function FolderPills({ folders, selected, onSelect, onCreate, onDelete }: {
     setShowNew(false);
   };
 
+  const pill = (active: boolean) => `rp-ease flex h-7 shrink-0 items-center gap-1.5 rounded-sm border px-2 text-xs font-medium ${active ? "border-rp-wash-border bg-rp-wash text-rp-blue" : "border-transparent text-rp-ink-muted hover:bg-rp-row-hover hover:text-rp-ink"}`;
+
   return (
     <div
       className="flex items-center gap-1 overflow-x-auto sb"
@@ -106,8 +112,7 @@ function FolderPills({ folders, selected, onSelect, onCreate, onDelete }: {
       <button
         type="button"
         aria-pressed={selected === null}
-        className="min-h-7 shrink-0 rounded px-2 py-0.5 text-[10px] transition-colors"
-        style={{ background: selected === null ? "var(--rp-ink-a08)" : "transparent", color: selected === null ? C.fg3 : C.fg0 }}
+        className={pill(selected === null)}
         onClick={() => onSelect(null)}
       >All</button>
       {folders.map(f => {
@@ -115,29 +120,27 @@ function FolderPills({ folders, selected, onSelect, onCreate, onDelete }: {
         const isActive = selected === f;
         const isConfirming = confirmDelete === f;
         return (
-          <div key={f} className="relative shrink-0 flex items-center">
+          <div key={f} className="relative flex shrink-0 items-center">
             <button
               type="button"
               aria-pressed={isActive}
-              className="flex min-h-7 items-center gap-1 rounded px-2 py-0.5 text-[10px] transition-colors"
-              style={{ background: isActive ? "var(--rp-ink-a08)" : "transparent", color: isActive ? C.fg3 : C.fg0 }}
+              className={pill(isActive)}
               onClick={() => onSelect(isActive ? null : f)}
             >
-              <div className="w-2 h-2 rounded-full" style={{ background: fc }} />
+              <span aria-hidden="true" className="size-2 rounded-[2px]" style={{ background: fc }} />
               {f}
             </button>
             {isActive && (
               <button
                 type="button"
                 aria-label={isConfirming ? `Confirm delete folder ${f}` : `Delete folder ${f}`}
-                className="ml-0.5 grid min-h-7 min-w-7 place-items-center rounded hover:bg-[color:var(--rp-ink-wash)]"
-                style={{ color: isConfirming ? C.red : C.fg0 }}
+                className={`rp-ease ml-0.5 grid size-7 place-items-center rounded-sm border ${isConfirming ? "border-rp-danger-border bg-rp-danger-soft text-rp-danger" : "border-transparent text-rp-ink-muted hover:bg-rp-row-hover hover:text-rp-ink"}`}
                 onClick={() => {
                   if (isConfirming) { onDelete(f); setConfirmDelete(null); }
                   else { setConfirmDelete(f); }
                 }}
                 title={isConfirming ? "Click again to confirm" : "Delete folder"}
-              >{isConfirming ? "✓" : "×"}</button>
+              >{isConfirming ? <Check aria-hidden="true" className="size-3.5" /> : <X aria-hidden="true" className="size-3.5" />}</button>
             )}
           </div>
         );
@@ -145,8 +148,7 @@ function FolderPills({ folders, selected, onSelect, onCreate, onDelete }: {
       {showNew ? (
         <input
           autoFocus
-          className="shrink-0 px-1.5 py-0.5 rounded text-[10px] outline-none w-24"
-          style={{ background: "var(--rp-ink-a06)", color: C.fg3, border: "1px solid var(--rp-ink-a10)" }}
+          className={`${fieldClassName} h-7 w-28 shrink-0 px-2 text-xs`}
           value={newName}
           onChange={e => setNewName(e.target.value)}
           onBlur={submitNew}
@@ -154,17 +156,17 @@ function FolderPills({ folders, selected, onSelect, onCreate, onDelete }: {
             if (e.key === "Enter") submitNew();
             if (e.key === "Escape") { setNewName(""); setShowNew(false); }
           }}
-          placeholder="Folder name…"
+          placeholder="Folder name"
           aria-label="New folder name"
         />
       ) : (
         <button
           type="button"
-          className="grid min-h-7 min-w-7 shrink-0 place-items-center rounded text-[10px] transition-colors hover:bg-[color:var(--rp-ink-wash)]"
-          style={{ color: C.fg0 }}
+          className="rp-ease grid size-7 shrink-0 place-items-center rounded-sm text-rp-ink-muted hover:bg-rp-row-hover hover:text-rp-blue"
           aria-label="Add folder"
+          title="Add folder"
           onClick={() => setShowNew(true)}
-        ><FolderPlus className="h-3 w-3" /></button>
+        ><FolderPlus aria-hidden="true" className="size-3.5" /></button>
       )}
     </div>
   );
@@ -191,38 +193,32 @@ function FilterBar({ filters, agents, onUpdate, onResetSecondary }: {
   }, [popOpen]);
 
   return (
-    <div className="flex items-center gap-1.5">
-      <div className="relative flex-1 min-w-0">
-        <Search className="absolute left-1.5 top-1/2 -translate-y-1/2 h-3 w-3 pointer-events-none" style={{ color: C.fg0 }} />
+    <div className="flex items-center gap-2">
+      <div className="relative min-w-0 flex-1">
+        <Search aria-hidden="true" className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-rp-ink-muted" />
         <input
           aria-label="Search saved runs"
-          className="w-full pl-6 pr-6 py-1 rounded text-[11px] outline-none"
-          style={{ background: "var(--rp-ink-a04)", color: C.fg3, border: "1px solid var(--rp-ink-a06)" }}
-          placeholder="Search saved runs…"
+          className={`${fieldClassName} h-8 pl-8 pr-8 text-[13px]`}
+          placeholder="Search saved runs"
           value={filters.search}
           onChange={e => onUpdate({ search: e.target.value })}
         />
         {filters.search && (
           <button
             aria-label="Clear search"
-            className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-[color:var(--rp-ink-wash)]"
-            style={{ color: C.fg0 }}
+            className="rp-ease absolute right-1 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-control text-rp-ink-muted hover:bg-rp-row-hover hover:text-rp-ink"
             onClick={() => onUpdate({ search: "" })}
-          ><X className="h-2.5 w-2.5" /></button>
+          ><X aria-hidden="true" className="size-3" /></button>
         )}
       </div>
       <button
         ref={btnRef}
         aria-label="Open filters"
-        className="rp-hover-wash shrink-0 flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors"
-        style={{
-          background: activeCount > 0 ? "var(--rp-ink-a08)" : "var(--rp-ink-a04)",
-          color: activeCount > 0 ? C.fg3 : C.fg2,
-          border: "1px solid var(--rp-ink-a06)",
-        }}
+        aria-expanded={popOpen}
+        className={`rp-ease flex h-8 shrink-0 items-center gap-1.5 rounded-control border px-2.5 text-xs font-medium ${activeCount > 0 ? "border-rp-wash-border bg-rp-wash text-rp-blue" : "border-rp-line bg-white text-rp-ink hover:border-rp-wash-border hover:bg-rp-wash"}`}
         onClick={() => setPopOpen(v => !v)}
       >
-        <SlidersHorizontal className="h-3 w-3" />
+        <SlidersHorizontal aria-hidden="true" className="size-3.5" />
         Filters{activeCount > 0 ? ` · ${activeCount}` : ""}
       </button>
       {popOpen && (
@@ -231,34 +227,25 @@ function FilterBar({ filters, agents, onUpdate, onResetSecondary }: {
             (popRef as any).current = el;
             if (!el || !btnRef.current) return;
             const r = btnRef.current.getBoundingClientRect();
-            el.style.top = `${r.bottom + 4}px`;
+            el.style.top = `${r.bottom + 6}px`;
             el.style.right = `${window.innerWidth - r.right}px`;
           }}
-          className="fixed z-[9999] rounded-lg p-2.5 shadow-xl space-y-2"
-          style={{ background: C.surface, border: `1px solid ${C.border}`, boxShadow: "var(--rp-e3)", width: 220 }}
+          className="rp-pop fixed z-[9999] w-[240px] space-y-3 rounded-lg border border-rp-line bg-white p-3 shadow-e3"
         >
-          <div>
-            <div className="text-[10px] mb-1" style={{ color: C.fg0 }}>Agent</div>
-            <div className="relative">
-              <select
-                aria-label="Filter by agent"
-                className="w-full appearance-none pl-2 pr-5 py-1 rounded text-[11px] outline-none cursor-pointer"
-                style={{ background: "var(--rp-ink-a06)", color: C.fg3, border: "1px solid var(--rp-ink-a08)" }}
-                value={filters.agent}
-                onChange={e => onUpdate({ agent: e.target.value })}
-              >
-                <option value="">All agents</option>
-                {agents.map(a => <option key={a} value={a}>{a}</option>)}
-              </select>
-              <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 h-2.5 w-2.5 pointer-events-none" style={{ color: C.fg0 }} />
-            </div>
-          </div>
+          <label className="grid gap-1.5">
+            <span className="rp-field-label">Agent</span>
+            <Select
+              aria-label="Filter by agent"
+              className="h-8 text-[13px]"
+              value={filters.agent}
+              onChange={e => onUpdate({ agent: e.target.value })}
+            >
+              <option value="">All agents</option>
+              {agents.map(a => <option key={a} value={a}>{a}</option>)}
+            </Select>
+          </label>
           {activeCount > 0 && (
-            <button
-              className="w-full text-[10px] py-1 rounded transition-colors hover:bg-[color:var(--rp-ink-wash)]"
-              style={{ color: C.fg0 }}
-              onClick={onResetSecondary}
-            >Reset</button>
+            <Button type="button" variant="outline" size="sm" className="w-full" onClick={onResetSecondary}>Reset</Button>
           )}
         </div>
       )}
@@ -275,17 +262,17 @@ function ActiveFilterChips({ filters, onUpdate }: {
   if (filters.agent) chips.push({ key: "agent", label: `Agent: ${filters.agent}`, clear: () => onUpdate({ agent: "" }) });
   if (chips.length === 0) return null;
   return (
-    <div className="flex items-center gap-1 flex-wrap" data-testid="active-filter-chips">
+    <div className="flex flex-wrap items-center gap-1.5" data-testid="active-filter-chips">
       {chips.map(c => (
         <button
           key={c.key}
-          className="flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] transition-colors rp-hover-wash"
-          style={{ background: C.surface, color: C.fg2, border: `1px solid ${C.border}` }}
+          className="rp-ease flex h-6 max-w-full items-center gap-1 rounded-sm border border-rp-wash-border bg-rp-wash px-1.5 text-[11px] font-medium text-rp-blue hover:border-rp-blue"
+          title={c.label}
           onClick={c.clear}
           aria-label={`Clear ${c.key} filter`}
         >
-          {c.label}
-          <X className="h-2.5 w-2.5" />
+          <span className="truncate">{c.label}</span>
+          <X aria-hidden="true" className="size-3 shrink-0" />
         </button>
       ))}
     </div>
@@ -357,26 +344,36 @@ export function SavedPage() {
 
   const isEmpty = events.length === 0;
 
+  const emptyPanel = (
+    <EmptyPanel
+      compact={isMobile}
+      className="w-full max-w-lg animate-fade-rise"
+      eyebrow="Saved / Empty"
+      title="No saved runs"
+      description="Open a run and choose Save in its header to keep it here. Saved runs can be filed into folders and filtered by agent."
+    />
+  );
+
   return (
     <div className="relative flex h-full">
-
       {/*
         Deliberately not inert when empty. Marking the whole column inert made
         every control in it — search, Filters, All, Add folder — visible but dead
         to both pointer and keyboard, which is precisely the state in which you
-        want to reach for them. The empty-state card is pointer-events-none, so
-        nothing covers the toolbar either.
+        want to reach for them.
       */}
       <div
-        className={`${isMobile ? (selectedEvent ? "hidden" : "w-full") : "w-80"} flex-shrink-0 flex flex-col`}
-        style={{ borderRight: isMobile ? "none" : `1px solid ${C.border}` }}
+        className={`${isMobile ? (selectedEvent ? "hidden" : "w-full") : "w-80 border-r border-rp-line"} flex flex-shrink-0 flex-col bg-white`}
       >
-        <div className="space-y-2 p-3" style={{ borderBottom: `1px solid ${C.border}` }}>
-          <div className="flex items-center justify-between pl-10 lg:pl-0">
-            <h1 className="text-[14px] font-medium" style={{ color: C.fg3 }}>Saved Runs</h1>
-            <div className="text-[10px]" style={{ color: C.fg0 }}>
-              {filtered.length === events.length ? String(events.length) : `${filtered.length}/${events.length}`}
+        <div className="space-y-3 border-b border-rp-line px-5 py-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <Eyebrow marker tone="accent">Saved / Local bookmarks</Eyebrow>
+              <h1 className="rp-subsection-title mt-2">Saved Runs</h1>
             </div>
+            <Badge mono tone="outline" className="mt-0.5" aria-label={filtered.length === events.length ? `${events.length} saved runs` : `${filtered.length} of ${events.length} saved runs shown`}>
+              {filtered.length === events.length ? String(events.length) : `${filtered.length}/${events.length}`}
+            </Badge>
           </div>
 
           <FilterBar
@@ -397,7 +394,7 @@ export function SavedPage() {
           <ActiveFilterChips filters={filters} onUpdate={update} />
         </div>
 
-        <div ref={savedListRef} className="flex-1 overflow-auto p-2 space-y-0.5 sb rp-list-scroll">
+        <div ref={savedListRef} className="flex-1 space-y-1 overflow-auto bg-rp-canvas p-3 sb rp-list-scroll">
           {filtered.map(evt => (
             <SavedListItem
               key={evt.id}
@@ -409,23 +406,22 @@ export function SavedPage() {
             />
           ))}
           {filtered.length === 0 && !isEmpty && (
-            <div className="p-6 text-center text-[11px]" style={{ color: C.fg0 }}>No saved runs match your filters</div>
+            <EmptyPanel compact className="animate-fade-rise" title="No saved runs match" description="Clear the search, folder or agent filter to see every saved run." />
           )}
+          {isEmpty && isMobile && emptyPanel}
         </div>
       </div>
 
-
-      <div className={`${isMobile && !selectedEvent ? "hidden" : ""} flex-1 min-w-0 overflow-hidden ${isEmpty ? "opacity-40" : ""}`}>
+      <div className={`${isMobile && !selectedEvent ? "hidden" : ""} min-w-0 flex-1 overflow-hidden`}>
         {selectedEvent && (
           <div className="flex h-full flex-col">
             {isMobile && (
               <button
                 type="button"
-                className="flex flex-shrink-0 items-center gap-2 py-2 pl-12 pr-4 text-left text-[12px] font-medium"
-                style={{ color: C.fg3, borderBottom: `1px solid ${C.border}` }}
+                className="rp-ease flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-white px-5 py-2 text-left text-[13px] font-medium text-rp-ink hover:bg-rp-row-hover"
                 onClick={() => navigate("/saved")}
               >
-                <ArrowLeft className="h-3.5 w-3.5" />
+                <ArrowLeft aria-hidden="true" className="size-3.5 text-rp-blue" />
                 <span>Back to saved runs</span>
               </button>
             )}
@@ -439,31 +435,19 @@ export function SavedPage() {
         {!selectedEvent && selectedId && (
           <TraceNotFound runId={selectedId} backPath="/saved" />
         )}
-        {!selectedEvent && !selectedId && !isEmpty && (
-          <div className="h-full flex items-center justify-center">
-            <div className="text-center space-y-2">
-              <Bookmark className="mx-auto h-6 w-6" style={{ color: C.fg0 }} />
-              <div className="text-[11px]" style={{ color: C.fg0 }}>Select a saved run to view its trace</div>
-            </div>
+        {!selectedEvent && !selectedId && (
+          <div className="flex h-full items-center justify-center px-8 py-10">
+            {isEmpty ? emptyPanel : (
+              <EmptyPanel
+                className="w-full max-w-lg animate-fade-rise"
+                eyebrow="Saved / No run selected"
+                title="Pick a saved run"
+                description="Choose a saved run on the left to open its trace here."
+              />
+            )}
           </div>
         )}
       </div>
-
-
-      {isEmpty && (
-        // pointer-events-none because this covers the whole column, toolbar
-        // included: the card is only centred text, but the layer under it was
-        // swallowing every click on Search, Filters and Add folder.
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center z-10">
-          <div className="pointer-events-auto text-center space-y-3 max-w-xs px-4 py-6 rounded-xl" style={{ background: C.surface, border: `1px solid ${C.border}`, boxShadow: "var(--rp-e4)" }}>
-            <Bookmark className="mx-auto h-8 w-8" style={{ color: C.fg1 }} />
-            <div className="text-sm font-medium" style={{ color: C.fg3 }}>No Saved Runs</div>
-            <div className="text-[11px] leading-relaxed" style={{ color: C.fg1 }}>
-              Save runs from the Runs page to collect them here for later reference.
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -489,30 +473,22 @@ function SavedListItem({ event, selected, onClick, onRemove, onMove }: {
   const folderColor = event.folder ? getFolderColor(event.folder) : null;
   const annotationPreview = getSavedAnnotationPreview(event);
   const titleText = event.summary || event.user_input || "";
-  const titleColor = event.summary ? C.fg4 : (event.user_input ? C.fg1 : C.fg0);
 
   return (
     <div className="group relative">
       <button
         type="button"
         aria-current={selected ? "true" : undefined}
-        className="w-full rounded-lg px-3 py-2.5 pr-12 text-left transition-[background-color,border-color] duration-150 lg:pr-3"
-        style={{
-          background: selected ? C.selected : "transparent",
-          border: `1px solid ${selected ? C.selectedBorder : "transparent"}`,
-        }}
-        onMouseEnter={(e) => { if (!selected) e.currentTarget.style.background = "var(--rp-surface)"; }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = selected ? C.selected : "transparent"; }}
+        className={`rp-ease w-full rounded-lg border py-3 pl-3 pr-12 text-left ${selected ? "border-rp-wash-border bg-rp-wash" : "border-transparent hover:border-rp-line hover:bg-white"}`}
         onClick={onClick}
       >
         <div className="min-w-0 overflow-hidden">
-          <div className="text-[12px] leading-snug line-clamp-2 min-h-[32px]" style={{ color: titleColor }}>
+          <div title={titleText || undefined} className={`line-clamp-2 min-h-[36px] text-[13px] leading-[18px] ${event.summary ? "font-medium text-rp-ink" : event.user_input ? "text-rp-ink-soft" : "text-rp-ink-muted"}`}>
             {titleText || "No summary yet"}
           </div>
           {annotationPreview && (
-            <div className="mt-1.5 flex min-w-0 items-start gap-1.5 rounded-md px-2 py-1.5 text-[10px] leading-snug"
-              style={{ background: C.surface, color: C.fg2, border: `1px solid ${C.border}` }}>
-              <MessageSquareText className="mt-0.5 h-3 w-3 shrink-0" style={{ color: C.fg1 }} />
+            <div className="mt-2 flex min-w-0 items-start gap-1.5 rounded-sm border border-rp-line-muted bg-rp-canvas-blue px-2 py-1.5 text-[11px] leading-4 text-rp-ink-soft">
+              <MessageSquareText aria-hidden="true" className="mt-px size-3 shrink-0 text-rp-ink-muted" />
               <span className="line-clamp-2">
                 {annotationPreview.note
                   ? `${annotationKindLabel(annotationPreview.kind)}: ${annotationPreview.note}`
@@ -520,47 +496,33 @@ function SavedListItem({ event, selected, onClick, onRemove, onMove }: {
               </span>
             </div>
           )}
-          <div className="flex items-center gap-1.5 mt-1.5 overflow-hidden">
+          <div className="mt-2 flex items-center gap-2 overflow-hidden">
             {event.folder && (
-              <span className="text-[9px] font-medium px-1.5 py-px rounded-full shrink-0 flex items-center gap-1"
-                style={{ background: `${folderColor}18`, color: C.fg2, border: `1px solid ${folderColor}40` }}>
-                <div className="w-1.5 h-1.5 rounded-full" style={{ background: folderColor! }} />
+              <span className="flex shrink-0 items-center gap-1 rounded-sm border border-rp-line bg-white px-1.5 py-px text-[11px] font-medium text-rp-ink-soft">
+                <span aria-hidden="true" className="size-1.5 rounded-[1px]" style={{ background: folderColor! }} />
                 {event.folder}
               </span>
             )}
-            <span className="text-[10px] truncate" style={{ color: C.fg0 }}>{event.event_name}</span>
-            <span className="text-[9px] flex-shrink-0 ml-auto" style={{ color: C.fg0 }}>{timeStr}</span>
+            <span title={event.event_name} className="rp-meta truncate">{event.event_name}</span>
+            <span className="rp-meta ml-auto flex-shrink-0">{timeStr}</span>
           </div>
         </div>
       </button>
-      <div
-        className="pointer-events-none absolute top-1 bottom-1 right-1 w-20 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity rounded-r-lg"
-        style={{
-          background: "linear-gradient(to right, var(--rp-canvas-fade-0) 0%, var(--rp-canvas-fade-1) 55%, var(--rp-canvas-fade-2) 100%)",
-        }}
-      />
-      <div className="absolute top-1/2 -translate-y-1/2 right-1.5 z-10 flex flex-col items-center gap-0.5 opacity-100 transition-opacity lg:opacity-0 lg:group-hover:opacity-100 lg:focus-within:opacity-100">
+      <div className="absolute right-1.5 top-1/2 z-10 flex -translate-y-1/2 flex-col items-center gap-0.5 opacity-100 transition-opacity duration-250 ease-standard lg:opacity-0 lg:focus-within:opacity-100 lg:group-hover:opacity-100">
         <button
           type="button"
           aria-label="Move saved run to folder"
           ref={moveBtnRef}
-          className="grid min-h-6 min-w-6 place-items-center rounded transition-colors hover:bg-[color:var(--rp-ink-wash)]"
-          style={{ color: C.fg2 }}
+          className="rp-ease grid size-7 place-items-center rounded-sm text-rp-ink-muted hover:bg-rp-row-hover hover:text-rp-blue"
           onClick={(e) => { e.stopPropagation(); setConfirmRemove(false); setMoveOpen(v => !v); }}
           title="Move to folder"
         >
-          <Folder className="h-3 w-3" />
+          <Folder aria-hidden="true" className="size-3.5" />
         </button>
         <button
           type="button"
           aria-label={confirmRemove ? "Confirm remove saved run" : "Remove saved run"}
-          className="grid min-h-6 min-w-6 place-items-center rounded transition-colors"
-          style={{
-            color: confirmRemove ? C.red : C.fg2,
-            background: confirmRemove ? "color-mix(in srgb, var(--rp-danger) 10%, white 90%)" : "transparent",
-          }}
-          onMouseEnter={(e) => { if (!confirmRemove) e.currentTarget.style.background = "var(--rp-ink-a10)"; }}
-          onMouseLeave={(e) => { if (!confirmRemove) e.currentTarget.style.background = "transparent"; }}
+          className={`rp-ease grid size-7 place-items-center rounded-sm ${confirmRemove ? "bg-rp-danger-soft text-rp-danger" : "text-rp-ink-muted hover:bg-rp-danger-soft hover:text-rp-danger"}`}
           onClick={(e) => {
             e.stopPropagation();
             if (confirmRemove) { setConfirmRemove(false); onRemove(); }
@@ -568,7 +530,7 @@ function SavedListItem({ event, selected, onClick, onRemove, onMove }: {
           }}
           title={confirmRemove ? "Click again to confirm delete" : "Remove"}
         >
-          <Trash2 className="h-3 w-3" />
+          <Trash2 aria-hidden="true" className="size-3.5" />
         </button>
       </div>
       {moveOpen && (
@@ -609,8 +571,8 @@ function SavedRunDetail({ event }: { event: SavedEvent }) {
   }, [event.id]);
 
   if (hasLocalRun === null) {
-    return <div className="h-full flex items-center justify-center gap-2" style={{ color: C.fg1 }}>
-      <Loader2 className="h-4 w-4 animate-spin" /> Loading...
+    return <div role="status" className="flex h-full items-center justify-center gap-2 text-[13px] text-rp-ink-muted">
+      <Loader2 aria-hidden="true" className="size-4 animate-spin text-rp-blue motion-reduce:animate-none" /> Loading saved trace…
     </div>;
   }
 
@@ -627,18 +589,20 @@ function SavedRunDetail({ event }: { event: SavedEvent }) {
 
 function SavedTraceUnavailable({ event }: { event: SavedEvent }) {
   return (
-    <div className="flex h-full items-center justify-center px-6">
-      <div className="max-w-md text-center">
-        <div className="text-[15px] font-medium" style={{ color: C.fg4 }}>
-          Saved trace not available locally
-        </div>
-        <div className="mt-2 text-sm leading-relaxed" style={{ color: C.fg1 }}>
-          This saved entry does not have a matching local trace in the current workspace.
-        </div>
-        <code className="mt-3 block truncate rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-ink-wash)] px-2 py-1.5 text-[11px]" style={{ color: C.fg0 }}>
-          {event.id}
-        </code>
-      </div>
+    <div className="flex h-full items-center justify-center px-6 py-10">
+      <EmptyPanel
+        className="w-full max-w-lg animate-fade-rise"
+        eyebrow="Saved / Trace missing"
+        title="Saved trace not available locally"
+        description={
+          <>
+            <p>This saved entry does not have a matching local trace in the current workspace.</p>
+            <code title={event.id} className="rp-meta mt-4 block truncate rounded-control border border-rp-line bg-rp-canvas-blue px-3 py-2 text-rp-ink">
+              {event.id}
+            </code>
+          </>
+        }
+      />
     </div>
   );
 }
