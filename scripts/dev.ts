@@ -4,14 +4,16 @@ import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-export function devCommands(repoRoot = REPO_ROOT) {
+export function devCommands(repoRoot = REPO_ROOT, uiPort = process.env.RUNPHANTOM_UI_PORT ?? "5948") {
   return [
-    { label: "daemon", cmd: [process.execPath, "--watch", "src/index.ts", "serve"], cwd: repoRoot },
+    // Run links built from the daemon origin (the examples' "Open in Run Phantom")
+    // are forwarded here while app/dist is not built.
+    { label: "daemon", cmd: [process.execPath, "--watch", "src/index.ts", "serve"], cwd: repoRoot, env: { RUNPHANTOM_DEV_UI_ORIGIN: `http://localhost:${uiPort}` } },
     { label: "UI", cmd: [process.execPath, "x", "vite", "--force"], cwd: path.join(repoRoot, "app") },
   ];
 }
 
-export async function runDev(commands = devCommands(), shutdownTimeout = 5_000): Promise<void> {
+export async function runDev(commands: { label: string; cmd: string[]; cwd: string; env?: Record<string, string> }[] = devCommands(), shutdownTimeout = 5_000): Promise<void> {
   const processes: { label: string; process: Bun.Subprocess }[] = [];
   const useProcessGroups = process.platform !== "win32";
   const signalChild = (child: Bun.Subprocess, signal: NodeJS.Signals) => {
@@ -48,7 +50,7 @@ export async function runDev(commands = devCommands(), shutdownTimeout = 5_000):
       const child = Bun.spawn({
         cmd: command.cmd,
         cwd: command.cwd,
-        env: process.env,
+        env: { ...process.env, ...command.env },
         stdin: "inherit",
         stdout: "inherit",
         stderr: "inherit",

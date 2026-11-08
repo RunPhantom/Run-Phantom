@@ -2,7 +2,8 @@ import { CaptureVisibilityDetails } from "./CaptureVisibilityDetails";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Pencil } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { argsPreview, displayPayload, fmt, MAX_INLINE_PAYLOAD, plural, trunc, tryJson } from "../utils/helpers";
+import { argsPreview, displayPayload, fmt, MAX_INLINE_PAYLOAD, plural, spanErrorReason, trunc, tryJson } from "../utils/helpers";
+import { parseSpanAttributes, spanFinishReasons, spanReasoningTokens, stoppedEarlyReason } from "../utils/span-evidence";
 import type { LiveEvent, Span, SubAgent } from "../utils/types";
 import { Button } from "./Button";
 import { FlameTimeline } from "./FlameTimeline";
@@ -27,6 +28,7 @@ type ChatItem =
   | { type: "user_msg"; content: string; parts?: string[]; images?: string[]; time: number; independentObservation?: boolean }
   | { type: "system_msg"; content: string; time: number; prevMessages?: { role: string; content: string }[] }
   | { type: "llm_out"; span: Span; time: number }
+  | { type: "llm_stop"; span: Span; error: string | null; reason: string | null; reasoningOnly: boolean; time: number }
   | LiveToolItem
   | { type: "reasoning"; content: string; time: number }
   | { type: "text_delta"; content: string; time: number };
@@ -538,6 +540,17 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
         }
       } else if (span.output_payload) {
         all.push({ type: "llm_out", span, time: span.end_time_ms });
+      } else {
+        // No answer text: say why when the span reports it, instead of leaving
+        // the turn blank after the user's message.
+        const error = span.status === "ERROR" ? spanErrorReason(span) || null : null;
+        const attrs = parseSpanAttributes(span.attributes);
+        const reason = stoppedEarlyReason(spanFinishReasons(attrs));
+        const reasoning = spanReasoningTokens(attrs);
+        if (error || reason) {
+          all.push({ type: "llm_stop", span, error, reason, time: span.end_time_ms,
+            reasoningOnly: reasoning !== null && span.output_tokens != null && span.output_tokens > 0 && reasoning >= span.output_tokens });
+        }
       }
     }
 
@@ -591,7 +604,7 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
     // shares its start_time with the first tool span on fast turns).
     const chatItemPriority = (t: ChatItem["type"]): number => {
       if (t === "user_msg" || t === "system_msg") return 0;
-      if (t === "llm_out") return 2;
+      if (t === "llm_out" || t === "llm_stop") return 2;
       return 1;
     };
     all.sort((a, b) => (a.time - b.time) || (chatItemPriority(a.type) - chatItemPriority(b.type)));
@@ -737,6 +750,19 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
               {!isErr && content !== null && (
                 <LLMOutput content={content} md={md} />
               )}
+            </div>
+          );
+        }
+
+        if (item.type === "llm_stop") {
+          return (
+            <div key={`ls${i}`} className="px-4 py-2" data-testid="llm-stop">
+              {item.error
+                ? <div className="max-w-[85%]"><LLMErrorBanner content={item.error} /></div>
+                : <p role="status" className="max-w-[85%] text-[13px] leading-6 text-rp-ink-muted">
+                    No answer text. Generation stopped early: <span className="font-mono text-rp-ink">{item.reason}</span>
+                    {item.reasoningOnly && item.span.output_tokens != null ? `. All ${item.span.output_tokens.toLocaleString()} output tokens were reasoning.` : "."}
+                  </p>}
             </div>
           );
         }

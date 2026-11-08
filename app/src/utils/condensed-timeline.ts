@@ -36,6 +36,31 @@ export interface CondensedTimeline {
   invocations: Array<{ rootSpanId: string; name: string; entryKeys: string[] }>;
 }
 
+/**
+ * Keeps the spans a view draws and re-links each one to its nearest kept
+ * ancestor. Leaving out wrapper spans (an agent root, an internal step) is a
+ * presentation choice, so it must not surface as missing parent evidence. A
+ * parent that is absent from the captured population, duplicated or part of a
+ * cycle keeps the original link and stays unavailable or ambiguous.
+ */
+export function linkToVisibleAncestors(spans: readonly Span[], keep: (span: Span) => boolean): Span[] {
+  const byId = new Map<string, Span | null>();
+  for (const span of spans) byId.set(span.id, byId.has(span.id) ? null : span);
+  const kept = spans.filter(keep);
+  const keptIds = new Set(kept.map(span => span.id));
+  return kept.map(span => {
+    let parent = span.parent_span_id;
+    const seen = new Set<string>([span.id]);
+    while (parent && !keptIds.has(parent)) {
+      const ancestor = byId.get(parent);
+      if (!ancestor || seen.has(parent)) return span;
+      seen.add(parent);
+      parent = ancestor.parent_span_id;
+    }
+    return parent === span.parent_span_id ? span : { ...span, parent_span_id: parent ?? null };
+  });
+}
+
 type Lane = { row: number; start: number; end: number };
 export function hasTimelineInterval(span: Span): boolean {
   // The served DTO uses zero for absent OTLP timestamps and does not retain presence.

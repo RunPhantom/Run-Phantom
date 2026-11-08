@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import { displayPayload, fmt, plural, tryJson } from "../utils/helpers";
 import { setMeridian, clearMeridian } from "../utils/meridian";
 import type { Span, SubAgent } from "../utils/types";
-import { buildCondensedTimeline, hasTimelineInterval, type TimelineEntry } from "../utils/condensed-timeline";
+import { buildCondensedTimeline, hasTimelineInterval, linkToVisibleAncestors, type TimelineEntry } from "../utils/condensed-timeline";
 import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
 
 // Half the width of a typical axis label at 12px mono. A label
@@ -179,7 +179,7 @@ function SpanTooltip({
 }
 
 export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { spans: Span[]; subAgents?: SubAgent[]; onDiveIn?: (rootSpanId: string) => void }) {
-  const vizSpans = useMemo(() => spans.filter(s => s.span_type === "TRACE" || s.span_type === "TOOL_CALL" || s.span_type?.includes("LLM")), [spans]);
+  const vizSpans = useMemo(() => linkToVisibleAncestors(spans, s => s.span_type === "TRACE" || s.span_type === "TOOL_CALL" || !!s.span_type?.includes("LLM")), [spans]);
   const subAgentSpanIds = useMemo(() => new Set(subAgents.flatMap(a => a.span_ids)), [subAgents]);
   const undrawnParentIds = useMemo(() => {
     const drawn = new Set(vizSpans);

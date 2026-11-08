@@ -32,6 +32,19 @@ async function seedSearchRuns(request: APIRequestContext, url: string, count = 3
   expect(response.ok(), `Seed search traces (HTTP ${response.status()})`).toBe(true);
 }
 
+test("a new query moves the page's own selection to a matching run", async ({ page, request, runPhantom }) => {
+  await seedSearchRuns(request, runPhantom.url);
+  await page.goto(`${runPhantom.url}/search`);
+  await expect(page).toHaveURL(new RegExp(`/search/${runId(0)}$`));
+  await page.getByRole("textbox", { name: "Search captured runs", exact: true }).fill("cobalt-only");
+  await expect(page.locator("[data-run-id]")).toHaveCount(1);
+  await expect(page).toHaveURL(new RegExp(`/search/${runId(1)}\\?q=cobalt-only$`));
+  await page.getByRole("textbox", { name: "Search captured runs", exact: true }).fill("no-run-has-this-zz");
+  await expect(page.getByText("No matching runs", { exact: true })).toBeVisible();
+  await expect(page.getByText("No result to open", { exact: true })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/search\\?q=no-run-has-this-zz$`));
+});
+
 test("search finds payload-only evidence and persists filters through a direct link", async ({ page, request, runPhantom }) => {
   await seedSearchRuns(request, runPhantom.url);
   await page.goto(`${runPhantom.url}/search`);

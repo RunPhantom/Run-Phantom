@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildCondensedTimeline, MAX_TIMELINE_SPANS, MAX_TIMELINE_MEMBERSHIPS, MAX_TIMELINE_WINDOW_MS } from "../app/src/utils/condensed-timeline";
+import { buildCondensedTimeline, linkToVisibleAncestors, MAX_TIMELINE_SPANS, MAX_TIMELINE_MEMBERSHIPS, MAX_TIMELINE_WINDOW_MS } from "../app/src/utils/condensed-timeline";
 import type { Span } from "../app/src/utils/types";
 
 function span(id: string, start = 0, end = 1, parent: string | null = null): Span {
@@ -106,5 +106,41 @@ describe("bounded compact timeline", () => {
   test("capped late points retain separate rows rather than covering other pinned IDs", () => {
     const capped = buildCondensedTimeline([span("first", 0, 1), span("late-a", MAX_TIMELINE_WINDOW_MS + 1, MAX_TIMELINE_WINDOW_MS + 2), span("late-b", MAX_TIMELINE_WINDOW_MS + 3, MAX_TIMELINE_WINDOW_MS + 4)]);
     expect(capped.entries[1].row).not.toBe(capped.entries[2].row); expect(capped.windowCapped).toBe(true); finite(capped);
+  });
+});
+
+function typed(id: string, type: string, parent: string | null, start = 0, end = 10): Span {
+  return { ...span(id, start, end, parent), name: id, span_type: type };
+}
+
+describe("trajectory parent links", () => {
+  const visible = (item: Span) => item.span_type === "TOOL_CALL" || item.span_type.includes("LLM");
+
+  test("children of a filtered agent root are linked roots, not missing evidence", () => {
+    const spans = [typed("root", "AGENT_ROOT", null), typed("llm-1", "LLM_GENERATION", "root", 0, 4), typed("tool", "TOOL_CALL", "root", 4, 5), typed("llm-2", "LLM_GENERATION", "root", 5, 10)];
+    const layout = buildCondensedTimeline(linkToVisibleAncestors(spans, visible));
+    expect(layout.entries.map(entry => entry.span.id)).toEqual(["llm-1", "tool", "llm-2"]);
+    expect(layout.unavailableParentCount).toBe(0);
+    expect(layout.entries.every(entry => entry.parentState === "root")).toBe(true);
+    expect(spans[1].parent_span_id).toBe("root");
+  });
+
+  test("a hidden intermediate span links a child to its nearest drawn ancestor", () => {
+    const spans = [typed("llm", "LLM_GENERATION", null), typed("step", "INTERNAL", "llm"), typed("tool", "TOOL_CALL", "step")];
+    const layout = buildCondensedTimeline(linkToVisibleAncestors(spans, visible));
+    expect(layout.entries.find(entry => entry.span.id === "tool")).toMatchObject({ parentState: "linked", depth: 1 });
+  });
+
+  test("a parent that was never captured stays unavailable", () => {
+    const spans = [typed("llm", "LLM_GENERATION", "killed-root"), typed("tool", "TOOL_CALL", "killed-root")];
+    expect(buildCondensedTimeline(linkToVisibleAncestors(spans, visible)).unavailableParentCount).toBe(2);
+  });
+
+  test("cyclic or duplicated hidden ancestors keep the original link", () => {
+    const cyclic = [typed("a", "INTERNAL", "b"), typed("b", "INTERNAL", "a"), typed("tool", "TOOL_CALL", "a")];
+    expect(linkToVisibleAncestors(cyclic, visible)[0].parent_span_id).toBe("a");
+    const duplicated = [typed("dup", "INTERNAL", null), typed("dup", "INTERNAL", null), typed("tool", "TOOL_CALL", "dup")];
+    expect(linkToVisibleAncestors(duplicated, visible)[0].parent_span_id).toBe("dup");
+    expect(buildCondensedTimeline(linkToVisibleAncestors(duplicated, visible)).unavailableParentCount).toBe(1);
   });
 });
