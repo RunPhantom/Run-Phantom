@@ -141,7 +141,9 @@ test("release audit: run detail is usable at a 390px viewport", async ({ page, r
   const backLabelBox = await page.getByText("Back to runs", { exact: true }).boundingBox();
   expect(sidebarToggleBox).not.toBeNull();
   expect(backLabelBox).not.toBeNull();
-  expect(backLabelBox!.x).toBeGreaterThanOrEqual(sidebarToggleBox!.x + sidebarToggleBox!.width + 4);
+  const clearsToggle = backLabelBox!.y >= sidebarToggleBox!.y + sidebarToggleBox!.height
+    || backLabelBox!.x >= sidebarToggleBox!.x + sidebarToggleBox!.width + 4;
+  expect(clearsToggle, "the back label must not sit under the sidebar trigger").toBe(true);
 
   for (const name of ["Annotate", "Debug", "Download", "Save", "Replay", "More actions"]) {
     const button = page.getByRole("button", { name, exact: true });
