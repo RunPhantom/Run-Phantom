@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { ExperimentSummary } from "../../api/evaluations";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Field, Select } from "../verification/PredicateEditor";
+import { Field, Select } from "./field";
 
 const PAGE_SIZE = 8;
 export function ExperimentIndex({ experiments, selectedId, onOpen }: { experiments: ExperimentSummary[]; selectedId: string; onOpen: (id: string) => void }) {

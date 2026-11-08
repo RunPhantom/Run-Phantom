@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { DatasetRevision } from "../../../../src/evaluations/protocol";
 import type { DatasetExecution as Execution, ExecutionDraft, AttemptStatus } from "../../../../src/evaluations/execution-protocol";
 import { Button } from "../ui/button";
-import { Field, Select } from "../verification/PredicateEditor";
+import { Field, Select } from "./field";
 
 export interface ExecutionCapabilities {
   enabled: boolean;
@@ -58,7 +58,7 @@ function DatasetExecutionForm({ revision, client }: { revision: DatasetRevision;
     const url = URL.createObjectURL(new Blob([JSON.stringify(execution, null, 2)], { type: "application/json" }));
     const anchor = document.createElement("a"); anchor.href = url; anchor.download = `dataset-execution-${execution.id}.json`; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 0);
   }
-  return <section aria-label="Explicit dataset execution" className="space-y-4 border-t border-[color:var(--rp-border)] pt-5">
+  return <section aria-label="Explicit dataset execution" className="space-y-4 border-t border-rp-line-muted pt-5">
     <h2 className="text-sm font-semibold">Run the frozen dataset</h2>
     <p className="max-w-2xl text-xs leading-relaxed text-[color:var(--rp-ink-soft)]">Execute revision {revision.version} of {revision.datasetName} through a locally registered agent endpoint. This starts new agent work and may invoke tools. Grading existing captured runs remains a separate action.</p>
     <label className="flex items-start gap-2 text-xs"><input type="checkbox" checked={enabled} disabled={busy || active} onChange={event => optIn(event.target.checked)} /><span>Enable explicit execution for this dataset</span></label>
@@ -84,7 +84,7 @@ function DatasetExecutionForm({ revision, client }: { revision: DatasetRevision;
       <p role="status">Execution {execution.status} · {execution.cases.length} frozen cases · revision {execution.dataset.version}</p>
       <p className="break-all">Execution identity: {execution.id}</p>
       <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={busy} onClick={() => void perform(signal => client.get(execution.id, signal), setExecution)}>Refresh execution</Button>{active && <Button variant="outline" disabled={busy} onClick={() => void perform(signal => client.cancel(execution.id, signal), setExecution)}>Cancel remaining work</Button>}<Button variant="outline" onClick={download}>Download execution JSON</Button></div>
-      <ol className="space-y-4">{execution.cases.map(item => <li key={item.case.id} className="space-y-2 border-b border-[color:var(--rp-border)] pb-3"><h3 className="font-semibold">{item.case.name}</h3><details><summary className="cursor-pointer">Frozen case input</summary><pre className="mt-2 whitespace-pre-wrap break-words">{item.case.input ?? "Unavailable"}</pre></details><p>Captured grading: {item.grading.status}. {item.grading.reason}</p><ol className="space-y-2">{item.attempts.map(attempt => <li key={attempt.id} className="space-y-1"><p>Attempt {attempt.index + 1}: {attemptLabels[attempt.status]} · {attempt.sideEffects === "not_dispatched" ? "No dispatch" : "External side effects may have occurred"}</p><p className="break-words">{attempt.reason}</p><p className="break-all">Attempt identity: {attempt.id}</p><p>Actual cost: {attempt.actualCostUsd === null ? "Unavailable" : `${attempt.actualCostUsd} USD`}</p>{attempt.runId && <a className="break-all underline" href={`/runs/${encodeURIComponent(attempt.runId)}`}>Open newly captured run</a>}</li>)}</ol></li>)}</ol>
+      <ol className="space-y-4">{execution.cases.map(item => <li key={item.case.id} className="space-y-2 border-b border-[color:var(--rp-border)] pb-3"><h3 className="font-semibold">{item.case.name}</h3><details><summary className="cursor-pointer">Frozen case input</summary><pre className="mt-2 whitespace-pre-wrap break-words">{item.case.input ?? "Unavailable"}</pre></details><p>Captured grading: {item.grading.status}. {item.grading.reason}</p><ol className="space-y-2">{item.attempts.map(attempt => <li key={attempt.id} className="space-y-1"><p>Attempt {attempt.index + 1}: {attemptLabels[attempt.status]} · {attempt.sideEffects === "not_dispatched" ? "No dispatch" : "External side effects may have occurred"}</p><p className="break-words">{attempt.reason}</p><p className="break-all">Attempt identity: {attempt.id}</p><p>Actual cost: {attempt.actualCostUsd === null ? "Unavailable" : `${attempt.actualCostUsd} USD`}</p>{attempt.runId && <a className="break-all" href={`/runs/${encodeURIComponent(attempt.runId)}`}>Open newly captured run</a>}</li>)}</ol></li>)}</ol>
     </div>}
   </section>;
 }

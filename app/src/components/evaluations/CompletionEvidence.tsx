@@ -3,7 +3,7 @@ import { claimsApi, CompletionRequestError } from "../../api/claims";
 import type { CompletionHistory, CompletionSavedReport } from "../../../../src/claims/protocol";
 import type { EvidenceSetView } from "../../../../src/evaluations/evidence-protocol";
 import { Button } from "../ui/button";
-import { Field, Select } from "../verification/PredicateEditor";
+import { Field, Select } from "./field";
 import { Input } from "../ui/input";
 import { textareaClass } from "./RuleEditor";
 
@@ -68,7 +68,7 @@ export function CompletionEvidence({ view, onRefusal }: { view: EvidenceSetView;
   }
   const report = saved?.report;
   return <section className="evidence-panel completion-evidence" aria-label="Reported completion evidence">
-    <div className="evidence-row"><div><p className="evidence-eyebrow">OPTIONAL · REPORT ONLY</p><h2>Reported completion evidence</h2></div><span className="evidence-badge">{enabled ? "Opt-in enabled" : "Disabled"}</span></div>
+    <div className="evidence-row"><div><p className="evidence-eyebrow">OPTIONAL · REPORT ONLY</p><h2>Reported completion evidence</h2></div><span className="evidence-badge" data-tone={enabled ? "accent" : "neutral"}>{enabled ? "Opt-in enabled" : "Disabled"}</span></div>
     <p className="evidence-meta">Locate support for a summary. Prose and producer reports do not prove execution, authenticity or full-set completion. Captured output and machine verdicts stay unchanged.</p>
     <label className="evidence-checkbox"><input type="checkbox" checked={enabled} onChange={event => consent(event.target.checked)} />Enable completion observer on this browser</label>
     {!enabled && <p className="evidence-meta">No summaries are processed while disabled. Retained observations remain read-only and can be deliberately opened below.</p>}

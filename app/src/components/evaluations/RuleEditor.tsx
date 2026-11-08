@@ -1,10 +1,10 @@
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
-import { Field, Select } from "../verification/PredicateEditor";
+import { Input, fieldClassName } from "../ui/input";
+import { Field, Select } from "./field";
 import type { Rule } from "../../api/evaluations";
 import { LossyJsonNumberError, parseJsonEvidence } from "../../../../src/evaluations/json-evidence";
 
-export const textareaClass = "min-h-20 w-full rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] p-2 text-xs text-[color:var(--rp-ink)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sidebar-ring";
+export const textareaClass = `${fieldClassName} min-h-20 resize-y py-2 leading-5`;
 export interface RuleDraft { kind: Rule["kind"]; operation: string; value: string; path: string; expected: string; names: string; name: string; match: "any" | "all"; metric: Extract<Rule, { kind: "budget" }>["metric"]; max: string; provider: "openai" | "anthropic"; model: string; rubric: string; threshold: string }
 export function emptyRule(): RuleDraft { return { kind: "output", operation: "equals", value: "", path: "", expected: "null", names: "", name: "", match: "all", metric: "totalTokens", max: "0", provider: "openai", model: "", rubric: "", threshold: "0.8" }; }
 export function ruleDraft(rule: Rule): RuleDraft {

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Field, Select } from "../verification/PredicateEditor";
+import { Field, Select } from "./field";
 import { buildRule, emptyRule, ruleDraft, ruleLabel, RuleEditor, textareaClass } from "./RuleEditor";
 import { ResponseSpanSelect, SnapshotPreview } from "./SnapshotPreview";
 import { evaluationsApi, type DatasetRevision, type DatasetCaseDraft, type Snapshot } from "../../api/evaluations";
@@ -54,7 +54,7 @@ export function DatasetEditor({ revision, latestVersion, initialRunId, onSaved }
       {overrideInput && <Field label="Reference input" hint="Candidate input must match this exactly, except line endings. This is an explicit manual override."><textarea className={textareaClass} maxLength={16384} value={input} onChange={event => setInput(event.target.value)} /></Field>}
       <Field label="Tags (optional)" hint="Up to eight comma-separated tags."><Input value={tags} onChange={event => setTags(event.target.value)} /></Field>
       {rules.map((draft, index) => <RuleEditor key={index} index={index} draft={draft} onChange={value => setRules(previous => previous.map((item, at) => at === index ? value : item))} onRemove={rules.length > 1 ? () => setRules(previous => previous.filter((_, at) => at !== index)) : undefined} />)}
-      <div className="flex flex-wrap gap-2"><Button variant="ghost" disabled={rules.length >= 8} onClick={() => setRules(previous => [...previous, emptyRule()])}>Add rule</Button><Button disabled={(!snapshot && !!sourceRunId && editing === null) || (cases.length >= 50 && editing === null)} onClick={addCase}>{editing === null ? "Add case" : "Update case draft"}</Button></div>
+      <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={rules.length >= 8} onClick={() => setRules(previous => [...previous, emptyRule()])}>Add rule</Button><Button disabled={(!snapshot && !!sourceRunId && editing === null) || (cases.length >= 50 && editing === null)} onClick={addCase}>{editing === null ? "Add case" : "Update case draft"}</Button></div>
     </fieldset>
     <Button disabled={busy || historical || !dirty} onClick={() => void perform(async () => { const next = await evaluationsApi.saveRevision(revision.datasetId, revision.version, cases); onSaved(next); })}>Save new revision</Button>
     {busy && <p role="status" className="text-xs">Updating dataset…</p>}
