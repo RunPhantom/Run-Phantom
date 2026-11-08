@@ -75,6 +75,32 @@ def span(
     return result
 
 
+def trace_json(value: object) -> str:
+    """Serializes like JSON.stringify so the same prompt from the TypeScript and Python examples is the same captured input."""
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+
+
+def usage_attributes(result) -> dict:
+    """Usage as OpenAI reports it; cached and reasoning counts are subsets of the totals."""
+    attributes: dict = {"gen_ai.response.model": result.model}
+    if result.service_tier:
+        attributes["runphantom.usage.tier"] = result.service_tier
+    usage = result.usage
+    if usage is None:
+        return attributes
+    attributes["gen_ai.usage.input_tokens"] = usage.prompt_tokens
+    attributes["gen_ai.usage.output_tokens"] = usage.completion_tokens
+    cached = getattr(usage.prompt_tokens_details, "cached_tokens", None)
+    if cached is not None:
+        attributes["gen_ai.usage.cache_read.input_tokens"] = cached
+        attributes["runphantom.usage.input_includes_cache"] = True
+    reasoning = getattr(usage.completion_tokens_details, "reasoning_tokens", None)
+    if reasoning is not None:
+        attributes["gen_ai.usage.output_tokens.reasoning"] = reasoning
+        attributes["runphantom.usage.output_includes_reasoning"] = True
+    return attributes
+
+
 async def export_trace(spans: list[dict]) -> None:
     body = {
         "resourceSpans": [
@@ -222,8 +248,8 @@ async def chat(request: web.Request) -> web.Response:
                     "runphantom.span.kind": "agent_root",
                     "runphantom.event.id": event_id,
                     "runphantom.event.name": "python-openai-chat",
-                    "runphantom.input": json.dumps(messages),
-                    "runphantom.output": json.dumps(output),
+                    "runphantom.input": trace_json(messages),
+                    "runphantom.output": trace_json(output),
                 },
             ),
             span(
@@ -236,11 +262,10 @@ async def chat(request: web.Request) -> web.Response:
                     "runphantom.span.kind": "llm_call",
                     "gen_ai.operation.name": "chat",
                     "gen_ai.provider.name": "openai",
-                    "gen_ai.request.model": result.model,
-                    "gen_ai.input.messages": json.dumps(messages),
-                    "gen_ai.output.messages": json.dumps([output]),
-                    "gen_ai.usage.input_tokens": usage.prompt_tokens if usage else 0,
-                    "gen_ai.usage.output_tokens": usage.completion_tokens if usage else 0,
+                    "gen_ai.request.model": MODEL,
+                    "gen_ai.input.messages": trace_json(messages),
+                    "gen_ai.output.messages": trace_json([output]),
+                    **usage_attributes(result),
                 },
                 parent_span_id=root_id,
             ),
@@ -250,8 +275,8 @@ async def chat(request: web.Request) -> web.Response:
     except Exception as error:
         detail = str(error)
         ended = time.time_ns()
-        input_json = json.dumps(messages)
-        output_json = json.dumps({"error": detail})
+        input_json = trace_json(messages)
+        output_json = trace_json({"error": detail})
         failed_spans = [
             span(
                 trace_id,

@@ -6,7 +6,7 @@ import { freezeRateRevision } from "../pricing/rates";
 import { PromptRegistry, type PromptOwner } from "./registry";
 import { promptId, promptInteger, promptObject, promptText, type PromptCapability, type PromptFence } from "./protocol";
 import { COMPARISON_LIMITS as L, COMPARISON_MODELS, ComparisonError, comparisonFamily, comparisonJson, comparisonTarget, parseComparisonRequest, freezeComparisonRequest, type ComparisonProvider } from "./comparison-protocol";
-import { reserveComparisonAttempt, estimateComparisonUsage } from "./spend-ledger";
+import { ceilMicrousd, reserveComparisonAttempt, estimateComparisonUsage } from "./spend-ledger";
 import type { acquireComparisonOwner, ComparisonOwnerFence } from "./comparison-owner";
 import type { ComparisonProviderResult } from "./providers";
 
@@ -272,7 +272,7 @@ export class ComparisonStore {
         if (row.provider === "anthropic") for (const value of [observations.cacheReadTokens, observations.cacheWriteTokens]) if (known(value)) inputMinimum += value;
         if (!Number.isSafeInteger(inputMinimum) || inputMinimum > reservation.inputTokenCeiling || known(observations.outputTokens) && observations.outputTokens > receipt.request!.options.maxOutputTokens) breach = 1;
         if (total !== null && Number.isFinite(total) && total >= 0) {
-          observed = usdText(total); const amount = Math.ceil(total * 1000000); breach = breach || (amount > row.reserveMicrousd ? 1 : 0);
+          observed = usdText(total); const amount = ceilMicrousd(total * 1000000); breach = breach || (amount > row.reserveMicrousd ? 1 : 0);
           if (Number.isSafeInteger(amount) && amount <= chargeCap) { charge = amount; state = "measured_estimate"; }
           else { state = "unrepresentable_overage"; breach = 1; }
         }
