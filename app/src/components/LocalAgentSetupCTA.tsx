@@ -49,7 +49,7 @@ function useSetupPromptCopy() {
 
 function InlineSetupCTA({ eventName, title, description }: { eventName?: string; title?: string; description?: React.ReactNode }) {
   const { copied, copyError, copy } = useSetupPromptCopy();
-  const resolvedTitle = title ?? `Set Up Agent Replay${eventName ? ` for "${eventName}"` : ""}`;
+  const resolvedTitle = title ?? `Set up agent replay${eventName ? ` for "${eventName}"` : ""}`;
   const resolvedDescription = description ?? "Copy the setup prompt and paste it into your AI coding tool to wire up replay.";
 
   return (
@@ -69,7 +69,7 @@ function InlineSetupCTA({ eventName, title, description }: { eventName?: string;
         onClick={copy}
       >
         {copied ? <Check aria-hidden="true" className="size-3.5" /> : <Copy aria-hidden="true" className="size-3.5" />}
-        {copied ? "Copied!" : "Copy Setup Prompt"}
+        {copied ? "Copied" : "Copy setup prompt"}
       </button>
       <p role={copyError ? "alert" : copied ? "status" : undefined} className={cn("text-[12px] leading-relaxed", copyError ? "text-rp-danger" : "text-rp-ink-muted")}>{copyError ? "Clipboard access was denied. Allow clipboard access and try again." : copied ? "Setup prompt copied. Paste it into your coding tool." : "The prompt configures replay in your agent’s repository."}</p>
     </div>
@@ -122,7 +122,7 @@ export function SetupReplayModal({ open, onClose, eventName }: SetupReplayModalP
           <div>
             <p className="rp-eyebrow mb-2"><span aria-hidden="true" className="rp-eyebrow-marker" />Replay / Setup</p>
             <h2 id="replay-setup-title" className="rp-subsection-title">
-              Set Up Agent Replay
+              Set up agent replay
             </h2>
             {cleanName && (
               <div className="rp-meta mt-1">
@@ -144,7 +144,7 @@ export function SetupReplayModal({ open, onClose, eventName }: SetupReplayModalP
             onClick={copy}
           >
             {copied ? <Check aria-hidden="true" className="size-4" /> : <Copy aria-hidden="true" className="size-4" />}
-            {copied ? "Copied to clipboard!" : "Copy Setup Prompt"}
+            {copied ? "Copied to clipboard" : "Copy setup prompt"}
           </button>
           {copyError && <p role="alert" className="text-[12px] text-rp-danger">Clipboard access was denied. Allow clipboard access and try again.</p>}
 

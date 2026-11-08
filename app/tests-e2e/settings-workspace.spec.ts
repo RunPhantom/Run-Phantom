@@ -132,9 +132,9 @@ test("settings reports key status and clipboard refusal without claiming success
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: () => Promise.reject(new Error("denied")) } });
     document.execCommand = () => false;
   });
-  await page.getByRole("button", { name: "Copy Setup Prompt", exact: true }).click();
+  await page.getByRole("button", { name: "Copy setup prompt", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("Clipboard access was denied");
-  await expect(page.getByRole("button", { name: "Copied!", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Copied", exact: true })).toHaveCount(0);
 });
 
 test("settings ignores a late save after changing tabs and unknown routes recover", async ({ page, local }) => {

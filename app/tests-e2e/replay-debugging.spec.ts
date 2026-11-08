@@ -24,7 +24,7 @@ test("local replay: pending agent registry blocks replay entry points until conf
     const edit = page.getByRole("dialog", { name: "Edit & Replay", exact: true });
     await expect(edit.getByRole("status")).toHaveText("Checking agent replay setup…");
     await expect(edit.getByRole("button", { name: "Replay", exact: true })).toBeDisabled();
-    await expect(page.getByRole("dialog", { name: "Set Up Agent Replay", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("dialog", { name: "Set up agent replay", exact: true })).toHaveCount(0);
     await edit.getByRole("button", { name: "Cancel", exact: true }).click();
     expect(localReplayAgent.requests).toHaveLength(0);
 
@@ -51,7 +51,7 @@ test("local replay: agent registry failures remain retryable without opening set
   const edit = page.getByRole("dialog", { name: "Edit & Replay", exact: true });
   await expect(edit.getByRole("alert")).toContainText("Could not load agent replay setup.");
   await expect(edit.getByRole("button", { name: "Replay", exact: true })).toBeDisabled();
-  await expect(page.getByRole("dialog", { name: "Set Up Agent Replay", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("dialog", { name: "Set up agent replay", exact: true })).toHaveCount(0);
   expect(localReplayAgent.requests).toHaveLength(0);
 
   fail = false;
@@ -66,7 +66,7 @@ test("local replay: a successful empty agent registry still offers setup", async
   await page.route("**/api/agents", (route) => route.fulfill({ json: {} }));
   await page.goto(`${runPhantom.url}/runs/${SOURCE_RUN_ID}`);
   await page.getByRole("button", { name: "Replay", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "Set Up Agent Replay", exact: true })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Set up agent replay", exact: true })).toBeVisible();
   expect(localReplayAgent.requests).toHaveLength(0);
 });
 
