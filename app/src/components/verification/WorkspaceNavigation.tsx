@@ -1,16 +1,16 @@
 import { useEffect } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Activity, ArrowDownRight, CheckCheck, FileCheck2, Fingerprint, Globe2, Layers2, Plug, Route } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 const sections = [
-  { id: "pair", label: "Pair app", Icon: Plug },
-  { id: "inspect", label: "Inspect", Icon: Fingerprint },
-  { id: "checks", label: "Check outcomes", Icon: CheckCheck },
-  { id: "flows", label: "Saved flows", Icon: Route },
-  { id: "performance", label: "Performance", Icon: Activity },
-  { id: "browser", label: "Trusted browser", Icon: Globe2 },
-  { id: "snapshots", label: "Snapshots", Icon: Layers2 },
-  { id: "reports", label: "Reports", Icon: FileCheck2 },
+  { id: "pair", label: "Pair app" },
+  { id: "inspect", label: "Inspect" },
+  { id: "checks", label: "Check outcomes" },
+  { id: "flows", label: "Saved flows" },
+  { id: "performance", label: "Performance" },
+  { id: "browser", label: "Trusted browser" },
+  { id: "snapshots", label: "Snapshots" },
+  { id: "reports", label: "Reports" },
 ] as const;
 
 export function WorkspaceNavigation({ sessionId, reports, ready }: { sessionId?: string; reports?: number; ready: boolean }) {
@@ -27,14 +27,15 @@ export function WorkspaceNavigation({ sessionId, reports, ready }: { sessionId?:
     });
     return () => cancelAnimationFrame(frame);
   }, [requested, selected, sessionId, ready]);
-  return <nav aria-label="Verification workspace" className="sticky top-0 z-10 flex min-w-0 flex-nowrap gap-1 overflow-x-auto bg-[color:var(--rp-canvas)] border-y border-[color:var(--rp-border)] py-2">
-    {sections.map(({ id, label, Icon }) => {
+  return <nav aria-label="Verification workspace" className="sticky top-0 z-10 -mx-5 flex min-w-0 flex-nowrap gap-1 overflow-x-auto border-y border-rp-line bg-white px-5 py-2 sm:mx-0 sm:rounded-lg sm:border sm:px-2">
+    {sections.map(({ id, label }, index) => {
       const next = new URLSearchParams(params); next.set("section", id);
-      return <Link key={id} to={{ search: `?${next}` }} preventScrollReset aria-current={selected === id ? "location" : undefined}
-        className={`inline-flex min-h-11 shrink-0 items-center gap-2 rounded-[5px] px-3 text-xs font-medium transition-colors motion-reduce:transition-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--rp-accent)] ${selected === id ? "bg-[color:var(--rp-accent-soft)] text-[color:var(--rp-accent)]" : "text-[color:var(--rp-ink-soft)] hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)]"}`}>
-        <Icon aria-hidden="true" className="size-3.5 shrink-0" />{label}
-        {id === "reports" && reports !== undefined && <span className="rounded border border-current/20 px-1 text-[10px] tabular-nums">{reports}</span>}
-        {selected === id && <ArrowDownRight aria-hidden="true" className="size-3" />}
+      const current = selected === id;
+      return <Link key={id} to={{ search: `?${next}` }} preventScrollReset aria-current={current ? "location" : undefined}
+        className={cn("inline-flex min-h-11 shrink-0 items-center gap-2.5 rounded-sm px-3 text-[13px] transition-[background-color,color] duration-250 ease-standard motion-reduce:transition-none",
+          current ? "bg-rp-wash font-semibold text-rp-blue" : "font-medium text-rp-ink-muted hover:bg-rp-row-hover hover:text-rp-ink")}>
+        <span aria-hidden="true" className={cn("rp-num text-[11px] font-medium", current ? "text-rp-blue" : "text-rp-index")}>{String(index + 1).padStart(2, "0")}</span>{label}
+        {id === "reports" && reports !== undefined && <span className={cn("rp-num rounded-sm border px-1.5 text-[11px] font-medium leading-4", current ? "border-rp-wash-border bg-white" : "border-rp-line text-rp-ink-muted")}>{reports}</span>}
       </Link>;
     })}
   </nav>;
