@@ -334,8 +334,8 @@ export function RunsPage() {
                 className={cn("size-1.5 rounded-full", wsConnected ? "bg-rp-success" : "bg-rp-danger")} />
               <span className={cn("rp-eyebrow", !wsConnected && "text-rp-danger")}>{wsConnected ? "connected" : "disconnected"}</span>
             </div>
-            <button type="button" aria-label="Clear all runs"
-              className="min-h-7 rounded-control px-2 text-[12px] font-medium text-rp-ink-muted transition-[background-color,color] duration-250 ease-standard hover:bg-rp-danger-soft hover:text-rp-danger"
+            <button type="button" aria-label="Clear all runs" disabled={runs.length === 0}
+              className="min-h-7 rounded-control px-2 text-[12px] font-medium text-rp-ink-muted transition-[background-color,color] duration-250 ease-standard hover:bg-rp-danger-soft hover:text-rp-danger disabled:pointer-events-none disabled:text-rp-ink-faint"
               onClick={handleClear}>
               Clear
             </button>
