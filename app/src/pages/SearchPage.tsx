@@ -231,7 +231,7 @@ export function SearchPage() {
               maxLength={256}
               value={query}
               onChange={(event) => updateFilter("q", event.target.value)}
-              placeholder="Search by title, event, user, conversation, or id"
+              placeholder="Title, user or run ID"
               className={`pl-9 pr-9 ${query ? "border-rp-blue" : ""}`}
             />
             {query && <button type="button" className="rp-ease absolute right-1.5 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-control text-rp-ink-muted hover:bg-rp-row-hover hover:text-rp-ink" onClick={() => updateFilter("q", "")} aria-label="Clear search">
