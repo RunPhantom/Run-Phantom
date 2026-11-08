@@ -60,8 +60,8 @@ const screenshot = async (page: import("@playwright/test").Page, name: string) =
 
 test("settings saves real endpoints, refuses duplicates and preserves drafts after a failed save", async ({ page, local }) => {
   await page.goto(`${local.url}/settings`);
-  await page.getByRole("tab", { name: "Agent Endpoints" }).click();
-  const panel = page.getByRole("tabpanel", { name: "Agent Endpoints" });
+  await page.getByRole("tab", { name: "Agent endpoints" }).click();
+  const panel = page.getByRole("tabpanel", { name: "Agent endpoints" });
   const name = panel.getByLabel("Agent name", { exact: true });
   const endpoint = panel.getByLabel("Replay endpoint URL", { exact: true });
   const add = panel.getByRole("button", { name: "Add agent endpoint" });
@@ -98,7 +98,7 @@ test("settings saves real endpoints, refuses duplicates and preserves drafts aft
   await expect(panel.getByText("Endpoint Readback mismatch registered.", { exact: true })).toHaveCount(0);
   expect((await (await page.request.get(`${local.url}/api/agents`)).json())["Readback mismatch"].url).toBe("http://localhost:65528/replay");
   await page.unroute("**/api/agents");
-  await page.reload(); await page.getByRole("tab", { name: "Agent Endpoints" }).click();
+  await page.reload(); await page.getByRole("tab", { name: "Agent endpoints" }).click();
   await expect(page.getByText("Reference replay", { exact: true })).toBeVisible();
   await expect(page.getByText("Readback mismatch", { exact: true })).toBeVisible();
   await screenshot(page, "settings-endpoints-desktop");
@@ -108,15 +108,15 @@ test("settings keeps an unread registry protected and supports narrow keyboard r
   await page.setViewportSize({ width: 320, height: 760 });
   await page.route("**/api/agents", async route => route.fulfill({ status: 503, json: { error: "Registry unavailable" } }));
   await page.goto(`${local.url}/settings`);
-  const keys = page.getByRole("tab", { name: "API Keys" }); await keys.focus(); await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("tab", { name: "Agent Endpoints" })).toBeFocused();
+  const keys = page.getByRole("tab", { name: "API keys" }); await keys.focus(); await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("tab", { name: "Agent endpoints" })).toBeFocused();
   await expect(page.getByRole("alert")).toContainText("Registry unavailable");
   await expect(page.getByLabel("Agent name", { exact: true })).toBeDisabled();
   await page.unroute("**/api/agents"); await page.getByRole("button", { name: "Try loading again" }).click();
   await expect(page.getByLabel("Agent name", { exact: true })).toBeEnabled();
   await screenshot(page, "settings-endpoints-320");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.getByRole("tab", { name: "Agent Endpoints" }).focus(); await page.keyboard.press("End");
+  await page.getByRole("tab", { name: "Agent endpoints" }).focus(); await page.keyboard.press("End");
   await expect(page.getByRole("tab", { name: "Debug" })).toBeFocused();
   await page.getByRole("button", { name: "show again" }).click(); await expect(page.getByRole("button", { name: "reset" })).toBeVisible();
 });
@@ -127,7 +127,7 @@ test("settings reports key status and clipboard refusal without claiming success
   await expect(page.getByRole("alert")).toContainText("Saved key status is unavailable");
   await page.unroute("**/api/secrets"); await page.getByRole("button", { name: "Try loading key status again" }).click();
   await expect(page.getByRole("alert")).toHaveCount(0);
-  await page.getByRole("tab", { name: "Agent Endpoints" }).click();
+  await page.getByRole("tab", { name: "Agent endpoints" }).click();
   await page.evaluate(() => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: () => Promise.reject(new Error("denied")) } });
     document.execCommand = () => false;
@@ -138,7 +138,7 @@ test("settings reports key status and clipboard refusal without claiming success
 });
 
 test("settings ignores a late save after changing tabs and unknown routes recover", async ({ page, local }) => {
-  await page.goto(`${local.url}/settings`); await page.getByRole("tab", { name: "Agent Endpoints" }).click();
+  await page.goto(`${local.url}/settings`); await page.getByRole("tab", { name: "Agent endpoints" }).click();
   await expect(page.getByLabel("Agent name", { exact: true })).toBeEnabled();
   await page.getByLabel("Agent name", { exact: true }).fill("Delayed replay"); await page.getByLabel("Replay endpoint URL", { exact: true }).fill("http://127.0.0.1:65530/replay");
   let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
@@ -154,7 +154,7 @@ test("settings ignores a late save after changing tabs and unknown routes recove
     await page.getByRole("tab", { name: "Debug" }).click(); release(); await Promise.all([...pending]);
     await expect(page.getByRole("tabpanel", { name: "Debug" })).toBeVisible();
     await expect(page.getByText("Endpoint Delayed replay registered.", { exact: true })).toHaveCount(0);
-    await page.getByRole("tab", { name: "Agent Endpoints" }).click(); await expect(page.getByText("Delayed replay", { exact: true })).toBeVisible();
+    await page.getByRole("tab", { name: "Agent endpoints" }).click(); await expect(page.getByText("Delayed replay", { exact: true })).toBeVisible();
   } finally { release(); await page.unroute("**/api/agents", handler); await Promise.all([...pending]); }
   await page.goto(`${local.url}/missing-reference-page`); await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
   await screenshot(page, "missing-route-desktop"); await page.getByRole("button", { name: "Back to runs" }).click(); await expect(page).toHaveURL(/\/runs/);
@@ -163,7 +163,7 @@ test("settings ignores a late save after changing tabs and unknown routes recove
 
 test("settings keeps saved keys write-only and clears the actual local store", async ({ page, local }) => {
   await page.goto(`${local.url}/settings`);
-  const panel = page.getByRole("tabpanel", { name: "API Keys" });
+  const panel = page.getByRole("tabpanel", { name: "API keys" });
   const input = panel.getByLabel("OpenAI", { exact: true });
   await expect(panel.getByText("Checking saved key status…", { exact: true })).toHaveCount(0);
   const synthetic = "fixture-only-key-with-no-provider-authorization";

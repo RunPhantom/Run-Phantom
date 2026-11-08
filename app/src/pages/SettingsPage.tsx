@@ -29,8 +29,8 @@ import { fetchPrices, modelPricingConsentEnabled, setModelPricingConsent } from 
 type Tab = "agents" | "keys" | "debug";
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: "keys", label: "API Keys" },
-  { id: "agents", label: "Agent Endpoints" },
+  { id: "keys", label: "API keys" },
+  { id: "agents", label: "Agent endpoints" },
   { id: "debug", label: "Debug" },
 ];
 

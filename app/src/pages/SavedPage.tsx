@@ -369,7 +369,7 @@ export function SavedPage() {
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <Eyebrow marker tone="accent">Saved / Local bookmarks</Eyebrow>
-              <h1 className="rp-subsection-title mt-2">Saved Runs</h1>
+              <h1 className="rp-subsection-title mt-2">Saved runs</h1>
             </div>
             <Badge mono tone="outline" className="mt-0.5" aria-label={filtered.length === events.length ? `${events.length} saved runs` : `${filtered.length} of ${events.length} saved runs shown`}>
               {filtered.length === events.length ? String(events.length) : `${filtered.length}/${events.length}`}

@@ -216,7 +216,7 @@ export function SearchPage() {
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <Eyebrow marker tone="accent">Search / Captured runs</Eyebrow>
-              <h1 className="rp-subsection-title mt-2">Local Search</h1>
+              <h1 className="rp-subsection-title mt-2">Local search</h1>
             </div>
             <Badge mono tone="outline" className="mt-0.5" aria-label={`${count}${currentResult?.hasMore ? " or more" : ""} results loaded`}>
               {count}{currentResult?.hasMore ? "+" : ""}
