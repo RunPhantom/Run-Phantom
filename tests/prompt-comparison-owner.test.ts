@@ -1,11 +1,9 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { acquireCodingHookOwner, codingHookOwnerPort, OWNER_LEASE_LIMITS } from "../src/coding-hooks/owner";
+import { acquireCodingHookOwner, codingHookOwnerLockPath } from "../src/coding-hooks/owner";
 import { acquireComparisonOwner } from "../src/prompts/comparison-owner";
 
 let directory: string, file: string;
@@ -30,13 +28,11 @@ async function launch(dbPath = file) {
   finally { clearTimeout(timer); reader.releaseLock(); }
   return { child, receipt: JSON.parse(raw) as { status: string; reason?: string; birth?: string; recoveryWrites: number; providerCalls: number } };
 }
-test("closed comparison namespace preserves the original coding-hook preimage and refuses arbitrary domains", async () => {
-  const expected = OWNER_LEASE_LIMITS.firstPort + createHash("sha256").update("runphantom.coding-hook-owner/v1\0" + file).digest().readUInt32BE(0) % OWNER_LEASE_LIMITS.ports;
-  const comparison = OWNER_LEASE_LIMITS.firstPort + createHash("sha256").update("runphantom.prompt-comparison-owner/v1\0" + file).digest().readUInt32BE(0) % OWNER_LEASE_LIMITS.ports;
-  expect(codingHookOwnerPort(file)).toBe(expected); expect(codingHookOwnerPort(file, "coding-hooks")).toBe(expected);
-  expect(codingHookOwnerPort(file, "prompt-comparisons")).toBe(comparison);
-  expect(() => codingHookOwnerPort(file, "caller-domain" as "prompt-comparisons")).toThrow();
-  const lease = await acquireCodingHookOwner(file); try { expect(lease.port).toBe(expected); } finally { await lease.release(); }
+test("closed comparison namespace uses its own lock beside the database and refuses arbitrary domains", async () => {
+  expect(codingHookOwnerLockPath(file)).toBe(file + ".hook-owner.lock"); expect(codingHookOwnerLockPath(file, "coding-hooks")).toBe(file + ".hook-owner.lock");
+  expect(codingHookOwnerLockPath(file, "prompt-comparisons")).toBe(file + ".comparison-owner.lock");
+  expect(() => codingHookOwnerLockPath(file, "caller-domain" as "prompt-comparisons")).toThrow();
+  const hooks = await acquireCodingHookOwner(file); try { expect(hooks.lockPath).toBe(file + ".hook-owner.lock"); const comparison = await owned(); expect(comparison.capture().birth).toMatch(/^[a-f0-9]{32}$/); } finally { await hooks.release(); }
 });
 test("actual competing process refuses before recovery writes or provider calls; kernel exit permits a new birth", async () => {
   const first = await launch(); expect(first.receipt.status).toBe("owned"); expect(first.receipt.recoveryWrites).toBe(1);
@@ -45,21 +41,13 @@ test("actual competing process refuses before recovery writes or provider calls;
   first.child.kill("SIGKILL"); await first.child.exited;
   const successor = await launch(); expect(successor.receipt.status).toBe("owned"); expect(successor.receipt.birth).not.toBe(first.receipt.birth);
 });
-test("occupied fixed comparison port refuses without recovery and cannot select an alternate port", async () => {
-  const server = createServer(socket => socket.destroy());
-  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen({ host: "127.0.0.1", port: codingHookOwnerPort(file, "prompt-comparisons"), exclusive: true, reusePort: false }, resolve); });
+test("a held comparison lock refuses without recovery", async () => {
+  const holder = new Database(codingHookOwnerLockPath(file, "prompt-comparisons")); holder.exec("PRAGMA busy_timeout=0"); holder.exec("BEGIN EXCLUSIVE");
   try { expect((await launch()).receipt).toMatchObject({ status: "refused", reason: "occupied", recoveryWrites: 0, providerCalls: 0 }); }
-  finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+  finally { holder.close(); }
 });
-test("a genuine searched port-hash collision refuses the second canonical database", async () => {
-  const seen = new Map<number, string>(); let collision: [string, string] | undefined;
-  for (let index = 0; index <= OWNER_LEASE_LIMITS.ports; index++) {
-    const candidate = path.join(directory, `collision-${index}.sqlite`); writeFileSync(candidate, "");
-    const port = codingHookOwnerPort(candidate, "prompt-comparisons"), prior = seen.get(port);
-    if (prior) { collision = [prior, candidate]; break; } seen.set(port, candidate);
-  }
-  expect(collision).toBeDefined(); const first = await acquireComparisonOwner(collision![0]); owners.push(first);
-  const error = await refusal(acquireComparisonOwner(collision![1])); expect(error).toHaveProperty("reason", "occupied");
+test("many distinct databases are owned concurrently without contending for a shared namespace", async () => {
+  for (let index = 0; index < 64; index++) { const candidate = path.join(directory, `distinct-${index}.sqlite`); writeFileSync(candidate, ""); owners.push(await acquireComparisonOwner(candidate)); }
 });
 test("file replacement and symlink aliases invalidate captured comparison authority", async () => {
   const owner = await owned(), fence = owner.capture(); renameSync(file, file + ".old"); writeFileSync(file, "");

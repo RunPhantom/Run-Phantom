@@ -1,11 +1,12 @@
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { linkSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
-import { createConnection, createServer } from "node:net";
+import { linkSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { closeDb, getDrizzleDb } from "../src/db";
-import { acquireCodingHookOwner, codingHookOwnerPort, CodingHookOwnerRefusal, startCodingHookOwner } from "../src/coding-hooks/owner";
+import { acquireCodingHookOwner, codingHookOwnerLockPath, CodingHookOwnerRefusal, startCodingHookOwner } from "../src/coding-hooks/owner";
 import { CodingHookStore } from "../src/coding-hooks/store";
 
 let directory: string, file: string, prior: string | undefined;
@@ -39,25 +40,34 @@ test("two unrelated actual database files can be owned concurrently", async () =
   const other = path.join(directory, "other.sqlite"); process.env.RUNPHANTOM_DB_PATH = other;
   getDrizzleDb(); closeDb();
   const fixture = new Database(other); expect(fixture.query("SELECT count(*) count FROM coding_hook_owner").get()).toEqual({ count: 0 }); fixture.close();
-  // Distinct deterministic lease ports qualify this positive fixture; collisions have a separate refusal control.
-  expect(codingHookOwnerPort(other)).not.toBe(codingHookOwnerPort(file));
+  expect(codingHookOwnerLockPath(other)).not.toBe(codingHookOwnerLockPath(file));
   const first = await launch(), second = await launch(other); expect(first.receipt).toMatchObject({ status: "owned" }); expect(second.receipt).toMatchObject({ status: "owned" }); expect(second.receipt.birth).not.toBe(first.receipt.birth);
 });
-test("an occupied fixed lease port refuses without creating an owner row or choosing another port", async () => {
-  const blocker = createServer(socket => socket.destroy());
-  await new Promise<void>((resolve, reject) => { blocker.once("error", reject); blocker.listen({ host: "127.0.0.1", port: codingHookOwnerPort(file), exclusive: true, reusePort: false }, resolve); });
-  try { const attempted = await launch(); expect(attempted.receipt.status).toBe("refused"); expect(attempted.receipt.reason).toBe("occupied"); const db = new Database(file); try { expect(db.query("SELECT * FROM coding_hook_owner").all()).toEqual([]); } finally { db.close(); } }
-  finally { await new Promise<void>(resolve => blocker.close(() => resolve())); }
+test("an unrelated listener on the port the old hashed lease would use cannot deny ownership", async () => {
+  // Formula of the former port lease: every profile on the host hashed into one shared 10000-port range.
+  const port = 20000 + createHash("sha256").update("runphantom.coding-hook-owner/v1\0" + file).digest().readUInt32BE(0) % 10000;
+  const unrelated = createServer(socket => socket.destroy());
+  await new Promise<void>((resolve, reject) => { unrelated.once("error", reject); unrelated.listen({ host: "127.0.0.1", port, exclusive: true }, resolve); });
+  try { expect((await launch()).receipt).toMatchObject({ status: "owned" }); }
+  finally { await new Promise<void>(resolve => unrelated.close(() => resolve())); }
 });
-test("incoming connections get no endpoint response and release is idempotent and permits recovery", async () => {
+function holdLock(lockPath: string): Database { const holder = new Database(lockPath); holder.exec("PRAGMA busy_timeout=0"); holder.exec("BEGIN EXCLUSIVE"); return holder; }
+test("a held owner lock refuses without creating an owner row", async () => {
+  const holder = holdLock(codingHookOwnerLockPath(file));
+  try { const attempted = await launch(); expect(attempted.receipt.status).toBe("refused"); expect(attempted.receipt.reason).toBe("occupied"); const db = new Database(file); try { expect(db.query("SELECT * FROM coding_hook_owner").all()).toEqual([]); } finally { db.close(); } }
+  finally { holder.close(); }
+});
+test("a second lease in the same process refuses, and release is idempotent and permits recovery", async () => {
   const lease = await acquireCodingHookOwner(file); expect(lease.isActive()).toBe(true);
-  const data = await new Promise<string>((resolve, reject) => {
-    const socket = createConnection({ host: "127.0.0.1", port: lease.port }); let bytes = "";
-    const timer = setTimeout(() => { socket.destroy(); reject(new Error("lease connection did not close")); }, 500);
-    socket.on("data", chunk => { bytes += chunk.toString(); }); socket.on("error", () => {}); socket.once("close", () => { clearTimeout(timer); resolve(bytes); });
-  }); expect(data).toBe("");
+  let error: unknown; try { await acquireCodingHookOwner(file); } catch (caught) { error = caught; } expect((error as CodingHookOwnerRefusal).reason).toBe("occupied"); expect(lease.isActive()).toBe(true);
   const first = lease.release(); expect(lease.isActive()).toBe(false); expect(lease.release()).toBe(first); await first;
   const next = await acquireCodingHookOwner(file); expect(next.birth).not.toBe(lease.birth); await next.release();
+});
+test("replacing the lock file ends the current lease so a successor cannot share authority", async () => {
+  const lease = await acquireCodingHookOwner(file), lockPath = codingHookOwnerLockPath(file); renameSync(lockPath, lockPath + ".old"); writeFileSync(lockPath, "");
+  expect(lease.isActive()).toBe(false); await lease.release();
+  const symlink = path.join(directory, "elsewhere.lock"); rmSync(lockPath); writeFileSync(symlink, ""); symlinkSync(symlink, lockPath);
+  let error: unknown; try { await acquireCodingHookOwner(file); } catch (caught) { error = caught; } expect((error as CodingHookOwnerRefusal).reason).toBe("invalid_owner_path");
 });
 test("unowned stores stay inactive, and a released lease fences persisted policy transactions", async () => {
   const db = new Database(file);
@@ -72,14 +82,14 @@ test("unowned stores stay inactive, and a released lease fences persisted policy
 test("noncanonical, symlink and hardlink aliases cannot select another lease for the same database", async () => {
   const symlink = path.join(directory, "symlink.sqlite"), hardlink = path.join(directory, "hardlink.sqlite"); symlinkSync(file, symlink);
   for (const value of [symlink, "owner.sqlite", path.join(directory, "absent.sqlite")]) { let error: unknown; try { await acquireCodingHookOwner(value); } catch (caught) { error = caught; } expect(error).toBeInstanceOf(CodingHookOwnerRefusal); expect((error as CodingHookOwnerRefusal).reason).toBe("invalid_owner_path"); }
-  linkSync(file, hardlink); expect(() => codingHookOwnerPort(file)).toThrow("invalid_owner_path"); expect(() => codingHookOwnerPort(hardlink)).toThrow("invalid_owner_path");
+  linkSync(file, hardlink); expect(() => codingHookOwnerLockPath(file)).toThrow("invalid_owner_path"); expect(() => codingHookOwnerLockPath(hardlink)).toThrow("invalid_owner_path");
 });
 test("pre-aborted acquisition creates no lease or owner generation", async () => {
   const controller = new AbortController(); controller.abort(); let error: unknown;
   try { await acquireCodingHookOwner(file, controller.signal); } catch (caught) { error = caught; } expect(error).toBeInstanceOf(CodingHookOwnerRefusal); expect((error as CodingHookOwnerRefusal).reason).toBe("aborted");
   const lease = await acquireCodingHookOwner(file); await lease.release(); const db = new Database(file); try { expect(db.query("SELECT * FROM coding_hook_owner").all()).toEqual([]); } finally { db.close(); }
 });
-test("cancellation during acquisition releases any pending listener before retry", async () => {
+test("cancellation during acquisition releases the pending lock before retry", async () => {
   const controller = new AbortController(), pending = acquireCodingHookOwner(file, controller.signal); controller.abort();
   let error: unknown; try { await pending; } catch (caught) { error = caught; }
   expect(error).toBeInstanceOf(CodingHookOwnerRefusal); expect((error as CodingHookOwnerRefusal).reason).toBe("aborted");

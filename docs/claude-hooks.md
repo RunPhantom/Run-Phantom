@@ -91,10 +91,11 @@ Conflicts and absent source identity or counts remain visible rather than inferr
 as success or zero.
 
 Startup migrates the actual owner SQLite connection before acquiring one exclusive
-loopback lifetime lease derived from its canonical path. The lease port lies in
-40000–49999, returns no endpoint data and never falls back to another port. An
-occupied port or hash collision refuses ownership before generation rotation or
-public listening. PID files and health responses are not ownership authority.
+lifetime lease: an exclusive SQLite lock on `<database>.hook-owner.lock` beside the
+canonical database path, which the kernel releases when the owner exits. A lock
+held by another owner of the same database refuses ownership before generation
+rotation or public listening; unrelated profiles and sockets cannot contend for it.
+PID files and health responses are not ownership authority.
 Raw callback routes precede general JSON parsing. Two requests may acquire bodies
 and eight may queue; every reservation has finite byte and time limits.
 

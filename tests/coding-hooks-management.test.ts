@@ -155,10 +155,14 @@ privateFilesystemTest("doctor distinguishes installed settings from an unavailab
   const status = await manager.doctor(binding.installationId); expect(status.configuration).toBe("installed"); expect(status.capability).toBe("unavailable"); expect(status.transport).toBe("unavailable"); expect(status.captureVerified).toBe(false);
 });
 privateFilesystemTest("inactive installation creates only inert configuration and a disabled private descriptor without fake owner generations", async () => {
-  store.db.exec("DELETE FROM coding_hook_owner"); const inactive = new ClaudeHookManagement(new CodingHookStore(store.db));
+  const inactive = new ClaudeHookManagement(new CodingHookStore(store.db)), owners = store.db.query("SELECT * FROM coding_hook_owner").all() as { id: number; source_epoch: string; generation: string; updated_at: number }[];
+  store.db.exec("DELETE FROM coding_hook_owner");
+  await typedRefusal(inactive.install({ ...binding, captureMode: "full" }, { fullConsent: true }), "inactive", 503);
+  expect(existsSync(binding.settingsPath)).toBe(false); expect(existsSync(capability)).toBe(false); expect(store.db.query("SELECT * FROM coding_hook_owner").all()).toEqual([]); expect(store.db.query("SELECT * FROM coding_hook_installations").all()).toEqual([]);
+  for (const row of owners) store.db.query("INSERT INTO coding_hook_owner VALUES(?,?,?,?)").run(row.id, row.source_epoch, row.generation, row.updated_at);
   const before = JSON.stringify(store.db.query("SELECT * FROM coding_hook_owner").all()), result = await inactive.install({ ...binding, captureMode: "full" }, { fullConsent: true });
   expect(result.policy).toBe("disabled"); expect(result.captureMode).toBe("metadata"); expect(result.transport).toBe("unavailable"); expect(result.captureVerified).toBe(false);
-  expect(JSON.stringify(store.db.query("SELECT * FROM coding_hook_owner").all())).toBe(before); expect(store.db.query("SELECT * FROM coding_hook_installations").all()).toEqual([]);
+  expect(JSON.stringify(store.db.query("SELECT * FROM coding_hook_owner").all())).toBe(before); expect(store.db.query("SELECT state,capture_mode FROM coding_hook_installations").all()).toEqual([{ state: "disabled", capture_mode: "metadata" }]);
   const descriptor = await readClaudeCapabilityDescriptor(capability, binding.installationId, capabilityOwnerKey(realpathSync(store.db.filename)));
   expect(descriptor.state).toBe("disabled"); expect(descriptor.token).toBeNull(); expect(descriptor.ownerGeneration).toBeNull(); expect(descriptor.installationGeneration).toBeNull(); expect(descriptor.origin).toBeNull();
   expect(readFileSync(binding.settingsPath, "utf8")).toContain(capability); expect(() => new CodingHookStore(store.db).beginOwner()).toThrow("inactive");
