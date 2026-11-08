@@ -50,7 +50,7 @@ export function FlowRepair({ flow, sessionId, available, disabled, onCommitted }
     finally { if (current()) { running.current = false; setBusy(false); } }
   }
   return <div className="flow-repair w-full min-w-0 space-y-3">
-    <Button variant="outline" size="sm" disabled={disabled || busy || !editable.length} aria-expanded={open} aria-label={`Review repair for ${flow.name}`} onClick={() => { setOpen(!open); setStep(editable[0] ?? 0); }}>Review repair</Button>
+    <Button variant="outline" size="sm" className="aria-expanded:border-rp-wash-border aria-expanded:bg-rp-wash aria-expanded:text-rp-blue" disabled={disabled || busy || !editable.length} aria-expanded={open} aria-label={`Review repair for ${flow.name}`} onClick={() => { setOpen(!open); setStep(editable[0] ?? 0); }}>Review repair</Button>
     {open && <section aria-label={`Repair ${flow.name}`} className="rp-fade-rise space-y-4 rounded-md border border-rp-line bg-white p-4 text-[13px] text-rp-ink sm:p-5">
       <h4 className="flow-repair-heading rp-subsection-title">Review a durable anchor</h4>
       <p className={fine}>Discover current matches, compare the old and proposed identity, then select one candidate. Saving a repair changes this flow only. Replay is a separate action.</p>
