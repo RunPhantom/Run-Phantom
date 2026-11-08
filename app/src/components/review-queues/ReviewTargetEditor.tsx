@@ -1,7 +1,7 @@
-import { Field, Select } from "../verification/PredicateEditor";
-import { Input } from "../ui/input";
+import { Input, Select, fieldClassName } from "../ui/input";
+import { Field } from "./fields";
 import type { ReviewDraft, ReviewField, ReviewSchema, ReviewScalar } from "./client";
-export const reviewTextarea = "min-h-24 w-full rounded-md border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] p-3 text-sm text-[color:var(--rp-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-accent)] disabled:opacity-60";
+export const reviewTextarea = `${fieldClassName} min-h-24 resize-y py-2 leading-6`;
 export function ReviewTargetEditor({ schema, draft, disabled, onChange }: { schema: ReviewSchema; draft: ReviewDraft; disabled: boolean; onChange: (draft: ReviewDraft) => void }) {
   const target = (field: ReviewField, value?: ReviewScalar) => {
     const next = { ...draft.target }; if (value === undefined) delete next[field.key]; else next[field.key] = value;
