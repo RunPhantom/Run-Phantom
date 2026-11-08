@@ -1,16 +1,12 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { lstatSync, realpathSync, type Stats } from "node:fs";
-import { createServer } from "node:net";
 import path from "node:path";
-import type { Database } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { CodingHookStore } from "./store";
 
 export type OwnerLeaseNamespace = "coding-hooks" | "prompt-comparisons";
-// Lease ports must stay below every default ephemeral range (Linux 32768+, macOS and
-// Windows 49152+): an outgoing socket on the hashed port makes daemon startup fail "occupied".
-export const OWNER_LEASE_LIMITS = Object.freeze({ firstPort: 20000, ports: 10000, acquireMs: 500, releaseMs: 500 });
 export class CodingHookOwnerRefusal extends Error { constructor(readonly reason: "invalid_owner_path" | "occupied" | "deadline" | "aborted" | "unavailable") { super(reason); } }
-export interface CodingHookOwnerLease { readonly databasePath: string; readonly port: number; readonly birth: string; isActive(): boolean; release(): Promise<void>; }
+export interface CodingHookOwnerLease { readonly databasePath: string; readonly lockPath: string; readonly birth: string; isActive(): boolean; release(): Promise<void>; }
 
 function ownerPath(value: string): { file: string; stat: Stats; parent: Stats } {
   try {
@@ -21,52 +17,49 @@ function ownerPath(value: string): { file: string; stat: Stats; parent: Stats } 
   } catch { throw new CodingHookOwnerRefusal("invalid_owner_path"); }
 }
 const same = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
-/** A collision refuses ownership; this port is never a discovery or HTTP endpoint. */
-export function codingHookOwnerPort(databasePath: string, namespace: OwnerLeaseNamespace = "coding-hooks"): number {
+const lockFile = (stat: Stats) => stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1;
+/**
+ * The lease is an exclusive SQLite lock held for the owner's lifetime on a sidecar of the database, so the
+ * kernel releases it when the process dies. A hashed loopback port was used before; every profile on the host
+ * shared one port range, so an unrelated daemon or socket on a colliding port refused ownership as "occupied".
+ */
+export function codingHookOwnerLockPath(databasePath: string, namespace: OwnerLeaseNamespace = "coding-hooks"): string {
   if (namespace !== "coding-hooks" && namespace !== "prompt-comparisons") throw new CodingHookOwnerRefusal("invalid_owner_path");
-  const { file } = ownerPath(databasePath);
-  const domain = namespace === "coding-hooks" ? "runphantom.coding-hook-owner/v1\0" : "runphantom.prompt-comparison-owner/v1\0";
-  return OWNER_LEASE_LIMITS.firstPort + createHash("sha256").update(domain + file).digest().readUInt32BE(0) % OWNER_LEASE_LIMITS.ports;
+  return ownerPath(databasePath).file + (namespace === "coding-hooks" ? ".hook-owner.lock" : ".comparison-owner.lock");
 }
 export async function acquireCodingHookOwner(databasePath: string, signal?: AbortSignal, namespace: OwnerLeaseNamespace = "coding-hooks"): Promise<CodingHookOwnerLease> {
-  const before = ownerPath(databasePath), port = codingHookOwnerPort(before.file, namespace);
+  const before = ownerPath(databasePath), lockPath = codingHookOwnerLockPath(before.file, namespace);
   if (signal?.aborted) throw new CodingHookOwnerRefusal("aborted");
-  const server = createServer(socket => { socket.on("error", () => {}); socket.destroy(); }); server.maxConnections = 1;
-  let active = false, releasing: Promise<void> | undefined;
+  const existing = (() => { try { return lstatSync(lockPath); } catch { return null; } })();
+  if (existing && !lockFile(existing)) throw new CodingHookOwnerRefusal("invalid_owner_path");
+  let lock: Database;
+  try { lock = new Database(lockPath, { create: true, readwrite: true }); } catch { throw new CodingHookOwnerRefusal("unavailable"); }
+  let active = false, releasing: Promise<void> | undefined, held: Stats | undefined;
   const release = (): Promise<void> => {
     active = false;
     if (releasing) return releasing;
-    releasing = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new CodingHookOwnerRefusal("deadline")), OWNER_LEASE_LIMITS.releaseMs);
-      server.close(error => { clearTimeout(timer); if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") reject(new CodingHookOwnerRefusal("unavailable")); else resolve(); });
-    });
+    releasing = new Promise<void>((resolve, reject) => { try { lock.close(); resolve(); } catch { reject(new CodingHookOwnerRefusal("unavailable")); } });
     return releasing;
   };
-  // A listener error invalidates authority immediately, including after acquisition.
-  server.on("error", () => { active = false; }); server.on("close", () => { active = false; });
   try {
-    await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const finish = (error?: CodingHookOwnerRefusal) => {
-        if (settled) return; settled = true; clearTimeout(timer); signal?.removeEventListener("abort", aborted); server.removeListener("error", failed); server.removeListener("listening", listening);
-        if (error) reject(error); else resolve();
-      };
-      const failed = (error: NodeJS.ErrnoException) => finish(new CodingHookOwnerRefusal(error.code === "EADDRINUSE" ? "occupied" : "unavailable"));
-      const aborted = () => finish(new CodingHookOwnerRefusal("aborted"));
-      const listening = () => finish();
-      const timer = setTimeout(() => finish(new CodingHookOwnerRefusal("deadline")), OWNER_LEASE_LIMITS.acquireMs);
-      signal?.addEventListener("abort", aborted, { once: true }); server.once("error", failed); server.once("listening", listening);
-      try { server.listen({ host: "127.0.0.1", port, exclusive: true, reusePort: false, backlog: 1 }); } catch { finish(new CodingHookOwnerRefusal("unavailable")); }
-    });
+    try { lock.exec("PRAGMA busy_timeout=0"); lock.exec("BEGIN EXCLUSIVE"); }
+    catch (error) { throw new CodingHookOwnerRefusal((error as { code?: string }).code === "SQLITE_BUSY" ? "occupied" : "unavailable"); }
+    held = lstatSync(lockPath);
+    if (!lockFile(held)) throw new CodingHookOwnerRefusal("invalid_owner_path");
+    await new Promise<void>(resolve => setImmediate(resolve));
     const after = ownerPath(databasePath);
     if (signal?.aborted) throw new CodingHookOwnerRefusal("aborted");
-    if (!same(before.stat, after.stat) || !same(before.parent, after.parent) || !server.listening) throw new CodingHookOwnerRefusal("invalid_owner_path");
+    if (!same(before.stat, after.stat) || !same(before.parent, after.parent)) throw new CodingHookOwnerRefusal("invalid_owner_path");
     active = true;
-    return Object.freeze({ databasePath: before.file, port, birth: randomBytes(16).toString("hex"), isActive: () => {
-      if (!active || !server.listening) return false;
-      if (namespace === "coding-hooks") return true;
-      try { const current = ownerPath(databasePath); return same(before.stat, current.stat) && same(before.parent, current.parent); }
-      catch { return false; }
+    const heldLock = held;
+    return Object.freeze({ databasePath: before.file, lockPath, birth: randomBytes(16).toString("hex"), isActive: () => {
+      if (!active) return false;
+      try {
+        // A replaced lock file would let a second owner lock the new inode, so authority ends with the held one.
+        if (!same(heldLock, lstatSync(lockPath))) return false;
+        if (namespace === "coding-hooks") return true;
+        const current = ownerPath(databasePath); return same(before.stat, current.stat) && same(before.parent, current.parent);
+      } catch { return false; }
     }, release });
   } catch (error) { await release(); throw error; }
 }
