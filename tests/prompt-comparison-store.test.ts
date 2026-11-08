@@ -105,7 +105,8 @@ test("admission deadline expires while queued rather than giving dequeue a new30
 });
 test("lifetime per-scope exhaustion includes privacy tombstones and cannot be recovered through clear", () => {
   const first = saved();
-  for (let index = 0; index < 100; index++) store.submit(request(first.id), store.capture("edit"));
+  // Refused receipts still count; a full queue now refuses without a receipt, so use a budget refusal.
+  for (let index = 0; index < 100; index++) store.submit({ ...request(first.id), operationBudgetMicrousd: 1 }, store.capture("edit"));
   const fence = store.capture("delete"); store.clear({ operationKey: randomUUID(), expectedGeneration: fence.comparisonGeneration, confirmRemoval: true }, fence);
   expect(db.query("SELECT count(*) n FROM prompt_comparisons WHERE tombstone=1").get()).toEqual({ n: 100 });
   expect(() => store.submit(request(first.id), store.capture("edit"))).toThrow("capacity");
@@ -330,3 +331,22 @@ test("an output that fits alone cannot consume other pending targets' terminal c
     expect(retainedBytes()).toBeLessThanOrEqual(COMPARISON_LIMITS.retainedBytes);
   } finally { clock.mockRestore(); }
 }, 30000);
+test("a full queue refuses admission as busy without persisting a refused receipt or using lifetime capacity", () => {
+  const first = saved(), single = [COMPARISON_MODELS[1]];
+  const admitted = Array.from({ length: COMPARISON_LIMITS.queued }, () => store.submit(request(first.id, randomUUID(), single), store.capture("edit")));
+  expect(admitted.every(receipt => receipt.attempts[0].status === "queued")).toBe(true);
+  let refusal: unknown;
+  try { store.submit(request(first.id, randomUUID(), single), store.capture("edit")); } catch (error) { refusal = error; }
+  expect(refusal).toMatchObject({ code: "busy", status: 429 });
+  expect(db.query("SELECT count(*) n FROM prompt_comparisons").get()).toEqual({ n: COMPARISON_LIMITS.queued });
+  expect(db.query("SELECT count(*) n FROM prompt_comparison_attempts WHERE status='budget_refused'").get()).toEqual({ n: 0 });
+  const replay = request(first.id, admitted[0].operationKey, single);
+  expect(store.submit(replay, store.capture("edit")).id).toBe(admitted[0].id);
+});
+test("measured estimates are retained as decimal USD without binary float noise", () => {
+  const operation = store.submit(request(saved().id, randomUUID(), [COMPARISON_MODELS[0]]), store.capture("edit")), fence = store.capture("edit"); store.start(operation.id, 0, fence);
+  // gpt-5.4: 18 * $2.50/M + 12 * $15/M sums to 0.00022500000000000002 in binary floating point.
+  const receipt = store.finish(operation.id, 0, fence, { status: "completed", result: { output: "Answer", finishReason: "length", provenance: "controlled-http-fixture" as const, usage: { model: "gpt-5.4", inputTokens: 18, outputTokens: 12, cacheReadTokens: 0, contextTokens: 18, tier: "standard" } } });
+  expect(receipt.attempts[0]).toMatchObject({ status: "completed", accountingState: "measured_estimate", observedEstimateUsd: "0.000225" });
+  expect(receipt.attempts[0].chargeMicrousd).toBeGreaterThanOrEqual(225);
+});

@@ -86,11 +86,26 @@ function pathComponents(absolutePath: string): string[] {
   return components;
 }
 
+// Only root can create or retarget a root-owned link in a directory that only root
+// can write, so such links (macOS /tmp and /var, ostree /home -> var/home) cannot be
+// planted or swapped by another local user. Refusing them made the store unusable
+// for every HOME below one of these system links.
+function isRootControlledLink(component: string, stats: fs.Stats): boolean {
+  if (process.platform === "win32" || stats.uid !== 0) return false;
+  let parent: fs.Stats;
+  try {
+    parent = fs.statSync(path.dirname(component));
+  } catch {
+    return false;
+  }
+  return parent.isDirectory() && parent.uid === 0 && (parent.mode & 0o022) === 0;
+}
+
 function assertExistingComponentsAreNotSymlinks(absolutePath: string): void {
   for (const component of pathComponents(absolutePath)) {
     const stats = lstatOrNull(component);
     if (!stats) return;
-    if (stats.isSymbolicLink()) {
+    if (stats.isSymbolicLink() && !isRootControlledLink(component, stats)) {
       throw securityError(`refusing symlinked secret-store path component: ${component}`);
     }
   }

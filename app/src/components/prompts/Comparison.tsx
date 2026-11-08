@@ -134,6 +134,7 @@ export function Comparison({ client, source, variables, canEdit, canDelete, scop
       <div className="comparison-targets">{current.selected.attempts.map(attempt => {
         const output = comparisonOutput(attempt);
         return <article className="comparison-target" key={attempt.position} aria-label={`Result ${attempt.model}`}><header><h4>{attempt.model}</h4><span className="comparison-state">{attempt.status.replace(/_/g, " ")}</span></header>{attempt.reason && <p className="prompt-muted">Reason: {attempt.reason.replace(/_/g, " ")}</p>}{output.controlled && <p className="comparison-fixture">Controlled HTTP fixture · no paid provider call</p>}{attempt.budgetBreach && <p className="comparison-error">Observed usage breached its reservation. Further spending by this provider is blocked.</p>}
+          {output.truncated && <p className="comparison-error" data-testid={`comparison-truncated-${attempt.position}`}>Stopped at the {current.selected?.request?.options.maxOutputTokens ?? "configured"} output token limit. This answer may be incomplete.</p>}
           {output.output !== null ? <pre data-testid={`comparison-output-${attempt.position}`}>{output.output}</pre> : <p className="prompt-muted">{["queued", "running"].includes(attempt.status) ? "Waiting for a retained result…" : "No output was retained for this target."}</p>}
           <ComparisonAccounting attempt={attempt} input={output.input} output={output.outputTokens} rateRevision={current.selected?.request?.rates[attempt.position].revision ?? null} />
         </article>;

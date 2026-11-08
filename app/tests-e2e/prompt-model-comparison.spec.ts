@@ -48,3 +48,12 @@ test("actual local held native comparison cancels all targets without refunding 
   await pane.getByRole("button", { name: "Cancel comparison", exact: true }).click(); await expect(pane.locator(".comparison-state")).toHaveText(["cancelled", "cancelled", "cancelled", "cancelled"]); await expect(pane.getByTestId("comparison-output-0")).toHaveCount(0);
   await page.getByLabel("Template", { exact: true }).fill("New immutable {{topic}}"); await page.getByRole("button", { name: "Save new revision", exact: true }).click(); await expect(page.getByRole("button", { name: "Compile revision 2", exact: true })).toBeEnabled(); await expect(pane.getByRole("region", { name: "Comparison results", exact: true })).toHaveCount(0);
 });
+test("actual local comparison marks answers cut off by the output token limit as possibly incomplete", async ({ page, comparison }) => {
+  test.setTimeout(90000); await source(page, comparison); const pane = page.getByTestId("comparison-workspace"); await page.getByLabel("topic", { exact: true }).fill("[length] long answer");
+  for (const model of ["gpt-4.1", "claude-sonnet-4-6"]) await pane.getByRole("checkbox", { name: new RegExp(model) }).check();
+  await pane.getByRole("button", { name: "Run comparison", exact: true }).click(); await page.getByRole("button", { name: "Confirm run comparison", exact: true }).click();
+  await expect(pane.locator(".comparison-state")).toHaveText(["completed", "completed"]);
+  for (const position of [0, 1]) await expect(pane.getByTestId(`comparison-truncated-${position}`)).toHaveText("Stopped at the 128 output token limit. This answer may be incomplete.");
+  await page.getByLabel("topic", { exact: true }).fill("complete answer"); await pane.getByRole("button", { name: "Run comparison", exact: true }).click(); await page.getByRole("button", { name: "Confirm run comparison", exact: true }).click();
+  await expect(pane.getByTestId("comparison-output-0")).toContainText("complete answer"); await expect(pane.getByTestId("comparison-truncated-0")).toHaveCount(0);
+});

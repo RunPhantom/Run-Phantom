@@ -27,6 +27,9 @@ const same = (a: ComparisonFence, b: ComparisonFence) => a.promptGeneration === 
 const positionValue = (value: unknown): number => { if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 3) throw new ComparisonError("invalid_request"); return value; };
 const chargeCap = 2251799813685;
 const attemptContent = ["status", "reason", "payload", "accounting_state", "observed_estimate_usd"];
+// Binary float sums such as 0.000045 + 0.00018 print as 0.00022500000000000002; retain a
+// nano-USD decimal instead. Charges are derived from the float total, never from this text.
+const usdText = (total: number) => { const fixed = total.toFixed(9); return fixed.includes("e") ? String(total) : fixed.replace(/\.?0+$/, ""); };
 const contentBytes = (...values: (string | null)[]) => values.reduce((total, value) => total + (value === null ? 0 : Buffer.byteLength(value)), 0);
 const reasons = new Set(["provider_error", "invalid_response", "response_limit", "protected_content", "cancelled", "timeout", "authority_lost"]);
 const terminal = new Set<ComparisonAttemptStatus>(["completed", "failed", "timeout", "cancelled", "unavailable", "budget_refused", "interrupted", "authority_lost"]);
@@ -163,9 +166,12 @@ export class ComparisonStore {
       const targetBytes = input.targets.reduce((total, target) => total + scopeBytes + 36 + Buffer.byteLength(target.provider) + Buffer.byteLength(target.model) + 32 + 64 + L.attemptPayloadBytes + 32 + 64 + 96, 0);
       if (totals.bytes + this.#pendingRetention() + headBytes + targetBytes > L.retainedBytes) throw new ComparisonError("capacity");
       const budget = this.#budgetTotals(), queue = this.#get<{ n: number }>("SELECT count(*) n FROM (SELECT scope_key,comparison_id FROM prompt_comparison_attempts WHERE status='queued' GROUP BY scope_key,comparison_id)")!.n;
+      // A full queue is transient: refuse before inserting so it neither reads as a budget
+      // decision nor consumes one of the scope's lifetime operations.
+      if (queue >= L.queued) throw new ComparisonError("busy");
       const held = { openai: 0, anthropic: 0 }, available = { openai: this.#available("openai"), anthropic: this.#available("anthropic") }; let operationHold = 0;
       input.targets.forEach((target, index) => { if (available[target.provider]) { held[target.provider] += reservations[index].microusd; operationHold += reservations[index].microusd; } });
-      const refused = queue >= L.queued || operationHold > input.operationBudgetMicrousd || (["openai", "anthropic"] as const).some(provider => held[provider] > 0 && (budget[provider].breached || budget[provider].holdMicrousd + budget[provider].chargeMicrousd + held[provider] > budget[provider].ceilingMicrousd));
+      const refused = operationHold > input.operationBudgetMicrousd || (["openai", "anthropic"] as const).some(provider => held[provider] > 0 && (budget[provider].breached || budget[provider].holdMicrousd + budget[provider].chargeMicrousd + held[provider] > budget[provider].ceilingMicrousd));
       const id = randomUUID(), now = Date.now();
       this.#db.query("INSERT INTO prompt_comparisons(scope_key,id,operation_key,request_digest,prompt_id,frozen_request,prompt_generation,evidence_generation,comparison_generation,target_count,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)").run(this.#scope, id, input.operationKey, requestDigest, input.promptId, serialized, current.promptGeneration, current.evidenceGeneration, current.comparisonGeneration, input.targets.length, now);
       input.targets.forEach((target, position) => {
@@ -266,7 +272,7 @@ export class ComparisonStore {
         if (row.provider === "anthropic") for (const value of [observations.cacheReadTokens, observations.cacheWriteTokens]) if (known(value)) inputMinimum += value;
         if (!Number.isSafeInteger(inputMinimum) || inputMinimum > reservation.inputTokenCeiling || known(observations.outputTokens) && observations.outputTokens > receipt.request!.options.maxOutputTokens) breach = 1;
         if (total !== null && Number.isFinite(total) && total >= 0) {
-          observed = String(total); const amount = Math.ceil(total * 1000000); breach = breach || (amount > row.reserveMicrousd ? 1 : 0);
+          observed = usdText(total); const amount = Math.ceil(total * 1000000); breach = breach || (amount > row.reserveMicrousd ? 1 : 0);
           if (Number.isSafeInteger(amount) && amount <= chargeCap) { charge = amount; state = "measured_estimate"; }
           else { state = "unrepresentable_overage"; breach = 1; }
         }

@@ -71,9 +71,10 @@ export function comparisonRequest(client: PromptClient, signal: AbortSignal) {
 export function comparisonExport(value: unknown, expectedId: string): unknown {
   const input = object(value); if (input.format !== "runphantom-model-comparison/v1" || comparisonReceipt(input.operation).id !== expectedId) throw invalid(); return input;
 }
-export function comparisonOutput(attempt: ComparisonAttempt): { output: string | null; input: number | null; outputTokens: number | null; controlled: boolean } {
-  if (!attempt.payload) return { output: null, input: null, outputTokens: null, controlled: false };
+export function comparisonOutput(attempt: ComparisonAttempt): { output: string | null; input: number | null; outputTokens: number | null; controlled: boolean; truncated: boolean } {
+  if (!attempt.payload) return { output: null, input: null, outputTokens: null, controlled: false, truncated: false };
   const payload = object(attempt.payload), usage = object(payload.usage), categories = object(usage.categories);
   const count = (field: string) => { const value = object(categories[field]).count; return value === null ? null : integer(value); };
-  return { output: text(payload.output, 8192), input: count("input"), outputTokens: count("output"), controlled: payload.provenance === "controlled-http-fixture" };
+  return { output: text(payload.output, 8192), input: count("input"), outputTokens: count("output"), controlled: payload.provenance === "controlled-http-fixture",
+    truncated: payload.finishReason === "length" || payload.finishReason === "max_tokens" };
 }

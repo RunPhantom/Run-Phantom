@@ -55,4 +55,45 @@ describe.serial("secret store filesystem security", () => {
 
     expect(() => getStoredSecret("openai")).toThrow(/symlinked secret-store path component/i);
   });
+
+  // macOS /tmp -> private/tmp is the common case; ostree systems link /home -> var/home.
+  const rootLink = (() => {
+    if (process.platform === "win32" || process.getuid?.() === 0) return null;
+    for (const entry of fs.readdirSync("/")) {
+      const link = path.join("/", entry);
+      try {
+        const stats = fs.lstatSync(link);
+        if (!stats.isSymbolicLink() || stats.uid !== 0) continue;
+        const target = fs.realpathSync(link);
+        fs.accessSync(target, fs.constants.W_OK);
+        if (fs.statSync(target).isDirectory()) return { link, target };
+      } catch { /* not a usable system link */ }
+    }
+    return null;
+  })();
+
+  test.skipIf(rootLink === null)("reads and writes through a root-owned system link such as macOS /tmp", () => {
+    const real = fs.mkdtempSync(path.join(rootLink!.target, "runphantom-secret-store-"));
+    temporaryRoots.push(real);
+    const throughLink = path.join(rootLink!.link, path.relative(rootLink!.target, real));
+    const storePath = path.join(throughLink, "state", "secrets.json");
+    process.env[RUNPHANTOM_SECRET_STORE_PATH_ENV] = storePath;
+
+    expect(getStoredSecret("openai")).toBeNull();
+    setStoredSecret("openai", "test-secret");
+    expect(getStoredSecret("openai")).toBe("test-secret");
+    expect(fs.statSync(path.join(real, "state", "secrets.json")).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(path.join(real, "state")).mode & 0o777).toBe(0o700);
+  });
+
+  test.skipIf(rootLink === null)("still refuses a user-owned link below a root-owned system link", () => {
+    const real = fs.mkdtempSync(path.join(rootLink!.target, "runphantom-secret-store-"));
+    temporaryRoots.push(real);
+    fs.mkdirSync(path.join(real, "target"), { mode: 0o700 });
+    fs.symlinkSync(path.join(real, "target"), path.join(real, "linked-state"), "dir");
+    const throughLink = path.join(rootLink!.link, path.relative(rootLink!.target, real));
+    process.env[RUNPHANTOM_SECRET_STORE_PATH_ENV] = path.join(throughLink, "linked-state", "secrets.json");
+
+    expect(() => getStoredSecret("openai")).toThrow(/symlinked secret-store path component/i);
+  });
 });

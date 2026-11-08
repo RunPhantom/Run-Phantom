@@ -95,6 +95,8 @@ export function createComparisonProviderClient(client: ClientOptions = {}) {
           inputTokens: target.provider === "openai" ? usage.prompt_tokens : usage.input_tokens, outputTokens: target.provider === "openai" ? usage.completion_tokens : usage.output_tokens,
           cacheReadTokens: cached, ...(target.provider === "anthropic" ? { cacheWriteTokens: usage.cache_creation_input_tokens } : {}), reasoningTokens: reasoning, tier, contextTokens } };
         try { comparisonJson(result, COMPARISON_LIMITS.attemptPayloadBytes); } catch { throw new ComparisonProviderError("response_limit", true); }
+        // Pattern redaction misses keys without a vendor prefix (gateways, proxies), so never retain an echo of the configured one.
+        if (JSON.stringify(result).includes(JSON.stringify(token).slice(1, -1))) throw new ComparisonProviderError("protected_content", true);
         return result;
       } catch (error) {
         if (timeout.signal.aborted) throw new ComparisonProviderError("timeout", sent);

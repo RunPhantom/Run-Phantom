@@ -105,3 +105,17 @@ test("a key saved in Settings enables comparisons and removing it stops dispatch
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("a response echoing the configured credential is refused even without a recognizable key prefix", async () => {
+  const token = "corp-gateway-7f3a91c2d4e5b6a7f8091a2b3c4d5e6f";
+  for (const field of ["content", "model"] as const) {
+    let calls = 0;
+    const server = Bun.serve({ port: 0, fetch: () => { calls++; return Response.json({ model: field === "model" ? `gpt-5.4 ${token}` : "gpt-5.4", choices: [{ message: { content: field === "content" ? `Here is the key: ${token}` : "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 0 } } }); } });
+    try {
+      const client = createComparisonProviderClient({ credentials: { openai: token }, transport: (_url, init) => fetch(server.url, init), provenance: "controlled-http-fixture" });
+      let failure: unknown;
+      try { await client.execute({ target, compiled: "small", options, signal: new AbortController().signal }); } catch (error) { failure = error; }
+      expect(failure).toMatchObject({ code: "protected_content", requestMayHaveBeenSent: true }); expect(String(failure)).not.toContain(token); expect(calls).toBe(1);
+    } finally { await server.stop(true); }
+  }
+});
