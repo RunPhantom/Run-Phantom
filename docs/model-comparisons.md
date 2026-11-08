@@ -33,7 +33,9 @@ These figures are estimates and retained accounting, not provider invoices.
 
 Each actual owner has two native dispatch slots shared by every comparison and
 scope, at most eight queued operations, four targets per operation and a thirty
-second deadline starting at admission. Compiled input is limited to sixteen KiB,
+second deadline starting at admission. A run submitted while eight operations are
+queued is refused with a retry message; it is not saved and does not consume
+lifetime capacity. Compiled input is limited to sixteen KiB,
 output to 1,024 tokens, provider response acquisition to sixty-four KiB, retained
 target output/usage to eight KiB, and HTTP requests/responses to sixty-four KiB.
 History pages contain twenty summaries and do not acquire compiled input or
