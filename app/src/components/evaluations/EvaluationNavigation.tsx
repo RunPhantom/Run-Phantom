@@ -18,7 +18,7 @@ export function EvaluationNavigation({ active, onView }: { active: Workspace; on
     </div>
     <div className="evaluation-navigation-curation">
       <Link to="/review-queues" aria-current={active === "queues" ? "page" : undefined}>Review queues</Link>
-      <Link to="/prompts" aria-current={active === "prompts" ? "page" : undefined}>Prompt lab</Link>
+      <Link to="/prompts" aria-current={active === "prompts" ? "page" : undefined}>Prompts</Link>
     </div>
   </nav>;
 }
