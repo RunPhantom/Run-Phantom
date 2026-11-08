@@ -59,7 +59,9 @@ test("compiled binary serves its embedded Run Phantom UI", async ({ page }) => {
   const backLabelBox = await page.getByText("Back to runs", { exact: true }).boundingBox();
   expect(toggleBox).not.toBeNull();
   expect(backLabelBox).not.toBeNull();
-  expect(backLabelBox!.x).toBeGreaterThanOrEqual(toggleBox!.x + toggleBox!.width + 4);
+  const clearsToggle = backLabelBox!.y >= toggleBox!.y + toggleBox!.height
+    || backLabelBox!.x >= toggleBox!.x + toggleBox!.width + 4;
+  expect(clearsToggle, "the back label must not sit under the sidebar trigger").toBe(true);
   const unnamedMobileButtons = await page.locator("button:visible").evaluateAll((buttons) =>
     buttons
       .filter((button) => !button.getAttribute("aria-label") && !button.getAttribute("title") && !button.textContent?.trim())
