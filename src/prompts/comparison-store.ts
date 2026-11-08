@@ -27,6 +27,9 @@ const same = (a: ComparisonFence, b: ComparisonFence) => a.promptGeneration === 
 const positionValue = (value: unknown): number => { if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 3) throw new ComparisonError("invalid_request"); return value; };
 const chargeCap = 2251799813685;
 const attemptContent = ["status", "reason", "payload", "accounting_state", "observed_estimate_usd"];
+// Binary float sums such as 0.000045 + 0.00018 print as 0.00022500000000000002; retain a
+// nano-USD decimal instead. Charges are derived from the float total, never from this text.
+const usdText = (total: number) => { const fixed = total.toFixed(9); return fixed.includes("e") ? String(total) : fixed.replace(/\.?0+$/, ""); };
 const contentBytes = (...values: (string | null)[]) => values.reduce((total, value) => total + (value === null ? 0 : Buffer.byteLength(value)), 0);
 const reasons = new Set(["provider_error", "invalid_response", "response_limit", "protected_content", "cancelled", "timeout", "authority_lost"]);
 const terminal = new Set<ComparisonAttemptStatus>(["completed", "failed", "timeout", "cancelled", "unavailable", "budget_refused", "interrupted", "authority_lost"]);
@@ -269,7 +272,7 @@ export class ComparisonStore {
         if (row.provider === "anthropic") for (const value of [observations.cacheReadTokens, observations.cacheWriteTokens]) if (known(value)) inputMinimum += value;
         if (!Number.isSafeInteger(inputMinimum) || inputMinimum > reservation.inputTokenCeiling || known(observations.outputTokens) && observations.outputTokens > receipt.request!.options.maxOutputTokens) breach = 1;
         if (total !== null && Number.isFinite(total) && total >= 0) {
-          observed = String(total); const amount = Math.ceil(total * 1000000); breach = breach || (amount > row.reserveMicrousd ? 1 : 0);
+          observed = usdText(total); const amount = Math.ceil(total * 1000000); breach = breach || (amount > row.reserveMicrousd ? 1 : 0);
           if (Number.isSafeInteger(amount) && amount <= chargeCap) { charge = amount; state = "measured_estimate"; }
           else { state = "unrepresentable_overage"; breach = 1; }
         }

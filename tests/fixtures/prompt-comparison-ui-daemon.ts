@@ -8,11 +8,11 @@ import { closeDb } from "../../src/db";
 const mode = process.argv[2]; if (mode !== "local" && mode !== "team") throw new Error("Closed native fixture mode required");
 const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
   const body = await request.json() as { model: string; messages: { content: string }[] };
-  const held = body.messages[0].content.includes("[hold]"), overage = body.messages[0].content.includes("[overage]");
+  const held = body.messages[0].content.includes("[hold]"), overage = body.messages[0].content.includes("[overage]"), cut = body.messages[0].content.includes("[length]");
   if (held) await new Promise<void>(resolve => request.signal.addEventListener("abort", () => resolve(), { once: true }));
   const output = overage ? "x".repeat(7900) : `Controlled ${body.model} answer.\n${body.messages[0].content}`, raw = body.model.startsWith("gpt")
-    ? { model: body.model, service_tier: "default", choices: [{ message: { content: output }, finish_reason: "stop" }], usage: { prompt_tokens: overage ? 1000000 : 3, completion_tokens: overage ? 1 : 2, prompt_tokens_details: { cached_tokens: 0 } } }
-    : { model: body.model, stop_reason: "end_turn", content: [{ type: "text", text: output }], usage: { input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, inference_geo: "global", service_tier: "standard" } };
+    ? { model: body.model, service_tier: "default", choices: [{ message: { content: output }, finish_reason: cut ? "length" : "stop" }], usage: { prompt_tokens: overage ? 1000000 : 3, completion_tokens: overage ? 1 : 2, prompt_tokens_details: { cached_tokens: 0 } } }
+    : { model: body.model, stop_reason: cut ? "max_tokens" : "end_turn", content: [{ type: "text", text: output }], usage: { input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, inference_geo: "global", service_tier: "standard" } };
   return Response.json(raw);
 } });
 const client = createComparisonProviderClient({ credentials: { openai: "fixture-token", anthropic: "fixture-token" }, transport: (_url, init) => fetch(upstream.url, init), provenance: "controlled-http-fixture" });

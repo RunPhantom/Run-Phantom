@@ -343,3 +343,10 @@ test("a full queue refuses admission as busy without persisting a refused receip
   const replay = request(first.id, admitted[0].operationKey, single);
   expect(store.submit(replay, store.capture("edit")).id).toBe(admitted[0].id);
 });
+test("measured estimates are retained as decimal USD without binary float noise", () => {
+  const operation = store.submit(request(saved().id, randomUUID(), [COMPARISON_MODELS[0]]), store.capture("edit")), fence = store.capture("edit"); store.start(operation.id, 0, fence);
+  // gpt-5.4: 18 * $2.50/M + 12 * $15/M sums to 0.00022500000000000002 in binary floating point.
+  const receipt = store.finish(operation.id, 0, fence, { status: "completed", result: { output: "Answer", finishReason: "length", provenance: "controlled-http-fixture" as const, usage: { model: "gpt-5.4", inputTokens: 18, outputTokens: 12, cacheReadTokens: 0, contextTokens: 18, tier: "standard" } } });
+  expect(receipt.attempts[0]).toMatchObject({ status: "completed", accountingState: "measured_estimate", observedEstimateUsd: "0.000225" });
+  expect(receipt.attempts[0].chargeMicrousd).toBeGreaterThanOrEqual(225);
+});
