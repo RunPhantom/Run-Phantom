@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Folder, FolderPlus, Trash2 } from "lucide-react";
-import { C } from "../utils/colors";
+import { cn } from "@/lib/utils";
+import { buttonVariants } from "@/components/ui/button";
+import { fieldClassName } from "@/components/ui/input";
 import { addFolder, getFolderColor, useSavedRuns } from "../api/saved-runs";
 
 function FolderRow({ label, value, selected, icon, onSelect }: {
@@ -14,16 +16,15 @@ function FolderRow({ label, value, selected, icon, onSelect }: {
     <button
       type="button"
       aria-pressed={selected}
-      className="w-full text-left px-2 py-1.5 rounded text-[11px] flex items-center gap-1.5 transition-colors rp-hover-wash"
-      style={{
-        color: selected ? C.fg5 : C.fg3,
-        background: selected ? "var(--rp-ink-a06)" : "transparent",
-      }}
+      className={cn(
+        "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[13px] transition-colors duration-250 ease-standard",
+        selected ? "bg-rp-wash font-medium text-rp-blue" : "text-rp-ink hover:bg-rp-row-hover",
+      )}
       onClick={() => onSelect(value)}
     >
       {icon}
       <span className="flex-1 truncate">{label}</span>
-      {selected && <Check className="size-3" style={{ color: C.green }} />}
+      {selected && <Check aria-hidden="true" className="size-3.5 text-rp-blue" />}
     </button>
   );
 }
@@ -76,19 +77,19 @@ export function SavePopover({ onSave, onClose, anchorRef, currentFolder, onUnsav
         el.style.top = `${btn.bottom + 4}px`;
         el.style.right = `${window.innerWidth - btn.right}px`;
       }}
-      className="fixed z-[9999] rounded-lg p-2.5 shadow-xl space-y-1"
+      className="rp-pop fixed z-[9999] space-y-0.5 rounded-md border border-rp-line bg-rp-surface p-1.5 shadow-e3"
       role="dialog"
       aria-label={isSaved ? "Move saved run to folder" : "Save run to folder"}
-      style={{ background: C.surface, border: `1px solid ${C.border}`, boxShadow: "var(--rp-e3)", width: "min(220px, calc(100vw - 32px))" }}
+      style={{ width: "min(240px, calc(100vw - 32px))" }}
     >
-      <div className="text-[10px] px-2 py-1" style={{ color: C.fg0 }}>
+      <div className="rp-eyebrow px-2 pb-1 pt-1">
         {isSaved ? "Move to folder" : "Save to folder"}
       </div>
       <FolderRow
         label="Unfiled"
         value={null}
         selected={normalizedCurrent === null}
-        icon={<Folder className="size-3" style={{ color: C.fg0 }} />}
+        icon={<Folder aria-hidden="true" className="size-3.5 text-rp-ink-muted" />}
         onSelect={selectFolder}
       />
       {folders.map(f => (
@@ -102,30 +103,27 @@ export function SavePopover({ onSave, onClose, anchorRef, currentFolder, onUnsav
         />
       ))}
       {showNew ? (
-        <div className="flex gap-1">
-          <input autoFocus aria-label="New folder name" className="flex-1 min-w-0 px-2 py-1 rounded text-[11px] outline-none" style={{ background: "var(--rp-ink-a06)", color: C.fg3, border: "1px solid var(--rp-ink-a10)" }}
+        <div className="flex gap-1.5 p-1">
+          <input autoFocus aria-label="New folder name" className={cn(fieldClassName, "h-8 flex-1 px-2 text-[13px]")}
             placeholder="Folder name..." value={newFolder} onChange={e => setNewFolder(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter" && newFolder.trim()) { addFolder(newFolder.trim()); onSave(newFolder.trim()); onClose(); } }} />
-          <button className="px-2 py-1 rounded text-[10px] font-medium" style={{ background: "var(--rp-ink-a08)", color: C.fg3 }}
+          <button className={buttonVariants({ variant: "primary", size: "sm" })}
             onClick={() => { if (newFolder.trim()) { addFolder(newFolder.trim()); onSave(newFolder.trim()); onClose(); } }}>
             {isSaved ? "Move" : "Save"}
           </button>
         </div>
       ) : (
-        <button className="w-full text-left px-2 py-1.5 rounded text-[11px] flex items-center gap-1.5 transition-colors hover:bg-[color:var(--rp-ink-wash)]" style={{ color: C.fg0 }}
+        <button className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[13px] text-rp-ink-muted transition-colors duration-250 ease-standard hover:bg-rp-row-hover hover:text-rp-ink"
           onClick={() => setShowNew(true)}>
-          <FolderPlus className="size-3" /> New folder…
+          <FolderPlus aria-hidden="true" className="size-3.5" /> New folder…
         </button>
       )}
       {onUnsave && (
         <>
-          <div className="my-1 -mx-1.5 border-t" style={{ borderColor: "var(--rp-ink-a08)" }} />
-          <button className="w-full text-left px-2 py-1.5 rounded text-[11px] flex items-center gap-1.5 transition-colors"
-            style={{ color: C.red }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "color-mix(in srgb, var(--rp-danger) 10%, white 90%)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+          <div className="-mx-1.5 my-1 border-t border-rp-line-muted" />
+          <button className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[13px] text-rp-danger transition-colors duration-250 ease-standard hover:bg-rp-danger-soft"
             onClick={() => { onUnsave(); onClose(); }}>
-            <Trash2 className="size-3" /> Remove from saved
+            <Trash2 aria-hidden="true" className="size-3.5" /> Remove from saved
           </button>
         </>
       )}
