@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Folder } from "lucide-react";
+import { ChevronRight, Folder } from "lucide-react";
 import { providerLabel, type AgentProviderId } from "../utils/agent-provider";
 
 type ChannelState = "green" | "amber" | "gray";
@@ -83,16 +83,17 @@ export function ConnectionIndicator({
   const statusContent = (
     <>
       <span
-        className="w-2 h-2 rounded-full"
+        aria-hidden="true"
+        className="size-2 shrink-0 rounded-full"
         style={{ background: COLORS[status.state] }}
       />
       {status.state !== "green" && (
-        <span className="truncate text-xs text-[color:var(--rp-ink-strong)]">{providerLabel(provider)} unavailable</span>
+        <span className="truncate text-xs font-medium text-rp-ink">{providerLabel(provider)} unavailable</span>
       )}
       {dir && (
-        <span className="flex min-w-0 items-center gap-1 text-xs text-[color:var(--rp-ink-muted)]">
-          <Folder className="h-3 w-3 shrink-0" />
-          <span className="truncate">{dir}</span>
+        <span className="flex min-w-0 items-center gap-1 text-xs text-rp-ink-muted">
+          <Folder aria-hidden="true" className="size-3 shrink-0" />
+          <span title={cwd ?? undefined} className="truncate font-mono">{dir}</span>
         </span>
       )}
     </>
@@ -106,7 +107,7 @@ export function ConnectionIndicator({
           aria-expanded={showWorkspaceMenu}
           aria-haspopup="menu"
           aria-controls="runphantom-workspace-menu"
-          className="flex min-w-0 items-center gap-2 rounded px-2 py-1 transition hover:bg-[color:var(--rp-ink-wash)]"
+          className="rp-ease flex min-w-0 items-center gap-2 rounded-sm px-2 py-1 hover:bg-rp-row-hover"
           onClick={() => {
             setShowWorkspaceMenu((value) => !value);
             void loadRegisteredWorkspaces(setWorkspaces, setWorkspaceError);
@@ -121,33 +122,33 @@ export function ConnectionIndicator({
           aria-expanded={showRemediation}
           aria-haspopup="dialog"
           aria-controls="runphantom-agent-remediation"
-          className="flex items-center gap-2 px-2 py-1 rounded hover:bg-[color:var(--rp-ink-wash)] transition"
+          className="rp-ease flex items-center gap-2 rounded-sm px-2 py-1 hover:bg-rp-row-hover"
           onClick={() => setShowRemediation((v) => !v)}
         >
           {statusContent}
         </button>
       )}
       {showWorkspaceMenu && status.state === "green" && (
-        <div id="runphantom-workspace-menu" role="menu" aria-label="Registered workspaces" className="absolute left-0 top-full z-50 mt-2 w-[min(20rem,calc(100vw-3rem))] rounded-lg border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] p-1 text-xs shadow-2xl">
+        <div id="runphantom-workspace-menu" role="menu" aria-label="Registered workspaces" className="rp-pop absolute left-0 top-full z-50 mt-2 w-[min(20rem,calc(100vw-3rem))] rounded-lg border border-rp-line bg-white p-1 text-xs shadow-e3">
           {onChooseFolder && (
             <button
               type="button"
               role="menuitem"
-              className="mb-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[color:var(--rp-ink-strong)] transition-colors hover:bg-[color:var(--rp-ink-wash)]"
+              className="rp-ease mb-1 flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left font-medium text-rp-blue hover:bg-rp-wash"
               onClick={() => {
                 setShowWorkspaceMenu(false);
                 onChooseFolder();
               }}
             >
-              <Folder className="h-3.5 w-3.5 shrink-0" />
-              <span className="min-w-0 flex-1 truncate">Choose folder...</span>
+              <Folder aria-hidden="true" className="size-3.5 shrink-0" />
+              <span className="min-w-0 flex-1 truncate">Choose folder…</span>
             </button>
           )}
           {workspaceError && (
-            <div className="px-2 py-1.5 text-[color:var(--rp-danger)]">{workspaceError}</div>
+            <div role="alert" className="px-2 py-1.5 text-rp-danger">{workspaceError}</div>
           )}
           {!workspaceError && workspaces.length === 0 && (
-            <div className="px-2 py-2 text-[color:var(--rp-ink-muted)]">No registered workspaces.</div>
+            <div className="px-2 py-2 text-rp-ink-muted">No registered workspaces.</div>
           )}
           {!workspaceError && workspaces.map((workspace) => (
             <button
@@ -155,56 +156,60 @@ export function ConnectionIndicator({
               type="button"
               role="menuitemradio"
               aria-checked={workspace.cwd === cwd}
-              className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
-                workspace.cwd === cwd ? "bg-[color:var(--rp-ink-wash)] text-[color:var(--rp-ink-strong)]" : "text-[color:var(--rp-ink-soft)] hover:bg-[color:var(--rp-ink-wash)] hover:text-[color:var(--rp-ink-strong)]"
+              title={workspace.cwd}
+              className={`rp-ease flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left ${
+                workspace.cwd === cwd ? "bg-rp-wash font-medium text-rp-blue" : "text-rp-ink-soft hover:bg-rp-row-hover hover:text-rp-ink"
               }`}
               onClick={() => void switchWorkspace(workspace.cwd, setShowWorkspaceMenu, setWorkspaceError)}
             >
-              <Folder className="h-3.5 w-3.5 shrink-0" />
+              <Folder aria-hidden="true" className="size-3.5 shrink-0" />
               <span className="min-w-0 flex-1 truncate">{cwdLabel(workspace.cwd)}</span>
               {workspace.agents && workspace.agents.length > 0 && (
-                <span className="shrink-0 truncate text-[10px] text-[color:var(--rp-ink-muted)]">{workspace.agents.join(", ")}</span>
+                <span className="rp-meta shrink-0 truncate">{workspace.agents.join(", ")}</span>
               )}
             </button>
           ))}
         </div>
       )}
       {showRemediation && status.state !== "green" && (
-        <div id="runphantom-agent-remediation" role="dialog" aria-label={`${providerLabel(provider)} setup help`} className="absolute left-0 top-full z-50 mt-2 w-[min(20rem,calc(100vw-3rem))] rounded-lg border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] p-3 text-xs shadow-2xl">
-          <div className="text-[color:var(--rp-ink-strong)] mb-2 leading-relaxed">
+        <div id="runphantom-agent-remediation" role="dialog" aria-label={`${providerLabel(provider)} setup help`} className="rp-pop absolute left-0 top-full z-50 mt-2 w-[min(20rem,calc(100vw-3rem))] rounded-lg border border-rp-line bg-white p-4 text-xs shadow-e3">
+          <div className="mb-2 leading-5 text-rp-ink">
             Run Phantom chat streams through your local {providerLabel(provider)} CLI. Make sure
-            <code className="mx-1 rounded bg-[color:var(--rp-ink-wash)] px-1 font-mono">{provider === "codex" ? "codex" : "claude"}</code>
+            <code className="mx-1 rounded-control bg-rp-canvas-blue px-1 font-mono text-rp-ink">{provider === "codex" ? "codex" : "claude"}</code>
             is on your PATH and you are logged in.
           </div>
           <button
-            className="mt-1 text-[color:var(--rp-ink-soft)] hover:text-[color:var(--rp-ink-strong)]"
+            type="button"
+            aria-expanded={firstTimeOpen}
+            className="rp-ease mt-1 inline-flex items-center gap-1 font-medium text-rp-blue hover:text-rp-blue-hover"
             onClick={() => setFirstTimeOpen((v) => !v)}
           >
-            First time? {firstTimeOpen ? "▾" : "▸"}
+            First time?
+            <ChevronRight aria-hidden="true" className={`size-3.5 transition-transform duration-250 ease-standard motion-reduce:transition-none ${firstTimeOpen ? "rotate-90" : ""}`} />
           </button>
           {firstTimeOpen && (
-            <div className="mt-2 text-[color:var(--rp-ink-soft)] leading-relaxed space-y-2">
+            <div className="mt-3 space-y-2 border-t border-rp-line-muted pt-3 leading-5 text-rp-ink-soft">
               <div>
                 From this source checkout, install dependencies once:
               </div>
-              <div className="flex items-center gap-2 rounded bg-[color:var(--rp-ink-wash)] px-2 py-1.5 font-mono text-[10px] text-[color:var(--rp-ink-strong)]">
+              <div className="flex items-center gap-2 rounded-sm border border-rp-line-muted bg-rp-canvas-blue px-2 py-1.5 font-mono text-[11px] text-rp-ink">
                 <span className="flex-1 select-all break-all">{installCommand}</span>
               </div>
               <div>
                 Register Run Phantom with your detected agent tools once:
               </div>
-              <div className="flex items-center gap-2 rounded bg-[color:var(--rp-ink-wash)] px-2 py-1.5 font-mono text-[10px] text-[color:var(--rp-ink-strong)]">
+              <div className="flex items-center gap-2 rounded-sm border border-rp-line-muted bg-rp-canvas-blue px-2 py-1.5 font-mono text-[11px] text-rp-ink">
                 <span className="flex-1 select-all break-all">{setupCommand}</span>
               </div>
               <div>
                 Run Phantom chat streams through {providerLabel(provider)} and injects
                 the local Run Phantom MCP server into that session. Claude Code reads MCP
                 entries from{" "}
-                <code className="font-mono bg-[color:var(--rp-ink-wash)] px-1 rounded">
+                <code className="rounded-control bg-rp-canvas-blue px-1 font-mono text-rp-ink">
                   ~/.claude.json
                 </code>
                 , while Codex can also read MCP servers from{" "}
-                <code className="font-mono bg-[color:var(--rp-ink-wash)] px-1 rounded">
+                <code className="rounded-control bg-rp-canvas-blue px-1 font-mono text-rp-ink">
                   ~/.codex/config.toml
                 </code>
                 .
