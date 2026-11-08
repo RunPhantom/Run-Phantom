@@ -10,7 +10,7 @@ export function BusinessEvidence({ events, enabled, connected, retained = false 
   for (const event of [...events].sort((a, b) => a.t - b.t)) if (event.type === "network.body") latest.set(event.data.requestId, event);
   return <section aria-labelledby={heading} className={retained ? "space-y-3 border-t border-rp-line-muted pt-4" : "space-y-4"}>
     {retained ? <div className="flex flex-wrap items-center justify-between gap-2"><h2 id={heading} className="text-[14px] font-semibold text-rp-ink">Response evidence</h2><span className="rp-meta">Saved evidence</span></div>
-      : <SectionHead eyebrow="Network / Response bodies" title="Response evidence" id={heading} aside={<Badge tone={!connected ? "warning" : enabled ? "accent" : "neutral"}>{!connected ? "Disconnected" : enabled ? "Capture enabled" : "Capture off"}</Badge>} />}
+      : <SectionHead eyebrow="Network / Response bodies" title="Response evidence" id={heading} aside={<Badge tone={!connected ? "warning" : enabled ? "accent" : "neutral"}>{!connected ? "App disconnected" : enabled ? "Capture enabled" : "Capture off"}</Badge>} />}
     <p className="max-w-[70ch] text-[13px] leading-[1.7] text-rp-ink-muted">{enabled ? "Bounded response copies reported by the app. Completion records a readable stream ending; it does not authenticate server persistence." : "Off by default. Enable response evidence when pairing, then connect with the updated setup."}</p>
     {latest.size === 0 && <p className="rounded-md border border-dashed border-[color:var(--rp-line-dashed)] px-4 py-4 text-[13px] text-rp-ink-muted">No response bodies captured in this interval.</p>}
     <ul className="space-y-3">{[...latest.values()].reverse().slice(0, 12).map(event => {
