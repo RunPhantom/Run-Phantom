@@ -41,7 +41,7 @@ function decodeRequest(input: Uint8Array): EvidenceWorkerRequest {
   if (Object.keys(request).length !== 6 || Object.keys(request).some(key => !["version", "id", "sourceId", "dialect", "limits", "bytes"].includes(key)) || request.version !== 1) throw new Error("protocol_invalid");
   const limits = readerLimits(request.limits as Partial<ReaderLimits>);
   const id = evidenceText(request.id, "worker request ID"), sourceId = evidenceText(request.sourceId, "source ID"), dialect = evidenceText(request.dialect, "dialect");
-  if (typeof request.bytes !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(request.bytes) || request.bytes.length > Math.ceil(limits.maxSourceBytes / 3) * 4) throw new Error("protocol_invalid");
+  if (typeof request.bytes !== "string" || request.bytes.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(request.bytes) || request.bytes.length > Math.ceil(limits.maxSourceBytes / 3) * 4) throw new Error("protocol_invalid");
   return { version: 1, id, sourceId, dialect, limits, bytes: request.bytes };
 }
 

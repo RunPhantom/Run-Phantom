@@ -1,21 +1,21 @@
 import { parseJsonEvidence } from "../json-evidence";
 import { ReaderRefusal, type ReaderLimits } from "./limits";
 
+// Sticky native scans: per-character loops over multi-MiB worker frames exceeded MAX_SOURCE_MS on CI runners.
+const STRING_BODY = /[^"\\]*(?:\\[\s\S][^"\\]*)*"/y;
+const LITERAL = /(?:true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)/y;
+
 /** Validate the complete JSON grammar before JSON.parse can erase duplicate keys. */
 export function strictEvidenceJson(text: string, limits: ReaderLimits): unknown {
   let at = 0, nodes = 0;
   const fail = () => { throw new ReaderRefusal("invalid_json", false); };
   const space = () => { while (/[\x20\t\r\n]/.test(text[at] ?? "!")) at++; };
   function string(): string {
-    const start = at++;
-    while (at < text.length) {
-      const char = text[at++];
-      if (char === '"') {
-        try { return JSON.parse(text.slice(start, at)) as string; } catch { return fail(); }
-      }
-      if (char === "\\") at++;
-    }
-    return fail();
+    const start = at;
+    STRING_BODY.lastIndex = at + 1;
+    if (!STRING_BODY.test(text)) return fail();
+    at = STRING_BODY.lastIndex;
+    try { return JSON.parse(text.slice(start, at)) as string; } catch { return fail(); }
   }
   function value(depth: number): void {
     if (++nodes > 200_000) throw new ReaderRefusal("source_limit");
@@ -45,9 +45,9 @@ export function strictEvidenceJson(text: string, limits: ReaderLimits): unknown 
       }
       fail();
     }
-    const literal = /^(?:true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)/.exec(text.slice(at));
-    if (!literal) fail();
-    at += literal![0].length;
+    LITERAL.lastIndex = at;
+    if (!LITERAL.test(text)) fail();
+    at = LITERAL.lastIndex;
   }
   value(0); space(); if (at !== text.length) fail();
   try { return parseJsonEvidence(text); } catch { return fail(); }

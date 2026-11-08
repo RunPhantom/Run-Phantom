@@ -16,7 +16,7 @@ function decimal(token: string): string {
 
 /** Inspect tokens outside JSON strings before a transport/parser can round them. Syntax is validated by JSON.parse. */
 export function assertLosslessJsonNumbers(text: string): void {
-  const tokens = /"(?:[^"\\]|\\[\s\S])*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
+  const tokens = /"[^"\\]*(?:\\[\s\S][^"\\]*)*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
   for (const [token] of text.matchAll(tokens)) {
     if (token.startsWith('"')) continue;
     const value = Number(token);
