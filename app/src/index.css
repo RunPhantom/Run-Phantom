@@ -29,6 +29,20 @@
   --rp-weight-medium: 500;
   --rp-weight-semibold: 600;
 
+  --rp-blue: #0021CC;
+  --rp-blue-hover: #001AA3;
+  --rp-blue-active: #001680;
+  --rp-line: #D9DEEA;
+  --rp-line-muted: #E8ECF5;
+  --rp-line-strong: #7C8494;
+  --rp-wash: #EEF2FF;
+  --rp-wash-border: #B9C4F1;
+  --rp-canvas-grey: #F8FAFB;
+  --rp-canvas-blue: #F8FAFF;
+  --rp-row-hover: #F6F7FA;
+  --rp-ink-subtle: #5C6578;
+  --rp-index: #777E8E;
+
   --rp-n0: #FFFFFF;
   --rp-n1: #FFFFFF;
   --rp-n2: #F9FAFC;
@@ -116,13 +130,10 @@
   --rp-elev-inset:
     inset 0 1px 2px 0 rgb(var(--rp-shadow-rgb) / 0.06),
     inset 0 1px 1px 0 rgb(var(--rp-shadow-rgb) / 0.04);
-  --rp-elev-1:
-    0 0 0 1px rgb(var(--rp-shadow-rgb) / 0.045),
-    0 1px 1px -0.5px rgb(var(--rp-shadow-rgb) / 0.06);
+  --rp-elev-1: 0 0 0 1px rgb(var(--rp-shadow-rgb) / 0.045);
   --rp-elev-2:
     0 0 0 1px rgb(var(--rp-shadow-rgb) / 0.05),
-    0 1px 1px -0.5px rgb(var(--rp-shadow-rgb) / 0.05),
-    0 2px 4px -2px rgb(var(--rp-shadow-rgb) / 0.05);
+    0 1px 2px 0 rgb(var(--rp-shadow-rgb) / 0.04);
   --rp-elev-3:
     0 0 0 1px rgb(var(--rp-shadow-rgb) / 0.06),
     0 1px 1px -0.5px rgb(var(--rp-shadow-rgb) / 0.05),
@@ -152,10 +163,11 @@
 
   --rp-highlight-top: inset 0 1px 0 0 rgb(255 255 255 / 0.70);
 
+  --rp-radius-control: 2px;
   --rp-radius-sm: 4px;
   --rp-radius-md: 5px;
   --rp-radius-lg: 7px;
-  --rp-radius-xl: 12px;
+  --rp-radius-xl: 8px;
   --rp-radius-full: 9999px;
 
   --rp-accent: #0021CC;
@@ -262,6 +274,12 @@
   --rp-ease-hover: cubic-bezier(0.25, 0.1, 0.25, 1);
   --rp-ease-drawer: cubic-bezier(0.22, 1, 0.36, 1);
 
+  --rp-dur-standard: 250ms;
+  --rp-dur-rise: 200ms;
+  --rp-dur-spring: 350ms;
+  --rp-rise-distance: 6px;
+  --rp-ease-spring: linear(0 0%, 0.0272 2.5%, 0.0924 5%, 0.1771 7.5%, 0.2695 10%, 0.3617 12.5%, 0.4492 15%, 0.5296 17.5%, 0.6015 20%, 0.6648 22.5%, 0.7198 25%, 0.7669 27.5%, 0.8069 30%, 0.8407 32.5%, 0.8691 35%, 0.8927 37.5%, 0.9123 40%, 0.9285 42.5%, 0.9419 45%, 0.9528 47.5%, 0.9618 50%, 0.9691 52.5%, 0.975 55%, 0.9799 57.5%, 0.9838 60%, 0.987 62.5%, 0.9895 65%, 0.9916 67.5%, 0.9933 70%, 0.9946 72.5%, 0.9957 75%, 0.9965 77.5%, 0.9972 80%, 0.9978 82.5%, 0.9982 85%, 0.9986 87.5%, 0.9989 90%, 0.9991 92.5%, 0.9993 95%, 0.9994 97.5%, 1 100%);
+
   --rp-motion-hover-in: 0ms;
   --rp-motion-hover-out: 120ms;
   --rp-motion-press: 120ms;
@@ -306,7 +324,7 @@
 
   --rp-dur-instant: 0ms;
   --rp-dur-press: 90ms;
-  --rp-dur-hover: 180ms;
+  --rp-dur-hover: 250ms;
   --rp-dur-tooltip: 125ms;
   --rp-dur-pop: 200ms;
   --rp-dur-panel: 280ms;
