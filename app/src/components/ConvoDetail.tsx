@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { HelpCircle } from "lucide-react";
-import { C } from "../utils/colors";
 import { ago } from "../utils/helpers";
 import { Dots } from "./Icons";
 import { ToolCallPill } from "./ToolCallPill";
@@ -13,29 +12,28 @@ import { isRunDeleting, useConversationDetail } from "../hooks/use-runs";
 
 function ConversationHeader({ runCount }: { runCount: number }) {
   return (
-    <div className="text-[11px] font-mono inline-flex items-center gap-1.5" style={{ color: C.fg1 }}>
-      <span>conversation</span>
-      <span className="relative group inline-flex items-center">
-        <HelpCircle size={13} style={{ color: C.fg0, cursor: "help" }} />
-        <div className="absolute left-0 top-full mt-2 z-50 hidden group-hover:block">
-          <div className="rounded-lg px-3 py-2 text-[11px] leading-relaxed whitespace-nowrap shadow-xl"
-            style={{ background: C.elevated, border: `1px solid ${C.borderLight}`, color: C.fg3 }}>
+    <div className="inline-flex items-center gap-2">
+      <span className="rp-eyebrow"><span aria-hidden="true" className="rp-eyebrow-marker" />conversation</span>
+      <span className="group relative inline-flex items-center">
+        <HelpCircle aria-hidden="true" size={13} className="cursor-help text-rp-ink-muted" />
+        <div className="absolute left-0 top-full z-50 mt-2 hidden group-hover:block">
+          <div className="rp-pop whitespace-nowrap rounded-md border border-rp-line bg-rp-surface px-3 py-2 text-[12px] leading-relaxed text-rp-ink shadow-e3">
             Conversation groups separate runs that share the same conversation ID.
           </div>
         </div>
       </span>
-      <span style={{ color: C.fg0 }}>&middot;</span>
-      <span>{runCount} run{runCount !== 1 ? "s" : ""}</span>
+      <span aria-hidden="true" className="text-rp-ink-faint">&middot;</span>
+      <span className="rp-meta">{runCount} run{runCount !== 1 ? "s" : ""}</span>
     </div>
   );
 }
 
 function UserMessage({ content }: { content: string }) {
   return (
-    <div className="flex justify-end px-4 pt-5 pb-1">
-      <div className="max-w-[65%] px-3.5 py-2.5 rounded-2xl rounded-br-md" style={{ background: C.user }}>
+    <div className="flex justify-end px-4 pb-1 pt-5">
+      <div className="max-w-[65%] rounded-md border border-rp-line bg-rp-surface px-3.5 py-2.5">
         <div className="relative">
-          <pre className="text-sm leading-relaxed font-sans whitespace-pre-wrap" style={{ color: C.fg3 }}>
+          <pre className="whitespace-pre-wrap font-sans text-[14px] leading-relaxed text-rp-ink">
             {content}
           </pre>
         </div>
@@ -46,22 +44,21 @@ function UserMessage({ content }: { content: string }) {
 
 function TurnDivider({ index, run, onOpen, onHover }: { index: number; run: Run; onOpen: () => void; onHover: (hovering: boolean) => void }) {
   return (
-    <div className="flex items-center gap-3 px-4 pt-6 pb-2">
-      <div className="flex-1 h-px" style={{ background: "var(--rp-ink-a08)" }} />
-      <span className="rounded border px-2 py-0.5 text-[10px] font-mono" style={{ color: C.fg1, background: C.surface, borderColor: C.border }}>
+    <div className="flex items-center gap-3 px-4 pb-2 pt-6">
+      <div className="h-px flex-1 bg-rp-line" />
+      <span className="rp-eyebrow text-rp-ink">
         Run {index + 1}
       </span>
-      <span className="text-[10px]" style={{ color: C.fg0 }}>{ago(run.started_at)}</span>
+      <span className="rp-meta">{ago(run.started_at)}</span>
       <button
-        className="text-[10px] font-mono px-2 py-0.5 rounded transition-colors"
-        style={{ color: C.fg1, background: C.surface, border: `1px solid ${C.border}` }}
-        onMouseEnter={e => { e.currentTarget.style.background = "var(--rp-surface-raised)"; onHover(true); }}
-        onMouseLeave={e => { e.currentTarget.style.background = "var(--rp-surface)"; onHover(false); }}
+        className="h-7 rounded-control border border-rp-line bg-rp-surface px-2 text-[12px] font-medium text-rp-blue transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash"
+        onMouseEnter={() => onHover(true)}
+        onMouseLeave={() => onHover(false)}
         onClick={onOpen}
       >
         open &rarr;
       </button>
-      <div className="flex-1 h-px" style={{ background: "var(--rp-ink-a08)" }} />
+      <div className="h-px flex-1 bg-rp-line" />
     </div>
   );
 }
@@ -71,7 +68,6 @@ export function ConvoDetail({ convoId, onOpenTurn }: { convoId: string; onOpenTu
   const { turns, runIds, isLoading, isError } = useConversationDetail(convoId);
   const [hoveredTurn, setHoveredTurn] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const colorMap = useMemo(() => new Map<string, string>(), []);
 
   useRunPhantomEvent("spans", () => {
     void queryClient.invalidateQueries({ queryKey: ["conversation-runs", convoId] });
@@ -98,13 +94,13 @@ export function ConvoDetail({ convoId, onOpenTurn }: { convoId: string; onOpenTu
 
   const events = useMemo(() => buildConvoEvents(turns), [turns]);
 
-  if (isLoading) return <div className="flex items-center justify-center h-full gap-2" style={{ color: C.fg1 }}>Loading <Dots /></div>;
-  if (isError) return <div className="flex items-center justify-center h-full" style={{ color: C.fg1 }}>Could not load conversation</div>;
-  if (turns.length === 0) return <div className="flex items-center justify-center h-full" style={{ color: C.fg1 }}>No runs found</div>;
+  if (isLoading) return <div role="status" className="flex h-full items-center justify-center gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-rp-ink-muted">Loading conversation <Dots /></div>;
+  if (isError) return <div role="alert" className="mx-4 my-6 rounded-lg border border-dashed border-rp-danger-border bg-rp-danger-soft px-6 py-8 text-center text-[13px] text-rp-danger">Could not load conversation</div>;
+  if (turns.length === 0) return <div className="mx-4 my-6 rounded-lg border border-dashed border-rp-line-dashed bg-rp-surface px-6 py-8 text-center text-[13px] text-rp-ink-muted">No runs found</div>;
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex-shrink-0 px-4 py-3" style={{ borderBottom: `1px solid ${C.border}` }}>
+      <div className="flex flex-shrink-0 items-center border-b border-rp-line px-4 py-3">
         <ConversationHeader runCount={turns.length} />
       </div>
 
@@ -115,7 +111,7 @@ export function ConvoDetail({ convoId, onOpenTurn }: { convoId: string; onOpenTu
 
           if (evt.type === "turn_start") {
             return (
-              <div key={`td${i}`} style={{ opacity: dimmed ? 0.35 : 1, transition: "opacity 0.15s" }}>
+              <div key={`td${i}`} style={{ opacity: dimmed ? 0.35 : 1, transition: "opacity 250ms cubic-bezier(.25,.1,.25,1)" }}>
                 <TurnDivider index={evt.turnIndex} run={evt.run}
                   onOpen={() => onOpenTurn?.(evt.run.id)}
                   onHover={(h) => setHoveredTurn(h ? evt.turnIndex : null)} />
@@ -125,7 +121,7 @@ export function ConvoDetail({ convoId, onOpenTurn }: { convoId: string; onOpenTu
 
           if (evt.type === "user_msg") {
             return (
-              <div key={`um${i}`} style={{ opacity: dimmed ? 0.35 : 1, transition: "opacity 0.15s" }}>
+              <div key={`um${i}`} style={{ opacity: dimmed ? 0.35 : 1, transition: "opacity 250ms cubic-bezier(.25,.1,.25,1)" }}>
                 <UserMessage content={evt.content} />
               </div>
             );
@@ -133,9 +129,9 @@ export function ConvoDetail({ convoId, onOpenTurn }: { convoId: string; onOpenTu
 
           if (evt.type === "tool_group") {
             return (
-              <div key={`tg${i}`} className="flex flex-wrap gap-1.5 px-4 py-1" style={{ opacity: dimmed ? 0.35 : 1, transition: "opacity 0.15s" }}>
+              <div key={`tg${i}`} className="flex flex-wrap gap-1.5 px-4 py-1" style={{ opacity: dimmed ? 0.35 : 1, transition: "opacity 250ms cubic-bezier(.25,.1,.25,1)" }}>
                 {evt.spans.map(s => (
-                  <ToolCallPill key={s.id} span={s} colorMap={colorMap} />
+                  <ToolCallPill key={s.id} span={s} />
                 ))}
               </div>
             );
@@ -143,8 +139,8 @@ export function ConvoDetail({ convoId, onOpenTurn }: { convoId: string; onOpenTu
 
           if (evt.type === "llm_out") {
             return (
-              <div key={`lo${i}`} className="max-w-[85%] px-4 py-2" style={{ opacity: dimmed ? 0.35 : 1, transition: "opacity 0.15s" }}>
-                <div className="text-message leading-relaxed" style={{ color: C.fg3 }}>
+              <div key={`lo${i}`} className="max-w-[85%] px-4 py-2" style={{ opacity: dimmed ? 0.35 : 1, transition: "opacity 250ms cubic-bezier(.25,.1,.25,1)" }}>
+                <div className="text-message leading-relaxed text-rp-ink">
                   <Markdown>{evt.content}</Markdown>
                 </div>
               </div>
@@ -153,7 +149,7 @@ export function ConvoDetail({ convoId, onOpenTurn }: { convoId: string; onOpenTu
 
           if (evt.type === "active") {
             return (
-              <div key={`act${i}`} className="px-4 py-2 text-[11px] font-mono" style={{ opacity: dimmed ? 0.35 : 1, transition: "opacity 0.15s", color: C.fg0 }}>
+              <div key={`act${i}`} className="px-4 py-2 text-[11px] font-mono" style={{ opacity: dimmed ? 0.35 : 1, transition: "opacity 250ms cubic-bezier(.25,.1,.25,1)", color: "var(--rp-ink-muted)" }}>
                 running <Dots />
               </div>
             );

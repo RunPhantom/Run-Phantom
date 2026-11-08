@@ -1,7 +1,7 @@
 import { CaptureVisibilityDetails } from "./CaptureVisibilityDetails";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Pencil } from "lucide-react";
-import { C, spanColor } from "../utils/colors";
+import { cn } from "@/lib/utils";
 import { argsPreview, displayPayload, fmt, MAX_INLINE_PAYLOAD, plural, trunc, tryJson } from "../utils/helpers";
 import type { LiveEvent, Span, SubAgent } from "../utils/types";
 import { Button } from "./Button";
@@ -44,28 +44,25 @@ function PreviousMessages({ messages }: { messages: { role: string; content: str
   return (
     <div>
       <div className="flex items-center gap-3 py-3">
-        <div className="flex-1 h-px" style={{ background: "var(--rp-ink-a18)" }} />
+        <div className="h-px flex-1 bg-rp-line" />
         <button
-          className="flex flex-col items-center text-[11px] font-mono whitespace-pre leading-tight px-4 py-1 rounded-xl transition-[background-color,color] duration-200"
-          style={{ color: C.fg2, background: "transparent" }}
-          onMouseEnter={e => { e.currentTarget.style.background = "var(--rp-ink-a08)"; }}
-          onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+          className="flex flex-col items-center whitespace-pre rounded-control border border-rp-line bg-rp-surface px-4 py-1.5 font-mono text-[11px] leading-tight text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash"
           onClick={() => setExpanded(!expanded)}
         >
           {expanded ? (
             "hide"
           ) : (
             <>
-              <span className="text-[12px] font-medium normal-case leading-snug" style={{ color: C.fg2 }}>
+              <span className="font-sans text-[12px] font-medium normal-case leading-snug text-rp-ink">
                 previous messages
               </span>
-              <span className="mt-0.5 text-[10px] text-[--fg1] opacity-70 font-normal">
+              <span className="mt-0.5 text-[10px] font-normal text-rp-ink-muted">
                 {counts}
               </span>
             </>
           )}
         </button>
-        <div className="flex-1 h-px" style={{ background: "var(--rp-ink-a18)" }} />
+        <div className="h-px flex-1 bg-rp-line" />
       </div>
       {expanded && <div className="mt-1"><MessageList messages={messages} /></div>}
     </div>
@@ -135,31 +132,29 @@ function SubAgentBlock({ agent, spans, subAgentBySpan, onDiveIn }: { agent: SubA
         type="button"
         aria-expanded={open}
         aria-haspopup="dialog"
-        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium"
-        style={{ background: "color-mix(in srgb, var(--rp-info) 9%, white 91%)", border: "1px solid color-mix(in srgb, var(--rp-info) 24%, white 76%)", color: C.fg2 }}
+        className="inline-flex min-h-8 items-center gap-1.5 rounded-sm border border-rp-line bg-rp-surface px-2.5 py-1 text-xs font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash aria-expanded:border-rp-wash-border aria-expanded:bg-rp-wash"
         onClick={() => setOpen(!open)}
       >
-        <span className="text-[10px] font-bold uppercase tracking-wider px-1 rounded leading-none"
-          style={{ color: C.cyan, background: "color-mix(in srgb, var(--rp-info) 12%, white 88%)", padding: "2px 4px" }}>agent</span>
-        <span style={{ color: C.fg4 }}>{a.name}</span>
-        <span style={{ color: C.fg0, fontSize: "10px" }}>{plural(a.tool_count, "tool")} &middot; {fmt(a.duration_ms)}</span>
+        <span className="rounded-sm bg-rp-wash px-1 py-0.5 font-mono text-[10px] font-medium uppercase leading-none tracking-[0.08em] text-rp-blue">agent</span>
+        <span className="text-rp-ink">{a.name}</span>
+        <span className="rp-num text-[11px] text-rp-ink-muted">{plural(a.tool_count, "tool")} &middot; {fmt(a.duration_ms)}</span>
         <Chevron open={open} size={10} />
       </button>
 
         {open && pos && (
           <div
-            className="fixed z-[9999] rounded-lg shadow-xl flex flex-col"
+            className="rp-pop fixed z-[9999] flex flex-col rounded-md border border-rp-line bg-rp-surface shadow-e3"
             role="dialog"
             aria-label={`${a.name} sub-agent details`}
-            style={{ top: pos.top, left: Math.max(16, Math.min(pos.left, window.innerWidth - Math.min(360, window.innerWidth - 32) - 16)), width: "min(360px, calc(100vw - 32px))", maxHeight: 340, background: C.elevated, border: `1px solid ${C.borderLight}` }}
+            style={{ top: pos.top, left: Math.max(16, Math.min(pos.left, window.innerWidth - Math.min(360, window.innerWidth - 32) - 16)), width: "min(360px, calc(100vw - 32px))", maxHeight: 340 }}
             onMouseDown={e => e.stopPropagation()}
           >
             <div className="p-3 space-y-2 overflow-auto sb flex-1 min-h-0">
               {/* Input — shown as a user-message bubble */}
               {agentInput && (
                 <div className="flex justify-end">
-                  <div className="max-w-[90%] px-2.5 py-1.5 rounded-2xl rounded-br-md" style={{ background: C.user }}>
-                    <pre className="text-[11px] font-sans leading-snug whitespace-pre-wrap" style={{ color: C.fg3 }}>{trunc(agentInput, 150)}</pre>
+                  <div className="max-w-[90%] rounded-md border border-rp-line bg-rp-canvas-blue px-2.5 py-1.5">
+                    <pre className="whitespace-pre-wrap font-sans text-[12px] leading-snug text-rp-ink">{trunc(agentInput, 150)}</pre>
                   </div>
                 </div>
               )}
@@ -168,9 +163,8 @@ function SubAgentBlock({ agent, spans, subAgentBySpan, onDiveIn }: { agent: SubA
               {agentToolSpans.length > 0 && (
                 <div className="flex flex-wrap gap-1">
                   {agentToolSpans.map(s => (
-                    <span key={s.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono"
-                      style={{ background: "var(--rp-ink-a04)", border: `1px solid ${C.border}`, color: s.status === "ERROR" ? C.red : C.fg3 }}>
-                      {s.status === "ERROR" ? <AlertCircle /> : <Check />} {s.name} <span style={{ color: C.fg0 }}>{fmt(s.duration_ms)}</span>
+                    <span key={s.id} className={cn("inline-flex items-center gap-1 rounded-sm border px-2 py-0.5 font-mono text-[11px]", s.status === "ERROR" ? "border-rp-danger-border bg-rp-danger-soft text-rp-danger" : "border-rp-line bg-white text-rp-ink")}>
+                      {s.status === "ERROR" ? <AlertCircle /> : <Check />} {s.name} <span className="text-rp-ink-muted">{fmt(s.duration_ms)}</span>
                     </span>
                   ))}
                 </div>
@@ -179,21 +173,21 @@ function SubAgentBlock({ agent, spans, subAgentBySpan, onDiveIn }: { agent: SubA
               {/* Output */}
               {agentOutput?.output_payload && (
                 <div>
-                  <div className="text-[9px] uppercase tracking-wide mb-0.5 font-medium" style={{ color: C.fg0 }}>Output</div>
-                  <pre className="text-[11px] font-sans leading-relaxed whitespace-pre-wrap" style={{ color: C.fg2 }}>{trunc(agentOutput.output_payload, 150)}</pre>
+                  <div className="mb-1 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted">Output</div>
+                  <pre className="whitespace-pre-wrap font-sans text-[12px] leading-relaxed text-rp-ink">{trunc(agentOutput.output_payload, 150)}</pre>
                 </div>
               )}
 
             </div>
 
             {/* Footer — always visible */}
-            <div className="flex-shrink-0 flex flex-wrap items-center justify-between gap-2 px-3 py-2" style={{ borderTop: `1px solid ${C.border}` }}>
+            <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2 border-t border-rp-line px-3 py-2">
               {onDiveIn ? (
                 <Button className="shrink-0 whitespace-nowrap" onClick={() => { setOpen(false); onDiveIn(a.root_span_id); }}>
                   Open Sub-Agent &rarr;
                 </Button>
               ) : <div />}
-              <div className="min-w-0 flex-1 break-words text-[10px] font-mono text-right" style={{ color: C.fg0 }}>
+              <div className="rp-meta min-w-0 flex-1 break-words text-right text-[10px]">
                 {a.model && <>{a.model} &middot; </>}
                 {a.llm_count} LLM &middot; {plural(a.tool_count, "tool")} &middot; {fmt(a.duration_ms)}
                 {a.total_input_tokens > 0 && <> &middot; {a.total_input_tokens.toLocaleString()} in</>}
@@ -219,21 +213,18 @@ function UserBubble({ content, collapsible }: { content: string; collapsible?: b
 
   return (
     <div
-      className="px-3.5 py-2.5 rounded-2xl rounded-br-md"
-      style={{ background: C.user }}
+      className="rounded-md border border-rp-line bg-rp-surface px-3.5 py-2.5"
     >
       <pre
-        className="text-[13px] leading-relaxed font-sans whitespace-pre-wrap"
+        className="whitespace-pre-wrap font-sans text-[14px] leading-relaxed text-rp-ink"
         style={{
-          color: C.fg3,
           ...(collapsed ? { maxHeight: 22, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const } : {}),
         }}
       >
         {capped}
       </pre>
       {canCollapse && (
-        <button className="text-[10px] font-mono mt-0.5 px-1.5 py-0.5 -ml-1.5 rounded transition-colors hover:bg-[color:var(--rp-ink-wash)]"
-          style={{ color: C.fg1 }}
+        <button className="-ml-1.5 mt-0.5 rounded-sm px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-rp-ink-muted transition-colors duration-250 ease-standard hover:bg-rp-row-hover hover:text-rp-ink"
           onClick={() => setCollapsed(!collapsed)}>{collapsed ? "expand" : "collapse"}</button>
       )}
     </div>
@@ -265,17 +256,11 @@ function UserMessage({ content, parts, images, onEdit }: { content: string; part
           <button
             type="button"
             aria-label="Edit message and replay run"
-            className="absolute -bottom-1.5 -right-1.5 min-h-7 min-w-7 rounded-full opacity-0 transition-opacity group-hover/usermsg:opacity-100 focus-visible:opacity-100"
-            style={{
-              background: "var(--rp-ink-a08)",
-              border: "1px solid var(--rp-ink-a15)",
-              boxShadow: "var(--rp-e1)",
-              color: C.fg2,
-            }}
+            className="absolute -bottom-2 -right-2 flex min-h-7 min-w-7 items-center justify-center rounded-control border border-rp-line bg-rp-surface text-rp-ink-muted opacity-0 transition-[opacity,background-color,color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash hover:text-rp-blue focus-visible:opacity-100 group-hover/usermsg:opacity-100"
             title="Edit & replay"
             onClick={() => editAction(content)}
           >
-            <Pencil className="size-2.5" />
+            <Pencil aria-hidden="true" className="size-3" />
           </button>
         )}
       </div>
@@ -295,11 +280,11 @@ function LLMOutput({ content, md }: { content: string; md: boolean }) {
     <div>
       <div className="max-w-[85%]">
         {md ? (
-          <div className="text-message leading-relaxed" style={{ color: C.fg3 }}>
+          <div className="text-message leading-relaxed text-rp-ink">
             <Markdown>{capped}</Markdown>
           </div>
         ) : (
-          <pre className="leading-relaxed font-sans whitespace-pre-wrap text-message" style={{ color: C.fg3 }}>
+          <pre className="whitespace-pre-wrap font-sans text-message leading-relaxed text-rp-ink">
             {capped}
           </pre>
         )}
@@ -309,32 +294,24 @@ function LLMOutput({ content, md }: { content: string; md: boolean }) {
 }
 
 function RenderModeToggle({ md, onChange }: { md: boolean; onChange: (md: boolean) => void }) {
-  const baseStyle: React.CSSProperties = {
-    fontSize: 10,
-    padding: "2px 6px",
-    borderRadius: "var(--rp-r-sm)",
-    cursor: "pointer",
-    border: "none",
-    outline: "none",
-    fontWeight: 400,
-    transition: "color 120ms",
-    background: "transparent",
-  };
+  const option = (selected: boolean) => cn(
+    "h-6 rounded-sm px-2 text-[11px] font-medium transition-[background-color,color] duration-250 ease-standard",
+    selected ? "bg-rp-wash text-rp-blue" : "text-rp-ink-muted hover:text-rp-ink",
+  );
   return (
-    <div className="inline-flex items-center gap-0.5 rounded-md px-1 py-0.5" style={{ border: `1px solid var(--rp-ink-a18)` }}>
+    <div className="inline-flex items-center gap-0.5 rounded-control border border-rp-line bg-rp-surface p-0.5">
       <button
         type="button"
         aria-pressed={md}
-        style={{ ...baseStyle, color: md ? C.fg3 : C.fg0 }}
+        className={option(md)}
         onClick={() => onChange(true)}
       >
         Markdown
       </button>
-      <span style={{ color: C.fg0, opacity: 0.5, fontSize: 10 }}>/</span>
       <button
         type="button"
         aria-pressed={!md}
-        style={{ ...baseStyle, color: !md ? C.fg3 : C.fg0 }}
+        className={option(!md)}
         onClick={() => onChange(false)}
       >
         Raw
@@ -376,7 +353,7 @@ function ActiveSpinner({ isActive, lastUpdatedAt, liveEvents, spans }: {
       <div className="flex gap-1">
         {[0, 1, 2].map(i => (
           <div key={i} className="size-1.5 rounded-full"
-            style={{ background: C.fg0, animation: "bounce-dot 1.4s infinite ease-in-out", animationDelay: `${i * 0.16}s` }} />
+            style={{ background: "var(--rp-ink-muted)", animation: "bounce-dot 1.4s infinite ease-in-out", animationDelay: `${i * 0.16}s` }} />
         ))}
       </div>
     </div>
@@ -388,7 +365,7 @@ function SmoothTextDelta({ content, enabled, as: Tag = "pre", className, style }
 }) {
   const displayed = useSmoothText(content, enabled);
   return (
-    <Tag className={className ?? "font-sans whitespace-pre-wrap text-message"} style={style ?? { color: C.fg3 }}>{displayed}</Tag>
+    <Tag className={className ?? "font-sans whitespace-pre-wrap text-message"} style={style ?? { color: "var(--rp-ink)" }}>{displayed}</Tag>
   );
 }
 
@@ -407,29 +384,25 @@ function LLMErrorBanner({ content }: { content: string }) {
       onFocus={() => setHovered(true)}
       onBlur={() => setHovered(false)}
     >
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg"
-        style={{ background: "color-mix(in srgb, var(--rp-danger) 9%, white 91%)", border: "1px solid color-mix(in srgb, var(--rp-danger) 22%, white 78%)" }}>
+      <div className="flex items-center gap-2 rounded-sm border border-rp-danger-border bg-rp-danger-soft px-3 py-1.5">
         <AlertCircle />
-        <span className="text-[12px] font-medium" style={{ color: C.red }}>LLM Error</span>
-        <span className="text-[11px] font-mono truncate max-w-[300px]" style={{ color: C.red }}>
+        <span className="text-[12px] font-medium text-rp-danger">LLM Error</span>
+        <span className="max-w-[300px] truncate font-mono text-[11px] text-rp-danger">
           {trunc(formatted, 80)}
         </span>
       </div>
       {hovered && (
-        <div className="absolute left-0 bottom-full mb-2 z-[9999] rounded-xl shadow-2xl overflow-hidden"
+        <div className="rp-pop absolute bottom-full left-0 z-[9999] mb-2 overflow-hidden rounded-md border border-rp-danger-border bg-rp-surface shadow-e3"
           style={{
             width: Math.min(500, window.innerWidth - 60),
             maxHeight: 320,
-            background: "var(--rp-surface)",
-            border: "1px solid color-mix(in srgb, var(--rp-danger) 28%, white 72%)",
-            boxShadow: "var(--rp-e3)",
           }}>
-          <div className="px-3 py-2 flex items-center gap-2" style={{ borderBottom: "1px solid color-mix(in srgb, var(--rp-danger) 20%, white 80%)" }}>
+          <div className="flex items-center gap-2 border-b border-rp-danger-border bg-rp-danger-soft px-3 py-2">
             <AlertCircle />
-            <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: C.red }}>Error Details</span>
+            <span className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-rp-danger">Error Details</span>
           </div>
           <div className="p-3 overflow-auto" style={{ maxHeight: 270 }}>
-            <pre className="text-[11px] font-mono leading-relaxed whitespace-pre-wrap break-words" style={{ color: C.red }}>
+            <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-rp-danger">
               {detail}
             </pre>
           </div>
@@ -446,7 +419,6 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
   spans: Span[]; liveEvents: LiveEvent[]; subAgents?: SubAgent[]; onDiveIn?: (rootSpanId: string) => void; isActive?: boolean; lastUpdatedAt?: number; onEditMessage?: (content: string) => void; replayError?: { code: string; message: string } | null;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const colorMap = useMemo(() => new Map<string, string>(), []);
   // detectSubAgents also reports agents nested inside another, and the outer
   // agent's span_ids include the inner one's. The smallest agent holding a span
   // owns it, so a Trajectory focus request opens exactly one chip.
@@ -656,21 +628,21 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
   if (items.length === 0) {
     if (replayError) {
       return (
-        <div className="flex flex-col items-center justify-center h-48 text-sm gap-2 px-6 text-center" style={{ color: C.fg1 }}>
-          <div className="font-medium" style={{ color: replayError.code === "replay_cancelled" ? C.fg2 : C.red }}>
+        <div className={cn("rp-fade-rise mx-4 my-6 flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-6 py-10 text-center text-[13px] text-rp-ink-muted", replayError.code === "replay_cancelled" ? "border-rp-line-dashed bg-rp-surface" : "border-rp-danger-border bg-rp-danger-soft")}>
+          <div className={cn("font-display text-[17px] font-semibold tracking-[-0.02em]", replayError.code === "replay_cancelled" ? "text-rp-ink" : "text-rp-danger")}>
             {replayError.code === "replay_cancelled" ? "Replay cancelled" : "Replay failed"}
           </div>
-          <div className="font-mono text-xs opacity-70">{replayError.code}</div>
-          <div className="max-w-xl text-xs whitespace-pre-wrap">{replayError.message}</div>
+          <div className="rp-meta">{replayError.code}</div>
+          <div className="max-w-xl whitespace-pre-wrap text-[13px] leading-6 text-rp-ink">{replayError.message}</div>
         </div>
       );
     }
     if (spans.some(span => span.normalized?.capture)) {
       return (
-        <div className="flex flex-col items-center justify-center h-48 gap-1.5 px-6 text-center">
-          <div className="text-sm" style={{ color: C.fg2 }}>No model messages in the captured trace</div>
-          <div role="status" className="text-xs" style={{ color: C.fg1 }}>Producer-reported observations · Partial capture · Runtime unverified</div>
-          <div className="text-xs" style={{ color: C.fg1 }}>Completion unverified. Captured spans are in the Span Tree tab.</div>
+        <div className="rp-fade-rise mx-4 my-6 flex flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-rp-line-dashed bg-rp-surface px-6 py-10 text-center">
+          <div className="font-display text-[17px] font-semibold tracking-[-0.02em] text-rp-ink">No model messages in the captured trace</div>
+          <div role="status" className="rp-meta">Producer-reported observations · Partial capture · Runtime unverified</div>
+          <div className="text-[13px] text-rp-ink-muted">Completion unverified. Captured spans are in the Span Tree tab.</div>
         </div>
       );
     }
@@ -680,9 +652,9 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
       && span.end_time_ms >= span.start_time_ms);
     if (!isActive) {
       return (
-        <div className="flex flex-col items-center justify-center h-48 gap-1.5 px-6 text-center">
-          <div className="text-sm" style={{ color: C.fg2 }}>No conversation in this trace</div>
-          <div className="text-xs" style={{ color: C.fg1 }}>
+        <div className="rp-fade-rise mx-4 my-6 flex flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-rp-line-dashed bg-rp-surface px-6 py-10 text-center">
+          <div className="font-display text-[17px] font-semibold tracking-[-0.02em] text-rp-ink">No conversation in this trace</div>
+          <div className="max-w-md text-[13px] leading-6 text-rp-ink-muted">
             {endedRoot
               ? "This run finished without recording any model messages. Its spans are in the Span Tree tab."
               : "No model messages were recorded. Completion is unverified. Its spans are in the Span Tree tab."}
@@ -691,7 +663,7 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
       );
     }
     return (
-      <div className="flex flex-col items-center justify-center h-48 text-sm gap-2" style={{ color: C.fg1 }}>
+      <div role="status" className="flex h-48 flex-col items-center justify-center gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-rp-ink-muted">
         Waiting for activity <Dots />
       </div>
     );
@@ -701,8 +673,8 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
 
   return (
     <div ref={scrollRef} className="space-y-1.5 py-2 pb-24">
-      {spans.some(span => span.normalized?.capture) && <div role="status" className="px-4 text-xs" style={{ color: C.fg1 }}>Producer-reported observations · Partial capture · Runtime unverified</div>}
-      <div className="px-3 min-w-0"><FlameTimeline spans={spans} subAgents={subAgents} onDiveIn={onDiveIn} /></div>
+      {spans.some(span => span.normalized?.capture) && <div role="status" className="rp-meta px-4">Producer-reported observations · Partial capture · Runtime unverified</div>}
+      <div className="min-w-0 px-3 pt-1 sm:px-4"><FlameTimeline spans={spans} subAgents={subAgents} onDiveIn={onDiveIn} /></div>
       {(() => { let seenLLM = false; return items.map((item, i) => {
         const isFirstLLM = hasLLMOutput && item.type === "llm_out" && !seenLLM;
         if (item.type === "llm_out") seenLLM = true;
@@ -711,22 +683,20 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
             <div key={`tg${i}`} className="flex flex-wrap gap-1.5 px-4 py-0.5 items-center">
               {item.items.map((gi, j) =>
                 gi.type === "tool"
-                  ? <ToolCallPill key={gi.span.id} span={gi.span} colorMap={colorMap} />
+                  ? <ToolCallPill key={gi.span.id} span={gi.span} />
                   : <SubAgentBlock key={`sa${j}`} agent={gi.agent} spans={spans} subAgentBySpan={subAgentBySpan} onDiveIn={onDiveIn} />
               )}
-              {item.liveTools?.map((lt, j) => { const tc = spanColor(lt.name, colorMap); return lt.type === "live_tool_start" ? (
-                <span key={`lts${j}`} className="inline-flex items-center gap-1.5 py-1 rounded text-xs font-medium"
-                  style={{ paddingLeft: 7, paddingRight: 12, background: `color-mix(in srgb, ${tc} 12%, transparent)`, border: `1px solid color-mix(in srgb, ${tc} 20%, transparent)`, color: tc }}>
+              {item.liveTools?.map((lt, j) => lt.type === "live_tool_start" ? (
+                <span key={`lts${j}`} className="inline-flex items-center gap-1.5 rounded-sm border border-rp-wash-border bg-rp-wash py-1 pl-2 pr-3 text-xs font-medium text-rp-blue">
                   <Spinner style={{ marginRight: 3 }} />
-                  <span style={{ color: C.fg4 }}>{lt.name}</span>
-                  {lt.argsPreview && <span style={{ color: C.fg2, fontWeight: 400 }}>({lt.argsPreview})</span>}
+                  <span className="text-rp-ink">{lt.name}</span>
+                  {lt.argsPreview && <span className="font-normal text-rp-ink-muted">({lt.argsPreview})</span>}
                 </span>
               ) : lt.type === "live_tool_result" ? (
-                <span key={`ltr${j}`} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium"
-                  style={{ background: "var(--rp-ink-a02)", border: `1px solid ${C.border}`, color: C.fg2 }}>
-                  <Check /> <span style={{ color: C.fg4 }}>{lt.name}</span>
+                <span key={`ltr${j}`} className="inline-flex items-center gap-1.5 rounded-sm border border-rp-line bg-rp-surface px-2.5 py-1 text-xs font-medium text-rp-ink">
+                  <Check /> <span className="text-rp-ink">{lt.name}</span>
                 </span>
-              ) : null; })}
+              ) : null)}
             </div>
           );
         }
@@ -756,14 +726,14 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
           return (
             <div key={`lo${i}`} className="px-4 py-2">
               {isFirstLLM && (
-                <div className="flex justify-start mb-2" style={{ marginLeft: -6 }} data-testid="llm-render-mode-toolbar">
+                <div className="mb-2 flex justify-start" data-testid="llm-render-mode-toolbar">
                   <RenderModeToggle md={md} onChange={handleMdChange} />
                 </div>
               )}
               {isErr && content !== null && (
                 <div className="max-w-[85%]"><LLMErrorBanner content={content} /></div>
               )}
-              {capture?.entityKind === "assistant" && content === null && <div className="text-xs" style={{ color: C.fg1 }}>Assistant observation · Text unavailable; inspect the captured span payload.</div>}
+              {capture?.entityKind === "assistant" && content === null && <div className="text-[12px] text-rp-ink-muted">Assistant observation · Text unavailable; inspect the captured span payload.</div>}
               {!isErr && content !== null && (
                 <LLMOutput content={content} md={md} />
               )}
@@ -773,7 +743,7 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
 
         if (item.type === "reasoning") {
           return (
-            <div key={`r${i}`} className="px-4 text-[11px] italic py-2.5 whitespace-pre-wrap" style={{ color: C.fg0, lineHeight: "1.6" }}>
+            <div key={`r${i}`} className="mx-4 my-1 whitespace-pre-wrap border-l-2 border-rp-line py-1 pl-3 text-[12px] italic leading-[1.6] text-rp-ink-muted">
               <SmoothTextDelta content={item.content} enabled={true} as="span" className="whitespace-pre-wrap" style={{ color: "inherit" }} />
             </div>
           );
