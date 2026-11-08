@@ -38,7 +38,7 @@ function AppLayout() {
     : null;
   const connectionStatus = useRunPhantomConnectionStatus();
   const section = NAV_ITEMS.find(({ path }) => location.pathname === path || location.pathname.startsWith(`${path}/`))?.label
-    ?? (location.pathname === "/settings" ? "Settings" : "Workspace");
+    ?? (location.pathname === "/settings" ? "Settings" : "Not found");
   useAgentUiCommands();
   useDialogFocus(showDisconnectedNotice, disconnectedDialogRef);
 
