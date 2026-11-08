@@ -7,7 +7,12 @@ import { searchRuns, searchSpanHits, searchSuggestions, getSearchScope, type Run
 import { SearchFilters } from "../components/SearchFilters";
 import { SearchSpanHits } from "../components/SearchSpanHits";
 import { useRunPhantomMessage } from "../hooks/use-runphantom-ws";
-import { C } from "../utils/colors";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { EmptyPanel } from "@/components/ui/empty-panel";
+import { Input, Select } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Eyebrow } from "@/components/ui/typography";
 import { useScrollRestoration } from "../hooks/use-scroll-restoration";
 import { safeDecodeParam } from "../utils/helpers";
 import { tracePath } from "../utils/navigation";
@@ -204,28 +209,22 @@ export function SearchPage() {
       if (importRef.current) importRef.current.value = "";
     }
   };
-  const controlStyle = { background: C.surface, color: C.fg4, borderColor: C.border };
-  const controlClass = "w-full min-w-0 rounded-lg border px-2.5 py-2 text-[12px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--rp-accent)]";
-
   return (
     <div className="flex h-full">
-      <div
-        className={`${isMobile ? (selectedId ? "hidden" : "w-full") : "w-[280px]"} min-h-0 flex-shrink-0 flex flex-col`}
-        style={{ borderRight: isMobile ? "none" : `1px solid ${C.border}` }}
-      >
-        <div className="flex-shrink-0 overflow-auto px-4 py-4" style={{ maxHeight: "66dvh", borderBottom: `1px solid ${C.border}` }}>
-          <div className="flex items-center justify-between gap-3 pl-10 lg:pl-0">
-            <div>
-              <h1 className="text-[11px] uppercase tracking-[0.18em]" style={{ color: C.fg0 }}>Local Search</h1>
-              <div className="mt-1 text-[14px] font-medium" style={{ color: C.fg4 }}>Search captured runs</div>
+      <div className={`${isMobile ? (selectedId ? "hidden" : "w-full") : "w-[300px] border-r border-rp-line"} flex min-h-0 flex-shrink-0 flex-col bg-white`}>
+        <div className="flex-shrink-0 overflow-auto border-b border-rp-line px-5 py-5" style={{ maxHeight: "66dvh" }}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <Eyebrow marker tone="accent">Search / Captured runs</Eyebrow>
+              <h1 className="rp-subsection-title mt-2">Local Search</h1>
             </div>
-            <div aria-label={`${count}${currentResult?.hasMore ? " or more" : ""} results loaded`} className="rounded-full border px-2 py-1 text-[10px] font-mono" style={{ background: C.surface, color: C.fg1, borderColor: C.border }}>
+            <Badge mono tone="outline" className="mt-0.5" aria-label={`${count}${currentResult?.hasMore ? " or more" : ""} results loaded`}>
               {count}{currentResult?.hasMore ? "+" : ""}
-            </div>
+            </Badge>
           </div>
           <div className="relative mt-4">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2" style={{ color: C.fg0 }} />
-            <input
+            <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-rp-ink-muted" />
+            <Input
               ref={searchRef}
               aria-label="Search captured runs"
               aria-describedby="search-scope"
@@ -233,72 +232,80 @@ export function SearchPage() {
               value={query}
               onChange={(event) => updateFilter("q", event.target.value)}
               placeholder="Search by title, event, user, conversation, or id"
-              className={`${controlClass} pl-9 pr-9`}
-              style={{ ...controlStyle, borderColor: query ? C.selectedBorder : C.border }}
+              className={`pl-9 pr-9 ${query ? "border-rp-blue" : ""}`}
             />
-            {query && <button type="button" className="absolute right-2 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-full hover:bg-[color:var(--rp-ink-wash)]" onClick={() => updateFilter("q", "")} aria-label="Clear search">
-              <X className="h-3.5 w-3.5" style={{ color: C.fg1 }} />
+            {query && <button type="button" className="rp-ease absolute right-1.5 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-control text-rp-ink-muted hover:bg-rp-row-hover hover:text-rp-ink" onClick={() => updateFilter("q", "")} aria-label="Clear search">
+              <X aria-hidden="true" className="size-3.5" />
             </button>}
           </div>
-          <p id="search-scope" className="mt-2 text-[11px] leading-5" style={{ color: C.fg1 }}>Search all local runs, captured inputs, outputs, and tool names.</p>
+          <p id="search-scope" className="rp-field-hint mt-2">Matches titles, captured inputs and outputs, and tool names across every local run. Press / to focus.</p>
           <input ref={importRef} type="file" accept=".json,application/json" aria-label="Import trace file" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importTrace(file); }} />
-          <button type="button" disabled={importing} onClick={() => importRef.current?.click()} className="mt-2 flex items-center gap-1.5 text-[11px] disabled:opacity-60" style={{ color: C.fg3 }}><Upload className="h-3.5 w-3.5" />{importing ? "Importing trace…" : "Import trace"}</button>
-          {importError && <div role="alert" className="mt-2 text-[11px] leading-5" style={{ color: C.fg3 }}><strong>Import failed.</strong> {importError}</div>}
-          <div className="mt-3 space-y-2">
-            <label className="block text-[11px]" style={{ color: C.fg2 }}>
-              Status
-              <select value={status} onChange={(event) => updateFilter("status", event.target.value)} className={`${controlClass} mt-1`} style={controlStyle}>
+          <Button type="button" variant="link" size="sm" disabled={importing} onClick={() => importRef.current?.click()} className="mt-2 h-8 text-xs"><Upload aria-hidden="true" className="!size-3.5" />{importing ? "Importing trace…" : "Import trace"}</Button>
+          {importError && <div role="alert" className="mt-2 rounded-sm border border-rp-danger-border bg-rp-danger-soft px-3 py-2 text-xs leading-5 text-rp-danger"><strong className="font-semibold">Import failed.</strong> {importError}</div>}
+          <div className="mt-4 grid gap-3">
+            <label className="grid gap-1.5">
+              <span className="rp-field-label">Status</span>
+              <Select value={status} onChange={(event) => updateFilter("status", event.target.value)} className="text-[13px]">
                 <option value="">All statuses</option>
                 <option value="running">Running</option>
                 <option value="completed">Completed</option>
                 <option value="failed">Failed</option>
-              </select>
+              </Select>
             </label>
             <div className="grid grid-cols-2 gap-2">
-              <label className="block min-w-0 text-[11px]" style={{ color: C.fg2 }}>
-                Model
-                <input value={model} onChange={(event) => updateFilter("model", event.target.value)} maxLength={256} placeholder="Any model" className={`${controlClass} mt-1`} style={controlStyle} />
+              <label className="grid min-w-0 gap-1.5">
+                <span className="rp-field-label">Model</span>
+                <Input value={model} onChange={(event) => updateFilter("model", event.target.value)} maxLength={256} placeholder="Any model" className="text-[13px]" />
               </label>
-              <label className="block min-w-0 text-[11px]" style={{ color: C.fg2 }}>
-                Provider
-                <input value={provider} onChange={(event) => updateFilter("provider", event.target.value)} maxLength={256} placeholder="Any provider" className={`${controlClass} mt-1`} style={controlStyle} />
+              <label className="grid min-w-0 gap-1.5">
+                <span className="rp-field-label">Provider</span>
+                <Input value={provider} onChange={(event) => updateFilter("provider", event.target.value)} maxLength={256} placeholder="Any provider" className="text-[13px]" />
               </label>
             </div>
-            <p className="text-[10px] leading-4" style={{ color: C.fg1 }}>Model and provider match exact names.</p>
-            {hasFilters && <button type="button" onClick={clearFilters} className="text-[11px] underline underline-offset-4" style={{ color: C.fg3 }}>Clear all filters</button>}
+            <p className="rp-field-hint -mt-1">Model and provider match exact names.</p>
+            {hasFilters && <Button type="button" variant="link" size="sm" onClick={clearFilters} className="w-fit text-xs">Clear all filters</Button>}
           </div>
           <SearchFilters query={params.toString()} onChange={submitParams} scopeKey={scopeKey} suggestions={searchSuggestions}/>
         </div>
-        <div ref={searchListRef} aria-label="Search results" aria-busy={loading || loadingMore} className="flex-1 overflow-auto px-3 py-3 space-y-1.5 rp-list-scroll">
-          <div role="status" className="text-[11px] leading-5" style={{ color: C.fg1 }}>
+        <div ref={searchListRef} aria-label="Search results" aria-busy={loading || loadingMore} className="flex-1 space-y-1.5 overflow-auto bg-rp-canvas px-3 py-3 rp-list-scroll">
+          <div role="status" className="rp-meta px-2 pb-1 uppercase tracking-[0.12em]">
             {loading ? "Searching local traces…" : currentResult && !error ? `${count} ${resource === "span-hits" ? "spans" : count === 1 ? "run" : "runs"} loaded${currentResult.hasMore ? "; more available" : ""}` : ""}
           </div>
-          {error && <div role="alert" className="rounded-xl border px-3 py-3" style={controlStyle}>
-            <p className="text-[13px] font-medium">Search unavailable</p>
-            <p className="mt-1 break-words text-[11px] leading-5" style={{ color: C.fg2 }}>{error}</p>
-            <button type="button" className="mt-2 text-[12px] underline underline-offset-4" onClick={() => setRefresh((value) => value + 1)}>Retry search</button>
+          {loading && !currentResult && !error && <div aria-hidden="true" className="space-y-2 px-2">
+            {[0, 1, 2].map((item) => <div key={item} className="space-y-2 rounded-lg border border-rp-line-muted bg-white px-3 py-3"><Skeleton className="h-3.5 w-2/3" /><Skeleton className="h-3 w-1/2" /></div>)}
           </div>}
-          {!loading && !error && currentResult && count === 0 && <div className="rounded-2xl border px-4 py-5 text-center" style={{ borderColor: C.border, background: C.surface }}>
-            <div className="text-[13px] font-medium" style={{ color: C.fg3 }}>{hasFilters ? "No matching runs" : "No captured runs yet"}</div>
-            <p className="mt-2 text-[11px] leading-5" style={{ color: C.fg1 }}>{hasFilters ? "Try a shorter phrase or clear the filters to browse all captured runs." : "Capture a local agent run or load demo traces to start searching."}</p>
-            {!hasFilters && <button type="button" disabled={demoLoading} onClick={() => void loadDemoTraces()} className="mt-3 text-[12px] underline underline-offset-4 disabled:opacity-60" style={{ color: C.fg3 }}>{demoLoading ? "Loading demo traces…" : "Load demo traces"}</button>}
+          {error && <div role="alert" className="animate-fade-rise rounded-lg border border-rp-danger-border bg-white px-4 py-4">
+            <Eyebrow className="text-rp-danger">Search / Error</Eyebrow>
+            <p className="mt-2 text-[13px] font-semibold text-rp-ink">Search unavailable</p>
+            <p className="mt-1 break-words text-xs leading-5 text-rp-ink-muted">{error}</p>
+            <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => setRefresh((value) => value + 1)}>Retry search</Button>
           </div>}
+          {!loading && !error && currentResult && count === 0 && <EmptyPanel
+            compact
+            className="animate-fade-rise"
+            titleAs="h2"
+            title={hasFilters ? "No matching runs" : "No captured runs yet"}
+            description={hasFilters ? "Try a shorter phrase or clear the filters to browse all captured runs." : "Capture a local agent run or load demo traces to start searching."}
+            action={hasFilters ? undefined : <Button type="button" variant="outline" size="sm" loading={demoLoading} onClick={() => void loadDemoTraces()}>{demoLoading ? "Loading demo traces…" : "Load demo traces"}</Button>}
+          />}
           {runs.map((run) => <RunListItem key={run.id} run={run} shortRunIds={shortRunIds} selected={selectedId === run.id} onClick={() => navigate(`${tracePath("/search", run.id)}${querySuffix}`)} />)}
           {resource === "span-hits" && <SearchSpanHits items={hits} open={hit=>navigate(`${tracePath("/search",hit.runId)}/span/${encodeURIComponent(hit.spanId)}${querySuffix}`)}/>}
-          {currentResult?.hasMore && <button type="button" onClick={() => void loadMore()} disabled={loading || loadingMore} className="w-full rounded-lg border px-3 py-2 text-[12px] disabled:opacity-60" style={controlStyle}>{loadingMore ? "Loading more…" : resource === "span-hits" ? "Load more spans" : "Load more runs"}</button>}
+          {currentResult?.hasMore && <Button type="button" variant="outline" size="sm" onClick={() => void loadMore()} disabled={loading} loading={loadingMore} className="w-full">{loadingMore ? "Loading more…" : resource === "span-hits" ? "Load more spans" : "Load more runs"}</Button>}
         </div>
       </div>
-      <div className={`${isMobile && !selectedId ? "hidden" : ""} flex-1 min-w-0`}>
+      <div className={`${isMobile && !selectedId ? "hidden" : ""} min-w-0 flex-1`}>
         {selectedId ? <div className="flex h-full flex-col">
-          {isMobile && <button type="button" className="flex flex-shrink-0 items-center gap-2 py-2 pl-12 pr-4 text-left text-[12px] font-medium" style={{ color: C.fg3, borderBottom: `1px solid ${C.border}` }} onClick={() => navigate(`/search${querySuffix}`)}>
-            <ArrowLeft className="h-3.5 w-3.5" /><span>Back to search</span>
+          {isMobile && <button type="button" className="rp-ease flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-white px-5 py-2 text-left text-[13px] font-medium text-rp-ink hover:bg-rp-row-hover" onClick={() => navigate(`/search${querySuffix}`)}>
+            <ArrowLeft aria-hidden="true" className="size-3.5 text-rp-blue" /><span>Back to search</span>
           </button>}
           <div className="min-h-0 flex-1 overflow-auto"><RunDetail key={selectedId} runId={selectedId} routeBase="/search" /></div>
-        </div> : <div className="flex h-full items-center justify-center px-8">
-          <div className="max-w-md text-center">
-            <div className="text-[18px] font-medium" style={{ color: C.fg4 }}>Search your local traces</div>
-            <p className="mt-3 text-[13px] leading-6" style={{ color: C.fg1 }}>Pick a run from the left to inspect spans, conversation turns, and replay context without leaving the local workspace.</p>
-          </div>
+        </div> : <div className="flex h-full items-center justify-center px-8 py-10">
+          <EmptyPanel
+            className="w-full max-w-lg animate-fade-rise"
+            eyebrow="Search / No run selected"
+            title="Pick a run to inspect"
+            description="Choose a result on the left to open its spans, conversation turns and replay context here."
+          />
         </div>}
       </div>
     </div>
