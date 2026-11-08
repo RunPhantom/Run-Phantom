@@ -31,6 +31,11 @@ describe("bounded compact timeline", () => {
     expect(layout.entries).toHaveLength(5); expect(layout.cycleCount).toBe(3); expect(layout.unavailableParentCount).toBe(1);
     expect(layout.entries[3].parentIndex).toBe(1); expect(layout.entries[1].parentIndex).toBeNull(); finite(layout);
   });
+  test("parents that exist in the run but are not drawn are not reported as unavailable", () => {
+    const layout = buildCondensedTimeline([span("tool", 0, 1, "agent-root"), span("orphan", 1, 2, "missing")], [], 0, new Set(["agent-root"]));
+    expect(layout.unavailableParentCount).toBe(1);
+    expect(layout.entries.map(entry => entry.parentState)).toEqual(["root", "unavailable"]); finite(layout);
+  });
   test("duplicate occurrences survive but cannot supply unique parents, actions or invocations", () => {
     const spans = [span("duplicate"), span("duplicate", 2, 3), span("child", 4, 5, "duplicate")];
     const layout = buildCondensedTimeline(spans, [{ root_span_id: "duplicate", name: "Agent", span_ids: ["duplicate", "child"] }]);
