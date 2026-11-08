@@ -35,7 +35,7 @@ function git(cwd: string, ...args: string[]): string {
   return result.stdout.trim();
 }
 
-async function measuredFixture(request: APIRequestContext, daemon: RunPhantomHandle) {
+async function measuredFixture(request: APIRequestContext, daemon: RunPhantomHandle & { runtime: { profile: string } }) {
   const directory = realpathSync(mkdtempSync(path.join(path.dirname(daemon.dbPath), "selected-project-")));
   git(directory, "init", "-q"); mkdirSync(path.join(directory, "src")); mkdirSync(path.join(directory, "tests"));
   writeFileSync(path.join(directory, "src/Cart.tsx"), "export const Cart = 'original';\n");
@@ -71,7 +71,7 @@ async function measuredFixture(request: APIRequestContext, daemon: RunPhantomHan
   expect(checked.ok()).toBe(true); const report = await checked.json() as VerificationReport; expect(report.status).toBe("fail");
   recordOwnedSourceHost(daemon, report);
   const originalReports = await (await request.get(`${daemon.url}/api/verification/reports`)).text();
-  const selectionFile = path.join(path.dirname(daemon.dbPath), ".runphantom", "active-workspace.json");
+  const selectionFile = path.join(daemon.runtime.profile, ".runphantom", "active-workspace.json");
   const select = async () => {
     const response = await request.post(`${daemon.url}/api/workspace/active`, { data: { cwd: directory } });
     expect(response.ok()).toBe(true); expect((await response.json()).cwd).toBe(directory);
