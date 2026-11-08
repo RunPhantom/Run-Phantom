@@ -3,6 +3,7 @@ import type { FrozenRateRevision } from "../pricing/protocol";
 export type ComparisonProvider = "openai" | "anthropic";
 export interface ComparisonTarget { readonly provider: ComparisonProvider; readonly model: string }
 export const COMPARISON_TARGET_LIMIT = 4;
+export const COMPARISON_OUTPUT_TOKEN_LIMIT = 1024;
 /** Browser-safe so the UI and daemon share one allowlist. */
 export const COMPARISON_MODELS = Object.freeze([
   Object.freeze({ provider: "openai", model: "gpt-5.4" }), Object.freeze({ provider: "openai", model: "gpt-4.1" }),

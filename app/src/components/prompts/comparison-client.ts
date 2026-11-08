@@ -72,10 +72,11 @@ export function comparisonRequest(client: PromptClient, signal: AbortSignal) {
 export function comparisonExport(value: unknown, expectedId: string): unknown {
   const input = object(value); if (input.format !== "runphantom-model-comparison/v1" || comparisonReceipt(input.operation).id !== expectedId) throw invalid(); return input;
 }
-export function comparisonOutput(attempt: ComparisonAttempt): { output: string | null; input: number | null; outputTokens: number | null; reasoningTokens: number | null; controlled: boolean; truncated: boolean } {
-  if (!attempt.payload) return { output: null, input: null, outputTokens: null, reasoningTokens: null, controlled: false, truncated: false };
+export function comparisonOutput(attempt: ComparisonAttempt): { output: string | null; input: number | null; outputTokens: number | null; reasoningTokens: number | null; controlled: boolean; truncated: boolean; shortenedFromBytes: number | null } {
+  if (!attempt.payload) return { output: null, input: null, outputTokens: null, reasoningTokens: null, controlled: false, truncated: false, shortenedFromBytes: null };
   const payload = object(attempt.payload), usage = object(payload.usage), categories = object(usage.categories);
   const count = (field: string) => { const value = object(categories[field]).count; return value === null ? null : integer(value); };
   return { output: text(payload.output, 8192), input: count("input"), outputTokens: count("output"), reasoningTokens: categories.reasoning === undefined ? null : count("reasoning"),
-    controlled: payload.provenance === "controlled-http-fixture", truncated: payload.finishReason === "length" || payload.finishReason === "max_tokens" };
+    controlled: payload.provenance === "controlled-http-fixture", truncated: payload.finishReason === "length" || payload.finishReason === "max_tokens",
+    shortenedFromBytes: payload.retention === undefined ? null : object(payload.retention).outputTruncated === true ? integer(object(payload.retention).outputBytes) : null };
 }

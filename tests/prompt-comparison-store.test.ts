@@ -22,6 +22,14 @@ function owner(database: Database, id = "local", kind: "local" | "project" = "lo
   return { database, scope: kind === "project" ? { kind, id } : { kind: "local", id: "local" }, authorize() { if (!allowed) throw new Error("actual membership revoked"); } };
 }
 function request(promptId: string, operationKey = randomUUID(), targets = COMPARISON_MODELS.slice(0, 4)) { return { operationKey, promptId, revision: 1, variables: { topic: "$& {{literal}}" }, targets, options: { maxOutputTokens: 128, temperature: 0 }, operationBudgetMicrousd: 1000000, expectedGeneration: store.capture("edit").comparisonGeneration }; }
+/** A billed answer larger than one attempt payload keeps its accounting and a shortened prefix instead of being discarded. */
+function expectShortenedAnswer(attempt: { status: string; reason: string | null; payload: unknown }, full: string) {
+  expect(attempt).toMatchObject({ status: "completed", reason: null });
+  const payload = attempt.payload as { output: string; retention: { outputTruncated: boolean; outputBytes: number } };
+  expect(payload.retention).toEqual({ outputTruncated: true, outputBytes: Buffer.byteLength(full) });
+  expect(payload.output.length).toBeGreaterThan(0); expect(payload.output.length).toBeLessThan(full.length); expect(full.startsWith(payload.output)).toBe(true);
+  expect(Buffer.byteLength(JSON.stringify(payload))).toBeLessThanOrEqual(COMPARISON_LIMITS.attemptPayloadBytes);
+}
 function saved() { return prompts.create({ operationKey: randomUUID(), name: "Frozen", template: "Explain {{topic}}" }, prompts.capture("edit")); }
 function initialize(database: Database) {
   database.exec("PRAGMA legacy_alter_table=ON; PRAGMA foreign_keys=OFF"); migrateDatabase(database, `${import.meta.dir}/../drizzle`);
@@ -153,7 +161,7 @@ test("retained payload accounting keeps measured overage and admission fuse thro
   const priced = estimateComparisonUsage(COMPARISON_MODELS[1], result.usage, operation.request!.rates[0]);
   expect(Buffer.byteLength(JSON.stringify({ ...result, ...priced }))).toBeGreaterThan(COMPARISON_LIMITS.attemptPayloadBytes);
   const receipt = store.finish(operation.id, 0, fence, { status: "completed", result });
-  expect(receipt.attempts[0]).toMatchObject({ status: "failed", reason: "response_limit", payload: null, chargeMicrousd: 2000008, accountingState: "measured_estimate", observedEstimateUsd: "2.000008", budgetBreach: true });
+  expectShortenedAnswer(receipt.attempts[0], "x".repeat(7900)); expect(receipt.attempts[0]).toMatchObject({ chargeMicrousd: 2000008, accountingState: "measured_estimate", observedEstimateUsd: "2.000008", budgetBreach: true });
   expect(store.budgetTotals().openai).toMatchObject({ chargeMicrousd: 2000008, holdMicrousd: 0, breached: true });
   await lease.close(); db.close(); db = new Database(file); lease = await acquireComparisonOwner(file);
   prompts = new PromptRegistry(owner(db)); store = new ComparisonStore(owner(db), lease, { budgets, availability: { openai: true, anthropic: true } });
@@ -164,11 +172,33 @@ test("retained payload accounting keeps measured overage and admission fuse thro
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
 });
 
+test("a billed 1,024-token answer larger than one attempt payload stays completed with its measured charge and a shortened prefix", () => {
+  // Live gpt-4.1 run on 2026-11-08: 29 input / 1,024 output tokens of numbered facts was billed and then discarded as response_limit.
+  const operation = store.submit({ ...request(saved().id, randomUUID(), [COMPARISON_MODELS[1]]), options: { maxOutputTokens: 1024, temperature: 0 } }, store.capture("edit")), fence = store.capture("edit");
+  store.start(operation.id, 0, fence);
+  const full = Array.from({ length: 60 }, (_, index) => `${index + 1}. The ocean holds about 97 percent of the water on Earth and regulates its climate.`).join("\n");
+  expect(Buffer.byteLength(full)).toBeGreaterThan(4500); expect(Buffer.byteLength(full)).toBeLessThan(COMPARISON_LIMITS.attemptPayloadBytes);
+  const receipt = store.finish(operation.id, 0, fence, { status: "completed", result: { output: full, finishReason: "length", provenance: "controlled-http-fixture" as const, usage: { model: "gpt-4.1", inputTokens: 29, outputTokens: 1024, cacheReadTokens: 0, tier: "standard" } } });
+  expectShortenedAnswer(receipt.attempts[0], full);
+  expect(receipt.attempts[0]).toMatchObject({ chargeMicrousd: 8250, accountingState: "measured_estimate", observedEstimateUsd: "0.00825", budgetBreach: false });
+  expect((receipt.attempts[0].payload as { finishReason: string }).finishReason).toBe("length");
+});
+
+test("a shortened answer never splits a multi-byte character", () => {
+  const operation = store.submit(request(saved().id, randomUUID(), [COMPARISON_MODELS[1]]), store.capture("edit")), fence = store.capture("edit");
+  store.start(operation.id, 0, fence);
+  const full = "\u{1F30A} wave ".repeat(1500);
+  const receipt = store.finish(operation.id, 0, fence, { status: "completed", result: { output: full, finishReason: "stop", provenance: "controlled-http-fixture" as const, usage: { model: "gpt-4.1", inputTokens: 3, outputTokens: 2, cacheReadTokens: 0, tier: "standard" } } });
+  expectShortenedAnswer(receipt.attempts[0], full);
+  const kept = (receipt.attempts[0].payload as { output: string }).output;
+  expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(kept)).toBe(false); expect(Array.from(kept).every(point => ["\u{1F30A}", " ", "w", "a", "v", "e"].includes(point))).toBe(true);
+});
+
 test("retained payload accounting preserves an unrepresentable overage without refund or false measured charge", () => {
   const operation = store.submit(request(saved().id, randomUUID(), [COMPARISON_MODELS[1]]), store.capture("edit")), fence = store.capture("edit");
   store.start(operation.id, 0, fence);
   const receipt = store.finish(operation.id, 0, fence, { status: "completed", result: { output: "x".repeat(7900), finishReason: "stop", provenance: "controlled-http-fixture" as const, usage: { model: "gpt-4.1", inputTokens: 2000000000000, outputTokens: 1, cacheReadTokens: 0, tier: "standard" } } });
-  expect(receipt.attempts[0]).toMatchObject({ status: "failed", reason: "response_limit", payload: null, chargeMicrousd: operation.attempts[0].reserveMicrousd, accountingState: "unrepresentable_overage", budgetBreach: true });
+  expectShortenedAnswer(receipt.attempts[0], "x".repeat(7900)); expect(receipt.attempts[0]).toMatchObject({ chargeMicrousd: operation.attempts[0].reserveMicrousd, accountingState: "unrepresentable_overage", budgetBreach: true });
   expect(Number(receipt.attempts[0].observedEstimateUsd)).toBeGreaterThan(2251799);
   expect(store.budgetTotals().openai.breached).toBe(true);
 });
@@ -177,7 +207,7 @@ test("retained payload accounting keeps unknown-price input breach conservative 
   const operation = store.submit(request(saved().id, randomUUID(), [COMPARISON_MODELS[0]]), store.capture("edit")), fence = store.capture("edit");
   store.start(operation.id, 0, fence);
   const receipt = store.finish(operation.id, 0, fence, { status: "completed", result: { output: "x".repeat(7900), finishReason: "stop", provenance: "controlled-http-fixture" as const, usage: { model: "gpt-5.4", inputTokens: 272001, contextTokens: 272001, outputTokens: 1, cacheReadTokens: 0, tier: "standard" } } });
-  expect(receipt.attempts[0]).toMatchObject({ status: "failed", reason: "response_limit", payload: null, chargeMicrousd: operation.attempts[0].reserveMicrousd, accountingState: "conservative", observedEstimateUsd: null, budgetBreach: true });
+  expectShortenedAnswer(receipt.attempts[0], "x".repeat(7900)); expect(receipt.attempts[0]).toMatchObject({ chargeMicrousd: operation.attempts[0].reserveMicrousd, accountingState: "conservative", observedEstimateUsd: null, budgetBreach: true });
   expect(store.budgetTotals().openai.breached).toBe(true);
 });
 
@@ -202,7 +232,7 @@ test("retained payload accounting survives the actual adapter and coordinator be
     const operation = coordinator.submit(store, input, store.capture("edit")); await coordinator.idle();
     expect(calls).toBe(1);
     const receipt = store.get(operation.id, store.capture("read"));
-    expect(receipt.attempts[0]).toMatchObject({ status: "failed", reason: "response_limit", payload: null, chargeMicrousd: 2000008, accountingState: "measured_estimate", observedEstimateUsd: "2.000008", budgetBreach: true });
+    expectShortenedAnswer(receipt.attempts[0], "x".repeat(7900)); expect(receipt.attempts[0]).toMatchObject({ chargeMicrousd: 2000008, accountingState: "measured_estimate", observedEstimateUsd: "2.000008", budgetBreach: true });
     const refused = coordinator.submit(store, { ...input, operationKey: randomUUID() }, store.capture("edit")); await coordinator.idle();
     expect(refused.attempts[0].status).toBe("budget_refused"); expect(calls).toBe(1);
     await coordinator.close(); db.close(); db = new Database(file); lease = await acquireComparisonOwner(file);
