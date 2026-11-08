@@ -289,7 +289,7 @@ test("team authentication presents recoverable validation without changing route
   await expect(page.getByRole("alert")).toBeVisible();
   await expect(page.getByLabel("Email", { exact: true })).toHaveValue("fixture-owner@example.test");
   await expect(page).toHaveURL(/\/team\/login$/);
-  await expect(page.getByRole("link", { name: "Back to traces", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Back to runs", exact: true })).toHaveCount(0);
   await page.getByRole("link", { name: "Have an invitation code?", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Join your project", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

@@ -157,7 +157,7 @@ test("settings ignores a late save after changing tabs and unknown routes recove
     await page.getByRole("tab", { name: "Agent Endpoints" }).click(); await expect(page.getByText("Delayed replay", { exact: true })).toBeVisible();
   } finally { release(); await page.unroute("**/api/agents", handler); await Promise.all([...pending]); }
   await page.goto(`${local.url}/missing-reference-page`); await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
-  await screenshot(page, "missing-route-desktop"); await page.getByRole("button", { name: "Back to traces" }).click(); await expect(page).toHaveURL(/\/runs/);
+  await screenshot(page, "missing-route-desktop"); await page.getByRole("button", { name: "Back to runs" }).click(); await expect(page).toHaveURL(/\/runs/);
 });
 
 
