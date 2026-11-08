@@ -17,7 +17,7 @@ export function FindingComparison({ experiments }: { experiments: ExperimentSumm
   const [params, setParams] = useSearchParams(), runs = useRuns();
   const kind = params.get("anchorKind") === "experiment" ? "experiment" : "run", id = params.get("anchorId") ?? "", selected = params.get("findingComparison") ?? "";
   const attachment = useMemo<EvidenceAttachment | null>(() => id ? { kind, id } : null, [kind, id]), context = JSON.stringify(attachment);
-  const epoch = useRef(0), currentContext = useRef(context), controllers = useRef(new Set<AbortController>()), work = useRef(false);
+  const epoch = useRef(0), currentContext = useRef(context), controllers = useRef(new Set<AbortController>()), work = useRef(false), mutations = useRef(0);
   if (currentContext.current !== context) { currentContext.current = context; epoch.current++; }
   const [capabilities, setCapabilities] = useState<EvidenceCapabilities | null>(null), [batches, setBatches] = useState<FindingBatchOption[]>([]), [history, setHistory] = useState<{ id: string; createdAt: number }[]>([]);
   const [authorized, setAuthorized] = useState(false), [refused, setRefused] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState("");
@@ -33,8 +33,9 @@ export function FindingComparison({ experiments }: { experiments: ExperimentSumm
   }, [cancelPending]);
   const refresh = useCallback(async () => {
     if (!attachment) return;
-    const captured = epoch.current, selection = { ...active.current }, controller = new AbortController(); controllers.current.add(controller);
-    const same = () => captured === epoch.current && !controller.signal.aborted && currentContext.current === context && active.current.selected === selection.selected && active.current.offset === selection.offset;
+    const captured = epoch.current, mutation = mutations.current, selection = { ...active.current }, controller = new AbortController(); controllers.current.add(controller);
+    // A poll that started before an import finished would restore the pre-import report list and drop the new selection.
+    const same = () => captured === epoch.current && mutation === mutations.current && !controller.signal.aborted && currentContext.current === context && active.current.selected === selection.selected && active.current.offset === selection.offset;
     try {
       const permission = await findingsApi.capabilities(controller.signal); if (!same()) return;
       if (!permission.enabled || permission.scope !== "local") throw Error("Finding comparison is unavailable in this workspace.");
@@ -60,8 +61,8 @@ export function FindingComparison({ experiments }: { experiments: ExperimentSumm
   async function perform(action: (signal: AbortSignal, valid: () => boolean) => Promise<void>) {
     if (!authorized || !capabilities || work.current) return;
     const captured = epoch.current, selection = { ...active.current }, controller = new AbortController(), valid = () => captured === epoch.current && currentContext.current === context && !controller.signal.aborted && active.current.selected === selection.selected && active.current.offset === selection.offset;
-    controllers.current.add(controller); work.current = true; setBusy(true); setError("");
-    try { await action(controller.signal, valid); } catch (cause) { if (valid()) revoke(message(cause)); } finally { controllers.current.delete(controller); if (valid()) { work.current = false; setBusy(false); } }
+    controllers.current.add(controller); work.current = true; mutations.current++; setBusy(true); setError("");
+    try { await action(controller.signal, valid); } catch (cause) { if (valid()) revoke(message(cause)); } finally { controllers.current.delete(controller); mutations.current++; if (valid()) { work.current = false; setBusy(false); } }
   }
   function download(value: unknown, valid: () => boolean) {
     const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json" }); if (!valid()) return;

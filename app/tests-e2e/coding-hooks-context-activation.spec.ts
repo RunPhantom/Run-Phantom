@@ -14,7 +14,7 @@ async function ownedChild(command: string, args: string[], input: string, env: N
 }
 
 test("manually activated installed independent agent outputs reach the live run UI with observed partial evidence", async ({ page, runPhantom }, testInfo) => {
-  const profile = path.dirname(runPhantom.dbPath), workspace = path.join(profile, "context-workspace"); mkdirSync(workspace);
+  const profile = path.join(path.dirname(runPhantom.dbPath), "profile"), workspace = path.join(profile, "context-workspace"); mkdirSync(workspace);
   const installed = await fetch(runPhantom.url + "/api/coding-hooks/claude/manage", { method: "POST", headers: { "content-type": "application/json", "x-runphantom-hook-owner": capabilityOwnerKey(runPhantom.dbPath) }, body: JSON.stringify({ action: "install", scope: "local", workspace, captureMode: "full", fullConsent: true }) });
   expect(installed.status).toBe(200); const receipt = await installed.json() as { installationId: string; captureVerified: boolean }; expect(receipt.captureVerified).toBe(false);
   const settings = JSON.parse(readFileSync(path.join(workspace, ".claude/settings.local.json"), "utf8")) as { hooks: Record<string, { hooks: { command: string; args: string[] }[] }[]> };
