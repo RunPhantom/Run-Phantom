@@ -1317,7 +1317,8 @@ export interface RunOutline {
   };
   sub_agents: Array<{ root_span_id: string; name: string; span_count: number }>;
   annotations: unknown[];
-  errors: Array<{ span_id: string; name: string; ts: number; first_line_of_output: string }>;
+  /** `reason` is the first line of the reported error: the failing span's output, else its status or exception message. */
+  errors: Array<{ span_id: string; name: string; ts: number; first_line_of_output: string; reason: string }>;
 }
 
 function firstLine(text: string | null | undefined, cap = 200): string {
@@ -1527,6 +1528,13 @@ export function getRunOutline(runId: string, payloadPreviewChars = 80): RunOutli
       name: schema.spans.name,
       start_time_ms: schema.spans.start_time_ms,
       output_payload: schema.spans.output_payload,
+      // OpenInference, the GenAI instrumentations and most SDKs report a failure
+      // only in the span status or an exception event, leaving output empty.
+      reported_error: drizzleSql<string | null>`CASE WHEN json_valid(${schema.spans.attributes}) THEN COALESCE(
+        json_extract(${schema.spans.attributes}, '$."error.message"'),
+        json_extract(${schema.spans.attributes}, '$."ai.response.error"'),
+        json_extract(${schema.spans.attributes}, '$."exception.message"'),
+        json_extract(${schema.spans.attributes}, '$."otel.status.message"')) END`,
     })
     .from(schema.spans)
     .where(and(eq(schema.spans.run_id, runId), eq(schema.spans.status, "ERROR")))
@@ -1539,6 +1547,7 @@ export function getRunOutline(runId: string, payloadPreviewChars = 80): RunOutli
     name: r.name,
     ts: r.start_time_ms ?? 0,
     first_line_of_output: firstLine(r.output_payload),
+    reason: firstLine(r.output_payload) || firstLine(typeof r.reported_error === "string" ? r.reported_error : r.reported_error == null ? null : String(r.reported_error)),
   }));
 
   // detectSubAgents only reads id / parent_span_id / name / span_type / status /
