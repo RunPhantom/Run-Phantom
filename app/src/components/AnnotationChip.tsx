@@ -9,9 +9,9 @@ export const KIND_STYLES: Record<
   AnnotationKind,
   { icon: string; label: string; fg: string; bg: string; border: string }
 > = {
-  issue: { icon: "!", label: "issue", fg: "var(--rp-danger)", bg: "color-mix(in srgb, var(--rp-danger) 10%, white 90%)", border: "color-mix(in srgb, var(--rp-danger) 28%, white 72%)" },
-  good:  { icon: "✓", label: "good",  fg: "var(--rp-success)", bg: "color-mix(in srgb, var(--rp-success) 10%, white 90%)", border: "color-mix(in srgb, var(--rp-success) 28%, white 72%)" },
-  note:  { icon: "·", label: "note",  fg: "var(--rp-info)", bg: "color-mix(in srgb, var(--rp-info) 10%, white 90%)", border: "color-mix(in srgb, var(--rp-info) 28%, white 72%)" },
+  issue: { icon: "!", label: "issue", fg: "var(--rp-danger)", bg: "var(--rp-danger-soft)", border: "var(--rp-danger-border)" },
+  good:  { icon: "✓", label: "good",  fg: "var(--rp-success)", bg: "var(--rp-success-soft)", border: "var(--rp-success-border)" },
+  note:  { icon: "·", label: "note",  fg: "var(--rp-blue)", bg: "var(--rp-wash)", border: "var(--rp-wash-border)" },
 };
 
 export const SOURCE_GLYPH: Record<Annotation["source"], string> = {
@@ -74,7 +74,7 @@ export function AnnotationChip({
         padding: showLabel ? "0 7px" : "0 5px",
         height: 18,
         lineHeight: "18px",
-        borderRadius: "var(--rp-r-full)",
+        borderRadius: 4,
         fontSize: 10,
         fontWeight: 500,
         fontFamily: "inherit",

@@ -1,7 +1,6 @@
 import React, { useCallback, useMemo, useState } from "react";
-import { C } from "../utils/colors";
 
-const MONO = 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace';
+const MONO = 'var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace';
 const SIZE = 11;
 const LH = 1.4;
 const ROW_GAP = 2;
@@ -21,7 +20,7 @@ const inlineButtonStyle: React.CSSProperties = {
   border: 0,
   background: "transparent",
   padding: 0,
-  color: C.accent,
+  color: "var(--rp-blue)",
   cursor: "pointer",
   fontSize: SIZE - 1,
   marginLeft: 4,
@@ -30,17 +29,17 @@ const inlineButtonStyle: React.CSSProperties = {
 };
 
 const dc = {
-  key: C.fg3,
-  string: "oklch(42% 0.08 54)",
-  number: "oklch(47% 0.12 246)",
-  boolean: "oklch(41% 0.13 150)",
-  null: C.fg0,
-  brace: C.fg0,
-  comma: C.fg0,
+  key: "var(--rp-ink)",
+  string: "#3D4B80",
+  number: "var(--rp-blue)",
+  boolean: "var(--rp-blue)",
+  null: "var(--rp-ink-muted)",
+  brace: "var(--rp-ink-muted)",
+  comma: "var(--rp-ink-muted)",
   guide: "var(--rp-guide)",
   guideHover: "var(--rp-guide-hover)",
-  count: C.fg0,
-  arrow: C.fg1,
+  count: "var(--rp-ink-muted)",
+  arrow: "var(--rp-ink-muted)",
   copyFlash: "var(--rp-accent-flash)",
 };
 
@@ -99,7 +98,7 @@ const JsonNode: React.FC<NodeProps> = ({ keyName, value, depth, maxExpand, isLas
   ) : null;
 
   if (!expandable) {
-    let color: string = C.fg2;
+    let color: string = "var(--rp-ink)";
     let italic = false;
     let display: React.ReactNode;
 
@@ -226,7 +225,7 @@ export function JsonView({ data, maxExpand = 3 }: { data: unknown; maxExpand?: n
     : scalar;
 
   return (
-    <pre style={{ fontFamily: MONO, fontSize: SIZE, color: C.fg2, whiteSpace: "pre-wrap", wordBreak: "break-word", margin: 0 }}>
+    <pre style={{ fontFamily: MONO, fontSize: SIZE, color: "var(--rp-ink)", whiteSpace: "pre-wrap", wordBreak: "break-word", margin: 0 }}>
       {scalarDisplay}
     </pre>
   );

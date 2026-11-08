@@ -1,5 +1,4 @@
 import type { Span } from "../utils/types";
-import { C } from "../utils/colors";
 
 const value = (item: string | number | null) => item === null ? "Not captured" : String(item);
 export function CaptureVisibilityDetails({ span }: { span: Span }) {
@@ -16,16 +15,16 @@ export function CaptureVisibilityDetails({ span }: { span: Span }) {
   if (capture.usage.cacheCreationInputTokens !== null) rows.push(["Cache creation tokens", capture.usage.cacheCreationInputTokens]);
   if (capture.usage.reasoningOutputTokens !== null) rows.push(["Reasoning tokens", capture.usage.reasoningOutputTokens]);
   return (
-    <section aria-label={title} data-capture-span={span.id} className="rounded" style={{ border: `1px solid ${C.border}`, background: C.surface, color: C.fg2, minWidth: 0 }}>
+    <section aria-label={title} data-capture-span={span.id} className="min-w-0 rounded-sm border border-rp-line bg-rp-surface text-rp-ink">
       <details>
-        <summary className="px-3 py-2 cursor-pointer text-sm font-medium" style={{ minHeight: 44, overflowWrap: "anywhere" }}>
+        <summary className="cursor-pointer px-3 py-2.5 text-[13px] font-medium transition-colors duration-250 ease-standard hover:bg-rp-row-hover" style={{ minHeight: 44, overflowWrap: "anywhere" }}>
           {title}{state ? ` · ${state}` : retrieval?.collection ? ` · ${retrieval.collection}` : ""}
         </summary>
         <div className="px-3 pb-3 space-y-3 text-xs" style={{ overflowWrap: "anywhere" }}>
           <dl className="grid gap-x-3 gap-y-2" style={{ gridTemplateColumns: "minmax(0, 1fr) minmax(0, 2fr)" }}>
-            {rows.map(([label, item]) => <div key={label} className="contents"><dt style={{ color: C.fg0 }}>{label}</dt><dd className="m-0 whitespace-pre-wrap">{value(item)}</dd></div>)}
+            {rows.map(([label, item]) => <div key={label} className="contents"><dt className="text-rp-ink-muted">{label}</dt><dd className="m-0 whitespace-pre-wrap font-mono text-[11px] tabular-nums">{value(item)}</dd></div>)}
           </dl>
-          {retrieval?.filter && <div><div className="mb-1 font-medium">Captured filter</div><pre className="m-0 whitespace-pre-wrap break-words font-mono">{retrieval.filter}</pre></div>}
+          {retrieval?.filter && <div><div className="mb-1 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted">Captured filter</div><pre className="m-0 whitespace-pre-wrap break-words rounded-sm border border-rp-line bg-rp-canvas-blue p-2 font-mono">{retrieval.filter}</pre></div>}
           {stream && <div className="space-y-2">
             <p className="m-0">{stream.coverage === "complete" ? "All declared chunks were captured." : stream.chunks.length ? "Partial observed chunks are retained. Completion is not established by this text." : "No chunk text was captured."}</p>
             {stream.chunks.length > 0 && <details><summary style={{ minHeight: 44, cursor: "pointer", paddingTop: 12 }}>Observed chunks ({stream.chunks.length})</summary>
@@ -33,7 +32,7 @@ export function CaptureVisibilityDetails({ span }: { span: Span }) {
             </details>}
             {stream.duplicateChunkCount > 0 && <p className="m-0">{stream.duplicateChunkCount} repeated chunk observations were combined.</p>}
           </div>}
-          {(capture.coverage.reasons.length > 0 || (stream?.reasons.length ?? 0) > 0) && <p className="m-0" style={{ color: C.fg0 }}>
+          {(capture.coverage.reasons.length > 0 || (stream?.reasons.length ?? 0) > 0) && <p className="m-0 text-rp-ink-muted">
             {capture.coverage.reasons.includes("content-redacted") ? "Sensitive metadata was redacted. " : ""}
             {[...capture.coverage.reasons, ...(stream?.reasons ?? [])].some(reason => ["source-loss", "receiver-loss", "content-truncated"].includes(reason)) ? "Some evidence is missing or exceeds capture limits. " : ""}
             {stream?.state === "unknown" ? "The captured metadata does not prove stream completion." : ""}
