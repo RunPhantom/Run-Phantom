@@ -558,6 +558,32 @@ input.secret-input-saved:focus::placeholder {
   opacity: 0 !important;
 }
 
+@keyframes rp-fade-rise {
+  from { opacity: 0; transform: translateY(var(--rp-rise-distance)); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes rp-pop-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.rp-fade-rise { animation: rp-fade-rise var(--rp-dur-rise) var(--rp-ease-standard) both; }
+.rp-pop {
+  transform-origin: var(--radix-popper-transform-origin, top center);
+  animation: rp-pop-in var(--rp-dur-spring) var(--rp-ease-spring) both;
+}
+.rp-ease {
+  transition-duration: var(--rp-dur-standard);
+  transition-timing-function: var(--rp-ease-standard);
+}
+@media (prefers-reduced-motion: reduce) {
+  .rp-fade-rise,
+  .rp-pop,
+  .animate-fade-rise,
+  .animate-pop-in {
+    animation: none;
+  }
+}
+
 @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:.3} }
 @keyframes spin { to{transform:rotate(360deg)} }
 @keyframes bounce-dot { 0%,80%,100%{transform:scale(0)} 40%{transform:scale(1)} }
@@ -813,6 +839,7 @@ pre { white-space: pre-wrap; word-break: break-word; font-family: var(--font-mon
 /* Keyboard-driven navigation collapses every state transition to zero. See
    utils/nav-modality.ts — the attribute flips on nav keys and back on pointer use. */
 html[data-nav="key"] {
+  --rp-dur-standard: 0ms;
   --rp-motion-instant: 0ms;
   --rp-motion-state: 0ms;
   --rp-dur-hover: 0ms;
