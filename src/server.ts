@@ -144,6 +144,7 @@ import { parseJsonEvidence, LossyJsonNumberError } from "./evaluations/json-evid
 import { hasDuplicateJsonKeys } from "./json-keys";
 import { ANALYTICS_LIMITS, CostAnalyticsError } from "./pricing/analytics";
 import { getLocalCostAnalytics } from "./pricing/local";
+import { devUiLocation, devUiOrigin, isPageNavigation, unbuiltUiPage } from "./unbuilt-ui";
 import {
   getEffectiveSecret,
   getSecretStatus,
@@ -3066,6 +3067,15 @@ export async function createServer(port: number, options: { comparisons?: Compar
   if (!process.env.RUNPHANTOM_DEV) {
     const builtAppDir = await resolveBuiltAppDir();
     spaIndexPath = path.join(builtAppDir, "index.html");
+    if (!fs.existsSync(spaIndexPath)) {
+      spaIndexPath = null;
+      const devUi = devUiOrigin(process.env.RUNPHANTOM_DEV_UI_ORIGIN);
+      app.use((req, res, next) => {
+        if (!isPageNavigation({ method: req.method, path: req.path, originalUrl: req.originalUrl, accept: req.headers.accept })) return next();
+        if (devUi) return res.redirect(307, devUiLocation(devUi, req.originalUrl));
+        res.status(503).type("html").send(unbuiltUiPage(String(configuredUiPort)));
+      });
+    }
     app.use(express.static(builtAppDir));
     // An unmatched /api/ path is a client error, not a page. Without this it fell
     // through to the SPA catch-all below and answered 200 + index.html, so a typo'd
@@ -3073,7 +3083,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
     app.all("/api/*", (_req, res) => {
       res.status(404).json({ error: "not found" });
     });
-    app.get("*", (_req, res) => res.sendFile(spaIndexPath!));
+    app.get("*", (_req, res) => spaIndexPath ? res.sendFile(spaIndexPath) : res.status(404).json({ error: "not found" }));
     // Any other verb on an unknown path. Express's built-in fallback answers with
     // an HTML page naming the method and path, which is the one response shape on
     // this daemon that is neither the SPA nor JSON.
