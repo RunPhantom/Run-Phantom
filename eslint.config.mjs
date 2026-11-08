@@ -147,4 +147,9 @@ export default defineConfig(
       "no-empty-pattern": "off",
     },
   },
+  {
+    // Webview fixtures run inside the Tauri window, not under Node.
+    files: ["tests/fixtures/tauri-verification/ui/**/*.js"],
+    languageOptions: { globals: globals.browser },
+  },
 );
