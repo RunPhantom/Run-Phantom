@@ -343,6 +343,88 @@
   }
 }
 
+@layer components {
+  .rp-page-title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: clamp(28px, 1.25vw + 18px, 36px);
+    line-height: 1.12;
+    letter-spacing: -0.039em;
+    color: var(--rp-ink);
+    text-wrap: balance;
+  }
+  .rp-section-title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 22px;
+    line-height: 1.2;
+    letter-spacing: -0.027em;
+    color: var(--rp-ink);
+  }
+  .rp-subsection-title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 17px;
+    line-height: 1.35;
+    letter-spacing: -0.02em;
+    color: var(--rp-ink);
+  }
+  .rp-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 16px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--rp-ink-muted);
+  }
+  .rp-eyebrow[data-tone="accent"] { color: var(--rp-blue); }
+  .rp-eyebrow-marker {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    background: var(--rp-blue);
+  }
+  .rp-lede {
+    margin: 0;
+    max-width: 70ch;
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--rp-ink-muted);
+  }
+  .rp-meta {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 16px;
+    letter-spacing: 0.02em;
+    color: var(--rp-ink-muted);
+    font-variant-numeric: tabular-nums slashed-zero;
+  }
+  .rp-num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums slashed-zero;
+  }
+  .rp-field-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 16px;
+    color: var(--rp-ink);
+  }
+  .rp-field-hint {
+    font-size: 12px;
+    line-height: 18px;
+    color: var(--rp-ink-muted);
+  }
+}
+
 html {
   color-scheme: light;
   background-color: var(--rp-canvas);
