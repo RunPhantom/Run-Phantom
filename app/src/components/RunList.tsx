@@ -1,6 +1,6 @@
 import { useMemo } from "react";
-import { Star, RotateCcw } from "lucide-react";
-import { C } from "../utils/colors";
+import { Bookmark, RotateCcw } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { ago, runDisplayName, runStatus, uniqueRunIdPrefixes } from "../utils/helpers";
 import { useSavedEvent } from "../api/saved-runs";
 import { parseReplayMetadata } from "../utils/types";
@@ -41,49 +41,51 @@ export function RunListItem({ run, shortRunIds, selected, highlighted, faded, on
   const baseName = runDisplayName(run);
   const traceIdShort = shortRunIds.get(run.id) ?? run.id;
 
+  const statusTone = active ? "text-rp-success" : status === "failed" ? "text-rp-danger" : "text-rp-ink-muted";
+
   return (
-    <div data-run-id={run.id} style={{ opacity: faded ? 0.4 : 1, transition: "opacity 150ms" }}>
+    <div data-run-id={run.id} className="transition-opacity duration-250 ease-standard" style={{ opacity: faded ? 0.4 : 1 }}>
       <button
         type="button"
         aria-current={selected ? "true" : undefined}
-        className="w-full rounded-lg p-2.5 text-left transition-[background-color,border-color] duration-150"
-        style={{
-          background: selected ? "var(--rp-ink-a08)" : highlighted ? "var(--rp-ink-a06)" : "transparent",
-          border: selected ? "1px solid var(--rp-ink-a15)" : highlighted ? "1px solid var(--rp-ink-a10)" : "1px solid transparent",
-        }}
-        onMouseEnter={(e) => { if (!selected && !highlighted) e.currentTarget.style.background = "var(--rp-ink-a04)"; }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = selected ? "var(--rp-ink-a08)" : highlighted ? "var(--rp-ink-a06)" : "transparent"; }}
+        className={cn(
+          "group/run w-full rounded-sm border px-3 py-2.5 text-left transition-[background-color,border-color,color] duration-250 ease-standard",
+          selected
+            ? "border-transparent bg-rp-wash"
+            : highlighted
+              ? "border-rp-wash-border bg-rp-wash"
+              : "border-transparent hover:bg-rp-row-hover",
+        )}
         onClick={onClick}>
-        <div className="flex items-center gap-2">
-          {active && <div className="size-2 rounded-full flex-shrink-0 pulse-dot" style={{ background: C.green }} />}
-          {!active && <div className="size-2 flex-shrink-0" />}
+        <div className="flex items-start gap-2">
+          <span aria-hidden="true" className={cn("mt-[7px] size-1.5 shrink-0 rounded-full", active ? "pulse-dot bg-rp-success" : "bg-transparent")} />
           <div className="min-w-0 flex-1 overflow-hidden">
             <div className="flex items-center gap-1.5">
-              <span data-run-name className="text-sm font-medium truncate" style={{ color: C.fg4, opacity: saved ? 1 : 0.9 }}>
+              <span data-run-name className={cn("truncate text-[13px] font-medium leading-5", selected ? "text-rp-blue" : "text-rp-ink")}>
                 {baseName}
               </span>
-              {saved && <span className="shrink-0 flex items-center justify-center size-5 rounded-full" style={{ background: "var(--rp-accent)" }}><Star className="size-3" style={{ color: "var(--rp-canvas)", fill: "var(--rp-canvas)" }} /></span>}
+              {saved && <Bookmark aria-hidden="true" className="size-3 shrink-0 fill-rp-blue text-rp-blue" />}
             </div>
-            <div className="flex items-center gap-2 mt-0.5 overflow-hidden">
-              <span className="text-[10px] flex-shrink-0 font-medium" style={{ color: active ? C.green : C.fg1 }}>
+            <div className="mt-0.5 flex items-center gap-1.5 overflow-hidden text-[11px] leading-4">
+              <span className={cn("flex-shrink-0 font-medium", statusTone)}>
                 {statusLabel}
               </span>
               {/* The id tells apart runs that share a name. It sits here rather
                   than in the title so a long agent name never has to give up
                   space for it, and it follows the status so the row button's
                   accessible name reads name, status, id. */}
-              <span aria-hidden="true" className="text-[10px] flex-shrink-0" style={{ color: C.fg0 }}>·</span>
-              <span data-run-short-id className="min-w-0 truncate text-[10px] font-mono" style={{ color: C.fg0 }} title={run.id}>{traceIdShort}</span>
-              <span aria-hidden="true" className="text-[10px] flex-shrink-0" style={{ color: C.fg0 }}>·</span>
-              <span className="text-[10px] flex-shrink-0" style={{ color: C.fg0 }}>{ago(run.last_updated_at)}</span>
+              <span aria-hidden="true" className="flex-shrink-0 text-rp-ink-faint">·</span>
+              <span data-run-short-id className="rp-meta min-w-0 truncate text-[11px]" title={run.id}>{traceIdShort}</span>
+              <span aria-hidden="true" className="flex-shrink-0 text-rp-ink-faint">·</span>
+              <span className="flex-shrink-0 text-rp-ink-muted">{ago(run.last_updated_at)}</span>
             </div>
             {/* A sidebar row has no room for the replay source beside the
                 status, id and age: on the meta line it wrapped over three lines
                 and squeezed the short id to nothing. */}
             {isReplay && (
-              <div className="flex items-center gap-1 mt-0.5" style={{ color: C.fg0 }}>
-                <RotateCcw className="size-2.5 shrink-0" />
-                <span className="min-w-0 truncate text-[10px]" title={replayMeta!.replay.sourceRunId}>
+              <div className="mt-0.5 flex items-center gap-1 text-rp-ink-muted">
+                <RotateCcw aria-hidden="true" className="size-2.5 shrink-0" />
+                <span className="min-w-0 truncate text-[11px] leading-4" title={replayMeta!.replay.sourceRunId}>
                   replay of <span className="font-mono">{shortRunIds.get(replayMeta!.replay.sourceRunId) ?? replayMeta!.replay.sourceRunId}</span>
                 </span>
               </div>

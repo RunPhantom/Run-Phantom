@@ -7,8 +7,10 @@ import { EmptyState } from "../components/EmptyState";
 import { ReplayView } from "../components/ReplayView";
 import { RunComparison } from "../components/RunComparison";
 import { useReplay } from "../hooks/use-replay";
-import { RotateCcw, ArrowRight, X, ChevronDown, ArrowLeft } from "lucide-react";
-import { C } from "../utils/colors";
+import { RotateCcw, ArrowRight, X, ArrowLeft, Search } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { fieldClassName } from "@/components/ui/input";
 import { fetchPrices, modelPricingConsentEnabled } from "../utils/costs";
 import { parseReplayMetadata } from "../utils/types";
 import type { Run } from "../utils/types";
@@ -319,72 +321,70 @@ export function RunsPage() {
         // hidden whenever the filter matched nothing too, which took the search
         // box away with it — leaving no way to correct or clear the query, and
         // showing first-run onboarding to someone who simply mistyped.
-        className={`${isMobile ? (selectedId ? "hidden" : "w-full") : "w-[248px]"} flex-shrink-0 flex flex-col`}
-        style={{ borderRight: isMobile ? "none" : "1px solid var(--rp-ink-a06)" }}
+        className={cn(
+          isMobile ? (selectedId ? "hidden" : "w-full") : "w-[264px] border-r border-rp-line",
+          "flex flex-shrink-0 flex-col bg-rp-surface",
+        )}
       >
-        <div className="p-3" style={{ borderBottom: "1px solid var(--rp-ink-a06)" }}>
-          <div className="mb-3 flex items-center justify-between pl-10 lg:pl-0">
-            <div role="status" aria-live="polite" className="flex items-center gap-1.5">
-              <div className="w-1.5 h-1.5 rounded-full" title={wsConnected ? "Connected" : "Disconnected"}
-                style={{ background: wsConnected ? C.green : C.red, opacity: wsConnected ? 0.6 : 1 }} />
-              <span className="text-[10px] font-mono" style={{ color: C.fg0 }}>{wsConnected ? "connected" : "disconnected"}</span>
+        <div className="border-b border-rp-line px-4 pb-4 pt-4">
+          <div className="mb-3 flex min-h-7 items-center justify-between">
+            <div role="status" aria-live="polite" className="flex items-center gap-2">
+              <span aria-hidden="true" title={wsConnected ? "Connected" : "Disconnected"}
+                className={cn("size-1.5 rounded-full", wsConnected ? "bg-rp-success" : "bg-rp-danger")} />
+              <span className={cn("rp-eyebrow", !wsConnected && "text-rp-danger")}>{wsConnected ? "connected" : "disconnected"}</span>
             </div>
-            <button type="button" aria-label="Clear all runs" className="min-h-7 rounded px-1.5 text-[10px] font-medium transition hover:bg-red-700/10" style={{ color: C.fg0 }} onClick={handleClear}>
+            <button type="button" aria-label="Clear all runs"
+              className="min-h-7 rounded-control px-2 text-[12px] font-medium text-rp-ink-muted transition-[background-color,color] duration-250 ease-standard hover:bg-rp-danger-soft hover:text-rp-danger"
+              onClick={handleClear}>
               Clear
             </button>
           </div>
-          <div className="relative mb-2">
+          <div className="relative">
+            <Search aria-hidden="true" className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-rp-ink-faint" />
             <input
               ref={searchRef}
               aria-label="Search runs"
-              className="w-full px-2 py-1.5 rounded text-[11px] font-mono outline-none"
-              style={{ background: "var(--rp-ink-a04)", color: C.fg3, border: `1px solid ${search ? "var(--rp-ink-a12)" : "var(--rp-ink-a06)"}` }}
+              className={cn(fieldClassName, "h-9 pl-8 pr-10 text-[13px]")}
               placeholder="Search runs..."
               value={search}
               onChange={e => setSearch(e.target.value)}
             />
-            {search && (
-              <button type="button" aria-label="Clear run search" className="absolute right-1.5 top-1/2 min-h-7 -translate-y-1/2 rounded px-1 text-[10px] font-mono"
-                style={{ color: C.fg0 }} onClick={() => setSearch("")}>
+            {search ? (
+              <button type="button" aria-label="Clear run search"
+                className="absolute right-1.5 top-1/2 min-h-7 -translate-y-1/2 rounded-control px-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-rp-ink-muted transition-colors duration-250 ease-standard hover:bg-rp-row-hover hover:text-rp-ink"
+                onClick={() => setSearch("")}>
                 esc
               </button>
+            ) : (
+              <kbd aria-hidden="true" className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded-sm border border-rp-line px-1.5 font-mono text-[10px] leading-4 text-rp-ink-muted">/</kbd>
             )}
           </div>
           {agentTypes.length > 1 && (
-            <div className="relative mb-2">
-              <select
-                aria-label="Filter runs by agent"
-                className="w-full appearance-none px-2 py-1.5 pr-6 rounded text-[11px] font-mono outline-none cursor-pointer"
-                style={{ background: "var(--rp-ink-a04)", color: agentFilter === "all" ? C.fg1 : C.fg3, border: `1px solid ${agentFilter !== "all" ? "var(--rp-ink-a12)" : "var(--rp-ink-a06)"}` }}
-                value={agentFilter}
-                onChange={e => setAgentFilter(e.target.value)}
-              >
-                <option value="all">All agents</option>
-                {agentTypes.map(name => (
-                  <option key={name} value={name}>{name}</option>
-                ))}
-              </select>
-              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 pointer-events-none" style={{ color: C.fg0 }} />
-            </div>
+            <select
+              aria-label="Filter runs by agent"
+              className={cn(fieldClassName, "rp-select mt-2 h-9 cursor-pointer pr-9 text-[13px]", agentFilter === "all" ? "text-rp-ink-muted" : "text-rp-ink")}
+              value={agentFilter}
+              onChange={e => setAgentFilter(e.target.value)}
+            >
+              <option value="all">All agents</option>
+              {agentTypes.map(name => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </select>
           )}
         </div>
 
         <div ref={listRef} className="flex-1 overflow-auto p-2 space-y-0.5 sb rp-list-scroll">
           {runsError
-              ? <div role="alert" className="mt-8 px-3 text-center">
-                  <div className="text-xs font-medium" style={{ color: C.fg3 }}>Couldn&rsquo;t load runs</div>
-                  <div className="mt-1 text-[11px] leading-relaxed" style={{ color: C.fg1 }}>{runsError}</div>
-                  <button
-                    type="button"
-                    className="mt-3 min-h-7 rounded-md border px-2.5 text-[11px] font-medium"
-                    style={{ borderColor: C.borderLight, color: C.fg4, background: C.elevated }}
-                    onClick={() => { void fetchRuns(); }}
-                  >
+              ? <div role="alert" className="mx-2 mt-6 rounded-sm border border-rp-danger-border bg-rp-danger-soft px-3 py-3">
+                  <div className="text-[13px] font-medium text-rp-danger">Couldn&rsquo;t load runs</div>
+                  <div className="mt-1 break-words text-[12px] leading-5 text-rp-ink-muted">{runsError}</div>
+                  <Button type="button" variant="secondary" size="sm" className="mt-3" onClick={() => { void fetchRuns(); }}>
                     Retry
-                  </button>
+                  </Button>
                 </div>
               : filtered.length === 0
-              ? <div className="text-center text-xs mt-8" style={{ color: C.fg0 }}>
+              ? <div className="mx-2 mt-6 rounded-sm border border-dashed border-rp-line-dashed px-3 py-5 text-center text-[13px] text-rp-ink-muted">
                   {search ? "No matching runs" : "No runs"}
                 </div>
               : filtered.map(run => (
@@ -425,25 +425,24 @@ export function RunsPage() {
                       {isMobile && (
                         <button
                           type="button"
-                          className="flex flex-shrink-0 items-center gap-2 py-2 pl-12 pr-4 text-left text-[12px] font-medium"
-                          style={{ color: C.fg3, borderBottom: `1px solid ${C.border}` }}
+                          className="flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-rp-surface px-4 text-left text-[13px] font-medium text-rp-ink transition-colors duration-250 ease-standard hover:bg-rp-row-hover"
                           onClick={() => navigate("/runs")}
                         >
-                          <ArrowLeft className="h-3.5 w-3.5" />
+                          <ArrowLeft aria-hidden="true" className="h-3.5 w-3.5 text-rp-ink-muted" />
                           <span>Back to runs</span>
                         </button>
                       )}
                       {meta && (
-                        <div className="flex-shrink-0 flex z-10" style={{ borderBottom: `1px solid ${C.border}` }}>
+                        <div className="z-10 flex flex-shrink-0 border-b border-rp-line bg-rp-canvas-blue">
                           <div
-                            className="flex items-center justify-between px-3 py-1.5 min-w-0"
-                            style={{ background: "var(--rp-ink-a10)", width: replayCompare ? "50%" : "100%" }}
+                            className="flex min-w-0 items-center justify-between px-4 py-2"
+                            style={{ width: replayCompare ? "50%" : "100%" }}
                           >
-                            <div className="flex items-center gap-2 min-w-0">
-                              <RotateCcw style={{ width: 12, height: 12, color: C.fg1, flexShrink: 0 }} />
-                              <span className="text-[12px] truncate" style={{ color: C.fg1 }}>
+                            <div className="flex min-w-0 items-center gap-2">
+                              <RotateCcw aria-hidden="true" className="size-3 flex-shrink-0 text-rp-blue" />
+                              <span className="truncate text-[12px] text-rp-ink-muted">
                                 replay of{" "}
-                                <button className="font-medium hover:underline transition-colors" style={{ color: C.fg3 }}
+                                <button className="font-medium text-rp-ink underline-offset-4 transition-colors duration-250 ease-standard hover:text-rp-blue hover:underline"
                                   onClick={() => { setReplayCompare(false); navigate(runPath(meta.replay.sourceRunId)); }}
                                   onMouseEnter={() => {
                                     const el = listRef.current?.querySelector(`[data-run-id="${meta.replay.sourceRunId}"]`);
@@ -458,14 +457,13 @@ export function RunsPage() {
                                   onMouseLeave={() => setHoveredSourceId(null)}>
                                   {srcName}
                                 </button>
-                                <span className="font-mono text-[10px] ml-1.5" style={{ color: C.fg0 }}>({shortRunIds.get(meta.replay.sourceRunId) ?? meta.replay.sourceRunId})</span>
+                                <span className="rp-meta ml-1.5">({shortRunIds.get(meta.replay.sourceRunId) ?? meta.replay.sourceRunId})</span>
                               </span>
                               {!replayCompare && !isMobile && (
                                 <button
-                                  className="flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded transition-colors hover:bg-[color:var(--rp-ink-wash)] flex-shrink-0"
-                                  style={{ color: C.fg2, border: `1px solid var(--rp-ink-a15)` }}
+                                  className="flex h-7 flex-shrink-0 items-center gap-1 rounded-control border border-rp-line bg-white px-2 text-[12px] font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash"
                                   onClick={() => setReplayCompare(true)}>
-                                  compare <ArrowRight className="w-3 h-3" />
+                                  compare <ArrowRight aria-hidden="true" className="size-3" />
                                 </button>
                               )}
                             </div>
@@ -473,19 +471,17 @@ export function RunsPage() {
 
                           {replayCompare && (
                             <>
-                              <div className="flex-shrink-0 w-[1px]" style={{ background: C.border }} />
-                              <div
-                                className="flex items-center justify-between px-3 py-1.5 min-w-0"
-                                style={{ background: "var(--rp-ink-a04)", flex: 1 }}
-                              >
-                                <span className="text-[12px] truncate" style={{ color: C.fg1 }}>
-                                  original — <span style={{ color: C.fg3 }}>{srcName}</span>
+                              <div className="w-px flex-shrink-0 bg-rp-line" />
+                              <div className="flex min-w-0 flex-1 items-center justify-between bg-rp-surface px-4 py-2">
+                                <span className="truncate text-[12px] text-rp-ink-muted">
+                                  original — <span className="text-rp-ink">{srcName}</span>
                                 </span>
                                 <button
-                                  className="p-0.5 rounded transition-colors hover:bg-[color:var(--rp-ink-wash)] flex-shrink-0"
+                                  aria-label="Close comparison"
+                                  className="flex size-7 flex-shrink-0 items-center justify-center rounded-control text-rp-ink-muted transition-colors duration-250 ease-standard hover:bg-rp-row-hover hover:text-rp-ink"
                                   onClick={() => setReplayCompare(false)}
                                 >
-                                  <X className="h-3.5 w-3.5" style={{ color: C.fg1 }} />
+                                  <X aria-hidden="true" className="h-3.5 w-3.5" />
                                 </button>
                               </div>
                             </>
@@ -499,7 +495,7 @@ export function RunsPage() {
                         </div>
                         {replayCompare && meta && (
                           <>
-                            <div className="flex-shrink-0 w-[1px]" style={{ background: C.border }} />
+                            <div className="w-px flex-shrink-0 bg-rp-line" />
                             <div className="flex-1 min-w-0 overflow-auto sb">
                               <RunDetail key={meta.replay.sourceRunId} runId={meta.replay.sourceRunId} />
                             </div>
@@ -513,7 +509,7 @@ export function RunsPage() {
                 ? <EmptyState onSeeDemoTraces={openDemoTrace} />
                 : (
                   <div className="flex h-full items-center justify-center" role="status" aria-live="polite">
-                    <span className="text-[12px]" style={{ color: C.fg1 }}>Loading runs…</span>
+                    <span className="rp-eyebrow">Loading runs…</span>
                   </div>
                 )
         }
