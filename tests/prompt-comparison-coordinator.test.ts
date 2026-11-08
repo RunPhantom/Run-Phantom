@@ -14,7 +14,7 @@ import { createComparisonProviderClient } from "../src/prompts/providers";
 
 let directory: string, db: Database, lease: Awaited<ReturnType<typeof acquireComparisonOwner>>, store: ComparisonStore, prompts: PromptRegistry, coordinator: ComparisonCoordinator;
 let allowed = true, calls = 0, active = 0, peak = 0;
-let responseMode: "normal" | "unavailable" | "oversized" | "unauthorized" | "invalid" = "normal";
+let responseMode: "normal" | "unavailable" | "oversized" | "unauthorized" | "invalid" | "low_credit" | "rate_limited" = "normal";
 let server: ReturnType<typeof Bun.serve>;
 const controls = new Set<() => void>();
 beforeEach(async () => {
@@ -29,6 +29,9 @@ beforeEach(async () => {
     if (responseMode === "unavailable") { done(); return new Response("controlled upstream unavailable", { status: 503 }); }
     if (responseMode === "unauthorized") { done(); return new Response("controlled invalid key", { status: 401 }); }
     if (responseMode === "invalid") { done(); return new Response("<html>gateway error</html>", { headers: { "content-type": "application/json" } }); }
+    // Shape of the live Anthropic refusal observed 2026-11-08 for an account without credit.
+    if (responseMode === "low_credit") { done(); return Response.json({ type: "error", error: { type: "invalid_request_error", message: "Your credit balance is too low to access the Anthropic API." } }, { status: 400 }); }
+    if (responseMode === "rate_limited") { done(); return Response.json({ error: { type: "rate_limit_error" } }, { status: 429 }); }
     return new Response(new ReadableStream({ start(controller) {
       const release = () => { controls.delete(release); if (completed) return; const output = responseMode === "oversized" ? "x".repeat(70000) : "Controlled answer", raw = body.model.startsWith("gpt") ? { model: body.model, service_tier: "default", choices: [{ message: { content: output }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 0 } } }
         : { model: body.model, stop_reason: "end_turn", content: [{ type: "text", text: output }], usage: { input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, inference_geo: "global", service_tier: "standard" } }; controller.enqueue(new TextEncoder().encode(JSON.stringify(raw))); controller.close(); done(); };
@@ -123,4 +126,12 @@ test("an unparseable provider body is recorded as an invalid response, not a gen
   const operation = coordinator.submit(store, input(), store.capture("edit")); await coordinator.idle();
   const receipt = store.get(operation.id, store.capture("read"));
   expect(receipt.attempts.map(row => [row.status, row.reason])).toEqual(Array.from({ length: 4 }, () => ["failed", "invalid_response"])); expect(calls).toBe(4);
+});
+test("credit-balance 400 and rate-limit 429 refusals release the conservative charge", async () => {
+  for (const [mode, target] of [["low_credit", COMPARISON_MODELS[5]], ["rate_limited", COMPARISON_MODELS[4]]] as const) {
+    responseMode = mode;
+    const operation = coordinator.submit(store, { ...input(), targets: [target] }, store.capture("edit")); await coordinator.idle();
+    expect(store.get(operation.id, store.capture("read")).attempts[0]).toMatchObject({ model: target.model, status: "failed", reason: "provider_error", chargeMicrousd: 0, holdMicrousd: 0, accountingState: "not_started" });
+  }
+  expect(calls).toBe(2);
 });
