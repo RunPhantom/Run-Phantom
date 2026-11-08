@@ -523,6 +523,9 @@ h1, h2, h3 {
   outline: 2px solid var(--rp-focus) !important;
   outline-offset: -2px !important;
 }
+:where([role="dialog"], [role="alertdialog"])[tabindex="-1"]:focus-visible {
+  outline: none !important;
+}
 
 .rp-primary-control:focus-visible {
   outline-color: var(--rp-on-solid) !important;
