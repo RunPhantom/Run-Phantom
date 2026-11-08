@@ -55,7 +55,7 @@ beforeAll(async () => {
 });
 afterAll(async () => { for (const send of [...releaseHeaders]) send(); for (const send of [...release]) send(); await handle?.close(); await upstream?.stop(true); if (profile) rmSync(profile, { recursive: true, force: true }); });
 const base = () => `/projects/${project}/prompts/comparisons`;
-async function input() { const cap = await call("GET", base() + "/capabilities", undefined, editor); expect(cap.response.status).toBe(200); return { operationKey: randomUUID(), promptId: source, revision: 1, variables: { topic: "$& {{literal}}" }, targets: [...COMPARISON_MODELS], options: { maxOutputTokens: 128, temperature: 0 }, operationBudgetMicrousd: 1000000, expectedGeneration: cap.data.generation }; }
+async function input() { const cap = await call("GET", base() + "/capabilities", undefined, editor); expect(cap.response.status).toBe(200); return { operationKey: randomUUID(), promptId: source, revision: 1, variables: { topic: "$& {{literal}}" }, targets: COMPARISON_MODELS.slice(0, 4), options: { maxOutputTokens: 128, temperature: 0 }, operationBudgetMicrousd: 1000000, expectedGeneration: cap.data.generation }; }
 test("real authenticated editor executes all four bounded targets through native HTTP and same-key retry never redispatches", async () => {
   const value = await input(), first = await call("POST", base(), value, editor); expect(first.response.status).toBe(201); const before = calls;
   const retry = await call("POST", base(), value, editor); expect(retry.response.status).toBe(201); expect(retry.data.id).toBe(first.data.id);

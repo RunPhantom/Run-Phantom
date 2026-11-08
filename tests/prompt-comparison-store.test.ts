@@ -21,7 +21,7 @@ function owner(database: Database, id = "local", kind: "local" | "project" = "lo
   if (kind === "local" && id !== "local") throw new Error("Invalid local fixture scope");
   return { database, scope: kind === "project" ? { kind, id } : { kind: "local", id: "local" }, authorize() { if (!allowed) throw new Error("actual membership revoked"); } };
 }
-function request(promptId: string, operationKey = randomUUID(), targets = [...COMPARISON_MODELS]) { return { operationKey, promptId, revision: 1, variables: { topic: "$& {{literal}}" }, targets, options: { maxOutputTokens: 128, temperature: 0 }, operationBudgetMicrousd: 1000000, expectedGeneration: store.capture("edit").comparisonGeneration }; }
+function request(promptId: string, operationKey = randomUUID(), targets = COMPARISON_MODELS.slice(0, 4)) { return { operationKey, promptId, revision: 1, variables: { topic: "$& {{literal}}" }, targets, options: { maxOutputTokens: 128, temperature: 0 }, operationBudgetMicrousd: 1000000, expectedGeneration: store.capture("edit").comparisonGeneration }; }
 function saved() { return prompts.create({ operationKey: randomUUID(), name: "Frozen", template: "Explain {{topic}}" }, prompts.capture("edit")); }
 function initialize(database: Database) {
   database.exec("PRAGMA legacy_alter_table=ON; PRAGMA foreign_keys=OFF"); migrateDatabase(database, `${import.meta.dir}/../drizzle`);

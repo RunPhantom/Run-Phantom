@@ -9,9 +9,14 @@ import { comparisonCapabilities, comparisonPage, comparisonReceipt, comparisonRe
 import "./comparison.css";
 import { ComparisonBreadcrumb } from "./ComparisonBreadcrumb";
 import { ComparisonAccounting } from "./ComparisonAccounting";
+import { COMPARISON_TARGET_LIMIT, comparisonModelSettings } from "../../../../src/prompts/comparison-types";
 
 interface View { key: string; capabilities: ComparisonCapabilities; page: ComparisonPage; selected: ComparisonReceipt | null }
 const pending = (receipt: ComparisonReceipt | null) => !!receipt?.attempts.some(attempt => ["queued", "running"].includes(attempt.status));
+const settingsLabel = (target: { provider: "openai" | "anthropic"; model: string }) => {
+  const settings = comparisonModelSettings(target);
+  return [settings.reasoningEffort === "medium" ? "reasoning medium" : "standard text", settings.temperature === "provider_default" ? "provider temperature" : null].filter(Boolean).join(" · ");
+};
 const usd = (microusd: number) => `$${(microusd / 1000000).toFixed(6)}`;
 const reasons: Record<string, string> = { credentials_unavailable: "Provider access is not configured.", budget_not_configured: "A spending budget is not configured for this server.", overage_fuse: "Observed usage exceeded its reservation. New spending is blocked.", ceiling_reached: "The admitted server budget is fully held or charged." };
 export function Comparison({ client, source, variables, canEdit, canDelete, scopeLabel }: {
@@ -98,7 +103,7 @@ export function Comparison({ client, source, variables, canEdit, canDelete, scop
   const selectedModels = current?.capabilities.models.filter(model => chosen.includes(`${model.provider}:${model.model}`)) ?? [];
   const settingsValid = /^[1-9][0-9]*$/.test(outputTokens) && Number(outputTokens) <= 1024 && /^(?:0(?:\.[0-9]+)?|1(?:\.0+)?)$/.test(temperature) && Number.isFinite(Number(temperature)) && Number(temperature) >= 0 && Number(temperature) <= 1
     && /^(?:0|1)(?:\.[0-9]{1,6})?$/.test(budget) && Number(budget) > 0 && Number(budget) <= 1;
-  const runnable = !!source && canEdit && !busy && !!current && selectedModels.length > 0 && selectedModels.every(model => model.spendingEnabled) && settingsValid;
+  const runnable = !!source && canEdit && !busy && !!current && selectedModels.length > 0 && selectedModels.length <= COMPARISON_TARGET_LIMIT && selectedModels.every(model => model.spendingEnabled) && settingsValid;
   async function clear() {
     if (!current) return;
     await request("/clear", { method: "POST", body: { operationKey: crypto.randomUUID(), expectedGeneration: current.capabilities.generation, confirmRemoval: true } });
@@ -117,9 +122,9 @@ export function Comparison({ client, source, variables, canEdit, canDelete, scop
       <p className="comparison-source">{source ? `Saved revision ${source.revision} · ${source.name}` : "Select a saved prompt revision to compare it."}<span>Unsaved template changes are excluded.</span></p>
       <fieldset disabled={!canEdit || busy || unresolved}><legend>Models <span>Choose up to four</span></legend><div className="comparison-models">{current.capabilities.models.map(model => {
         const modelKey = `${model.provider}:${model.model}`;
-        return <label key={modelKey} className={chosen.includes(modelKey) ? "comparison-model chosen" : "comparison-model"}><input type="checkbox" checked={chosen.includes(modelKey)} onChange={() => setChosen(previous => previous.includes(modelKey) ? previous.filter(value => value !== modelKey) : [...previous, modelKey])} /><span><strong>{model.model}</strong><small>{model.provider} · standard text</small><small>Reservation ceiling {usd(model.reservationCeilingMicrousd)} at maximum input/output</small>{model.admissionReason && <small className="comparison-access">{reasons[model.admissionReason]}</small>}</span></label>;
+        return <label key={modelKey} className={chosen.includes(modelKey) ? "comparison-model chosen" : chosen.length >= COMPARISON_TARGET_LIMIT ? "comparison-model limited" : "comparison-model"}><input type="checkbox" checked={chosen.includes(modelKey)} disabled={!chosen.includes(modelKey) && chosen.length >= COMPARISON_TARGET_LIMIT} onChange={() => setChosen(previous => previous.includes(modelKey) ? previous.filter(value => value !== modelKey) : [...previous, modelKey])} /><span><strong>{model.model}</strong><small>{model.provider} · {settingsLabel(model)}</small><small>Reservation ceiling {usd(model.reservationCeilingMicrousd)} at maximum input/output</small>{model.admissionReason && <small className="comparison-access">{reasons[model.admissionReason]}</small>}</span></label>;
       })}</div></fieldset>
-      <div className="comparison-options"><label>Maximum output tokens<Input inputMode="numeric" value={outputTokens} onChange={event => setOutputTokens(event.target.value)} disabled={!canEdit || busy || unresolved} /><small>1–1,024 tokens per target</small></label><label>Temperature<Input inputMode="decimal" value={temperature} onChange={event => setTemperature(event.target.value)} disabled={!canEdit || busy || unresolved} /><small>0–1, standard text settings</small></label><label>Operation budget (USD)<Input inputMode="decimal" value={budget} onChange={event => setBudget(event.target.value)} disabled={!canEdit || busy || unresolved} /><small>Positive cap, maximum $1</small></label></div>
+      <div className="comparison-options"><label>Maximum output tokens<Input inputMode="numeric" value={outputTokens} onChange={event => setOutputTokens(event.target.value)} disabled={!canEdit || busy || unresolved} /><small>1–1,024 tokens per target</small></label><label>Temperature<Input inputMode="decimal" value={temperature} onChange={event => setTemperature(event.target.value)} disabled={!canEdit || busy || unresolved} /><small>0–1, where the model accepts it</small></label><label>Operation budget (USD)<Input inputMode="decimal" value={budget} onChange={event => setBudget(event.target.value)} disabled={!canEdit || busy || unresolved} /><small>Positive cap, maximum $1</small></label></div>
       <p className="prompt-muted">Reservations bound this operation. Estimates use frozen standard text rates; provider invoices and account balances are unavailable. No request is sent until you confirm Run.</p>
       {unresolved && <p role="status" className="comparison-error">The request outcome is unavailable. Retry the same saved request to retrieve its receipt before starting another comparison.</p>}
       <Button size="lg" disabled={unresolved ? busy || !current : !runnable} onClick={() => unresolved ? void perform(run) : setConfirm("run")}><ArrowRight />{unresolved ? "Retry saved comparison" : "Run comparison"}</Button>
@@ -134,7 +139,7 @@ export function Comparison({ client, source, variables, canEdit, canDelete, scop
       <div className="comparison-targets">{current.selected.attempts.map(attempt => {
         const output = comparisonOutput(attempt);
         return <article className="comparison-target" key={attempt.position} aria-label={`Result ${attempt.model}`}><header><h4>{attempt.model}</h4><span className="comparison-state">{attempt.status.replace(/_/g, " ")}</span></header>{attempt.reason && <p className="prompt-muted">Reason: {attempt.reason.replace(/_/g, " ")}</p>}{output.controlled && <p className="comparison-fixture">Controlled HTTP fixture · no paid provider call</p>}{attempt.budgetBreach && <p className="comparison-error">Observed usage breached its reservation. Further spending by this provider is blocked.</p>}
-          {output.truncated && <p className="comparison-error" data-testid={`comparison-truncated-${attempt.position}`}>Stopped at the {current.selected?.request?.options.maxOutputTokens ?? "configured"} output token limit. This answer may be incomplete.</p>}
+          {output.truncated && <p className="comparison-error" data-testid={`comparison-truncated-${attempt.position}`}>Stopped at the {current.selected?.request?.options.maxOutputTokens ?? "configured"} output token limit. This answer may be incomplete.{output.reasoningTokens ? ` ${output.reasoningTokens.toLocaleString()} of ${output.outputTokens?.toLocaleString() ?? "the"} output tokens were reasoning; raise Maximum output tokens for visible text.` : ""}</p>}
           {output.output !== null ? <pre data-testid={`comparison-output-${attempt.position}`}>{output.output}</pre> : <p className="prompt-muted">{["queued", "running"].includes(attempt.status) ? "Waiting for a retained result…" : "No output was retained for this target."}</p>}
           <ComparisonAccounting attempt={attempt} input={output.input} output={output.outputTokens} rateRevision={current.selected?.request?.rates[attempt.position].revision ?? null} />
         </article>;

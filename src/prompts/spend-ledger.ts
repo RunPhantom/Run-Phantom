@@ -2,26 +2,29 @@ import { freezeRateRevision } from "../pricing/rates";
 import { normalizeUsage } from "../pricing/usage";
 import { calculateCost } from "../pricing/calculator";
 import { PRICING_VERSION, type CategoryRate, type FrozenRateRevision } from "../pricing/protocol";
-import { COMPARISON_LIMITS, comparisonTarget, ComparisonError, type ComparisonTarget } from "./comparison-protocol";
+import { COMPARISON_LIMITS, COMPARISON_MODELS, comparisonTarget, ComparisonError, type ComparisonTarget } from "./comparison-protocol";
 import { promptInteger, promptText } from "./protocol";
 
-const observedAt = "2026-10-13T00:00:00.000Z";
+const firstObserved = "2026-10-13", currentObserved = "2026-11-08";
 const quotes = {
-  "gpt-5.4": { input: 2.5, output: 15, cache: 0.25, reference: "https://developers.openai.com/api/docs/models/gpt-5.4", alias: "gpt-5.4-2026-03-05" },
-  "gpt-4.1": { input: 2, output: 8, cache: 0.5, reference: "https://developers.openai.com/api/docs/models/gpt-4.1", alias: "gpt-4.1-2025-04-14" },
-  "claude-opus-4-6": { input: 5, output: 25, cache: 0.5, reference: "https://platform.claude.com/docs/en/about-claude/pricing", alias: null },
-  "claude-sonnet-4-6": { input: 3, output: 15, cache: 0.3, reference: "https://platform.claude.com/docs/en/about-claude/pricing", alias: null },
-} as const;
+  "gpt-6.1-terra": { input: 1, output: 5, cache: 0.05, reference: "https://developers.openai.com/api/docs/models/gpt-6.1-terra", alias: null, observed: currentObserved, longContextAbove: 272000 },
+  "gpt-5.4": { input: 2.5, output: 15, cache: 0.25, reference: "https://developers.openai.com/api/docs/models/gpt-5.4", alias: "gpt-5.4-2026-03-05", observed: firstObserved, longContextAbove: 272000 },
+  "gpt-4.1": { input: 2, output: 8, cache: 0.5, reference: "https://developers.openai.com/api/docs/models/gpt-4.1", alias: "gpt-4.1-2025-04-14", observed: firstObserved, longContextAbove: null },
+  "claude-sonnet-5-5": { input: 2, output: 10, cache: 0.1, reference: "https://platform.claude.com/docs/en/about-claude/pricing", alias: null, observed: currentObserved, longContextAbove: null },
+  "claude-opus-4-6": { input: 5, output: 25, cache: 0.5, reference: "https://platform.claude.com/docs/en/about-claude/pricing", alias: null, observed: firstObserved, longContextAbove: null },
+  "claude-sonnet-4-6": { input: 3, output: 15, cache: 0.3, reference: "https://platform.claude.com/docs/en/about-claude/pricing", alias: null, observed: firstObserved, longContextAbove: null },
+} as const satisfies Record<(typeof COMPARISON_MODELS)[number]["model"], unknown>;
 const priced = (usdPerMillionTokens: number): CategoryRate => ({ kind: "priced", usdPerMillionTokens });
 /** Public standard text quotes are estimates; credentials and provider invoices are separate. */
 export function comparisonRate(targetValue: ComparisonTarget): FrozenRateRevision {
   const target = comparisonTarget(targetValue), quote = quotes[target.model as keyof typeof quotes];
-  return freezeRateRevision({ version: PRICING_VERSION, ...target, tier: "standard", revision: `comparison-standard-text-2026-10-13:${target.model}`, currency: "USD", unit: "usd_per_million_tokens",
-    source: { kind: "manual", name: "Frozen official standard text quote", reference: quote.reference, observedAt },
+  const longContext = quote.longContextAbove === null ? [] : [{ maxContextTokens: null, categories: { input: { kind: "unavailable" as const }, output: { kind: "unavailable" as const }, cache_read: { kind: "unavailable" as const }, cache_write: { kind: "not_applicable" as const }, cache_write_5m: { kind: "not_applicable" as const }, cache_write_1h: { kind: "not_applicable" as const }, reasoning: { kind: "included" as const }, audio_input: { kind: "not_applicable" as const }, audio_output: { kind: "not_applicable" as const } } }];
+  return freezeRateRevision({ version: PRICING_VERSION, ...target, tier: "standard", revision: `comparison-standard-text-${quote.observed}:${target.model}`, currency: "USD", unit: "usd_per_million_tokens",
+    source: { kind: "manual", name: "Frozen official standard text quote", reference: quote.reference, observedAt: `${quote.observed}T00:00:00.000Z` },
     aliases: quote.alias ? [{ provider: target.provider, model: quote.alias, tier: "standard" }] : [],
-    bands: [{ maxContextTokens: target.model === "gpt-5.4" ? 272000 : null, categories: { input: priced(quote.input), output: priced(quote.output), cache_read: priced(quote.cache),
+    bands: [{ maxContextTokens: quote.longContextAbove, categories: { input: priced(quote.input), output: priced(quote.output), cache_read: priced(quote.cache),
       cache_write: { kind: "not_applicable" }, cache_write_5m: { kind: "not_applicable" }, cache_write_1h: { kind: "not_applicable" },
-      reasoning: { kind: "included" }, audio_input: { kind: "not_applicable" }, audio_output: { kind: "not_applicable" } } }, ...(target.model === "gpt-5.4" ? [{ maxContextTokens: null, categories: { input: { kind: "unavailable" as const }, output: { kind: "unavailable" as const }, cache_read: { kind: "unavailable" as const }, cache_write: { kind: "not_applicable" as const }, cache_write_5m: { kind: "not_applicable" as const }, cache_write_1h: { kind: "not_applicable" as const }, reasoning: { kind: "included" as const }, audio_input: { kind: "not_applicable" as const }, audio_output: { kind: "not_applicable" as const } } }] : [])] });
+      reasoning: { kind: "included" }, audio_input: { kind: "not_applicable" }, audio_output: { kind: "not_applicable" } } }, ...longContext] });
 }
 export interface ComparisonUsage {
   readonly model?: unknown; readonly inputTokens?: unknown; readonly outputTokens?: unknown; readonly cacheReadTokens?: unknown;

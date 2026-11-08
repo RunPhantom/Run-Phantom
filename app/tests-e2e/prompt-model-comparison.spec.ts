@@ -21,11 +21,17 @@ for (const mode of ["local", "Team"] as const) test(`actual ${mode} saved-revisi
   page.on("pageerror", error => errors.push(error.message)); page.on("request", request => { if (new URL(request.url()).origin !== comparison.url && !request.url().startsWith("blob:")) foreign.push(request.url()); });
   await source(page, comparison); const pane = page.getByTestId("comparison-workspace");
   await expect(pane.getByRole("checkbox", { checked: true })).toHaveCount(0); await expect(pane.getByRole("button", { name: "Run comparison", exact: true })).toBeDisabled();
-  for (const model of ["gpt-5.4", "gpt-4.1", "claude-opus-4-6", "claude-sonnet-4-6"]) await pane.getByRole("checkbox", { name: new RegExp(model) }).check();
+  await expect(pane.getByRole("checkbox")).toHaveCount(6);
+  await expect(pane.getByRole("checkbox", { name: /gpt-6\.1-terra/ })).toHaveAccessibleName(/openai · reasoning medium · provider temperature/);
+  await expect(pane.getByRole("checkbox", { name: /claude-sonnet-5-5/ })).toHaveAccessibleName(/anthropic · standard text · provider temperature/);
+  for (const model of ["gpt-6.1-terra", "gpt-4.1", "claude-sonnet-5-5", "claude-sonnet-4-6"]) await pane.getByRole("checkbox", { name: new RegExp(model.replace(".", "\\.")) }).check();
+  for (const model of ["gpt-5.4", "claude-opus-4-6"]) await expect(pane.getByRole("checkbox", { name: new RegExp(model.replace(".", "\\.")) })).toBeDisabled();
+  await expect(pane.getByRole("checkbox", { checked: true })).toHaveCount(4);
   await page.getByLabel("Template", { exact: true }).fill("Unsaved replacement is excluded");
   await pane.getByRole("button", { name: "Run comparison", exact: true }).click(); await expect(page.getByRole("alertdialog")).toContainText("Send revision 1"); await expect(page.getByRole("button", { name: "Keep working", exact: true })).toBeFocused(); await page.keyboard.press("Escape"); await expect(pane.getByRole("button", { name: "Run comparison", exact: true })).toBeFocused();
   await pane.getByRole("button", { name: "Run comparison", exact: true }).click(); await page.getByRole("button", { name: "Confirm run comparison", exact: true }).click();
   for (let position = 0; position < 4; position++) await expect(pane.getByTestId(`comparison-output-${position}`)).toContainText("Review Literal $& {{next}} <img");
+  await expect(pane.getByRole("region", { name: "Accounting sources for gpt-6.1-terra", exact: true })).toContainText("$0.000013²Observed price estimate");
   await expect(pane.getByText("Controlled HTTP fixture · no paid provider call", { exact: true })).toHaveCount(4); await expect(pane.getByRole("complementary", { name: "Comparison history", exact: true }).getByRole("button", { name: /Release comparison/ })).toContainText("completed / completed / completed / completed"); await expect(page.locator("img[src*='untrusted.invalid']")).toHaveCount(0);
   await pane.getByText("Frozen input and settings", { exact: true }).click(); await expect(pane.locator(".comparison-frozen pre")).not.toContainText("Unsaved replacement");
   const pendingDownload = page.waitForEvent("download"); await pane.getByRole("button", { name: "Export comparison", exact: true }).click(); const exported = JSON.parse(readFileSync((await (await pendingDownload).path())!, "utf8"));
@@ -56,4 +62,11 @@ test("actual local comparison marks answers cut off by the output token limit as
   for (const position of [0, 1]) await expect(pane.getByTestId(`comparison-truncated-${position}`)).toHaveText("Stopped at the 128 output token limit. This answer may be incomplete.");
   await page.getByLabel("topic", { exact: true }).fill("complete answer"); await pane.getByRole("button", { name: "Run comparison", exact: true }).click(); await page.getByRole("button", { name: "Confirm run comparison", exact: true }).click();
   await expect(pane.getByTestId("comparison-output-0")).toContainText("complete answer"); await expect(pane.getByTestId("comparison-truncated-0")).toHaveCount(0);
+});
+test("actual local reasoning target that spends its whole output budget explains the empty answer", async ({ page, comparison }) => {
+  test.setTimeout(90000); await source(page, comparison); const pane = page.getByTestId("comparison-workspace"); await page.getByLabel("topic", { exact: true }).fill("[reasoning-limit] prime count"); await pane.getByLabel(/Maximum output tokens/).fill("16");
+  await pane.getByRole("checkbox", { name: /gpt-6\.1-terra/ }).check(); await pane.getByRole("checkbox", { name: /gpt-4\.1/ }).check();
+  await pane.getByRole("button", { name: "Run comparison", exact: true }).click(); await page.getByRole("button", { name: "Confirm run comparison", exact: true }).click();
+  await expect(pane.getByRole("article", { name: "Result gpt-6.1-terra", exact: true }).getByTestId("comparison-truncated-1")).toHaveText("Stopped at the 16 output token limit. This answer may be incomplete. 16 of 16 output tokens were reasoning; raise Maximum output tokens for visible text.");
+  await expect(pane.getByTestId("comparison-output-1")).toHaveText(""); await expect(pane.getByTestId("comparison-output-0")).toContainText("Controlled gpt-4.1 answer."); await expect(pane.getByTestId("comparison-truncated-0")).toHaveCount(0);
 });

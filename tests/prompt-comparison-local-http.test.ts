@@ -38,7 +38,7 @@ afterEach(async () => { await stop(); await upstream.stop(true); if (prior === u
 async function call(path: string, method = "GET", value?: unknown) {
   const response = await fetch(url + path, { method, headers: value === undefined ? {} : { "Content-Type": "application/json" }, ...(value === undefined ? {} : { body: JSON.stringify(value) }) }); return { response, data: await response.json() };
 }
-async function request(targets = [...COMPARISON_MODELS]) {
+async function request(targets = COMPARISON_MODELS.slice(0, 4)) {
   const saved = await call("/api/prompts", "POST", { operationKey: randomUUID(), name: "Native immutable source", template: "Literal {{topic}}" }); expect(saved.response.status).toBe(201);
   const cap = await call("/api/prompts/comparisons/capabilities"); expect(cap.response.status).toBe(200);
   return { operationKey: randomUUID(), promptId: saved.data.id, revision: 1, variables: { topic: "$& {{literal}}" }, targets, options: { maxOutputTokens: 128, temperature: 0 }, operationBudgetMicrousd: 1000000, expectedGeneration: cap.data.generation };

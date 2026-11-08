@@ -3,6 +3,7 @@ import { getProviderBaseURL, getProviderHeaders } from "../provider-options";
 import { redactText, sanitizeWithReport } from "../verification/serialization";
 import { EVALUATION_LIMITS as L, type RubricRule, type RuleResult, type Snapshot } from "./protocol";
 import { boundRuleResult } from "./rules";
+import { comparisonModelSettings } from "../prompts/comparison-types";
 
 export interface JudgeOptions { signal?: AbortSignal; fetch?: typeof globalThis.fetch }
 
@@ -157,14 +158,18 @@ export async function evaluateRubric(
       const judge = async (): Promise<{ score: number; reason: string }> => {
         const userData = JSON.stringify({ referenceInput: frozenCaseInput, candidateOutput: snapshot.output.value });
         const system = `${instructions}\n\nScoring rubric:\n${rule.rubric}`;
+        // Comparison targets and judges share one per-model request profile so a model's 400 rules live in one place.
+        const settings = comparisonModelSettings({ provider: rule.provider, model: rule.model });
+        const reasoningEffort = settings.reasoningEffort === "medium" ? settings.reasoningEffort : null;
         const body = rule.provider === "openai" ? {
           model: rule.model,
           ...(/^(?:gpt-[56](?:[.-]|$)|o[1-9](?:[.-]|$))/.test(rule.model)
-            ? { max_completion_tokens: 512 } : { max_tokens: 512, temperature: 0 }),
+            // Reasoning tokens count against max_completion_tokens; at medium effort 512 can end with empty content.
+            ? { max_completion_tokens: reasoningEffort ? 4096 : 512, ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}) } : { max_tokens: 512, temperature: 0 }),
           response_format: { type: "json_object" },
           messages: [{ role: "system", content: system }, { role: "user", content: userData }],
         } : {
-          model: rule.model, max_tokens: 512, temperature: 0, system,
+          model: rule.model, max_tokens: 512, ...(settings.thinking === "between_tools" ? { thinking: { type: "between_tools" } } : {}), ...(settings.temperature === "requested" ? { temperature: 0 } : {}), system,
           messages: [{ role: "user", content: userData }],
           output_config: { format: { type: "json_schema", schema: {
             type: "object", properties: {

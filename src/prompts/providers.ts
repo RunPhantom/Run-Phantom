@@ -8,13 +8,16 @@ export type ComparisonProvenance = "official-provider" | "controlled-http-fixtur
 export type ProviderFailure = "unavailable" | "cancelled" | "timeout" | "provider_error" | "invalid_response" | "response_limit" | "protected_content";
 const messages: Record<ProviderFailure, string> = { unavailable: "Provider credentials are unavailable.", cancelled: "Provider request was cancelled.", timeout: "Provider request timed out.", provider_error: "Provider request failed.", invalid_response: "Provider response was invalid.", response_limit: "Provider response exceeded its limit.", protected_content: "Provider response contains protected credentials." };
 export class ComparisonProviderError extends Error {
-  /** billable=false only when the provider cannot have metered the request: it was never sent, or it was refused as unauthenticated. */
+  /** billable=false only when the provider cannot have metered the request: it was never sent, or it was refused before generation. */
   constructor(readonly code: ProviderFailure, readonly requestMayHaveBeenSent: boolean, readonly billable: boolean = requestMayHaveBeenSent) { super(messages[code]); this.name = "ComparisonProviderError"; }
 }
 export interface ComparisonProviderResult { output: string; usage: ComparisonUsage; finishReason: string; provenance: ComparisonProvenance }
 type Transport = (url: string | URL, init: RequestInit) => Promise<Response>;
 /** resolveCredential lets the local daemon add its Settings store; Team runtimes must not import local machine secrets. */
 interface ClientOptions { credentials?: Partial<Record<ComparisonProvider, string>>; resolveCredential?: (provider: ComparisonProvider) => string | null | undefined; transport?: Transport; provenance?: ComparisonProvenance }
+// Validation, auth, unknown-model, credit-balance and rate-limit refusals are answered before any tokens are
+// generated, so neither provider meters them; 408/5xx stay conservative because generation may have run.
+const refusedBeforeGeneration: ReadonlySet<number> = new Set([400, 401, 403, 404, 413, 422, 429]);
 const endpoints = Object.freeze({ openai: "https://api.openai.com/v1/chat/completions", anthropic: "https://api.anthropic.com/v1/messages" });
 const object = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ComparisonProviderError("invalid_response", true);
@@ -63,15 +66,16 @@ export function createComparisonProviderClient(client: ClientOptions = {}) {
       if (!Number.isFinite(remaining) || remaining <= 0 || remaining > COMPARISON_LIMITS.attemptMs) throw new ComparisonProviderError("timeout", false);
       const timer = setTimeout(() => timeout.abort(), remaining), signal = AbortSignal.any([input.signal, timeout.signal]);
       const family = comparisonFamily(target);
-      const body = target.provider === "openai" ? { model: target.model, messages: [{ role: "user", content: compiled }], max_completion_tokens: outputTokens, temperature: input.options.temperature, stream: false, store: false, service_tier: "default", ...(family.reasoningEffort ? { reasoning_effort: family.reasoningEffort } : {}) }
-        : { model: target.model, messages: [{ role: "user", content: compiled }], max_tokens: outputTokens, temperature: input.options.temperature, stream: false, thinking: { type: "disabled" }, service_tier: "standard_only", inference_geo: "global" };
+      const temperature = family.temperature === "requested" ? { temperature: input.options.temperature } : {};
+      const body = target.provider === "openai" ? { model: target.model, messages: [{ role: "user", content: compiled }], max_completion_tokens: outputTokens, ...temperature, stream: false, store: false, service_tier: "default", ...(family.reasoningEffort ? { reasoning_effort: family.reasoningEffort } : {}) }
+        : { model: target.model, messages: [{ role: "user", content: compiled }], max_tokens: outputTokens, ...temperature, stream: false, thinking: { type: family.thinking }, service_tier: "standard_only", inference_geo: "global" };
       const headers: Record<string, string> = target.provider === "openai" ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
         : { "Content-Type": "application/json", "x-api-key": token, "anthropic-version": "2023-06-01" };
       let sent = false;
       try {
         sent = true;
         const response = await transport(endpoints[target.provider], { method: "POST", headers, body: JSON.stringify(body), signal, redirect: "error" });
-        if (!response.ok) { void response.body?.cancel().catch(() => {}); throw new ComparisonProviderError("provider_error", true, response.status !== 401 && response.status !== 403); }
+        if (!response.ok) { void response.body?.cancel().catch(() => {}); throw new ComparisonProviderError("provider_error", true, !refusedBeforeGeneration.has(response.status)); }
         const raw = object(await responseJson(response, signal));
         let output: string, finishReason: string; const usage = raw.usage === undefined ? {} : object(raw.usage);
         if (target.provider === "openai") {

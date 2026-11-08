@@ -50,8 +50,8 @@ test("live providers: saving a synthetic run in the UI persists an Anthropic sum
 });
 
 for (const [provider, model] of [
-  ["openai", process.env.RUNPHANTOM_LIVE_OPENAI_MODEL ?? "gpt-4.1-mini"],
-  ["anthropic", process.env.RUNPHANTOM_LIVE_ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001"],
+  ["openai", process.env.RUNPHANTOM_LIVE_OPENAI_MODEL ?? "gpt-6.1-terra"],
+  ["anthropic", process.env.RUNPHANTOM_LIVE_ANTHROPIC_MODEL ?? "claude-sonnet-5-5"],
 ] as const) {
   test(`live providers: ${provider} answers from the selected trace through the backend`, async ({ request }) => {
     await seedRunPhantomFixtures(liveUrl!);

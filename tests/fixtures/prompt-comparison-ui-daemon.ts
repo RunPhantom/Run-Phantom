@@ -7,8 +7,11 @@ import { closeDb } from "../../src/db";
 
 const mode = process.argv[2]; if (mode !== "local" && mode !== "team") throw new Error("Closed native fixture mode required");
 const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-  const body = await request.json() as { model: string; messages: { content: string }[] };
+  const body = await request.json() as { model: string; messages: { content: string }[]; temperature?: number; thinking?: { type: string } };
+  // Mirror the provider 400s observed for these models so the UI path proves the request shape it sends.
+  if (["gpt-6.1-terra", "claude-sonnet-5-5"].includes(body.model) && body.temperature !== undefined || body.model === "claude-sonnet-5-5" && body.thinking?.type !== "between_tools") return Response.json({ error: { type: "invalid_request_error" } }, { status: 400 });
   const held = body.messages[0].content.includes("[hold]"), overage = body.messages[0].content.includes("[overage]"), cut = body.messages[0].content.includes("[length]");
+  if (body.messages[0].content.includes("[reasoning-limit]") && body.model === "gpt-6.1-terra") return Response.json({ model: body.model, service_tier: "default", choices: [{ message: { content: "" }, finish_reason: "length" }], usage: { prompt_tokens: 29, completion_tokens: 16, prompt_tokens_details: { cached_tokens: 0 }, completion_tokens_details: { reasoning_tokens: 16 } } });
   if (held) await new Promise<void>(resolve => request.signal.addEventListener("abort", () => resolve(), { once: true }));
   const output = overage ? "x".repeat(7900) : `Controlled ${body.model} answer.\n${body.messages[0].content}`, raw = body.model.startsWith("gpt")
     ? { model: body.model, service_tier: "default", choices: [{ message: { content: output }, finish_reason: cut ? "length" : "stop" }], usage: { prompt_tokens: overage ? 1000000 : 3, completion_tokens: overage ? 1 : 2, prompt_tokens_details: { cached_tokens: 0 } } }
