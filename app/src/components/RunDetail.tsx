@@ -416,9 +416,13 @@ function StatsLine({ stats, model, spans, active, startedAt, completionUnavailab
       setCostPosition({ left: Math.max(16, Math.min(rect.left, window.innerWidth - width - 16)), top: rect.bottom + height + 8 <= window.innerHeight - 16 ? rect.bottom + 8 : Math.max(16, rect.top - height - 8), width });
     };
     position();
+    // The first measurement runs before the panel width is constrained, so a
+    // wrapped multi-model panel grows taller afterwards and must be re-placed.
+    const observer = new ResizeObserver(position);
+    if (costPanelRef.current) observer.observe(costPanelRef.current);
     window.addEventListener("resize", position);
     window.addEventListener("scroll", position, true);
-    return () => { window.removeEventListener("resize", position); window.removeEventListener("scroll", position, true); };
+    return () => { observer.disconnect(); window.removeEventListener("resize", position); window.removeEventListener("scroll", position, true); };
   }, [showCost, breakdown]);
 
   useEffect(() => {
