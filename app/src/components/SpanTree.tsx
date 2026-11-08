@@ -2,7 +2,7 @@ import { CaptureVisibilityDetails } from "./CaptureVisibilityDetails";
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { ArrowLeft } from "lucide-react";
 import { setMeridian, clearMeridian } from "../utils/meridian";
-import { C } from "../utils/colors";
+import { cn } from "@/lib/utils";
 import { fmt, tryJson, displayPayload, detectProvider, isoTimestamp } from "../utils/helpers";
 import type { Span } from "../utils/types";
 import { Chevron } from "./Icons";
@@ -22,11 +22,11 @@ function CollapsibleSection({ title, preview, data, maxExpand = 3 }: { title: st
     <div>
       <button type="button" className="flex w-full items-center gap-2 text-left" onClick={() => setOpen(!open)}>
         <Chevron open={open} size={8} />
-        <span className="text-[10px] uppercase tracking-wide font-medium" style={{ color: C.fg1 }}>{title}</span>
-        {!open && <span className="text-[10px] font-mono truncate flex-1" style={{ color: C.fg0 }}>{preview}</span>}
+        <span className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted">{title}</span>
+        {!open && <span className="rp-meta flex-1 truncate text-[10px]">{preview}</span>}
       </button>
       {open && (
-        <div className="mt-1 rounded p-2" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+        <div className="mt-1.5 rounded-sm border border-rp-line bg-rp-canvas-blue p-2.5">
           <JsonView data={data} maxExpand={maxExpand} />
         </div>
       )}
@@ -43,8 +43,7 @@ function CopyButton({ text, label }: { text: string; label: string }) {
     <button
       type="button"
       aria-label={copied ? `Copied span ${label}` : `Copy span ${label}`}
-      className="text-[10px] font-mono px-1.5 py-0.5 rounded transition"
-      style={{ color: copied ? C.green : C.fg0, background: C.surface }}
+      className={cn("rounded-sm px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] transition-colors duration-250 ease-standard", copied ? "bg-rp-success-soft text-rp-success" : "text-rp-ink-muted hover:bg-rp-row-hover hover:text-rp-ink")}
       onClick={() => { void navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
     >
       {copied ? "copied" : "copy"}
@@ -52,13 +51,15 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   );
 }
 
-const TYPE_LABEL: Record<string, { color: string; label: string }> = {
-  TRACE: { color: C.purple, label: "TRACE" },
-  TOOL_CALL: { color: C.orange, label: "TOOL" },
-  LLM_GENERATION: { color: C.cyan, label: "LLM" },
-  RETRIEVAL: { color: C.purple, label: "RETRIEVAL" },
-  EMBEDDING: { color: C.accent, label: "EMBEDDING" },
-  INTERNAL: { color: C.fg0, label: "SPAN" },
+// Blue marks model work, ink marks the agent acting, grey marks structure.
+// Status (red) is layered on top, so a type never borrows a status colour.
+const TYPE_LABEL: Record<string, { bar: string; chip: string; label: string }> = {
+  TRACE: { bar: "var(--rp-line-strong)", chip: "bg-[color:var(--rp-n4)] text-rp-ink-muted", label: "TRACE" },
+  TOOL_CALL: { bar: "var(--rp-ink-soft)", chip: "bg-[color:var(--rp-n4)] text-rp-ink", label: "TOOL" },
+  LLM_GENERATION: { bar: "var(--rp-blue)", chip: "bg-rp-wash text-rp-blue", label: "LLM" },
+  RETRIEVAL: { bar: "var(--rp-ink-soft)", chip: "bg-[color:var(--rp-n4)] text-rp-ink", label: "RETRIEVAL" },
+  EMBEDDING: { bar: "var(--rp-blue)", chip: "bg-rp-wash text-rp-blue", label: "EMBEDDING" },
+  INTERNAL: { bar: "var(--rp-line-strong)", chip: "bg-[color:var(--rp-n4)] text-rp-ink-muted", label: "SPAN" },
 };
 
 function typeInfo(span: Span) {
@@ -79,7 +80,7 @@ function SpanRow({ span, depth, minTime, totalDur, selected, flashing, onClick, 
   onClearFresh: (id: string) => void;
 }) {
   const info = typeInfo(span);
-  const color = info.color;
+  const color = info.bar;
   const isErr = span.status === "ERROR";
   const leftPct = totalDur > 0 ? ((span.start_time_ms - minTime) / totalDur) * 100 : 0;
   const widthPct = totalDur > 0 ? Math.max((span.duration_ms / totalDur) * 100, 0.5) : 100;
@@ -92,22 +93,20 @@ function SpanRow({ span, depth, minTime, totalDur, selected, flashing, onClick, 
       onMouseLeave={() => clearMeridian()}
       onFocus={() => setMeridian(span.id)}
       onBlur={() => clearMeridian()}
-      className="flex items-center rounded-md"
+      className="flex cursor-pointer items-center hover:bg-rp-row-hover"
       role="button"
       tabIndex={0}
       aria-pressed={selected}
       style={{
         minHeight: 28,
-        borderBottom: `1px solid ${C.border}`,
-        background: flashing
-          ? "color-mix(in srgb, var(--rp-info) 12%, white 88%)"
-          : selected
-            ? C.selected
-            : isErr
-              ? "color-mix(in srgb, var(--rp-danger) 6%, white 94%)"
-              : "transparent",
-        borderLeft: flashing ? `2px solid ${C.cyan}` : selected ? `2px solid ${C.selectedBorder}` : isErr ? `2px solid ${C.red}` : "2px solid transparent",
-        transition: "background 0.4s ease, border-left 0.4s ease",
+        borderBottom: "1px solid var(--rp-line-muted)",
+        background: flashing || selected
+          ? "var(--rp-wash)"
+          : isErr
+            ? "var(--rp-danger-soft)"
+            : undefined,
+        borderLeft: flashing || selected ? "2px solid var(--rp-blue)" : isErr ? "2px solid var(--rp-danger)" : "2px solid transparent",
+        transition: "background-color 250ms cubic-bezier(.25,.1,.25,1), border-color 250ms cubic-bezier(.25,.1,.25,1)",
       }}
       onClick={onClick}
       onKeyDown={(event) => {
@@ -122,10 +121,10 @@ function SpanRow({ span, depth, minTime, totalDur, selected, flashing, onClick, 
       onContextMenu={onContextMenu ? (e) => { e.preventDefault(); onContextMenu(e, span); } : undefined}
     >
       <div className="flex items-center gap-1.5 flex-shrink-0" style={{ width: 220, paddingLeft: depth * 14 + 8, minWidth: 220 }}>
-        <span className="text-[10px] font-mono font-bold px-1 py-0.5 rounded" style={{ color: info.color, background: `${info.color}12` }}>
+        <span className={cn("rounded-sm px-1 py-0.5 font-mono text-[10px] font-medium tracking-[0.06em]", info.chip)}>
           {info.label}
         </span>
-        <span className="text-[11px] font-mono truncate" style={{ color: isErr ? C.red : C.fg3 }} title={span.name}>
+        <span className={cn("truncate font-mono text-[12px]", isErr ? "text-rp-danger" : selected ? "text-rp-blue" : "text-rp-ink")} title={span.name}>
           {span.name}
         </span>
         {annotations.map((a) => (
@@ -145,14 +144,12 @@ function SpanRow({ span, depth, minTime, totalDur, selected, flashing, onClick, 
             width: `${widthPct}%`,
             top: 0,
             height: 10,
-            backgroundColor: isErr ? C.red : color,
-            boxShadow: selected || flashing ? `0 0 0 1px ${isErr ? C.red : color}` : "none",
-            opacity: selected || flashing ? 1 : 0.88,
+            backgroundColor: isErr ? "var(--rp-danger)" : color,
             minWidth: 2,
           }} />
       </div>
       <div className="flex-shrink-0 text-right pr-3" style={{ width: 55 }}>
-        <span className="text-[10px] font-mono" style={{ color: C.fg0 }}>{fmt(span.duration_ms)}</span>
+        <span className="font-mono text-[11px] tabular-nums text-rp-ink-muted">{fmt(span.duration_ms)}</span>
       </div>
     </div>
   );
@@ -172,8 +169,7 @@ function SpanIdCopy({ id }: { id: string }) {
   return (
     <button
       type="button"
-      className="w-full min-w-0 truncate rounded text-left transition-colors"
-      style={{ color: copied ? C.green : C.fg0 }}
+      className={cn("w-full min-w-0 truncate rounded-sm text-left transition-colors duration-250 ease-standard hover:text-rp-blue", copied ? "text-rp-success" : "text-rp-ink")}
       title={id}
       aria-label={`Copy span id ${id}`}
       onClick={() => {
@@ -194,40 +190,40 @@ function SpanDetail({ span }: { span: Span }) {
   const isErr = span.status === "ERROR";
 
   return (
-    <div className="p-4 space-y-3 h-full overflow-auto sb">
+    <div className="rp-fade-rise sb h-full space-y-4 overflow-auto p-4 sm:p-5">
       <div>
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded" style={{ color: info.color, background: `${info.color}15`, marginLeft: -6 }}>
+          <span className={cn("rounded-sm px-1.5 py-0.5 font-mono text-[10px] font-medium tracking-[0.06em]", info.chip)}>
             {info.label}
           </span>
-          {isErr && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded" style={{ color: C.red, background: "color-mix(in srgb, var(--rp-danger) 10%, white 90%)" }}>ERROR</span>}
-          {(() => { const p = detectProvider(span.model, span.provider); return p ? <span className="text-[9px] font-mono font-medium px-1.5 py-0.5 rounded" style={{ color: C.fg1, background: C.surface, border: `1px solid ${C.border}` }}>{p.label}</span> : null; })()}
+          {isErr && <span className="rounded-sm bg-rp-danger-soft px-1.5 py-0.5 font-mono text-[10px] font-medium tracking-[0.06em] text-rp-danger">ERROR</span>}
+          {(() => { const p = detectProvider(span.model, span.provider); return p ? <span className="rounded-sm border border-rp-line bg-white px-1.5 py-0.5 font-mono text-[10px] font-medium text-rp-ink-muted">{p.label}</span> : null; })()}
         </div>
-        <div className="text-sm font-mono font-medium" style={{ color: C.fg4 }}>{span.name}</div>
+        <div className="mt-1.5 break-all font-display text-[18px] font-semibold tracking-[-0.02em] text-rp-ink">{span.name}</div>
       </div>
 
       {isErr && span.output_payload && (
-        <div className="rounded-lg p-2.5" style={{ background: "color-mix(in srgb, var(--rp-danger) 8%, white 92%)", border: "1px solid color-mix(in srgb, var(--rp-danger) 18%, white 82%)" }}>
-          <div className="text-[9px] uppercase tracking-wide mb-1 font-medium" style={{ color: C.red }}>Error</div>
-          <pre className="text-[11px] font-mono leading-relaxed" style={{ color: C.red }}>{displayPayload(span.output_payload)}</pre>
+        <div className="rounded-sm border border-rp-danger-border bg-rp-danger-soft p-3">
+          <div className="mb-1 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-danger">Error</div>
+          <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-rp-danger">{displayPayload(span.output_payload)}</pre>
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] font-mono">
-        <div style={{ color: C.fg0 }}>duration</div>
-        <div style={{ color: C.fg2 }}>{fmt(span.duration_ms)}</div>
-        {span.model && <><div style={{ color: C.fg0 }}>model</div><div style={{ color: C.fg2 }}>{span.model}</div></>}
-        {span.input_tokens != null && <><div style={{ color: C.fg0 }}>input tokens</div><div style={{ color: C.fg2 }}>{span.input_tokens.toLocaleString()}</div></>}
-        {span.output_tokens != null && <><div style={{ color: C.fg0 }}>output tokens</div><div style={{ color: C.fg2 }}>{span.output_tokens.toLocaleString()}</div></>}
-        <div style={{ color: C.fg0 }}>status</div>
-        <div style={{ color: isErr ? C.red : C.fg2 }}>{span.status}</div>
-        <div style={{ color: C.fg0 }}>start</div>
-        <div style={{ color: C.fg2 }}>{isoTimestamp(span.start_time_ms)}</div>
-        <div style={{ color: C.fg0 }}>end</div>
-        <div style={{ color: C.fg2 }}>{isoTimestamp(span.end_time_ms)}</div>
-        <div style={{ color: C.fg0 }}>span id</div>
+      <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-4 gap-y-1.5 border-y border-rp-line-muted py-3 font-mono text-[11px] tabular-nums">
+        <div className="text-rp-ink-muted">duration</div>
+        <div className="text-rp-ink">{fmt(span.duration_ms)}</div>
+        {span.model && <><div className="text-rp-ink-muted">model</div><div className="text-rp-ink">{span.model}</div></>}
+        {span.input_tokens != null && <><div className="text-rp-ink-muted">input tokens</div><div className="text-rp-ink">{span.input_tokens.toLocaleString()}</div></>}
+        {span.output_tokens != null && <><div className="text-rp-ink-muted">output tokens</div><div className="text-rp-ink">{span.output_tokens.toLocaleString()}</div></>}
+        <div className="text-rp-ink-muted">status</div>
+        <div className={isErr ? "text-rp-danger" : "text-rp-ink"}>{span.status}</div>
+        <div className="text-rp-ink-muted">start</div>
+        <div className="text-rp-ink">{isoTimestamp(span.start_time_ms)}</div>
+        <div className="text-rp-ink-muted">end</div>
+        <div className="text-rp-ink">{isoTimestamp(span.end_time_ms)}</div>
+        <div className="text-rp-ink-muted">span id</div>
         <SpanIdCopy id={span.id} />
-        {span.attributes && (() => { try { const a = JSON.parse(span.attributes); return a["ai.provider.baseURL"] ? <><div style={{ color: C.fg0 }}>base url</div><div style={{ color: C.fg0 }}>{a["ai.provider.baseURL"]}</div></> : null; } catch { return null; } })()}
+        {span.attributes && (() => { try { const a = JSON.parse(span.attributes); return a["ai.provider.baseURL"] ? <><div className="text-rp-ink-muted">base url</div><div className="text-rp-ink-muted">{a["ai.provider.baseURL"]}</div></> : null; } catch { return null; } })()}
       </div>
 
       {span.attributes && (() => {
@@ -294,10 +290,10 @@ function SpanDetail({ span }: { span: Span }) {
       {span.input_payload && (
         <div>
           <div className="flex items-center justify-between mb-1">
-            <div className="text-[10px] uppercase tracking-wide font-medium" style={{ color: C.fg1 }}>Input</div>
+            <div className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted">Input</div>
             <CopyButton label="input" text={tryJson(span.input_payload) ?? span.input_payload} />
           </div>
-          <div className="rounded p-2" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+          <div className="rounded-sm border border-rp-line bg-rp-canvas-blue p-2.5">
             <JsonView data={span.input_payload} />
           </div>
         </div>
@@ -306,10 +302,10 @@ function SpanDetail({ span }: { span: Span }) {
       {span.output_payload && (
         <div>
           <div className="flex items-center justify-between mb-1">
-            <div className="text-[10px] uppercase tracking-wide font-medium" style={{ color: C.fg1 }}>Output</div>
+            <div className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted">Output</div>
             <CopyButton label="output" text={tryJson(span.output_payload) ?? span.output_payload} />
           </div>
-          <div className="rounded p-2" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+          <div className="rounded-sm border border-rp-line bg-rp-canvas-blue p-2.5">
             <JsonView data={span.output_payload} />
           </div>
         </div>
@@ -472,23 +468,23 @@ export function SpanTree({
 
   const selectedSpan = selectedId ? spanMap.get(selectedId) : null;
 
-  if (flat.length === 0) return <div style={{ color: C.fg1 }}>No spans</div>;
+  if (flat.length === 0) return <div className="rounded-lg border border-dashed border-rp-line-dashed bg-rp-surface px-6 py-8 text-center text-[13px] text-rp-ink-muted">No spans</div>;
 
   return (
-    <div className="flex flex-col h-full rounded-lg" style={{ border: `1px solid ${C.border}` }}>
+    <div className="flex h-full flex-col overflow-hidden rounded-lg border border-rp-line bg-rp-surface">
       <div className="flex flex-1 min-h-0">
         <div
           className="overflow-auto sb"
           style={{
             display: isMobile && selectedSpan ? "none" : undefined,
             flex: selectedSpan ? "0 0 50%" : "1 1 auto",
-            borderRight: selectedSpan && !isMobile ? `1px solid ${C.border}` : "none",
+            borderRight: selectedSpan && !isMobile ? "1px solid var(--rp-line)" : "none",
           }}
         >
-          <div className="flex items-center px-2 py-1.5 sticky top-0 z-10" style={{ background: C.surface, borderBottom: `1px solid ${C.border}` }}>
-            <div className="text-[9px] uppercase tracking-wider font-medium" style={{ color: C.fg0, width: 220 }}>Span</div>
-            <div className="flex-1 text-[9px] uppercase tracking-wider font-medium" style={{ color: C.fg0 }}>Timeline</div>
-            <div className="text-[9px] uppercase tracking-wider font-medium text-right pr-3" style={{ color: C.fg0, width: 55 }}>Dur</div>
+          <div className="sticky top-0 z-10 flex items-center border-b border-rp-line bg-rp-surface px-2 py-2">
+            <div className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted" style={{ width: 220 }}>Span</div>
+            <div className={cn("font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted", "flex-1")}>Timeline</div>
+            <div className={cn("font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted", "pr-3 text-right")} style={{ width: 55 }}>Dur</div>
           </div>
           {flat.map(({ span, depth }) => (
             <div key={span.id}>
@@ -532,12 +528,12 @@ export function SpanTree({
                   {(annotationsBySpan.get(span.id) ?? []).map((a) => {
                     const st = KIND_STYLES[a.kind];
                     return (
-                      <div key={a.id} style={{ padding: "7px 9px", border: `1px solid ${st.border}`, background: st.bg, borderRadius: "var(--rp-r-lg)", display: "flex", alignItems: "flex-start", gap: 8 }}>
-                        <div style={{ flex: 1, minWidth: 0, fontSize: 11, color: C.fg4, lineHeight: 1.45, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-                          <span style={{ color: C.fg0, fontSize: 10, marginRight: 6 }}>
+                      <div key={a.id} style={{ padding: "7px 9px", border: `1px solid ${st.border}`, background: st.bg, borderRadius: 4, display: "flex", alignItems: "flex-start", gap: 8 }}>
+                        <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: "var(--rp-ink)", lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                          <span style={{ color: "var(--rp-ink-muted)", fontSize: 11, marginRight: 6 }}>
                             {SOURCE_GLYPH[a.source]} {annotationSourceLabel(a.source)}
                           </span>
-                          {a.note ? <DeepLinkedText text={a.note} /> : <em style={{ color: C.fg0 }}>(no note)</em>}
+                          {a.note ? <DeepLinkedText text={a.note} /> : <em style={{ color: "var(--rp-ink-muted)" }}>(no note)</em>}
                         </div>
                         {onDeleteAnnotation && (
                           <button
@@ -545,7 +541,8 @@ export function SpanTree({
                             aria-label={`Delete ${a.kind} annotation`}
                             onClick={(e) => { e.stopPropagation(); void onDeleteAnnotation(a.id); }}
                             title="Delete annotation"
-                            style={{ background: "transparent", border: 0, color: C.fg0, fontSize: 13, cursor: "pointer", minWidth: 24, minHeight: 24, padding: "0 4px", lineHeight: 1 }}
+                            className="rounded-sm text-rp-ink-muted transition-colors duration-250 ease-standard hover:bg-rp-row-hover hover:text-rp-ink"
+                            style={{ background: "transparent", border: 0, fontSize: 14, cursor: "pointer", minWidth: 24, minHeight: 24, padding: "0 4px", lineHeight: 1 }}
                           >
                             ×
                           </button>
@@ -580,17 +577,16 @@ export function SpanTree({
             role="region"
             aria-label="Span details"
             className="min-w-0 overflow-auto sb"
-            style={{ flex: isMobile ? "1 1 100%" : "0 0 50%", background: C.surface }}
+            style={{ flex: isMobile ? "1 1 100%" : "0 0 50%", background: "var(--rp-surface)" }}
           >
             {isMobile && (
-              <div className="sticky top-0 z-10 border-b px-2 py-1.5" style={{ background: C.surface, borderColor: C.border }}>
+              <div className="sticky top-0 z-10 border-b border-rp-line bg-rp-surface px-2 py-1.5">
                 <button
                   type="button"
-                  className="inline-flex min-h-9 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors hover:bg-[color:var(--rp-ink-wash)]"
-                  style={{ color: C.fg2 }}
+                  className="inline-flex min-h-9 items-center gap-1.5 rounded-control px-2 text-[13px] font-medium text-rp-ink transition-colors duration-250 ease-standard hover:bg-rp-row-hover"
                   onClick={() => setSelectedId(null)}
                 >
-                  <ArrowLeft className="h-3.5 w-3.5" />
+                  <ArrowLeft aria-hidden="true" className="h-3.5 w-3.5 text-rp-ink-muted" />
                   Back to span list
                 </button>
               </div>
@@ -639,20 +635,14 @@ function SpanContextMenu({ x, y, onClose, onMarkKind, onAddNote }: {
       aria-label="Annotate span"
       onClick={(e) => e.stopPropagation()}
       onKeyDown={onMenuKeyDown}
+      className="rp-pop rounded-md border border-rp-line bg-rp-surface p-1 text-[13px] text-rp-ink shadow-e3"
       style={{
         position: "fixed",
         top: clampedY, left: clampedX, zIndex: 50,
         minWidth: 210,
-        padding: "4px 0",
-        background: C.elevated,
-        border: `1px solid ${C.border}`,
-        borderRadius: "var(--rp-r-md)",
-        boxShadow: "var(--rp-e3)",
-        fontSize: 12,
-        color: C.fg3,
       }}
     >
-      <div style={{ padding: "4px 12px 2px", fontSize: 10, textTransform: "uppercase", color: C.fg0, letterSpacing: "0.04em" }}>
+      <div className="rp-eyebrow px-2 pb-1 pt-1.5">
         Annotate span
       </div>
       {(["issue", "good", "note"] as AnnotationKind[]).map((kind) => {
@@ -663,13 +653,7 @@ function SpanContextMenu({ x, y, onClose, onMarkKind, onAddNote }: {
             type="button"
             role="menuitem"
             onClick={() => { if (kind === "note") onAddNote(); else onMarkKind(kind); }}
-            style={{
-              display: "flex", alignItems: "center", gap: 10, width: "100%",
-              padding: "6px 12px", background: "transparent", border: 0, color: C.fg3,
-              cursor: "pointer", textAlign: "left",
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--rp-ink-a06)")}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            className="flex w-full cursor-pointer items-center gap-2.5 rounded-sm px-2 py-1.5 text-left transition-colors duration-250 ease-standard hover:bg-rp-row-hover"
           >
             <span style={{ width: 14, textAlign: "center", color: s.fg, fontWeight: 700 }}>{s.icon}</span>
             <span style={{ flex: 1 }}>{kind === "note" ? "Add note…" : `Mark as ${kind}`}</span>
