@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Copy, Check, X } from "lucide-react";
-import { C } from "../utils/colors";
+import { cn } from "@/lib/utils";
 import { buildSkillPrompt } from "../utils/skill-content";
 import { useDialogFocus } from "../hooks/use-dialog-focus";
 
@@ -53,28 +53,25 @@ function InlineSetupCTA({ eventName, title, description }: { eventName?: string;
   const resolvedDescription = description ?? "Copy the setup prompt and paste it into your AI coding tool to wire up replay.";
 
   return (
-    <div className="rounded-lg p-4 space-y-3"
-      style={{ background: "var(--rp-accent-soft)", border: `1px solid ${C.border}` }}>
-      <div className="text-[11px] font-medium" style={{ color: C.fg3 }}>
+    <div className="space-y-3 rounded-md border border-rp-wash-border bg-rp-wash p-4">
+      <div className="text-[13px] font-semibold text-rp-ink">
         {resolvedTitle}
       </div>
-      <div className="text-[10px] leading-relaxed" style={{ color: C.fg1 }}>
+      <div className="text-[12px] leading-5 text-rp-ink-muted">
         {resolvedDescription}
       </div>
       <button
         type="button"
-        className="min-h-[44px] w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md text-[11px] font-medium transition-colors"
-        style={{
-          background: copied ? "color-mix(in srgb, var(--rp-success) 12%, white 88%)" : "var(--rp-ink-wash)",
-          border: `1px solid ${copied ? "color-mix(in srgb, var(--rp-success) 26%, white 74%)" : C.border}`,
-          color: copied ? C.green : C.fg3,
-        }}
+        className={cn(
+          "flex min-h-[44px] w-full items-center justify-center gap-2 rounded-control border px-3 py-2 text-[13px] font-medium transition-[background-color,border-color,color] duration-250 ease-standard",
+          copied ? "border-rp-success-border bg-rp-success-soft text-rp-success" : "rp-primary-control border-rp-blue bg-rp-blue text-white hover:border-rp-blue-hover hover:bg-rp-blue-hover",
+        )}
         onClick={copy}
       >
-        {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+        {copied ? <Check aria-hidden="true" className="size-3.5" /> : <Copy aria-hidden="true" className="size-3.5" />}
         {copied ? "Copied!" : "Copy Setup Prompt"}
       </button>
-      <p role={copyError ? "alert" : copied ? "status" : undefined} className="text-[12px] leading-relaxed" style={{ color: copyError ? C.red : C.fg1 }}>{copyError ? "Clipboard access was denied. Allow clipboard access and try again." : copied ? "Setup prompt copied. Paste it into your coding tool." : "The prompt configures replay in your agent’s repository."}</p>
+      <p role={copyError ? "alert" : copied ? "status" : undefined} className={cn("text-[12px] leading-relaxed", copyError ? "text-rp-danger" : "text-rp-ink-muted")}>{copyError ? "Clipboard access was denied. Allow clipboard access and try again." : copied ? "Setup prompt copied. Paste it into your coding tool." : "The prompt configures replay in your agent’s repository."}</p>
     </div>
   );
 }
@@ -100,8 +97,8 @@ export function SetupReplayModal({ open, onClose, eventName }: SetupReplayModalP
       onClick={onClose}
     >
       <div
-        className="absolute inset-0 bg-[color:var(--rp-scrim)] backdrop-blur-sm"
-        style={{ animation: "fade-in 0.15s ease-out forwards" }}
+        className="absolute inset-0 bg-[color:var(--rp-scrim-soft)]"
+        style={{ animation: "fade-in 0.2s ease-out forwards" }}
       />
 
       <div
@@ -109,58 +106,50 @@ export function SetupReplayModal({ open, onClose, eventName }: SetupReplayModalP
         role="dialog"
         aria-modal="true"
         aria-labelledby="replay-setup-title"
-        className="relative w-full max-w-md mx-4 rounded-xl overflow-hidden"
-        style={{
-          background: C.surface,
-          border: `1px solid ${C.borderLight}`,
-          boxShadow: "var(--rp-e4)",
-          animation: "dialog-in var(--rp-motion-surface-in) var(--rp-ease-out) forwards",
-        }}
+        className="rp-fade-rise relative mx-4 w-full max-w-md overflow-hidden rounded-lg border border-rp-line bg-rp-surface shadow-e4"
         onClick={(e) => e.stopPropagation()}
       >
         <button
           type="button"
           aria-label="Close replay setup"
-          className="absolute right-3 top-3 p-1.5 rounded-md transition-colors hover:bg-[color:var(--rp-ink-wash)]"
-          style={{ color: C.fg1 }}
+          className="absolute right-3 top-3 grid size-8 place-items-center rounded-control text-rp-ink-muted transition-colors duration-250 ease-standard hover:bg-rp-row-hover hover:text-rp-ink"
           onClick={onClose}
         >
-          <X className="size-4" />
+          <X aria-hidden="true" className="size-4" />
         </button>
 
         <div className="p-6 space-y-4">
           <div>
-            <h2 id="replay-setup-title" className="text-[15px] font-semibold" style={{ color: C.fg4 }}>
+            <p className="rp-eyebrow mb-2"><span aria-hidden="true" className="rp-eyebrow-marker" />Replay / Setup</p>
+            <h2 id="replay-setup-title" className="rp-subsection-title">
               Set Up Agent Replay
             </h2>
             {cleanName && (
-              <div className="text-[12px] mt-1 font-mono" style={{ color: C.fg1 }}>
+              <div className="rp-meta mt-1">
                 for "{cleanName}"
               </div>
             )}
           </div>
 
-          <p className="text-[13px] leading-relaxed" style={{ color: C.fg2 }}>
+          <p className="text-[13px] leading-6 text-rp-ink-muted">
             Copy this prompt and paste it into Claude Code, Cursor, or another AI coding tool
             in your agent's repo. It will set up the replay endpoint automatically.
           </p>
 
           <button
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg text-[13px] font-medium transition-[background-color,border-color,color]"
-            style={{
-              background: copied ? "color-mix(in oklch, var(--rp-success) 12%, transparent)" : C.accent,
-              border: `1px solid ${copied ? "color-mix(in srgb, var(--rp-success) 28%, white 72%)" : C.selectedBorder}`,
-              color: copied ? C.green : "var(--rp-canvas)",
-            }}
+            className={cn(
+              "flex min-h-11 w-full items-center justify-center gap-2 rounded-control border px-4 text-[13px] font-medium transition-[background-color,border-color,color] duration-250 ease-standard",
+              copied ? "border-rp-success-border bg-rp-success-soft text-rp-success" : "rp-primary-control border-rp-blue bg-rp-blue text-white hover:border-rp-blue-hover hover:bg-rp-blue-hover",
+            )}
             onClick={copy}
           >
-            {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+            {copied ? <Check aria-hidden="true" className="size-4" /> : <Copy aria-hidden="true" className="size-4" />}
             {copied ? "Copied to clipboard!" : "Copy Setup Prompt"}
           </button>
-          {copyError && <p role="alert" className="text-[12px]" style={{ color: C.red }}>Clipboard access was denied. Allow clipboard access and try again.</p>}
+          {copyError && <p role="alert" className="text-[12px] text-rp-danger">Clipboard access was denied. Allow clipboard access and try again.</p>}
 
-          <div className="text-[11px] text-center" style={{ color: C.fg0 }}>
-            Using Claude Code? Just run <code className="font-mono px-1.5 py-0.5 rounded" style={{ background: "var(--rp-ink-a08)", color: C.fg2 }}>/setup-agent-replay</code>
+          <div className="text-center text-[12px] text-rp-ink-muted">
+            Using Claude Code? Just run <code className="rounded-sm border border-rp-line bg-rp-canvas-blue px-1.5 py-0.5 font-mono text-rp-ink">/setup-agent-replay</code>
           </div>
         </div>
       </div>
@@ -169,16 +158,6 @@ export function SetupReplayModal({ open, onClose, eventName }: SetupReplayModalP
         @keyframes fade-in {
           from { opacity: 0; }
           to { opacity: 1; }
-        }
-        @keyframes dialog-in {
-          from {
-            opacity: 0;
-            transform: scale(0.95) translateY(10px);
-          }
-          to {
-            opacity: 1;
-            transform: scale(1) translateY(0);
-          }
         }
       `}</style>
     </div>

@@ -25,9 +25,9 @@ export function AcpProviderState({ cwd }: { cwd: string | null | undefined }) {
       }).catch(() => { if (!controller.signal.aborted) setError("Could not check OpenCode ACP."); });
     return () => controller.abort();
   }, [cwd, attempt]);
-  return <div className="border-b border-[color:var(--rp-border)] px-3 py-2 text-xs text-[color:var(--rp-ink-soft)]">
+  return <div className="border-b border-rp-line bg-rp-canvas-blue px-4 py-2.5 text-[12px] text-rp-ink">
     <p role="status">{!cwd ? "Choose a workspace to use OpenCode." : error ?? (state ? state.available ? "ACP ready. Sign-in has not been verified." : state.authentication === "required" ? "OpenCode sign-in required." : state.reason === "unsupported_protocol" ? "This OpenCode ACP version is unsupported." : "OpenCode ACP is unavailable." : "Checking OpenCode ACP...")}</p>
-    <p className="mt-1 text-[10px] leading-relaxed text-[color:var(--rp-ink-muted)]">Chats listed here were created in this Run Phantom session. Client tool permissions are denied. No trace MCP is attached.</p>
-    {(error || state?.available === false) && <button type="button" onClick={() => setAttempt((value) => value + 1)} className="mt-1 min-h-11 rounded border border-[color:var(--rp-border)] px-3">Check again</button>}
+    <p className="mt-1 text-[11px] leading-relaxed text-rp-ink-muted">Chats listed here were created in this Run Phantom session. Client tool permissions are denied. No trace MCP is attached.</p>
+    {(error || state?.available === false) && <button type="button" onClick={() => setAttempt((value) => value + 1)} className="mt-2 min-h-11 rounded-control border border-rp-line bg-white px-3 text-[12px] font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash">Check again</button>}
   </div>;
 }
