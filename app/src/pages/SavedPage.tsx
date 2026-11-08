@@ -418,7 +418,7 @@ export function SavedPage() {
             {isMobile && (
               <button
                 type="button"
-                className="rp-ease flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-white px-5 py-2 text-left text-[13px] font-medium text-rp-ink hover:bg-rp-row-hover"
+                className="rp-ease flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-white px-4 py-2 text-left text-[13px] font-medium text-rp-ink hover:bg-rp-row-hover"
                 onClick={() => navigate("/saved")}
               >
                 <ArrowLeft aria-hidden="true" className="size-3.5 text-rp-blue" />
