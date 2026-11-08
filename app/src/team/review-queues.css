@@ -18,7 +18,7 @@
 .team-review-grid { display: grid; grid-template-columns: 280px minmax(0, 1fr); align-items: start; gap: 16px; }
 .team-review-evidence-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px; }
 .team-review-toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
-.team-review-toolbar > p { font-family: var(--font-mono); font-size: 11px; line-height: 16px; letter-spacing: .14em; text-transform: uppercase; color: var(--rp-ink-muted); }
+.team-review-toolbar > p { margin-right: auto; font-family: var(--font-mono); font-size: 11px; line-height: 16px; letter-spacing: .14em; text-transform: uppercase; color: var(--rp-ink-muted); }
 .team-review-items, .team-review-datasets { list-style: none; padding: 0; display: grid; gap: 6px; margin: 14px 0; }
 .team-review-items li { display: flex; border: 1px solid var(--rp-line); border-radius: var(--rp-radius-md); min-width: 0; background: var(--rp-surface); transition: background-color var(--rp-dur-standard) var(--rp-ease-standard), border-color var(--rp-dur-standard) var(--rp-ease-standard); }
 .team-review-items li:hover { border-color: var(--rp-wash-border); background: var(--rp-row-hover); }

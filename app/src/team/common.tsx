@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { LoaderCircle } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { RunPhantomMark } from "../components/RunPhantomMark";
-import { useOptionalProject } from "./context";
+import { useOptionalProject } from "./project-context";
 
 export function Action({ children, primary, danger, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { primary?: boolean; danger?: boolean }) {
   const variant = danger ? (primary ? "destructive" : "destructive-outline") : primary ? "default" : "secondary";

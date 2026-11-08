@@ -3,16 +3,15 @@ import { QueryClient, QueryClientProvider, useInfiniteQuery, useQuery, useQueryC
 import { Navigate, useParams } from "react-router-dom";
 import { TeamApiError, TeamClient, projectApi, teamQuery, type Page, type Project, type SessionResponse } from "../api/team";
 import { ErrorNotice, Loading } from "./common";
+import { ProjectContext } from "./project-context";
 import { discardTeamSearchHistory, synchronizeTeamSearchSession } from "../utils/search-state";
 
 type Authenticated = Extract<SessionResponse, { authenticated: true }>;
 const signedOut: SessionResponse = { authenticated: false, setupRequired: false, user: null, session: null, csrfToken: null };
 interface TeamContextValue { client: TeamClient; session: SessionResponse; acceptSession: (session: SessionResponse) => void; notice: string; permissionRevisions: Readonly<Record<string, number>>; clearSession: () => void }
 const TeamContext = createContext<TeamContextValue | null>(null);
-const ProjectContext = createContext<Project | null>(null);
 export function useTeam() { const value = useContext(TeamContext); if (!value) throw new Error("Team session context is missing"); return value; }
 export function useAccount(): Authenticated { const { session } = useTeam(); if (!session.authenticated) throw new Error("Sign in to continue"); return session; }
-export function useOptionalProject() { return useContext(ProjectContext); }
 export function useProject() { const project = useContext(ProjectContext); if (!project) throw new Error("Select a project to continue"); return project; }
 
 export function TeamProvider({ children }: { children: ReactNode }) {
