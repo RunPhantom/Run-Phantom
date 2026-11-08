@@ -4,7 +4,7 @@ import { TeamError } from "./errors";
 import { EventEmitter } from "node:events";
 
 export async function runTeamCli(args: string[]): Promise<number> {
-  if (!args.length || args[0] === "help" || args[0] === "--help" || args[0] === "-h") {
+  if (!args.length || args.some(arg => arg === "help" || arg === "--help" || arg === "-h")) {
     console.log("Run Phantom team\n\n  runphantom team serve\n\nConfigure RUNPHANTOM_TEAM_PORT, RUNPHANTOM_TEAM_DATA_DIR and RUNPHANTOM_TEAM_PUBLIC_ORIGIN.\nDefault: loopback port 5949. Shared use requires HTTPS and configured trusted proxy peers.");
     return 0;
   }

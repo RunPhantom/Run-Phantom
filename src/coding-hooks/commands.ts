@@ -11,8 +11,9 @@ import { parseTransitionV2 } from "./context-v2";
 import { hookVendorForSettings } from "./shared";
 import { hookDigest, isHex } from "./protocol";
 
+const HOOKS_USAGE = "usage: runphantom hooks install|uninstall|doctor|unregister claude|cursor [--global|--local] [--cwd PATH] [--full --consent-full]\n       runphantom hooks install|doctor|uninstall codex --local --cwd PATH [--full --consent-full] [--port PORT]";
 function command(argv: string[]): HookManagementCommand {
-  const action = argv[0]; if (!["install", "uninstall", "doctor", "unregister"].includes(action) || !["claude", "cursor"].includes(argv[1])) throw new Error("usage: runphantom hooks install|uninstall|doctor|unregister claude|cursor [--global|--local] [--cwd PATH] [--full --consent-full]");
+  const action = argv[0]; if (!["install", "uninstall", "doctor", "unregister"].includes(action) || !["claude", "cursor"].includes(argv[1])) throw new Error(HOOKS_USAGE);
   let scope = "global", workspace = process.cwd(), captureMode = "metadata", fullConsent = false;
   for (let i = 2; i < argv.length; i++) {
     if (argv[i] === "--global") scope = "global";
@@ -72,6 +73,7 @@ function activationIds(argv: string[]): string[] {
   return ids;
 }
 export async function cmdCodingHooks(argv: string[]): Promise<number> {
+  if (["-h", "--help", "help"].includes(argv[0])) { console.log(HOOKS_USAGE); return 0; }
   if (argv[1] === "codex") {
     const { cmdCodexHooks } = await import("./codex-install");
     return cmdCodexHooks(argv);

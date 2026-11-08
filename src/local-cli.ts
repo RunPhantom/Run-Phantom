@@ -717,7 +717,21 @@ USAGE
   }
 }
 
+const DAEMON_COMMAND_HELP: Record<string, string> = {
+  open: "Start the daemon if needed and open Run Phantom in the browser.",
+  start: "Start the daemon in the background.",
+  stop: "Stop the background daemon.",
+  status: "Show daemon health.",
+  serve: "Run the daemon in the foreground.",
+  mcp: "Serve the Run Phantom MCP tools over stdio.",
+};
+
 async function dispatchRunPhantom(verb: string | undefined, rest: string[]): Promise<number> {
+  // These verbs take no flags, so without this `stop --help` would stop the daemon.
+  if (verb && verb in DAEMON_COMMAND_HELP && rest.some((arg) => arg === "-h" || arg === "--help")) {
+    console.log(`runphantom ${verb} — ${DAEMON_COMMAND_HELP[verb]}\n\nUSAGE\n    runphantom ${verb}\n`);
+    return 0;
+  }
   switch (verb) {
     case undefined:
     case "open":
@@ -759,7 +773,6 @@ async function dispatchRunPhantom(verb: string | undefined, rest: string[]): Pro
   const top = process.argv[2];
   switch (top) {
     case undefined:
-    case "open":
       process.exit(await cmdRunPhantomDefault());
       break;
     case "-h":
@@ -789,6 +802,7 @@ async function dispatchRunPhantom(verb: string | undefined, rest: string[]): Pro
     case "uninstall":
       process.exit(await cmdUninstall(process.argv.slice(3)));
       break;
+    case "open":
     case "connect":
     case "start":
     case "stop":
