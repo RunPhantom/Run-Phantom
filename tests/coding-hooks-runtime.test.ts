@@ -118,7 +118,7 @@ async function closedPort(): Promise<number> {
 }
 async function cli(args: string[], port: number) {
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(?:KEY|TOKEN|SECRET|PASSWORD|AUTH)/i.test(key)));
-  const child = spawn(realpathSync(path.resolve(import.meta.dir, "../bin/runphantom-dev")), ["hooks", ...args], { env: { ...inherited, RUNPHANTOM_PORT: String(port), BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }, stdio: "pipe" }); let output = "", error = ""; child.stdout.on("data", x => output += x); child.stderr.on("data", x => error += x); child.stdin.end();
+  const child = spawn(realpathSync(path.resolve(import.meta.dir, "../bin/runphantom-dev")), ["hooks", ...args], { env: { ...inherited, RUNPHANTOM_PORT: String(port), RUNPHANTOM_SKIP_START: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }, stdio: "pipe" }); let output = "", error = ""; child.stdout.on("data", x => output += x); child.stderr.on("data", x => error += x); child.stdin.end();
   expect(await new Promise(resolve => child.once("close", resolve))).toBe(0); expect(error).toBe(""); return JSON.parse(output);
 }
 function offlineBinding(name: string): InstallationBinding {
@@ -128,15 +128,31 @@ function offlineBinding(name: string): InstallationBinding {
 }
 async function stop() { await new Promise<void>((resolve, reject) => server!.close(error => error ? reject(error) : resolve())); server = undefined; }
 async function failingCli(args: string[], port: number) {
-  const child = spawn(realpathSync(path.resolve(import.meta.dir, "../bin/runphantom-dev")), ["hooks", ...args], { env: { ...process.env, RUNPHANTOM_PORT: String(port), BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", OPENAI_API_KEY: "", RUNPHANTOM_OPENAI_API_KEY: "", ANTHROPIC_API_KEY: "" }, stdio: "pipe" }); let output = "", error = ""; child.stdout.on("data", x => output += x); child.stderr.on("data", x => error += x); child.stdin.end();
+  const child = spawn(realpathSync(path.resolve(import.meta.dir, "../bin/runphantom-dev")), ["hooks", ...args], { env: { ...process.env, RUNPHANTOM_PORT: String(port), RUNPHANTOM_SKIP_START: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", OPENAI_API_KEY: "", RUNPHANTOM_OPENAI_API_KEY: "", ANTHROPIC_API_KEY: "" }, stdio: "pipe" }); let output = "", error = ""; child.stdout.on("data", x => output += x); child.stderr.on("data", x => error += x); child.stdin.end();
   return { status: await new Promise(resolve => child.once("close", resolve)), output, error };
 }
 test("offline installation on a profile no daemon has owned refuses before writing settings, a capability or an owner", async () => {
   const b = offlineBinding("offline-never-owned");
   const result = await failingCli(["install", "claude", "--local", "--cwd", b.registeredWorkspace, "--full", "--consent-full"], await closedPort());
-  expect(result.status).toBe(64); expect(result.output).toBe(""); expect(result.error).toContain("has never run on this profile");
+  expect(result.status).toBe(64); expect(result.output).toBe(""); expect(result.error).toContain("Run `runphantom start`, then retry");
   expect(existsSync(b.settingsPath)).toBe(false); expect(existsSync(capabilityPath(b))).toBe(false);
   expect(getDrizzleDb().$client.query("SELECT * FROM coding_hook_owner").all()).toEqual([]); expect(getDrizzleDb().$client.query("SELECT * FROM coding_hook_installations").all()).toEqual([]);
+});
+test("first CLI hook install on a brand-new profile starts the daemon and activates capture", async () => {
+  const b = offlineBinding("first-run"), home = path.join(directory, "fresh-home"), port = await closedPort(); mkdirSync(home);
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(?:KEY|TOKEN|SECRET|PASSWORD|AUTH)/i.test(key) && key !== "RUNPHANTOM_SKIP_START"));
+  const child = spawn(realpathSync(path.resolve(import.meta.dir, "../bin/runphantom-dev")), ["hooks", "install", "claude", "--local", "--cwd", b.registeredWorkspace, "--full", "--consent-full"], { env: { ...inherited, HOME: home, RUNPHANTOM_PORT: String(port), BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }, stdio: "pipe" });
+  let output = "", error = ""; child.stdout.on("data", x => output += x); child.stderr.on("data", x => error += x); child.stdin.end();
+  const status = await new Promise(resolve => child.once("close", resolve)), pidFile = path.join(home, ".runphantom/runphantom.pid");
+  const daemon = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : 0;
+  try {
+    expect(error).toBe(""); expect(status).toBe(0); const result = JSON.parse(output);
+    expect(result.policy).toBe("active"); expect(result.captureMode).toBe("full"); expect(result.transport).toBe("available");
+    const cap = await readClaudeCapabilityDescriptor(capabilityPath(b), b.installationId); expect(cap.state).toBe("active"); expect(cap.origin).toBe(`http://127.0.0.1:${port}`);
+  } finally {
+    if (daemon > 0) { process.kill(daemon, "SIGTERM"); for (let i = 0; i < 100; i++) { try { process.kill(daemon, 0); } catch { break; } await new Promise(resolve => setTimeout(resolve, 100)); } }
+  }
+  expect(daemon).toBeGreaterThan(0);
 });
 test("an installation made while the daemon was stopped stays disabled, visible to the daemon and removed by product uninstall", async () => {
   const b = offlineBinding("offline-recorded"); await start(); await stop();
