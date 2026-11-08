@@ -11,6 +11,10 @@ import { canonicalEvidenceJson, evidenceDigest } from "../src/evaluations/eviden
 import { parseExternalEvidence } from "../src/evaluations/external-evidence";
 import { evidenceExportJUnit } from "../src/evaluations/evidence-export";
 import { TEAM_LIMITS } from "../src/team/protocol";
+import { EVIDENCE_LIMITS } from "../src/evaluations/evidence-protocol";
+
+// Eight serialized actual imports, each bounded only by MAX_IMPORT_MS; CI runners measured ~27s for the near4MiB proof.
+const SERIAL_IMPORT_PROOF_MS = 60_000;
 
 interface Identity { cookie: string; csrf: string; userId: string }
 const runId = "1".repeat(32), spanId = "2".repeat(16);
@@ -63,7 +67,8 @@ async function fixture() {
     return Buffer.concat([length, header, ...bytes]);
   }
   async function completed(id: string, who = owner) {
-    const deadline = Date.now() + 5000;
+    // Readers spawn one isolated child per source, so a legitimate 32-source import may use the whole product import budget.
+    const deadline = Date.now() + EVIDENCE_LIMITS.MAX_IMPORT_MS + 5000;
     let delay = 100;
     while (Date.now() < deadline) {
       const response = await call("GET", `${base}/imports/${id}`, undefined, who);
@@ -482,7 +487,7 @@ test("actual32-source near4MiB publication expands to a bounded transport DTO an
     expect(f.requests()).toBeLessThanOrEqual(TEAM_LIMITS.REQUESTS_PER_SESSION);
     console.info(JSON.stringify({ authenticatedRequests: f.requests(), proof: "team-evidence-max-population", sources: 32, leaves: count * 32, selectedStoredBytes: held.bytes, detailDtoBytes: Buffer.byteLength(view.text), projectNormalizedBytes: ledger.bytes, normalizedQuotaBytes: 32 * 1024 * 1024 }));
   } finally { await f.close(); }
-}, 20_000);
+}, SERIAL_IMPORT_PROOF_MS);
 
 test("actual retained raw2MiB sources fill separate64MiB project quota without capture counter changes", async () => {
   const f = await fixture();
@@ -509,7 +514,7 @@ test("actual retained raw2MiB sources fill separate64MiB project quota without c
     expect((await f.call("DELETE", `${f.base}/sets/${firstId}/retention/raw?revision=1`, undefined, f.owner)).json.removed).toBe(4);
     expect((await f.call("POST", f.base + "/imports", f.frame("raw-after-retention"), f.owner, { "Content-Type": EVIDENCE_IMPORT_CONTENT_TYPE })).status).toBe(202);
   } finally { await f.close(); }
-}, 20_000);
+}, SERIAL_IMPORT_PROOF_MS);
 
 test("legitimate XML source identity expansion accepts exact8MiB and refuses plus1 before serialization", async () => {
   const f = await fixture();
@@ -591,16 +596,20 @@ test.skipIf(process.platform === "win32")("native Team shutdown reaps a live iso
   const f = await fixture();
   try {
     await f.capture();
-    const raw = Buffer.from('<testsuite tests="400">' + `<testcase name="${"x".repeat(512)}"/>`.repeat(400) + "</testsuite>");
-    const sources = Array.from({ length: 32 }, (_, index) => ({ sourceId: "source-" + index, shardId: "unit-" + index, kind: "junit", dialect: "junit-xml/v1", byteLength: raw.byteLength, artifactSha256: evidenceDigest(raw) }));
+    // ps resolves args after its process snapshot, so a child must outlive one ps pass; maximal 2MiB sources keep each reader alive longest.
+    const prefix = '<testsuite tests="1"><testcase name="Live child"/><!--', suffix = "--></testsuite>";
+    const raw = Buffer.from(prefix + "x".repeat(2 * 1024 * 1024 - Buffer.byteLength(prefix + suffix)) + suffix);
+    const sources = Array.from({ length: 4 }, (_, index) => ({ sourceId: "source-" + index, shardId: "unit-" + index, kind: "junit", dialect: "junit-xml/v1", byteLength: raw.byteLength, artifactSha256: evidenceDigest(raw) }));
     const response = await f.call("POST", f.base + "/imports", f.frame("shutdown-live-child", { sources, retention: "normalized_only" }, sources.map(() => raw)), f.owner, { "Content-Type": EVIDENCE_IMPORT_CONTENT_TYPE });
     expect(response.status).toBe(202);
     const children = async () => {
       const processList = Bun.spawn(["ps", "-ax", "-o", "pid=,ppid=,args="], { stdout: "pipe", stderr: "ignore" });
       const output = await new Response(processList.stdout).text(); await processList.exited;
-      return output.split("\n").filter(line => line.includes("/evaluations/evidence-worker.ts") && Number(line.trim().split(/\s+/)[1]) === process.pid).map(line => Number(line.trim().split(/\s+/)[0]));
+      // macOS ps prints "(bun)" when a short-lived child's args vanish between its snapshot and args read; the in-process server's only other child is this ps.
+      return output.split("\n").map(line => line.trim().split(/\s+/)).filter(([pid, ppid, command = ""]) => Number(ppid) === process.pid && Number(pid) !== processList.pid && (command.includes("bun") || command.includes("evidence-worker"))).map(([pid]) => Number(pid));
     };
-    let pids: number[] = []; const deadline = Date.now() + 1000;
+    // Upload admission precedes the first spawn and a loaded runner can spend most of a second in admission plus ps; the 32-source import outlives this wait.
+    let pids: number[] = []; const deadline = Date.now() + 10_000;
     while (!pids.length && Date.now() < deadline) { pids = await children(); if (!pids.length) await Bun.sleep(5); }
     expect(pids.length).toBeGreaterThan(0);
     await f.handle.close();
