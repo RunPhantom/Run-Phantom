@@ -8,7 +8,7 @@ import { hookSession, transcriptRecord } from "../../tests/fixtures/coding-hooks
 test("installed hook source observations reach chat without invented assistant input or runtime proof",async({page,runPhantom})=>{
  const home=path.dirname(runPhantom.dbPath),workspace=path.join(home,"hook-workspace");mkdirSync(workspace);
  const installed=await fetch(runPhantom.url+"/api/coding-hooks/claude/manage",{method:"POST",headers:{"content-type":"application/json","x-runphantom-hook-owner":capabilityOwnerKey(runPhantom.dbPath)},body:JSON.stringify({action:"install",scope:"local",workspace,captureMode:"full",fullConsent:true})});expect(installed.status).toBe(200);const receipt=await installed.json() as {captureVerified:boolean;installationId:string};expect(receipt.captureVerified).toBe(false);
- const project=path.join(home,".claude/projects",workspace.replace(/[^A-Za-z0-9.-]+/g,"-")),file=path.join(project,hookSession+".jsonl");
+ const project=path.join(runPhantom.runtime.profile,".claude/projects",workspace.replace(/[^A-Za-z0-9.-]+/g,"-")),file=path.join(project,hookSession+".jsonl");
  // Acquire the real registered empty FD before any assistant/tool observation.
  writeFileSync(file,"");
  const startSettings=JSON.parse(readFileSync(path.join(workspace,".claude/settings.local.json"),"utf8")) as {hooks:{SessionStart:{hooks:{command:string;args:string[]}[]}[]}};

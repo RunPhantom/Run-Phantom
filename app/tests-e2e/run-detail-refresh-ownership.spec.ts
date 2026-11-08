@@ -198,7 +198,7 @@ test("same-run completed reads publish progress during three ongoing refresh rou
       await expect(page.getByRole("button", { name: `Rename snapshot-${round + 1}`, exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: `step-${round + 1}`, exact: true })).toBeVisible();
       await expect.poll(async () => (await page.getByRole("tabpanel", { name: "Overview", exact: true }).innerText()).split(content).length - 1).toBe(2);
-      await expect(page.getByText("Loading", { exact: true })).toHaveCount(0);
+      await expect(page.getByRole("status").filter({ hasText: /^Loading run\s*$/ })).toHaveCount(0);
       expect(failures).toEqual([]);
       current = next;
     }
@@ -262,7 +262,7 @@ test("A1 retires immediately through B and A2 and its old finally cannot own A2"
     expect(a2.request).toBe(a2Request);
     expect(a2.request).not.toBe(a1.request);
     a1.release(); await a1.delivered;
-    await expect(page.getByText("Loading", { exact: true })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: /^Loading run\s*$/ })).toBeVisible();
     expect(reads.held).toHaveLength(beforeReturn + 1);
     a2.release(); await a2.delivered; await finished(a2.request);
     await expect(page.getByRole("button", { name: "Rename snapshot-0", exact: true })).toBeVisible();
@@ -291,7 +291,7 @@ for (const fault of ["403", "404", "503", "json", "transport"] as const) {
       releaseError.release();
       const recovered = await reads.next(0);
       await expect(page.getByText("This trace is not available in the current workspace.", { exact: false })).toBeVisible();
-      await expect(page.getByText("Loading", { exact: true })).toHaveCount(0);
+      await expect(page.getByRole("status").filter({ hasText: /^Loading run\s*$/ })).toHaveCount(0);
       recovered.release(); await recovered.delivered; await finished(recovered.request);
       await expect(page.getByRole("button", { name: "Rename snapshot-0", exact: true })).toBeVisible();
     } finally { releaseError.release(); reads.dispose(); }
