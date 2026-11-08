@@ -45,6 +45,7 @@
   --rp-line-strong: #7C8494;
   --rp-wash: #EEF2FF;
   --rp-wash-border: #B9C4F1;
+  --rp-line-dashed: #BFC8DF;
   --rp-canvas-grey: #F8FAFB;
   --rp-canvas-blue: #F8FAFF;
   --rp-row-hover: #F6F7FA;
@@ -109,6 +110,7 @@
   --rp-wash-5: rgb(14 18 27 / 0.160);
 
   --rp-scrim:  rgb(14 18 27 / 0.550);
+  --rp-scrim-soft: rgb(14 18 27 / 0.32);
 
   --rp-ink-wash: var(--rp-wash-3);
   --rp-ink-wash-strong: var(--rp-wash-4);
@@ -502,7 +504,7 @@ h1, h2, h3 {
    so the active tab's own styling is left alone. */
 .rp-tab[aria-selected="false"]:hover {
   color: var(--rp-ink-strong) !important;
-  background: var(--rp-ink-a04) !important;
+  background: var(--rp-row-hover) !important;
 }
 
 /*
