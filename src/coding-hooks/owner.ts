@@ -6,7 +6,9 @@ import type { Database } from "bun:sqlite";
 import { CodingHookStore } from "./store";
 
 export type OwnerLeaseNamespace = "coding-hooks" | "prompt-comparisons";
-export const OWNER_LEASE_LIMITS = Object.freeze({ firstPort: 40000, ports: 10000, acquireMs: 500, releaseMs: 500 });
+// Lease ports must stay below every default ephemeral range (Linux 32768+, macOS and
+// Windows 49152+): an outgoing socket on the hashed port makes daemon startup fail "occupied".
+export const OWNER_LEASE_LIMITS = Object.freeze({ firstPort: 20000, ports: 10000, acquireMs: 500, releaseMs: 500 });
 export class CodingHookOwnerRefusal extends Error { constructor(readonly reason: "invalid_owner_path" | "occupied" | "deadline" | "aborted" | "unavailable") { super(reason); } }
 export interface CodingHookOwnerLease { readonly databasePath: string; readonly port: number; readonly birth: string; isActive(): boolean; release(): Promise<void>; }
 
