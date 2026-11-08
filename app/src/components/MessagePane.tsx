@@ -1010,11 +1010,11 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
 
 function FloatingAskButton({ provider, onOpen }: { provider: AgentProviderId; onOpen: () => void }) {
   return (
-    <div data-debug-launcher className="fixed bottom-4 right-4 z-40">
+    <div data-debug-launcher className="fixed bottom-3 right-4 z-40 lg:right-8">
       <button
         type="button"
         onClick={onOpen}
-        className="flex h-10 items-center gap-2 rounded-control border border-rp-line bg-white px-4 text-[13px] font-medium text-rp-ink shadow-e2 transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash"
+        className="flex h-10 items-center gap-2 rounded-control border border-rp-line bg-white px-4 text-[13px] font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash"
         title={`Ask ${providerLabel(provider)}`}
       >
         <Terminal aria-hidden="true" className="h-4 w-4 text-rp-blue" />

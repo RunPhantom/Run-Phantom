@@ -529,6 +529,20 @@ h1, h2, h3 {
   outline-offset: -4px !important;
 }
 
+.rp-launcher-band:has([data-debug-launcher]) {
+  position: relative;
+  padding-bottom: 65px;
+}
+.rp-launcher-band:has([data-debug-launcher])::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 65px;
+  border-top: 1px solid var(--rp-line);
+  background: var(--rp-surface);
+}
+
 .skip-link {
   position: fixed;
   left: 12px;
