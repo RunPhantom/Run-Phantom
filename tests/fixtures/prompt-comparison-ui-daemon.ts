@@ -24,7 +24,7 @@ console.log(JSON.stringify({ ready: true, mode, url: `http://127.0.0.1:${port}`,
 let closing = false;
 async function close() {
   if (closing) return; closing = true;
-  if ("close" in handle) await handle.close(); else await new Promise<void>((resolve, reject) => handle.server.close(error => error ? reject(error) : resolve()));
+  if ("close" in handle) await handle.close(); else await new Promise<void>((resolve, reject) => handle.server.close((error?: Error) => error ? reject(error) : resolve()));
   await upstream.stop(true); closeDb(); process.exit(0);
 }
 process.on("SIGINT", () => void close()); process.on("SIGTERM", () => void close());
