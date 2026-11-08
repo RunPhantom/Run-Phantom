@@ -24,6 +24,24 @@ describe("captured token usage", () => {
     expect(normalizeUsage({ "gen_ai.usage.input_tokens": 12, "ai.usage.inputTokens": 12 }).categories.input.count).toBe(12);
   });
 
+  test("reads OpenInference token detail counts", () => {
+    // Shape reported by openinference-instrumentation-openai 0.1.69 for a
+    // gpt-6.1-terra Responses API call with medium reasoning effort.
+    const usage = normalizeUsage({
+      "llm.token_count.prompt": 125, "llm.token_count.completion": 63,
+      "llm.token_count.completion_details.reasoning": 8,
+      "llm.token_count.prompt_details.cache_read": 0, "llm.token_count.prompt_details.cache_write": 0,
+      "llm.token_count.prompt_details.audio": 0, "llm.token_count.completion_details.audio": 0,
+    });
+    expect(usage.categories.reasoning).toEqual({ count: 8, state: "known", attributes: ["llm.token_count.completion_details.reasoning"] });
+    expect(usage.categories.cache_read.count).toBe(0);
+    expect(usage.categories.cache_write.count).toBe(0);
+    expect(usage.categories.audio_input.count).toBe(0);
+    expect(usage.categories.audio_output.count).toBe(0);
+    expect(usage.inclusion.reasoning).toBe("unknown");
+    expect(normalizeUsage({ "llm.token_count.completion_details.reasoning": 8, "gen_ai.usage.output_tokens.reasoning": 9 }).categories.reasoning.state).toBe("conflicting");
+  });
+
   test("requires captured cache/audio/reasoning inclusion rather than provider guessing", () => {
     const usage = normalizeUsage({ "runphantom.usage.cache_read_tokens": 10 }, "provider");
     expect(usage.inclusion.cache_read).toBe("unknown");
