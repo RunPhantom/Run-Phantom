@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Field, Select } from "../verification/PredicateEditor";
+import { Field, Select } from "./field";
+import { Badge } from "../ui/badge";
 import { evaluationsApi, type Snapshot, type Status } from "../../api/evaluations";
 
 export const measurement = (value: number | null, suffix = "") => value === null ? "Unavailable" : `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })}${suffix}`;
-export function Verdict({ status }: { status: Status | null }) { return <span className="text-xs font-semibold" style={{ color: status === "pass" ? "var(--rp-success)" : status === "fail" ? "var(--rp-danger)" : "var(--rp-warning)" }}>{status === "pass" ? "Pass" : status === "fail" ? "Fail" : status === "inconclusive" ? "Inconclusive" : "Pending"}</span>; }
+export function Verdict({ status }: { status: Status | null }) { return <Badge tone={status === "pass" ? "success" : status === "fail" ? "danger" : status === "inconclusive" ? "warning" : "neutral"} className="text-xs font-semibold">{status === "pass" ? "Pass" : status === "fail" ? "Fail" : status === "inconclusive" ? "Inconclusive" : "Pending"}</Badge>; }
 export function ResponseSpanSelect({ runId, value, onChange, label = "Response span (optional)" }: { runId: string; value: string; onChange: (value: string) => void; label?: string }) {
   const spans = useQuery({ queryKey: ["evaluation-response-spans", runId], queryFn: () => evaluationsApi.responseSpans(runId), enabled: !!runId });
   return <Field label={label} hint={spans.isError ? spans.error?.message ?? "Response spans could not load. Open the trace to inspect it." : spans.data?.truncated ? "Some response choices or names were omitted or redacted because captured metadata was unavailable." : "Automatic selection uses the agent response; choose explicitly if the trace has ambiguous output."}><Select value={value} onChange={event => onChange(event.target.value)} disabled={!runId || spans.isLoading}><option value="">Automatic response selection</option>{spans.data?.spans.map(span => <option key={span.id} value={span.id}>{span.name} · {span.spanType}</option>)}</Select></Field>;

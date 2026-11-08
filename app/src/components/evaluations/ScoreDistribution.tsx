@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Field, Select } from "../verification/PredicateEditor";
+import { Field, Select } from "./field";
 import { evaluationsApi, type DistributionRequest, type ExperimentSummary, type ScoreDistributionAnalysis } from "../../api/evaluations";
 import { DISTRIBUTION_UNITS } from "../../../../src/evaluations/aggregation-protocol";
 

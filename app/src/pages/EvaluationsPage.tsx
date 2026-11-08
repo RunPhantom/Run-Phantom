@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { Field, Select } from "../components/verification/PredicateEditor";
+import { Field, Select } from "../components/evaluations/field";
 import { DatasetEditor } from "../components/evaluations/DatasetEditor";
 import { RepeatedTrials } from "../components/evaluations/RepeatedTrials";
 import { StartExperiment, ExperimentResults, CompareExperiments } from "../components/evaluations/Experiments";

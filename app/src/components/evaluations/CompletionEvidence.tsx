@@ -3,7 +3,7 @@ import { claimsApi, CompletionRequestError } from "../../api/claims";
 import type { CompletionHistory, CompletionSavedReport } from "../../../../src/claims/protocol";
 import type { EvidenceSetView } from "../../../../src/evaluations/evidence-protocol";
 import { Button } from "../ui/button";
-import { Field, Select } from "../verification/PredicateEditor";
+import { Field, Select } from "./field";
 import { Input } from "../ui/input";
 import { textareaClass } from "./RuleEditor";
 

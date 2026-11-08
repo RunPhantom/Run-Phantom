@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Field, Select } from "../verification/PredicateEditor";
+import { Field, Select } from "./field";
 import type { EvidenceExpectedSource, EvidenceInventoryRevision } from "../../api/evaluations";
 
 const blank = (): EvidenceExpectedSource => ({ shardId: "", kind: "junit", constraints: { runnerId: null, commit: null, sourceSha256: null } });

@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Field, Select } from "../verification/PredicateEditor";
+import { Field, Select } from "./field";
 import { ResponseSpanSelect, SnapshotPreview, Verdict, measurement } from "./SnapshotPreview";
 import { textareaClass, ruleLabel } from "./RuleEditor";
 import { evaluationsApi, type DatasetRevision, type Experiment, type Snapshot, type Comparison, type ExperimentSummary } from "../../api/evaluations";

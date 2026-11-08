@@ -5,7 +5,7 @@ import { findingsApi, type FindingBatchOption, type FindingComparisonPage } from
 import { useRuns } from "../../hooks/use-runs";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Field, Select } from "../verification/PredicateEditor";
+import { Field, Select } from "./field";
 import { prepareEvidenceUpload, type EvidenceCapabilities } from "./evidence-upload";
 import "./evidence-workspace.css";
 import "./finding-workspace.css";

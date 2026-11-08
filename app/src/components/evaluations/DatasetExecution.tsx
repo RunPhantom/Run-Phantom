@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { DatasetRevision } from "../../../../src/evaluations/protocol";
 import type { DatasetExecution as Execution, ExecutionDraft, AttemptStatus } from "../../../../src/evaluations/execution-protocol";
 import { Button } from "../ui/button";
-import { Field, Select } from "../verification/PredicateEditor";
+import { Field, Select } from "./field";
 
 export interface ExecutionCapabilities {
   enabled: boolean;

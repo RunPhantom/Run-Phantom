@@ -6,7 +6,7 @@ import { verificationApi } from "../api/verification";
 import { useRuns } from "../hooks/use-runs";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { Field, Select } from "./verification/PredicateEditor";
+import { Field, Select } from "./evaluations/field";
 import { checkEvidenceFiles, prepareEvidenceUpload, type EvidenceFileDraft } from "./evaluations/evidence-upload";
 import { EvidenceInventoryEditor } from "./evaluations/EvidenceInventoryEditor";
 import { EvidenceReport } from "./evaluations/EvidenceReport";

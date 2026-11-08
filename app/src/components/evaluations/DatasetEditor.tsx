@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Field, Select } from "../verification/PredicateEditor";
+import { Field, Select } from "./field";
 import { buildRule, emptyRule, ruleDraft, ruleLabel, RuleEditor, textareaClass } from "./RuleEditor";
 import { ResponseSpanSelect, SnapshotPreview } from "./SnapshotPreview";
 import { evaluationsApi, type DatasetRevision, type DatasetCaseDraft, type Snapshot } from "../../api/evaluations";
