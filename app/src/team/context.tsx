@@ -12,6 +12,7 @@ const TeamContext = createContext<TeamContextValue | null>(null);
 const ProjectContext = createContext<Project | null>(null);
 export function useTeam() { const value = useContext(TeamContext); if (!value) throw new Error("Team session context is missing"); return value; }
 export function useAccount(): Authenticated { const { session } = useTeam(); if (!session.authenticated) throw new Error("Sign in to continue"); return session; }
+export function useOptionalProject() { return useContext(ProjectContext); }
 export function useProject() { const project = useContext(ProjectContext); if (!project) throw new Error("Select a project to continue"); return project; }
 
 export function TeamProvider({ children }: { children: ReactNode }) {
