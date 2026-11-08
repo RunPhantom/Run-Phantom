@@ -4,6 +4,7 @@ import { runPath } from "../utils/navigation";
 import { RunListItem, useShortRunIds } from "../components/RunList";
 import { RunDetail } from "../components/RunDetail";
 import { EmptyState } from "../components/EmptyState";
+import { EmptyPanel } from "@/components/ui/empty-panel";
 import { ReplayView } from "../components/ReplayView";
 import { RunComparison } from "../components/RunComparison";
 import { useReplay } from "../hooks/use-replay";
@@ -505,6 +506,18 @@ export function RunsPage() {
                     </div>
                   );
                 })()
+              : runsLoaded && runsError
+                ? (
+                  <div className="flex h-full items-center justify-center px-5 py-10 sm:px-10">
+                    <EmptyPanel
+                      className="w-full max-w-xl animate-fade-rise"
+                      tone="danger"
+                      eyebrow="Runs / Not loaded"
+                      title="Runs could not be loaded"
+                      description="The run list request failed, so this workspace cannot show which runs are stored. Use Retry in the run list once the local daemon is reachable."
+                    />
+                  </div>
+                )
               : runsLoaded
                 ? <EmptyState onSeeDemoTraces={openDemoTrace} />
                 : (
