@@ -3,6 +3,7 @@ import { redactText, sanitizeWithReport } from "../verification/serialization";
 import { selectPath } from "../verification/state-select";
 import { structurallyEqual } from "../verification/predicates";
 import { parseId } from "./validation";
+import { boundJudgeUsage } from "./judge-usage";
 import { LossyJsonNumberError, parseJsonEvidence } from "./json-evidence";
 
 export const CODE_EVALUATOR_VERSION = "code:2";
@@ -27,6 +28,8 @@ export function boundRuleResult(result: RuleResult): RuleResult {
   const out: RuleResult = { status: result.status, source: result.source, evaluatorVersion: result.evaluatorVersion,
     score: result.score, reason: (typeof reason === "string" ? reason : "Evaluation evidence was unavailable").slice(0, L.MAX_REASON),
     actual, expected, spanIds, redacted, truncated };
+  const usage = result.source === "llm" ? boundJudgeUsage(result.usage) : undefined;
+  if (usage) out.usage = usage;
   if (out.evaluatorVersion.length > 64 || redactText(out.evaluatorVersion) !== out.evaluatorVersion || !/^[a-z]+:\d+$/.test(out.evaluatorVersion)) {
     out.evaluatorVersion = out.source === "llm" ? RUBRIC_EVALUATOR_VERSION : CODE_EVALUATOR_VERSION;
     out.status = "inconclusive"; out.score = null; out.reason = "Evaluator returned invalid version metadata"; out.truncated = true;

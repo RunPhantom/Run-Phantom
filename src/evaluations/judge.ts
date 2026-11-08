@@ -4,6 +4,8 @@ import { redactText, sanitizeWithReport } from "../verification/serialization";
 import { EVALUATION_LIMITS as L, type RubricRule, type RuleResult, type Snapshot } from "./protocol";
 import { boundRuleResult } from "./rules";
 import { comparisonModelSettings } from "../prompts/comparison-types";
+import { measureJudgeUsage, unavailableJudgeUsage } from "./judge-usage";
+import type { JudgeUsage } from "./protocol";
 
 export interface JudgeOptions { signal?: AbortSignal; fetch?: typeof globalThis.fetch }
 
@@ -116,13 +118,14 @@ export async function evaluateRubric(
   let expected: unknown = null;
   let key: string | null = null;
   const spanIds: string[] = [];
+  let usage: JudgeUsage | undefined;
   const finish = (status: RuleResult["status"], reason: string, score: number | null = null): RuleResult => {
     // A malicious provider can echo even a key without a recognizable vendor prefix.
     const safeReason = key ? reason.split(key).join("[REDACTED]") : reason;
     const safeExpected = sanitizeWithReport(expected, { scrubString: (text) => key ? text.split(key).join("[REDACTED]") : text });
     return boundRuleResult({ status, source: "llm", evaluatorVersion: "rubric:1", score,
       reason: safeReason, actual: score === null ? null : { score }, expected: safeExpected.value, spanIds,
-      redacted: safeReason !== reason || Boolean(safeExpected.redacted), truncated: Boolean(safeExpected.truncation) });
+      redacted: safeReason !== reason || Boolean(safeExpected.redacted), truncated: Boolean(safeExpected.truncation), ...(usage ? { usage } : {}) });
   };
   try {
     if (options.signal?.aborted) return finish("inconclusive", "Model judge was cancelled");
@@ -178,15 +181,19 @@ export async function evaluateRubric(
             }, required: ["score", "reason"], additionalProperties: false,
           } } },
         };
+        usage = unavailableJudgeUsage(rule.provider, rule.model, "Provider response was not received");
         const response = await (options.fetch ?? globalThis.fetch)(getProviderBaseURL(rule.provider), {
           method: "POST", headers: getProviderHeaders(rule.provider, key!), body: JSON.stringify(body),
           redirect: "error", signal: controller.signal,
         });
         if (!response.ok) {
           void response.body?.cancel().catch(() => undefined);
+          usage = unavailableJudgeUsage(rule.provider, rule.model, `Provider returned HTTP ${response.status}`);
           throw new JudgeFailure(`Model judge provider returned HTTP ${response.status}`);
         }
-        return parseScore(rule.provider, await readResponse(response, controller.signal));
+        const envelope = await readResponse(response, controller.signal);
+        usage = measureJudgeUsage(rule.provider, rule.model, envelope);
+        return parseScore(rule.provider, envelope);
       };
       const result = await Promise.race([judge(), abort]);
       if (controller.signal.aborted) return finish("inconclusive", timedOut ? "Model judge timed out" : "Model judge was cancelled");

@@ -1,5 +1,6 @@
 import { apiJson, jsonInit } from "./request";
-import type { Dataset, DatasetRevision, DatasetCaseDraft, DatasetExport, Snapshot, Experiment, ExperimentSummary, ExperimentDraft, Comparison, Review } from "../../../src/evaluations/protocol";
+import type { Dataset, DatasetRevision, DatasetCaseDraft, DatasetExport, Snapshot, Experiment, ExperimentSummary, ExperimentDraft, Comparison, Review, JudgeSpend } from "../../../src/evaluations/protocol";
+export interface JudgeSpendTotals { experiments: number; experimentsWithJudgeCalls: number; experimentsWithoutUsageRecord: number; spend: JudgeSpend | null }
 export type { Rule, RuleResult, Snapshot, Dataset, DatasetRevision, DatasetCase, DatasetCaseDraft, DatasetExport, Assignment, Experiment, ExperimentSummary, ExperimentDraft, Review, Comparison, Status } from "../../../src/evaluations/protocol";
 import type { TrialAnalysis } from "../../../src/evaluations/trials-protocol";
 export type { TrialAnalysis } from "../../../src/evaluations/trials-protocol";
@@ -26,6 +27,7 @@ export const evaluationsApi = {
   analyzeTrials: (experimentIds: string[], signal?: AbortSignal) => apiJson<TrialAnalysis>(`${root}/analyses/repeated-trials`, jsonInit("POST", { experimentIds }, { signal })),
   analyzeDistribution: (selection: DistributionRequest, signal?: AbortSignal) => apiJson<ScoreDistributionAnalysis>(`${root}/analyses/score-distributions`, jsonInit("POST", selection, { signal })),
   experiments: () => apiJson<ExperimentSummary[]>(`${root}/experiments`),
+  judgeSpend: (signal?: AbortSignal) => apiJson<JudgeSpendTotals>(`${root}/judge-spend`, { signal, cache: "no-store" }),
   start: (draft: ExperimentDraft) => apiJson<Experiment>(`${root}/experiments`, jsonInit("POST", draft)),
   experiment: (id: string, signal?: AbortSignal) => apiJson<Experiment>(experimentPath(id), { signal }),
   report: async (id: string, format: "json" | "junit") => {

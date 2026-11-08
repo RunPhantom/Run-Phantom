@@ -291,3 +291,35 @@ test("evaluations: model grading requires explicit opt-in and imported definitio
   } });
   expect(executable.status()).toBe(400);
 });
+
+test("evaluations: a judge with no provider call shows its cost as unavailable, never $0, in results and Cost & usage", async ({ page, request, runPhantom }) => {
+  await seedEvaluationRuns(request, runPhantom.url);
+  const rubric = await createEvaluationDataset(request, runPhantom.url, [{
+    kind: "rubric", provider: "openai", model: "gpt-6.1-terra", rubric: "The output clearly describes the checkout result.", threshold: 0.8,
+  }], "Unconfigured judge spend");
+  const response = await request.post(`${runPhantom.url}/api/evaluations/experiments`, { data: {
+    datasetId: rubric.datasetId, version: rubric.version, name: "Judge without credentials", allowModelJudges: true,
+    assignments: [{ caseId: rubric.cases[0].id, runId: EVALUATION_RUNS.baseline }],
+  } });
+  expect(response.status()).toBe(202);
+  const id = (await response.json() as Experiment).id;
+  let completed: Experiment | undefined;
+  await expect.poll(async () => { completed = await (await request.get(`${runPhantom.url}/api/evaluations/experiments/${id}`)).json() as Experiment; return completed.status; }, { timeout: 15_000 }).toBe("completed");
+  expect(completed!.results[0].checks[0]).toMatchObject({ status: "inconclusive", reason: "Model judge provider key is not configured" });
+  expect(completed!.results[0].checks[0]).not.toHaveProperty("usage");
+  expect(completed!.summary).not.toHaveProperty("judgeSpend");
+
+  await page.goto(`${runPhantom.url}/evaluations`);
+  const viewer = page.getByLabel("View experiment");
+  await expect(viewer.locator("option", { hasText: "Judge without credentials" })).toHaveCount(1);
+  await viewer.selectOption({ label: (await viewer.locator("option", { hasText: "Judge without credentials" }).innerText()).trim() });
+  await expect(page.getByTestId("judge-usage")).toHaveText(/Judge cost: Unavailable/);
+  await expect(page.getByTestId("judge-spend")).toHaveText(/no recorded model judge calls/);
+  await expect(page.getByText("$0.000000")).toHaveCount(0);
+
+  await page.goto(`${runPhantom.url}/costs`);
+  const panel = page.getByRole("region", { name: "Evaluation judge spend" });
+  await expect(panel).toContainText("no recorded model judge calls");
+  await expect(panel).toContainText("their judge cost is unavailable, not zero");
+  await expect(panel).not.toContainText("$0");
+});

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { summarizeJudgeSpend } from "./judge-usage";
 import { EVALUATION_VERSION, SNAPSHOT_VERSION, EVALUATION_LIMITS as L, type Rule, type RuleResult, type Status, type DatasetCase, type DatasetCaseDraft, type DatasetExport, type Experiment, type Comparison } from "./protocol";
 import { parseDatasetCreate, parseDatasetUpdate, parseDatasetExport, parseExperimentDraft, parseReviewDraft, parseId, EvaluationError } from "./validation";
 import { sanitizeInput, sanitizeSnapshotText } from "./snapshot";
@@ -28,7 +29,8 @@ function aggregate(experiment: Experiment): void {
   const counts = { total: experiment.results.length, pass: 0, fail: 0, inconclusive: 0, passRate: 0 };
   for (const result of experiment.results) counts[result.status]++;
   counts.passRate = counts.total ? counts.pass / counts.total : 0;
-  experiment.summary = counts;
+  const judgeSpend = summarizeJudgeSpend(experiment.results);
+  experiment.summary = judgeSpend ? { ...counts, judgeSpend } : counts;
   experiment.verdict = experiment.status === "queued" || experiment.status === "running" ? null : fold(experiment.results.map((result) => result.status));
 }
 function finishUnstarted(experiment: Experiment, completedChecks: number, reason: string, cancelled: boolean): void {

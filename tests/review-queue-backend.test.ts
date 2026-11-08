@@ -66,6 +66,15 @@ function promoteBody(item: ReviewItem, datasetId: string, version = 1, key = "pr
 }
 
 describe("unactivated local review real SQLite and HTTP component", () => {
+  test("an explicit null outputSpanId selects the same item as omitting it", async () => {
+    source("run-source"); const queue = (await call("", "POST", { name: "Null span" })).body as ReviewQueue;
+    const explicit = await call(`/${queue.id}/items`, "POST", { runId: "run-source", outputSpanId: null });
+    expect(explicit).toMatchObject({ status: 201, body: { state: "draft" } });
+    const omitted = await call(`/${queue.id}/items`, "POST", { runId: "run-source" });
+    expect(omitted.status).toBeLessThan(300); expect((omitted.body as ReviewItem).id).toBe((explicit.body as ReviewItem).id);
+    expect((explicit.body as ReviewItem).id).toBe(reviewItemId(queue.id, "run-source", null));
+    expect((await call(`/${queue.id}/items`, "POST", { runId: "run-source", outputSpanId: 7 })).status).toBe(400);
+  });
   test("atomic latest-draft approval, real counts, frozen insertion retry and delayed acknowledgment", async () => {
     const { queue, item } = await created();
     const pending = call(`/${queue.id}/items/${item.id}/approve`, "POST", { expectedRevision: item.revision, mutationId: "approve-delayed", draft: draft(item, "Immediate latest edit") }, { "x-fixture-delay-ack": "1" });
