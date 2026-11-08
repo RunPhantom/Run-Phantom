@@ -11,6 +11,9 @@ const useSystemChrome = process.env.PLAYWRIGHT_USE_SYSTEM_CHROME === "1";
 
 export default defineConfig({
   testDir: "./tests-e2e",
+  // Navigates relative to the Vite component server that only
+  // tests-e2e/dataset-execution-component.config.ts starts; run it there.
+  testIgnore: ["dataset-execution.spec.ts"],
   fullyParallel: true,
   workers: process.env.CI ? 2 : 1,
   // One CI retry absorbs infrastructure startup jitter without hiding persistent regressions.
