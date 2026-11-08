@@ -48,7 +48,7 @@ export function CostAnalytics({ data, controls }: { data: CostAnalyticsReport; c
   </div>;
 }
 
-export function CostAnalyticsWorkspace({ scopeKey, title, load }: { scopeKey: readonly unknown[]; title: string; load: (request: CostAnalyticsRequest, signal: AbortSignal) => Promise<CostAnalyticsReport> }) {
+export function CostAnalyticsWorkspace({ scopeKey, title, load, footer }: { scopeKey: readonly unknown[]; title: string; load: (request: CostAnalyticsRequest, signal: AbortSignal) => Promise<CostAnalyticsReport>; footer?: ReactNode }) {
   const pricing = useSyncExternalStore(subscribePricing, getPricingSnapshot, getPricingSnapshot);
   const [selection, setSelection] = useState<WindowSelection>("24h");
   const [to, setTo] = useState(Date.now);
@@ -118,5 +118,6 @@ export function CostAnalyticsWorkspace({ scopeKey, title, load }: { scopeKey: re
     {exportState.key === exportKey && exportState.error && <p role="alert" className="rounded-lg border border-rp-danger-border bg-rp-danger-soft p-4 text-[13px] text-rp-danger">{exportState.error}</p>}
     {!result.data && result.isFetching && <div aria-hidden="true" className="grid gap-4 sm:grid-cols-2">{[0, 1].map(item => <div key={item} className={cn(PANEL, "space-y-3")}><Skeleton className="h-3 w-24" /><Skeleton className="h-8 w-40" /><Skeleton className="h-3 w-32" /></div>)}</div>}
     {result.data && !result.error && !unavailableNominal && <CostAnalytics data={result.data} />}
+    {footer}
   </div></section>;
 }

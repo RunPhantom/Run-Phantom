@@ -4,7 +4,7 @@ import { and, asc, desc, eq, inArray, notInArray, count, sql } from "drizzle-orm
 import { getDrizzleDb } from "../db";
 import { evaluation_datasets as datasets, evaluation_revisions as revisions, evaluation_experiments as experiments, evaluation_reviews as reviews } from "../db/schema";
 import { canonicalCaseDefinitions, EvaluationError, parseDatasetExport } from "./validation";
-import { EVALUATION_LIMITS as L, type Dataset, type DatasetCase, type DatasetRevision, type Experiment, type ExperimentSummary, type Review } from "./protocol";
+import { EVALUATION_LIMITS as L, type Dataset, type DatasetCase, type DatasetRevision, type Experiment, type ExperimentSummary, type JudgeSpend, type Review } from "./protocol";
 import { MAX_TRIAL_ACQUISITION_BYTES, parseTrialSelection } from "./trials";
 import { parseDistributionIds } from "./distributions";
 import type { PromotionRequest, PromotionReceipt } from "../review-queues/protocol";
@@ -128,6 +128,27 @@ function readFrozenSelection(ids: string[], consume: (experiment: Experiment) =>
 export function listExperiments(): ExperimentSummary[] {
   return getDrizzleDb().select({ summary: experiments.summary }).from(experiments).orderBy(desc(experiments.created_at)).limit(50).all()
     .map((row) => JSON.parse(row.summary));
+}
+/** Totals across every stored experiment summary; summaries frozen before judge usage recording are counted, not guessed. */
+export function judgeSpendTotals(): { experiments: number; experimentsWithJudgeCalls: number; experimentsWithoutUsageRecord: number; spend: JudgeSpend | null } {
+  const rows = getDrizzleDb().select({ summary: experiments.summary }).from(experiments).all();
+  const spends: JudgeSpend[] = [];
+  let withoutRecord = 0;
+  for (const row of rows) {
+    let summary: { summary?: { judgeSpend?: unknown } };
+    try { summary = JSON.parse(row.summary); } catch { withoutRecord++; continue; }
+    const spend = summary.summary?.judgeSpend;
+    if (spend && typeof spend === "object" && typeof (spend as JudgeSpend).calls === "number") spends.push(spend as JudgeSpend); else withoutRecord++;
+  }
+  if (!spends.length) return { experiments: rows.length, experimentsWithJudgeCalls: 0, experimentsWithoutUsageRecord: withoutRecord, spend: null };
+  const sum = (pick: (spend: JudgeSpend) => number | null): number | null => {
+    const known = spends.map(pick).filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    return known.length ? known.reduce((total, value) => total + value, 0) : null;
+  };
+  return { experiments: rows.length, experimentsWithJudgeCalls: spends.length, experimentsWithoutUsageRecord: withoutRecord, spend: {
+    calls: sum(spend => spend.calls) ?? 0, costKnownCalls: sum(spend => spend.costKnownCalls) ?? 0, costUnavailableCalls: sum(spend => spend.costUnavailableCalls) ?? 0,
+    costUsd: sum(spend => spend.costUsd), inputTokens: sum(spend => spend.inputTokens), outputTokens: sum(spend => spend.outputTokens),
+    cacheReadTokens: sum(spend => spend.cacheReadTokens), cacheWriteTokens: sum(spend => spend.cacheWriteTokens), reasoningTokens: sum(spend => spend.reasoningTokens) } };
 }
 export function activeExperiments() {
   return getDrizzleDb().select({ id: experiments.id }).from(experiments).where(inArray(experiments.status, ["queued", "running"])).all();

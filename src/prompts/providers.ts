@@ -23,6 +23,19 @@ const object = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ComparisonProviderError("invalid_response", true);
   return value as Record<string, unknown>;
 };
+/** Maps an official Chat Completions or Messages envelope's usage block to comparison usage; absent fields stay undefined. */
+export function providerResponseUsage(provider: ComparisonProvider, raw: Record<string, unknown>): ComparisonUsage {
+  const usage = raw.usage === undefined ? {} : object(raw.usage);
+  const cached = provider === "openai" && usage.prompt_tokens_details !== undefined ? object(usage.prompt_tokens_details).cached_tokens : usage.cache_read_input_tokens;
+  const reasoning = provider === "openai" && usage.completion_tokens_details !== undefined ? object(usage.completion_tokens_details).reasoning_tokens : undefined;
+  const observedTier = usage.service_tier ?? raw.service_tier;
+  const tier = provider === "openai" ? observedTier === "default" ? "standard" : observedTier ?? "unknown"
+    : observedTier === "standard" && usage.inference_geo === "global" ? "standard" : "unknown";
+  const contextTokens = provider === "openai" && typeof usage.prompt_tokens === "number" && Number.isSafeInteger(usage.prompt_tokens) && usage.prompt_tokens >= 0 && typeof cached === "number" && Number.isSafeInteger(cached) && cached >= 0 && cached <= usage.prompt_tokens ? usage.prompt_tokens : undefined;
+  return { model: raw.model,
+    inputTokens: provider === "openai" ? usage.prompt_tokens : usage.input_tokens, outputTokens: provider === "openai" ? usage.completion_tokens : usage.output_tokens,
+    cacheReadTokens: cached, ...(provider === "anthropic" ? { cacheWriteTokens: usage.cache_creation_input_tokens } : {}), reasoningTokens: reasoning, tier, contextTokens };
+}
 async function responseJson(response: Response, signal: AbortSignal): Promise<unknown> {
   if (!response.body) throw new ComparisonProviderError("invalid_response", true);
   const reader = response.body.getReader(), parts: Uint8Array[] = []; let size = 0;
@@ -77,7 +90,7 @@ export function createComparisonProviderClient(client: ClientOptions = {}) {
         const response = await transport(endpoints[target.provider], { method: "POST", headers, body: JSON.stringify(body), signal, redirect: "error" });
         if (!response.ok) { void response.body?.cancel().catch(() => {}); throw new ComparisonProviderError("provider_error", true, !refusedBeforeGeneration.has(response.status)); }
         const raw = object(await responseJson(response, signal));
-        let output: string, finishReason: string; const usage = raw.usage === undefined ? {} : object(raw.usage);
+        let output: string, finishReason: string;
         if (target.provider === "openai") {
           if (!Array.isArray(raw.choices) || raw.choices.length !== 1) throw new ComparisonProviderError("invalid_response", true);
           const choice = object(raw.choices[0]), message = object(choice.message);
@@ -89,15 +102,7 @@ export function createComparisonProviderClient(client: ClientOptions = {}) {
         }
         try { output = promptText(output, COMPARISON_LIMITS.attemptPayloadBytes); }
         catch (error) { throw new ComparisonProviderError(error instanceof Error && "code" in error && error.code === "credentials" ? "protected_content" : "response_limit", true); }
-        const cached = target.provider === "openai" && usage.prompt_tokens_details !== undefined ? object(usage.prompt_tokens_details).cached_tokens : usage.cache_read_input_tokens;
-        const reasoning = target.provider === "openai" && usage.completion_tokens_details !== undefined ? object(usage.completion_tokens_details).reasoning_tokens : undefined;
-        const observedTier = usage.service_tier ?? raw.service_tier;
-        const tier = target.provider === "openai" ? observedTier === "default" ? "standard" : observedTier ?? "unknown"
-          : observedTier === "standard" && usage.inference_geo === "global" ? "standard" : "unknown";
-        const contextTokens = target.provider === "openai" && typeof usage.prompt_tokens === "number" && Number.isSafeInteger(usage.prompt_tokens) && usage.prompt_tokens >= 0 && typeof cached === "number" && Number.isSafeInteger(cached) && cached >= 0 && cached <= usage.prompt_tokens ? usage.prompt_tokens : undefined;
-        const result: ComparisonProviderResult = { output, finishReason, provenance, usage: { model: raw.model,
-          inputTokens: target.provider === "openai" ? usage.prompt_tokens : usage.input_tokens, outputTokens: target.provider === "openai" ? usage.completion_tokens : usage.output_tokens,
-          cacheReadTokens: cached, ...(target.provider === "anthropic" ? { cacheWriteTokens: usage.cache_creation_input_tokens } : {}), reasoningTokens: reasoning, tier, contextTokens } };
+        const result: ComparisonProviderResult = { output, finishReason, provenance, usage: providerResponseUsage(target.provider, raw) };
         try { comparisonJson(result, COMPARISON_LIMITS.attemptPayloadBytes); } catch { throw new ComparisonProviderError("response_limit", true); }
         // Pattern redaction misses keys without a vendor prefix (gateways, proxies), so never retain an echo of the configured one.
         if (JSON.stringify(result).includes(JSON.stringify(token).slice(1, -1))) throw new ComparisonProviderError("protected_content", true);

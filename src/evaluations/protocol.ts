@@ -24,9 +24,24 @@ export type Rule =
   | { kind: "errors"; max: number }
   | { kind: "rubric"; provider: "openai" | "anthropic"; model: string; rubric: string; threshold: number };
 export type RubricRule = Extract<Rule, { kind: "rubric" }>;
+/**
+ * Provider usage for one model-judge request. Present only when a request may have reached the provider; a token
+ * field or costUsd is null when the provider did not report it or the model has no frozen rate, never 0 as a stand-in.
+ */
+export interface JudgeUsage {
+  provider: "openai" | "anthropic"; model: string; responseModel: string | null;
+  inputTokens: number | null; outputTokens: number | null; cacheReadTokens: number | null; cacheWriteTokens: number | null; reasoningTokens: number | null;
+  costUsd: number | null; rateRevision: string | null; costUnavailableReason: string | null;
+}
+/** Sum of known judge usage across an experiment. Experiments frozen before usage recording have no judgeSpend. */
+export interface JudgeSpend {
+  calls: number; costKnownCalls: number; costUnavailableCalls: number; costUsd: number | null;
+  inputTokens: number | null; outputTokens: number | null; cacheReadTokens: number | null; cacheWriteTokens: number | null; reasoningTokens: number | null;
+}
 export interface RuleResult {
   status: Status; source: "code" | "llm"; evaluatorVersion: string; score: number | null;
   reason: string; actual: unknown; expected: unknown; spanIds: string[]; redacted: boolean; truncated: boolean;
+  usage?: JudgeUsage;
 }
 export interface PayloadUnavailable { input: boolean; output: boolean; attributes: boolean; otlpEvidence?: boolean }
 /** Exact stored identities with acquisition-time payload withholding. No coalesced display metrics. */
@@ -82,7 +97,7 @@ export interface Experiment {
   id: string; name: string; datasetId: string; datasetName: string; datasetVersion: number; datasetHash: string;
   status: "queued" | "running" | "completed" | "cancelled"; verdict: Status | null;
   createdAt: number; completedAt: number | null; results: CaseResult[];
-  summary: { total: number; pass: number; fail: number; inconclusive: number; passRate: number }; error: string | null;
+  summary: { total: number; pass: number; fail: number; inconclusive: number; passRate: number; judgeSpend?: JudgeSpend }; error: string | null;
 }
 export type ExperimentSummary = Omit<Experiment, "results">;
 export interface Review { id: string; experimentId: string; caseId: string; rating: "pass" | "fail"; note: string; createdAt: number }

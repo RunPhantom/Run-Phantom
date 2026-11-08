@@ -38,6 +38,7 @@ export function createEvaluationRouter(service: EvaluationService, evidence?: { 
   router.get("/runs/:id/snapshot", route((req, res) => res.json(loadSnapshot(parseId(req.params.id), req.query.outputSpanId === undefined ? undefined : parseId(req.query.outputSpanId)))));
   router.get("/runs/:id/response-spans", route((req, res) => res.json(listResponseSpans(parseId(req.params.id)))));
   router.get("/experiments", route((_req, res) => res.json(store.listExperiments())));
+  router.get("/judge-spend", route((_req, res) => res.json(store.judgeSpendTotals())));
   router.post("/analyses/repeated-trials", route((req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.json(analyzeTrials(parseTrialSelection(req.body), store.readExperimentSelection));
