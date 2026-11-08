@@ -1,7 +1,7 @@
 import express from "express";
 import OpenAI from "openai";
 import { loadWorkspaceEnv } from "../loadEnv";
-import { ExampleTrace, page } from "../shared/runphantom";
+import { ExampleTrace, openAIUsage, page } from "../shared/runphantom";
 
 loadWorkspaceEnv(import.meta.url);
 
@@ -39,12 +39,11 @@ app.post("/api/chat", async (request, response) => {
     trace.addLlm({
       name: "openai.chat.completions",
       provider: "openai",
-      model: completion.model || model,
+      model,
       input: messages,
       output: [output],
       startedAtMs,
-      inputTokens: completion.usage?.prompt_tokens,
-      outputTokens: completion.usage?.completion_tokens,
+      ...openAIUsage(completion),
     });
     await trace.finish(output);
     response.json({ text, runUrl: trace.runUrl() });

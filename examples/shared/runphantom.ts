@@ -25,7 +25,36 @@ export interface LlmSpanInput {
   endedAtMs?: number;
   inputTokens?: number;
   outputTokens?: number;
+  /** Subsets of inputTokens/outputTokens, as OpenAI reports them; never additional tokens. */
+  cacheReadTokens?: number;
+  reasoningTokens?: number;
+  responseModel?: string;
+  serviceTier?: string;
   error?: string;
+}
+
+interface OpenAIUsageReport {
+  model?: string;
+  service_tier?: string | null;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number } | null;
+    completion_tokens_details?: { reasoning_tokens?: number } | null;
+  } | null;
+}
+
+/** Maps a Chat Completions response onto the span usage fields, keeping cached and reasoning detail. */
+export function openAIUsage(completion: OpenAIUsageReport): Pick<LlmSpanInput, "inputTokens" | "outputTokens" | "cacheReadTokens" | "reasoningTokens" | "responseModel" | "serviceTier"> {
+  const usage = completion.usage ?? undefined;
+  return {
+    inputTokens: usage?.prompt_tokens,
+    outputTokens: usage?.completion_tokens,
+    cacheReadTokens: usage?.prompt_tokens_details?.cached_tokens,
+    reasoningTokens: usage?.completion_tokens_details?.reasoning_tokens,
+    responseModel: completion.model || undefined,
+    serviceTier: completion.service_tier || undefined,
+  };
 }
 
 function id(bytes: number): string {
@@ -78,6 +107,16 @@ export class ExampleTrace {
     };
     if (input.inputTokens !== undefined) attributes["gen_ai.usage.input_tokens"] = input.inputTokens;
     if (input.outputTokens !== undefined) attributes["gen_ai.usage.output_tokens"] = input.outputTokens;
+    if (input.cacheReadTokens !== undefined) {
+      attributes["gen_ai.usage.cache_read.input_tokens"] = input.cacheReadTokens;
+      attributes["runphantom.usage.input_includes_cache"] = true;
+    }
+    if (input.reasoningTokens !== undefined) {
+      attributes["gen_ai.usage.output_tokens.reasoning"] = input.reasoningTokens;
+      attributes["runphantom.usage.output_includes_reasoning"] = true;
+    }
+    if (input.responseModel !== undefined) attributes["gen_ai.response.model"] = input.responseModel;
+    if (input.serviceTier !== undefined) attributes["runphantom.usage.tier"] = input.serviceTier;
 
     this.spans.push({
       traceId: this.traceId,

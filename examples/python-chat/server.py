@@ -75,6 +75,27 @@ def span(
     return result
 
 
+def usage_attributes(result) -> dict:
+    """Usage as OpenAI reports it; cached and reasoning counts are subsets of the totals."""
+    attributes: dict = {"gen_ai.response.model": result.model}
+    if result.service_tier:
+        attributes["runphantom.usage.tier"] = result.service_tier
+    usage = result.usage
+    if usage is None:
+        return attributes
+    attributes["gen_ai.usage.input_tokens"] = usage.prompt_tokens
+    attributes["gen_ai.usage.output_tokens"] = usage.completion_tokens
+    cached = getattr(usage.prompt_tokens_details, "cached_tokens", None)
+    if cached is not None:
+        attributes["gen_ai.usage.cache_read.input_tokens"] = cached
+        attributes["runphantom.usage.input_includes_cache"] = True
+    reasoning = getattr(usage.completion_tokens_details, "reasoning_tokens", None)
+    if reasoning is not None:
+        attributes["gen_ai.usage.output_tokens.reasoning"] = reasoning
+        attributes["runphantom.usage.output_includes_reasoning"] = True
+    return attributes
+
+
 async def export_trace(spans: list[dict]) -> None:
     body = {
         "resourceSpans": [
@@ -236,11 +257,10 @@ async def chat(request: web.Request) -> web.Response:
                     "runphantom.span.kind": "llm_call",
                     "gen_ai.operation.name": "chat",
                     "gen_ai.provider.name": "openai",
-                    "gen_ai.request.model": result.model,
+                    "gen_ai.request.model": MODEL,
                     "gen_ai.input.messages": json.dumps(messages),
                     "gen_ai.output.messages": json.dumps([output]),
-                    "gen_ai.usage.input_tokens": usage.prompt_tokens if usage else 0,
-                    "gen_ai.usage.output_tokens": usage.completion_tokens if usage else 0,
+                    **usage_attributes(result),
                 },
                 parent_span_id=root_id,
             ),
