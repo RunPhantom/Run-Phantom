@@ -721,7 +721,29 @@ function demoChatHtml(): string {
 
 export async function createServer(port: number, options: { comparisons?: ComparisonRuntimeOptions } = {}) {
   const app = express();
+  // Express 4 ignores a rejected async handler, so the request was never
+  // answered (seen with /api/models/anthropic when the secret store threw).
+  // Forward rejections to the JSON error handler instead. Four-argument
+  // handlers are error middleware, identified by arity, so they stay as-is.
+  for (const method of ["get", "post", "put", "patch", "delete"] as const) {
+    const register = app[method].bind(app) as (...args: unknown[]) => unknown;
+    (app as unknown as Record<string, unknown>)[method] = (...args: unknown[]) => register(...args.map(handler =>
+      typeof handler === "function" && handler.length < 4
+        ? (req: Request, res: Response, next: NextFunction) => {
+          const result = (handler as (req: Request, res: Response, next: NextFunction) => unknown)(req, res, next);
+          if (result instanceof Promise) result.catch(next);
+        }
+        : handler));
+  }
   const server = http.createServer(app);
+  // closeAllConnections() does not end a socket whose request is still in
+  // flight under Bun, so one unanswered request kept server.close() pending and
+  // the daemon alive after SIGTERM, still holding its owner lease.
+  const openSockets = new Set<import("node:net").Socket>();
+  server.on("connection", (socket) => {
+    openSockets.add(socket);
+    socket.once("close", () => openSockets.delete(socket));
+  });
   const hookOwner = await startCodingHookOwner(getDrizzleDb().$client, undefined, { contextTransport: true });
   let hookController: CodingHookController;
   let clearingHooks = false;
@@ -851,6 +873,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
         for (const client of clients) client.terminate();
         wss.close();
         server.closeAllConnections();
+        for (const socket of openSockets) socket.destroy();
         const error = await httpClosed;
         if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") throw error;
       } finally { closeDb(); await hookOwner.close(); }
