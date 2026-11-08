@@ -31,7 +31,7 @@
 .evidence-workspace input[type="file"] { width: 100%; padding: 10px; border: 1px dashed var(--rp-line-dashed); border-radius: var(--rp-radius-sm); background: var(--rp-canvas-blue); color: var(--rp-ink-muted); }
 .evidence-workspace input[type="file"]::file-selector-button { padding: 7px 12px; border: 1px solid var(--rp-line); border-radius: var(--rp-radius-control); background: var(--rp-surface); color: var(--rp-ink); font: inherit; font-weight: 500; margin-right: 12px; cursor: pointer; transition: background-color var(--rp-dur-standard) var(--rp-ease-standard); }
 .evidence-workspace input[type="file"]::file-selector-button:hover { background: var(--rp-wash); }
-.evidence-workspace button.evidence-primary { background: var(--rp-blue); color: #fff; border-color: var(--rp-blue); padding-inline: 20px; }
+.evidence-workspace button.evidence-primary { background: var(--rp-blue); color: var(--rp-on-solid); border-color: var(--rp-blue); padding-inline: 20px; }
 .evidence-workspace button.evidence-primary:hover { background: var(--rp-blue-hover); }
 .evidence-workspace button.evidence-primary:active { background: var(--rp-blue-active); }
 .evidence-workspace button.evidence-primary:focus-visible { outline-color: var(--rp-blue) !important; outline-offset: 2px !important; }
