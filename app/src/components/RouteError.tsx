@@ -1,7 +1,8 @@
 import { useRouteError, isRouteErrorResponse, useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { AlertTriangle, ChevronDown, Copy, Check, RotateCcw, ArrowLeft } from "lucide-react";
-import { C } from "../utils/colors";
+import { Button } from "@/components/ui/button";
+import { Eyebrow } from "@/components/ui/typography";
 
 // Without a route errorElement, a single render throw unmounts the entire app and
 // leaves React Router's raw stack page. One malformed trace should never cost the
@@ -38,85 +39,62 @@ export function RouteError() {
   const { title, detail, raw } = describe(error);
 
   return (
-    <div role="alert" className="flex h-full items-center justify-center overflow-auto p-6">
-      <div
-        className="w-full max-w-lg rounded-xl border p-6"
-        style={{ borderColor: C.border, background: C.surface, boxShadow: "var(--rp-e1)" }}
-      >
-        <div className="mb-3 flex items-center gap-2">
-          <AlertTriangle className="size-4 shrink-0" style={{ color: C.red }} aria-hidden="true" />
-          <h2 className="font-display text-[20px] font-semibold leading-7" style={{ color: C.fg4 }}>{title}</h2>
-        </div>
+    <div role="alert" className="flex h-full items-center justify-center overflow-auto px-5 py-10 sm:px-10">
+      <section className="w-full max-w-xl animate-fade-rise rounded-lg border border-rp-danger-border bg-white px-6 py-8 sm:px-8">
+        <Eyebrow className="text-rp-danger">
+          <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
+          View / Render error
+        </Eyebrow>
+        <h2 className="rp-section-title mt-3">{title}</h2>
 
-        <p className="mb-5 text-[12px] leading-relaxed" style={{ color: C.fg1 }}>
+        <p className="mt-2 break-words text-[13px] leading-[1.8] text-rp-ink-muted">
           {detail}
         </p>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => navigate("/runs", { replace: true })}
-            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border px-3 text-[12px] font-medium transition-colors"
-            style={{ borderColor: C.borderLight, color: C.fg4, background: C.elevated }}
-          >
-            <ArrowLeft className="size-3.5" aria-hidden="true" />
+        <div className="mt-6 flex flex-wrap items-center gap-2">
+          <Button variant="primary" onClick={() => navigate("/runs", { replace: true })}>
+            <ArrowLeft aria-hidden="true" />
             Back to runs
-          </button>
-          <button
-            type="button"
-            onClick={() => window.location.reload()}
-            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border px-3 text-[12px] font-medium transition-colors"
-            style={{ borderColor: C.border, color: C.fg2, background: C.surface }}
-          >
-            <RotateCcw className="size-3.5" aria-hidden="true" />
+          </Button>
+          <Button variant="outline" onClick={() => window.location.reload()}>
+            <RotateCcw aria-hidden="true" />
             Reload
-          </button>
-          <button
-            type="button"
-            aria-expanded={open}
-            onClick={() => setOpen((v) => !v)}
-            className="inline-flex min-h-[44px] items-center gap-1.5 min-h-[44px] rounded-md px-2 text-[12px] transition-colors"
-            style={{ color: C.fg1 }}
-          >
+          </Button>
+          <Button variant="ghost" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
             <ChevronDown
-              className="size-3.5 transition-transform"
-              style={{ transform: open ? "rotate(180deg)" : "none" }}
+              className={`transition-transform duration-250 ease-standard motion-reduce:transition-none ${open ? "rotate-180" : ""}`}
               aria-hidden="true"
             />
             {open ? "Hide details" : "Show details"}
-          </button>
+          </Button>
         </div>
 
         {open && (
-          <div className="mt-4">
-            <div className="mb-1.5 flex items-center justify-between">
-              <span className="text-[9px] font-medium uppercase tracking-wide" style={{ color: C.fg0 }}>
-                Error detail
-              </span>
-              <button
-                type="button"
+          <div className="mt-5 animate-fade-rise border-t border-rp-line-muted pt-4">
+            <div className="mb-2 flex items-center justify-between">
+              <Eyebrow>Error detail</Eyebrow>
+              <Button
+                variant="ghost"
+                size="icon-sm"
                 aria-label={copied ? "Copied error detail" : "Copy error detail"}
+                title={copied ? "Copied" : "Copy error detail"}
+                className={copied ? "text-rp-success hover:text-rp-success" : undefined}
                 onClick={() => {
                   void navigator.clipboard.writeText(raw).then(() => {
                     setCopied(true);
                     window.setTimeout(() => setCopied(false), 1500);
                   }).catch(() => {});
                 }}
-                className="rounded p-1 transition-colors"
-                style={{ color: copied ? C.green : C.fg0 }}
               >
-                {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
-              </button>
+                {copied ? <Check aria-hidden="true" className="!size-3.5" /> : <Copy aria-hidden="true" className="!size-3.5" />}
+              </Button>
             </div>
-            <pre
-              className="max-h-52 overflow-auto rounded-md border p-2.5 text-[10px] leading-relaxed"
-              style={{ borderColor: C.border, background: C.bg, color: C.fg1, whiteSpace: "pre-wrap", wordBreak: "break-word" }}
-            >
+            <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-sm border border-rp-line-muted bg-rp-canvas-blue p-3 font-mono text-[11px] leading-5 text-rp-ink-soft">
               {raw.slice(0, 4000)}
             </pre>
           </div>
         )}
-      </div>
+      </section>
     </div>
   );
 }
