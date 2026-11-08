@@ -124,7 +124,7 @@ export function ProjectBoundary({ children }: { children: ReactNode }) {
   const result = useTeamQuery<Project>([projectId, "project"], projectApi(projectId), 30_000);
   useEffect(() => { if (result.error) queries.removeQueries({ predicate: q => q.queryKey.includes(projectId) && !q.queryKey.includes("project") }); }, [projectId, queries, result.error]);
   if (result.isPending) return <Loading text="Opening project…" />;
-  if (result.error) return <div className="team-page"><ErrorNotice error={result.error} retry={() => void result.refetch()} /><p><a href="/team">Return to projects</a></p></div>;
+  if (result.error) return <div className="team-page"><ErrorNotice error={result.error} retry={() => void result.refetch()} /><p><a className="team-text-link" href="/team">Return to projects</a></p></div>;
   return <ProjectContext.Provider key={`${projectId}:${result.data.role}`} value={result.data}>{children}</ProjectContext.Provider>;
 }
 export function RequireSession({ children }: { children: ReactNode }) { return useTeam().session.authenticated ? children : <Navigate to="/team/login" replace />; }

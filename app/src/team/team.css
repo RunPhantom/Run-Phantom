@@ -108,6 +108,8 @@ select.team-input{appearance:none;padding-right:36px;background-image:url("data:
 
 .team-error{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;background:var(--rp-danger-soft);border:1px solid var(--rp-danger-border);border-radius:var(--rp-radius-md);margin:12px 0;color:var(--rp-danger);font-size:13px;line-height:20px;overflow-wrap:anywhere;animation:team-rise var(--rp-dur-rise,200ms) var(--rp-ease-standard) both}
 .team-root>.team-error{margin:12px 28px}
+.team-root>.team-loading{padding:24px 28px}
+.team-auth>.team-loading,.team-auth>.team-error{width:calc(100% - 32px);max-width:480px;margin:72px auto 0}
 .team-loading{padding:24px 0;display:flex;gap:10px;align-items:center;color:var(--rp-ink-muted);font-size:13px}
 .team-empty{margin:16px 0;padding:32px 28px;max-width:none;border:1px dashed var(--rp-line-dashed);border-radius:var(--rp-radius-lg);background:var(--rp-surface)}
 .team-empty h2{font-family:var(--font-display);font-size:18px;line-height:24px;letter-spacing:-.025em;margin-bottom:8px}
