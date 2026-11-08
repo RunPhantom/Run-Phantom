@@ -42,7 +42,7 @@ export class ComparisonCoordinator {
           try {
             const code = error instanceof ComparisonProviderError ? error.code : error instanceof Error && "code" in error ? error.code : undefined;
             if (code === "authority_changed" || code === "deleted" || code === "not_found" || code === "inactive" || !this.#canPublish(entry)) { entry.store.terminatePending(entry.id); return; }
-            entry.store.finish(entry.id, entry.position, entry.fence, { status: code === "timeout" ? "timeout" : code === "cancelled" ? "cancelled" : "failed", reason: code === "timeout" || code === "cancelled" ? code : code === "response_limit" || code === "limit_refused" ? "response_limit" : code === "protected_content" || code === "credentials" ? "protected_content" : "provider_error" });
+            entry.store.finish(entry.id, entry.position, entry.fence, { unbilled: error instanceof ComparisonProviderError && !error.billable, status: code === "timeout" ? "timeout" : code === "cancelled" ? "cancelled" : "failed", reason: code === "timeout" || code === "cancelled" ? code : code === "response_limit" || code === "limit_refused" ? "response_limit" : code === "protected_content" || code === "credentials" ? "protected_content" : "provider_error" });
           } catch { if (!this.#closed) { try { entry.store.terminatePending(entry.id); } catch { /* Invalid owner authority cannot publish or repair persisted content. */ } } }
         }
       }).catch(error => {

@@ -9,7 +9,8 @@ export type ComparisonProvenance = "official-provider" | "controlled-http-fixtur
 export type ProviderFailure = "unavailable" | "cancelled" | "timeout" | "provider_error" | "invalid_response" | "response_limit" | "protected_content";
 const messages: Record<ProviderFailure, string> = { unavailable: "Provider credentials are unavailable.", cancelled: "Provider request was cancelled.", timeout: "Provider request timed out.", provider_error: "Provider request failed.", invalid_response: "Provider response was invalid.", response_limit: "Provider response exceeded its limit.", protected_content: "Provider response contains protected credentials." };
 export class ComparisonProviderError extends Error {
-  constructor(readonly code: ProviderFailure, readonly requestMayHaveBeenSent: boolean) { super(messages[code]); this.name = "ComparisonProviderError"; }
+  /** billable=false only when the provider cannot have metered the request: it was never sent, or it was refused as unauthenticated. */
+  constructor(readonly code: ProviderFailure, readonly requestMayHaveBeenSent: boolean, readonly billable: boolean = requestMayHaveBeenSent) { super(messages[code]); this.name = "ComparisonProviderError"; }
 }
 export interface ComparisonProviderResult { output: string; usage: ComparisonUsage; finishReason: string; provenance: ComparisonProvenance }
 type Transport = (url: string | URL, init: RequestInit) => Promise<Response>;
@@ -70,7 +71,7 @@ export function createComparisonProviderClient(client: ClientOptions = {}) {
       try {
         sent = true;
         const response = await transport(endpoints[target.provider], { method: "POST", headers, body: JSON.stringify(body), signal, redirect: "error" });
-        if (!response.ok) { void response.body?.cancel().catch(() => {}); throw new ComparisonProviderError("provider_error", true); }
+        if (!response.ok) { void response.body?.cancel().catch(() => {}); throw new ComparisonProviderError("provider_error", true, response.status !== 401 && response.status !== 403); }
         const raw = object(await responseJson(response, signal));
         let output: string, finishReason: string; const usage = raw.usage === undefined ? {} : object(raw.usage);
         if (target.provider === "openai") {

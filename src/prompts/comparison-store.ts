@@ -250,7 +250,7 @@ export class ComparisonStore {
       return { request: receipt.request!, position, remainingMs: attempt.deadlineAt - now };
     });
   }
-  finish(idValue: unknown, positionInput: unknown, fence: ComparisonFence, outcome: { status: "completed"; result: ComparisonProviderResult } | { status: "failed" | "timeout" | "cancelled"; reason: string }): ComparisonReceipt {
+  finish(idValue: unknown, positionInput: unknown, fence: ComparisonFence, outcome: { status: "completed"; result: ComparisonProviderResult } | { status: "failed" | "timeout" | "cancelled"; reason: string; unbilled?: boolean }): ComparisonReceipt {
     const id = promptId(idValue), position = positionValue(positionInput);
     return this.#transaction("edit", fence, () => {
       const head = this.#head(id); if (head.tombstone) throw new ComparisonError("deleted"); const receipt = this.#receipt(head), row = receipt.attempts[position];
@@ -275,7 +275,11 @@ export class ComparisonStore {
           if (!(error instanceof ComparisonError) || error.code !== "limit_refused") throw error;
           status = "failed"; reason = "response_limit";
         }
-      } else { if (!reasons.has(outcome.reason)) throw new ComparisonError("invalid_request"); reason = outcome.reason; }
+      } else {
+        if (!reasons.has(outcome.reason)) throw new ComparisonError("invalid_request"); reason = outcome.reason;
+        // Release the conservative charge only when the provider provably did not meter the attempt.
+        if (outcome.unbilled === true) { charge = 0; state = "not_started"; }
+      }
       const currentBytes = this.#get<{ n: number }>(`SELECT ${attemptContent.map(column => `coalesce(${bytes(column)},0)`).join("+")} n FROM prompt_comparison_attempts WHERE scope_key=? AND comparison_id=? AND position=?`, this.#scope, id, position)!.n;
       const retained = this.#totals().bytes - currentBytes;
       const cleanupBytes = this.#cleanupRetention(id, position);
