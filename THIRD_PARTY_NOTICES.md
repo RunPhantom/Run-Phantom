@@ -28,6 +28,14 @@ grant rights to any third-party mark.
 | TypeScript | Source language references |
 | Node.js | Tooling and runtime references |
 
+## Bundled Fonts
+
+| Font | Files | License |
+| --- | --- | --- |
+| Geist Mono, Copyright 2024 The Geist Project Authors | `app/public/fonts/GeistMono-Variable-latin.woff2` | SIL Open Font License 1.1, `app/public/fonts/GeistMono-OFL.txt` |
+| Syne | `app/public/fonts/syne-variable.ttf` | SIL Open Font License 1.1, `app/public/fonts/syne-OFL.txt` |
+| Inter (via `@fontsource-variable/inter`) | Bundled from the npm package at build time | SIL Open Font License 1.1, shipped in the package |
+
 ## Compatibility Labels
 
 The UI uses neutral text glyphs for supported third-party agent tools rather
