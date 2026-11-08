@@ -569,9 +569,9 @@ details[open] > .rp-disclosure::before { transform: rotate(45deg); }
 .skip-link {
   position: fixed;
   left: 12px;
-  top: 12px;
+  top: calc(var(--rp-strip-h, 0px) + 12px);
   z-index: 10000;
-  transform: translateY(-180%);
+  transform: translateY(calc(-100% - var(--rp-strip-h, 0px) - 24px));
   border: 0;
   border-radius: var(--rp-radius-control);
   background: var(--rp-blue);
