@@ -1,6 +1,9 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { Eye, EyeOff, Trash2 } from "lucide-react";
-import { C } from "../utils/colors";
+import { ArrowUpRight, Eye, EyeOff, Trash2 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { fieldClassName } from "@/components/ui/input";
 
 export function SecretInput({
   label,
@@ -29,7 +32,7 @@ export function SecretInput({
   saving?: boolean;
   /** External console where the user can generate this key. Renders a small link next to the description. */
   getKeyUrl?: string;
-  /** Override link label. Defaults to "Get a key →". */
+  /** Override link label. Defaults to "Get a key". */
   getKeyLabel?: string;
 }) {
   const inputId = useId();
@@ -67,9 +70,9 @@ export function SecretInput({
     .filter(Boolean)
     .join(" ") || undefined;
   return (
-    <div className="py-1">
-      <div className="mb-1.5 flex items-center justify-between gap-3">
-        <label className="text-[12px] font-medium" style={{ color: C.fg3 }} htmlFor={inputId}>
+    <div className="py-5">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <label className="text-[13px] font-medium text-rp-ink" htmlFor={inputId}>
           {label}
         </label>
         {saved && (
@@ -77,16 +80,9 @@ export function SecretInput({
           // daemon read from the environment — so the pane claimed the user had
           // saved a key they never entered, and the Clear button beside it did
           // nothing. Name the actual source.
-          <span
-            id={statusId}
-            aria-live="polite"
-            className="rounded-full px-2 py-1 text-[10px] font-mono"
-            style={sourceIsEnv
-              ? { color: C.fg1, background: "var(--rp-ink-wash)" }
-              : { color: C.green, background: "color-mix(in srgb, var(--rp-success) 12%, white 88%)" }}
-          >
+          <Badge id={statusId} aria-live="polite" mono tone={sourceIsEnv ? "neutral" : "success"}>
             {sourceIsEnv ? "from env" : "saved"}
-          </span>
+          </Badge>
         )}
       </div>
       <div className="flex flex-col gap-2 sm:flex-row">
@@ -94,13 +90,7 @@ export function SecretInput({
           id={inputId}
           ref={inputRef}
           aria-describedby={describedBy}
-          className={`min-h-[44px] min-w-0 flex-1 rounded-xl px-3 py-2 text-[12px] font-mono outline-none transition-colors ${saved ? "secret-input-saved" : ""}`}
-          style={{
-            background: C.surface,
-            color: C.fg3,
-            border: `1px solid ${C.border}`,
-            boxShadow: focused ? `0 0 0 1px ${C.accent}` : "none",
-          }}
+          className={cn(fieldClassName, "h-10 flex-1 font-mono text-[13px]", saved && "secret-input-saved")}
           type={show ? "text" : "password"}
           placeholder={displayPlaceholder}
           value={value}
@@ -121,73 +111,64 @@ export function SecretInput({
           }}
         />
         {canReveal && (
-          <button
+          <Button
             type="button"
+            variant="outline"
+            size="icon"
             aria-label={show ? `Hide ${label} value` : `Show ${label} value`}
-            className="min-h-[44px] rounded-xl px-3 py-2 transition-colors rp-hover-wash sm:flex-shrink-0"
-            style={{ background: C.elevated, border: `1px solid ${C.border}`, color: C.fg1 }}
+            className="h-10 w-full sm:w-10 sm:flex-shrink-0"
             onMouseDown={e => e.preventDefault()}
             onClick={() => setShow(!show)}
             title={show ? `Hide ${label} value` : `Show ${label} value`}
           >
-            {show ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-          </button>
+            {show ? <EyeOff aria-hidden="true" className="!size-3.5" /> : <Eye aria-hidden="true" className="!size-3.5" />}
+          </Button>
         )}
         {canClear && (
-          <button
+          <Button
             type="button"
+            variant="destructive-outline"
+            size="icon"
             aria-label={`Clear saved ${label} key`}
-            className="min-h-[44px] rounded-xl px-3 py-2 transition-colors rp-hover-wash sm:flex-shrink-0"
-            style={{
-              background: C.elevated,
-              border: `1px solid ${C.border}`,
-              color: saving ? C.fg0 : C.red,
-              cursor: saving ? "default" : "pointer",
-            }}
+            className="h-10 w-full sm:w-10 sm:flex-shrink-0"
             onMouseDown={e => e.preventDefault()}
             onClick={clearSavedKey}
             disabled={saving}
             title="Clear saved key"
           >
-            <Trash2 className="w-3 h-3" />
-          </button>
+            <Trash2 aria-hidden="true" className="!size-3.5" />
+          </Button>
         )}
       </div>
       {(description || getKeyUrl || showSave) && (
-        <div className="mt-1.5 flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between">
+        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 items-center gap-2">
             {description && (
-              <div id={descriptionId} className="text-[11px] leading-relaxed" style={{ color: C.fg0 }}>
+              <div id={descriptionId} className="text-[12px] leading-5 text-rp-ink-muted">
                 {description}
               </div>
             )}
           </div>
           <div className="flex items-center gap-2">
             {showSave ? (
-              <button
+              <Button
                 type="button"
+                size="sm"
                 aria-label={`Save ${label} key`}
-                className="min-h-[36px] whitespace-nowrap rounded-full px-3 py-1 text-[10px] font-mono transition-colors rp-hover-wash"
-                style={{
-                  color: saving || !canSave ? C.fg0 : C.green,
-                  background: saving || !canSave ? C.elevated : "color-mix(in srgb, var(--rp-success) 12%, white 88%)",
-                  border: `1px solid ${saving || !canSave ? C.border : "color-mix(in srgb, var(--rp-success) 22%, white 78%)"}`,
-                  cursor: saving || !canSave ? "default" : "pointer",
-                }}
                 onClick={saveAndExitEditMode}
                 disabled={saving || !canSave}
               >
-                {saving ? "saving..." : "Save"}
-              </button>
+                {saving ? "Saving…" : "Save"}
+              </Button>
             ) : getKeyUrl && (
               <a
                 href={getKeyUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rp-touch-target text-[11px] font-medium whitespace-nowrap hover:underline"
-                style={{ color: C.fg3 }}
+                className="rp-touch-target rp-ease inline-flex items-center gap-1 whitespace-nowrap text-[12px] font-medium text-rp-blue hover:text-rp-blue-hover hover:underline hover:underline-offset-4"
               >
-                {getKeyLabel ?? "Get a key \u2192"}
+                {getKeyLabel ?? "Get a key"}
+                <ArrowUpRight aria-hidden="true" className="size-3.5" />
               </a>
             )}
           </div>
