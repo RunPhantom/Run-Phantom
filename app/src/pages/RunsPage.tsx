@@ -322,8 +322,8 @@ export function RunsPage() {
         // box away with it — leaving no way to correct or clear the query, and
         // showing first-run onboarding to someone who simply mistyped.
         className={cn(
-          isMobile ? (selectedId ? "hidden" : "w-full") : "w-[264px] border-r border-rp-line",
-          "flex flex-shrink-0 flex-col bg-rp-surface",
+          isMobile ? (selectedId ? "hidden" : "flex w-full") : "flex w-[264px] border-r border-rp-line",
+          "flex-shrink-0 flex-col bg-rp-surface",
         )}
       >
         <div className="border-b border-rp-line px-4 pb-4 pt-4">
