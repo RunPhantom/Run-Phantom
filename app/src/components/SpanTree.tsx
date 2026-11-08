@@ -3,7 +3,8 @@ import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { ArrowLeft } from "lucide-react";
 import { setMeridian, clearMeridian } from "../utils/meridian";
 import { cn } from "@/lib/utils";
-import { fmt, tryJson, displayPayload, detectProvider, isoTimestamp } from "../utils/helpers";
+import { fmt, tryJson, displayPayload, detectProvider, isoTimestamp, spanErrorReason } from "../utils/helpers";
+import { parseSpanAttributes, requestedToolCalls, spanFinishReasons, spanReasoningTokens, stoppedEarlyReason } from "../utils/span-evidence";
 import type { Span } from "../utils/types";
 import { Chevron } from "./Icons";
 import { JsonView } from "./JsonView";
@@ -188,6 +189,12 @@ function SpanIdCopy({ id }: { id: string }) {
 function SpanDetail({ span }: { span: Span }) {
   const info = typeInfo(span);
   const isErr = span.status === "ERROR";
+  const errorReason = isErr ? spanErrorReason(span) : "";
+  const evidence = useMemo(() => {
+    const attrs = span.span_type?.includes("LLM") ? parseSpanAttributes(span.attributes) : null;
+    const finishReasons = spanFinishReasons(attrs);
+    return { finishReasons, stoppedEarly: stoppedEarlyReason(finishReasons), reasoningTokens: spanReasoningTokens(attrs), toolCalls: span.output_payload ? [] : requestedToolCalls(attrs) };
+  }, [span.attributes, span.output_payload, span.span_type]);
 
   return (
     <div className="rp-fade-rise sb h-full space-y-4 overflow-auto p-4 sm:p-5">
@@ -202,10 +209,19 @@ function SpanDetail({ span }: { span: Span }) {
         <div className="mt-1.5 break-all font-display text-[18px] font-semibold tracking-[-0.02em] text-rp-ink">{span.name}</div>
       </div>
 
-      {isErr && span.output_payload && (
+      {errorReason && (
         <div className="rounded-sm border border-rp-danger-border bg-rp-danger-soft p-3">
           <div className="mb-1 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-danger">Error</div>
-          <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-rp-danger">{displayPayload(span.output_payload)}</pre>
+          <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-rp-danger">{displayPayload(errorReason)}</pre>
+        </div>
+      )}
+
+      {evidence.stoppedEarly && (
+        <div role="status" className="rounded-sm border border-rp-line bg-rp-canvas-blue p-3 text-[12px] leading-5 text-rp-ink">
+          Generation stopped early: <span className="font-mono">{evidence.stoppedEarly}</span>
+          {evidence.reasoningTokens !== null && span.output_tokens != null && evidence.reasoningTokens >= span.output_tokens && span.output_tokens > 0
+            ? ". Every reported output token was reasoning, so no answer text was produced."
+            : "."}
         </div>
       )}
 
@@ -215,6 +231,8 @@ function SpanDetail({ span }: { span: Span }) {
         {span.model && <><div className="text-rp-ink-muted">model</div><div className="text-rp-ink">{span.model}</div></>}
         {span.input_tokens != null && <><div className="text-rp-ink-muted">input tokens</div><div className="text-rp-ink">{span.input_tokens.toLocaleString()}</div></>}
         {span.output_tokens != null && <><div className="text-rp-ink-muted">output tokens</div><div className="text-rp-ink">{span.output_tokens.toLocaleString()}</div></>}
+        {evidence.reasoningTokens !== null && <><div className="text-rp-ink-muted">reasoning tokens</div><div className="text-rp-ink">{evidence.reasoningTokens.toLocaleString()}</div></>}
+        {evidence.finishReasons.length > 0 && <><div className="text-rp-ink-muted">finish reason</div><div className="break-words text-rp-ink">{evidence.finishReasons.join(", ")}</div></>}
         <div className="text-rp-ink-muted">status</div>
         <div className={isErr ? "text-rp-danger" : "text-rp-ink"}>{span.status}</div>
         <div className="text-rp-ink-muted">start</div>
@@ -307,6 +325,18 @@ function SpanDetail({ span }: { span: Span }) {
           </div>
           <div className="rounded-sm border border-rp-line bg-rp-canvas-blue p-2.5">
             <JsonView data={span.output_payload} />
+          </div>
+        </div>
+      )}
+
+      {evidence.toolCalls.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <div className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted">Output · requested tool calls</div>
+            <CopyButton label="tool calls" text={JSON.stringify(evidence.toolCalls, null, 2)} />
+          </div>
+          <div className="rounded-sm border border-rp-line bg-rp-canvas-blue p-2.5">
+            <JsonView data={evidence.toolCalls} />
           </div>
         </div>
       )}
