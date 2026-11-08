@@ -3,13 +3,13 @@ import { QueryClient, QueryClientProvider, useInfiniteQuery, useQuery, useQueryC
 import { Navigate, useParams } from "react-router-dom";
 import { TeamApiError, TeamClient, projectApi, teamQuery, type Page, type Project, type SessionResponse } from "../api/team";
 import { ErrorNotice, Loading } from "./common";
+import { ProjectContext } from "./project-context";
 import { discardTeamSearchHistory, synchronizeTeamSearchSession } from "../utils/search-state";
 
 type Authenticated = Extract<SessionResponse, { authenticated: true }>;
 const signedOut: SessionResponse = { authenticated: false, setupRequired: false, user: null, session: null, csrfToken: null };
 interface TeamContextValue { client: TeamClient; session: SessionResponse; acceptSession: (session: SessionResponse) => void; notice: string; permissionRevisions: Readonly<Record<string, number>>; clearSession: () => void }
 const TeamContext = createContext<TeamContextValue | null>(null);
-const ProjectContext = createContext<Project | null>(null);
 export function useTeam() { const value = useContext(TeamContext); if (!value) throw new Error("Team session context is missing"); return value; }
 export function useAccount(): Authenticated { const { session } = useTeam(); if (!session.authenticated) throw new Error("Sign in to continue"); return session; }
 export function useProject() { const project = useContext(ProjectContext); if (!project) throw new Error("Select a project to continue"); return project; }
@@ -123,7 +123,7 @@ export function ProjectBoundary({ children }: { children: ReactNode }) {
   const result = useTeamQuery<Project>([projectId, "project"], projectApi(projectId), 30_000);
   useEffect(() => { if (result.error) queries.removeQueries({ predicate: q => q.queryKey.includes(projectId) && !q.queryKey.includes("project") }); }, [projectId, queries, result.error]);
   if (result.isPending) return <Loading text="Opening project…" />;
-  if (result.error) return <div className="team-page"><ErrorNotice error={result.error} retry={() => void result.refetch()} /><p><a href="/team">Return to projects</a></p></div>;
+  if (result.error) return <div className="team-page"><ErrorNotice error={result.error} retry={() => void result.refetch()} /><p><a className="team-text-link" href="/team">Return to projects</a></p></div>;
   return <ProjectContext.Provider key={`${projectId}:${result.data.role}`} value={result.data}>{children}</ProjectContext.Provider>;
 }
 export function RequireSession({ children }: { children: ReactNode }) { return useTeam().session.authenticated ? children : <Navigate to="/team/login" replace />; }
