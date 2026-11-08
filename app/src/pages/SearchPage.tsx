@@ -238,7 +238,7 @@ export function SearchPage() {
               <X aria-hidden="true" className="size-3.5" />
             </button>}
           </div>
-          <p id="search-scope" className="rp-field-hint mt-2">Matches titles, captured inputs and outputs, and tool names across every local run. Press / to focus.</p>
+          <p id="search-scope" className="rp-field-hint mt-2">Matches titles, captured inputs and outputs, and tool names across every local run.<span className="hidden lg:inline"> Press / to focus.</span></p>
           <input ref={importRef} type="file" accept=".json,application/json" aria-label="Import trace file" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importTrace(file); }} />
           <Button type="button" variant="link" size="sm" disabled={importing} onClick={() => importRef.current?.click()} className="mt-2 h-8 text-xs"><Upload aria-hidden="true" className="!size-3.5" />{importing ? "Importing trace…" : "Import trace"}</Button>
           {importError && <div role="alert" className="mt-2 rounded-sm border border-rp-danger-border bg-rp-danger-soft px-3 py-2 text-xs leading-5 text-rp-danger"><strong className="font-semibold">Import failed.</strong> {importError}</div>}
@@ -303,8 +303,8 @@ export function SearchPage() {
           <EmptyPanel
             className="w-full max-w-lg animate-fade-rise"
             eyebrow="Search / No run selected"
-            title="Pick a run to inspect"
-            description="Choose a result on the left to open its spans, conversation turns and replay context here."
+            title={!loading && currentResult && count === 0 ? "No result to open" : "Pick a run to inspect"}
+            description={!loading && currentResult && count === 0 ? "When the search matches a run, choose it on the left to open its trace here." : "Choose a result on the left to open its spans, conversation turns and replay context here."}
           />
         </div>}
       </div>
