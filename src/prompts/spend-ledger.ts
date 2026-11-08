@@ -30,12 +30,19 @@ export interface ComparisonUsage {
   readonly model?: unknown; readonly inputTokens?: unknown; readonly outputTokens?: unknown; readonly cacheReadTokens?: unknown;
   readonly cacheWriteTokens?: unknown; readonly reasoningTokens?: unknown; readonly tier?: unknown; readonly contextTokens?: unknown;
 }
+/**
+ * Rounds up to whole micro-USD after discarding binary floating-point noise below a nano-USD (the precision of the
+ * displayed estimate). A plain Math.ceil turned 16 x $2.5/M + 43 x $15/M = 685.0000000000001 µ$ into a 686 µ$ charge.
+ */
+export function ceilMicrousd(microusd: number): number {
+  return Math.ceil(Number(microusd.toFixed(3)));
+}
 export function reserveComparisonAttempt(compiledValue: string, target: ComparisonTarget, outputValue: number): { microusd: number; inputTokenCeiling: number; rate: FrozenRateRevision } {
   const compiled = promptText(compiledValue, COMPARISON_LIMITS.inputBytes), output = promptInteger(outputValue, COMPARISON_LIMITS.outputTokens), rate = comparisonRate(target);
   const inputTokenCeiling = Buffer.byteLength(compiled) + 1024, categories = rate.bands[0].categories;
   if (categories.input.kind !== "priced" || categories.output.kind !== "priced") throw new ComparisonError("budget_refused");
   // One text-only user message, no tools/system/cache creation. Byte count deliberately over-reserves tokenizer input.
-  const microusd = Math.ceil(inputTokenCeiling * categories.input.usdPerMillionTokens + output * categories.output.usdPerMillionTokens);
+  const microusd = ceilMicrousd(inputTokenCeiling * categories.input.usdPerMillionTokens + output * categories.output.usdPerMillionTokens);
   if (!Number.isSafeInteger(microusd) || microusd < 1 || microusd > COMPARISON_LIMITS.providerBudgetMicrousd) throw new ComparisonError("budget_refused");
   return { microusd, inputTokenCeiling, rate };
 }

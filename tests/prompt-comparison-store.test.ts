@@ -77,6 +77,12 @@ test("fresh report epoch keeps comparison content readable and fences a captured
   expect(() => store.get(original.id, stale)).toThrow(); expect(store.get(original.id, store.capture("read")).request).toEqual(original.request);
   const edit = store.capture("edit"), input = request(first.id); allowed = false; expect(() => store.submit(input, edit)).toThrow("membership");
 });
+test("a measured estimate that is a whole micro-USD charges exactly that amount", () => {
+  // Live gpt-4.1 usage from the OpenAI regression soak: 24 x $2/M + 20 x $8/M sums to 208.00000000000003 µ$ in floating point.
+  const first = saved(), operation = store.submit(request(first.id), store.capture("edit")), fence = store.capture("edit"); store.start(operation.id, 1, fence);
+  const outcome = store.finish(operation.id, 1, fence, { status: "completed", result: { output: "Answer", finishReason: "stop", provenance: "controlled-http-fixture" as const, usage: { model: "gpt-4.1", inputTokens: 24, outputTokens: 20, cacheReadTokens: 0, tier: "standard" } } });
+  expect(outcome.attempts[1].observedEstimateUsd).toBe("0.000208"); expect(outcome.attempts[1].chargeMicrousd).toBe(208); expect(outcome.attempts[1].holdMicrousd).toBe(0);
+});
 test("over-reservation measured estimates permanently close admission across content deletion and restart", async () => {
   const first = saved(), operation = store.submit(request(first.id), store.capture("edit")), fence = store.capture("edit"); store.start(operation.id, 1, fence);
   const outcome = store.finish(operation.id, 1, fence, { status: "completed", result: { output: "Answer", finishReason: "stop", provenance: "controlled-http-fixture" as const, usage: { model: "gpt-4.1", inputTokens: 1000000, outputTokens: 1, cacheReadTokens: 0, tier: "standard" } } });
