@@ -150,6 +150,7 @@ import {
   getSecretStatus,
   getSecretStatuses,
   parseSecretKey,
+  parseSecretValueInput,
   setStoredSecret,
   deleteStoredSecret,
 } from "./secret-store";
@@ -1594,7 +1595,12 @@ export async function createServer(port: number, options: { comparisons?: Compar
       res.status(404).json({ error: "unknown secret key" });
       return;
     }
-    const value = typeof req.body?.value === "string" ? req.body.value.trim() : "";
+    const input = parseSecretValueInput(req.body);
+    if (!input.ok) {
+      res.status(400).json({ error: input.error });
+      return;
+    }
+    const value = input.value;
     if (!value) {
       deleteStoredSecret(key);
       broadcast("secrets_updated", { key, status: getSecretStatus(key) });
