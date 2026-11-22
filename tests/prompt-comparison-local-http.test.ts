@@ -56,9 +56,10 @@ test("actual local registered owner routes retain four native outputs and reject
   expect((await fetch(url + "/api/prompts/comparisons", { method: "POST", headers: { "Content-Type": "application/json", Origin: "https://foreign.invalid" }, body: JSON.stringify(value) })).status).toBe(403);
   expect(rows()).toEqual(before); expect(calls).toBe(4); expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
 });
-test("actual mounted adapter preserves enriched-output overage, fuse and all accounting across privacy clear and same-inode owner reopen", async () => {
+test("actual mounted adapter retains a truncated enriched-output overage, fuse and all accounting across privacy clear and same-inode owner reopen", async () => {
   overage = true; const value = await request([COMPARISON_MODELS[1]]), first = await call("/api/prompts/comparisons", "POST", value); expect(first.response.status).toBe(201);
-  const result = await terminal(first.data.id); expect(result.attempts[0]).toMatchObject({ status: "failed", reason: "response_limit", payload: null, accountingState: "measured_estimate", observedEstimateUsd: "2.000008", chargeMicrousd: 2000008, budgetBreach: true }); expect(calls).toBe(1);
+  const result = await terminal(first.data.id); expect(result.attempts[0]).toMatchObject({ status: "completed", reason: null, payload: { finishReason: "stop", retention: { outputTruncated: true, outputBytes: 7900 } }, accountingState: "measured_estimate", observedEstimateUsd: "2.000008", chargeMicrousd: 2000008, budgetBreach: true }); expect(calls).toBe(1);
+  const retained: string = result.attempts[0].payload.output; expect(retained.length).toBeGreaterThan(0); expect(retained.length).toBeLessThan(7900); expect(retained).toBe("x".repeat(retained.length));
   const cap = await call("/api/prompts/comparisons/capabilities"); expect(cap.data.models.filter((model: { provider: string }) => model.provider === "openai").every((model: { spendingEnabled: boolean; admissionReason: string }) => !model.spendingEnabled && model.admissionReason === "overage_fuse")).toBe(true);
   const refused = await call("/api/prompts/comparisons", "POST", { ...value, operationKey: randomUUID() }); expect(refused.data.attempts[0].status).toBe("budget_refused"); expect(calls).toBe(1);
   const filename = getDrizzleDb().$client.filename, inode = statSync(filename).ino, history = getDrizzleDb().$client.query("SELECT hash,created_at FROM __drizzle_migrations ORDER BY created_at").all(); expect(history).toEqual(currentHistory);
