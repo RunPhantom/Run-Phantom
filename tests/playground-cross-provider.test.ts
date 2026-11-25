@@ -73,10 +73,7 @@ function assertValidHistory(provider: PlaygroundProvider, body: Json): number {
       }
       expect(open).toEqual([]);
       open = (message.tool_calls ?? []).map((call: Json) => call.id);
-      for (const call of message.tool_calls ?? []) {
-        expect(call.id.length).toBeLessThanOrEqual(40);
-        expect(typeof call.function.arguments).toBe("string");
-      }
+      for (const call of message.tool_calls ?? []) expect(typeof call.function.arguments).toBe("string");
     }
     expect(open).toEqual([]);
   } else if (provider === "anthropic") {

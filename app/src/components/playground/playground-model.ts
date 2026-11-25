@@ -351,11 +351,11 @@ export interface ErrorHelp {
  */
 export function errorHelp(kind: PlaygroundErrorKind, key?: PlaygroundKeyOrigin | null): ErrorHelp {
   if (kind === "auth" && key?.source === "store") {
-    return { title: "Key rejected", hint: "Run Phantom used the key saved in Settings. Replace it there, or check with the provider that it has not been revoked.", settings: true };
+    return { title: "Key rejected", hint: "Replace the key saved in Settings, or check with the provider that it has not been revoked.", settings: true };
   }
   if (kind === "auth" && key?.source === "env") {
-    const variable = key.envVar ?? "the provider's API key variable";
-    return { title: "Key rejected", hint: `Run Phantom used the key in ${variable} because none is saved in Settings. Save a working key in Settings, which takes priority, or fix ${variable} and restart Run Phantom.`, settings: true };
+    const variable = key.envVar ?? "the environment variable";
+    return { title: "Key rejected", hint: `No key is saved in Settings, so this one was used. Save a working key in Settings, which takes priority, or fix ${variable} and restart Run Phantom.`, settings: true };
   }
   switch (kind) {
     case "missing_key": return { title: "No API key", hint: "Add a key for this provider in Settings, or set its API key variable before starting Run Phantom, then run again.", settings: true };
