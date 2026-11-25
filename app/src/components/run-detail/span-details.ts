@@ -112,3 +112,22 @@ export function stepAsJson(span: Span): string {
   const { normalized: _normalized, captureVisibility: _visibility, guardEvidence: _guard, ...stored } = span;
   return JSON.stringify(stored, null, 2);
 }
+
+/**
+ * Markdown cut to about `limit` characters at a paragraph or line boundary,
+ * never inside a code fence, so a preview renders the way the full text does.
+ */
+export function markdownPreview(text: string, limit = 400): string {
+  if (text.length <= limit) return text;
+  const head = text.slice(0, limit);
+  const paragraph = head.lastIndexOf("\n\n");
+  const line = head.lastIndexOf("\n");
+  let cut = paragraph >= limit / 3 ? paragraph : line >= limit / 3 ? line : -1;
+  let preview = cut >= 0 ? head.slice(0, cut) : head.replace(/\s+\S*$/, "");
+  const fences = preview.match(/^\s*(```|~~~)/gm)?.length ?? 0;
+  if (fences % 2 === 1) {
+    cut = preview.search(/^\s*(```|~~~)(?![\s\S]*^\s*(```|~~~))/m);
+    preview = cut > 0 ? preview.slice(0, cut) : preview;
+  }
+  return `${preview.trimEnd()}\n\n…`;
+}

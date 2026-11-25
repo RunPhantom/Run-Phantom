@@ -4,6 +4,7 @@ import { HelpCircle } from "lucide-react";
 import { ago } from "../utils/helpers";
 import { Dots } from "./Icons";
 import { ToolCallPill } from "./ToolCallPill";
+import { SubAgentBlock } from "./ChatFlow";
 import { Markdown } from "./Markdown";
 import type { Run } from "../utils/types";
 import { buildConvoEvents } from "./convo-events";
@@ -129,10 +130,10 @@ export function ConvoDetail({ convoId, onOpenTurn }: { convoId: string; onOpenTu
 
           if (evt.type === "tool_group") {
             return (
-              <div key={`tg${i}`} className="flex flex-wrap gap-1.5 px-4 py-1" style={{ opacity: dimmed ? 0.35 : 1, transition: "opacity 250ms cubic-bezier(.25,.1,.25,1)" }}>
-                {evt.spans.map(s => (
-                  <ToolCallPill key={s.id} span={s} />
-                ))}
+              <div key={`tg${i}`} className="flex flex-wrap items-center gap-1.5 px-4 py-1" style={{ opacity: dimmed ? 0.35 : 1, transition: "opacity 250ms cubic-bezier(.25,.1,.25,1)" }}>
+                {evt.items.map(item => item.kind === "tool"
+                  ? <ToolCallPill key={item.span.id} span={item.span} />
+                  : <SubAgentBlock key={item.agent.root_span_id} agent={item.agent} spans={evt.turnSpans} subAgentBySpan={item.owner} />)}
               </div>
             );
           }

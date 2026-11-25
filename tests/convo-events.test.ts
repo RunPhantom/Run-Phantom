@@ -59,3 +59,30 @@ describe("conversation stream for a multi-step agent turn", () => {
     expect(o && "content" in o ? o.content : null).toBe("final");
   });
 });
+
+describe("conversation stream for a turn that delegated to a sub-agent", () => {
+  const spans = [
+    span({ id: "llm1", span_type: "LLM", start_time_ms: 1000,
+      input_payload: JSON.stringify([{ role: "user", content: "Is my order under warranty?" }]), output_payload: "Looking it up." }),
+    span({ id: "lookup", span_type: "TOOL_CALL", start_time_ms: 1100 }),
+    span({ id: "delegate", name: "delegate_research", span_type: "TOOL_CALL", start_time_ms: 1200 }),
+    span({ id: "sub-llm", span_type: "LLM", start_time_ms: 1210, output_payload: "Researcher notes." }),
+    span({ id: "search", name: "search_kb", span_type: "TOOL_CALL", start_time_ms: 1220 }),
+    span({ id: "llm2", span_type: "LLM", start_time_ms: 1400, output_payload: "Yes, it is covered." }),
+  ];
+  const subAgents = [{ root_span_id: "delegate", name: "researcher", span_ids: ["delegate", "sub-llm", "search"],
+    start_time_ms: 1200, end_time_ms: 1300, duration_ms: 100, model: null, status: "OK", llm_count: 1, tool_count: 1,
+    total_input_tokens: 0, total_output_tokens: 0 }];
+  const events = buildConvoEvents([{ run, spans, subAgents }]);
+  const group = events.find(e => e.type === "tool_group");
+
+  test("the sub-agent is one card in reading order and its own tools stay under it", () => {
+    expect(group && group.type === "tool_group" ? group.items.map(item => item.kind === "tool" ? item.span.id : `agent:${item.agent.name}`) : null)
+      .toEqual(["lookup", "agent:researcher"]);
+  });
+
+  test("the answer is the parent's last reply, not the sub-agent's", () => {
+    const out = events.find(e => e.type === "llm_out");
+    expect(out && "content" in out ? out.content : null).toBe("Yes, it is covered.");
+  });
+});

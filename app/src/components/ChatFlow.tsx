@@ -17,7 +17,7 @@ import { canEditReplayMessage } from "../utils/messageParsing";
 import { spanCost } from "../../../src/pricing/span-cost";
 import { fmtCost } from "../utils/costs";
 import { countedLlmSpans } from "./run-detail/trace-model";
-import { looksLikeMarkdown } from "./run-detail/span-details";
+import { looksLikeMarkdown, markdownPreview } from "./run-detail/span-details";
 
 type ToolGroupItem = { type: "tool"; span: Span } | { type: "sub_agent"; agent: SubAgent };
 type LiveToolItem =
@@ -75,7 +75,7 @@ function PreviousMessages({ messages }: { messages: { role: string; content: str
   );
 }
 
-function SubAgentBlock({ agent, spans, subAgentBySpan, onDiveIn }: { agent: SubAgent; spans: Span[]; subAgentBySpan: Map<string, string>; onDiveIn?: (id: string) => void }) {
+export function SubAgentBlock({ agent, spans, subAgentBySpan, onDiveIn }: { agent: SubAgent; spans: Span[]; subAgentBySpan: Map<string, string>; onDiveIn?: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -197,7 +197,7 @@ function SubAgentBlock({ agent, spans, subAgentBySpan, onDiveIn }: { agent: SubA
                 <div>
                   <div className="mb-1 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted">Output</div>
                   {looksLikeMarkdown(agentOutput.output_payload)
-                    ? <div className="text-[12px] leading-relaxed text-rp-ink [&_p]:my-1"><Markdown>{trunc(agentOutput.output_payload, 400) ?? ""}</Markdown></div>
+                    ? <div className="text-[12px] leading-relaxed text-rp-ink [&_p]:my-1"><Markdown>{markdownPreview(agentOutput.output_payload)}</Markdown></div>
                     : <pre className="whitespace-pre-wrap font-sans text-[12px] leading-relaxed text-rp-ink">{trunc(agentOutput.output_payload, 150)}</pre>}
                 </div>
               )}
