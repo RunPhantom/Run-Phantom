@@ -248,6 +248,28 @@ describe("sparkline gaps and partial buckets", () => {
     const end = /<circle cx="([\d.]+)"[^>]*data-sparkline-end/.exec(html)?.[1];
     expect(Number(end)).toBeLessThan(90);
   });
+
+  test("when only the partial bucket has activity, it carries the emphasis instead of the empty history", () => {
+    const html = render(Sparkline, { values: [0, 0, 0, 21], partial: [false, false, false, true], label: "Runs", width: 100 });
+    expect(count(html, 'data-sparkline-end="true"')).toBe(1);
+    expect(html).toContain('data-sparkline-end-partial="true"');
+    expect(count(html, "data-partial-point")).toBe(0);
+    const end = /<circle cx="([\d.]+)" cy="([\d.]+)"[^>]*data-sparkline-end/.exec(html);
+    expect(Number(end?.[1])).toBeGreaterThan(90);
+    expect(Number(end?.[2])).toBeLessThan(10);
+  });
+
+  test("a single known value draws no trend at all", () => {
+    const html = render(Sparkline, { values: [null, null, null, 0.2], partial: [false, false, false, true], label: "Error rate", width: 100 });
+    expect(html).not.toContain("<circle");
+    expect(html).not.toContain("<path");
+  });
+
+  test("a quiet history keeps the emphasis on the last full bucket even at zero", () => {
+    const html = render(Sparkline, { values: [0, 3, 0, 5], partial: [false, false, false, true], label: "Runs", width: 100 });
+    expect(html).not.toContain("data-sparkline-end-partial");
+    expect(count(html, "data-partial-point")).toBe(1);
+  });
 });
 
 describe("bar list links", () => {

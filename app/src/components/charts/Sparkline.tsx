@@ -8,7 +8,10 @@ import { useElementSize } from "./use-element-size";
  * Null values break the line rather than reading as zero. Points flagged in
  * `partial` cover only part of their span, so they are joined with a dashed line
  * and a hollow dot and never carry the emphasis: a half-finished bucket would
- * otherwise read as a dip.
+ * otherwise read as a dip. The one exception: when every complete point is zero
+ * or unknown and the trailing partial point holds the only activity, that point
+ * carries the emphasis, because an accent dot on the empty history would read as
+ * a drop to zero. With fewer than two known points there is no trend to draw.
  */
 export function Sparkline({ values, partial, label, tone = "accent", width: fixedWidth, height = 28, className }: {
   values: readonly (number | null)[];
@@ -37,13 +40,19 @@ export function Sparkline({ values, partial, label, tone = "accent", width: fixe
   });
   let lastIndex = -1;
   for (let index = complete.length - 1; index >= 0; index--) if (complete[index]) { lastIndex = index; break; }
-  const last = lastIndex >= 0 ? complete[lastIndex] : null;
-  const previous = lastIndex > 0 ? complete[lastIndex - 1] : null;
+  let lastKnown = -1;
+  for (let index = points.length - 1; index >= 0; index--) if (points[index]) { lastKnown = index; break; }
+  const drawable = known.length >= 2;
+  const completeActivity = values.some((value, index) => !isPartial(index) && value !== null && Number.isFinite(value) && value !== 0);
+  const partialLeads = lastKnown > lastIndex && isPartial(lastKnown) && values[lastKnown] !== 0 && !completeActivity;
+  const emphasis = !drawable ? null : partialLeads ? points[lastKnown] : lastIndex >= 0 ? complete[lastIndex] : null;
+  const last = !drawable || partialLeads ? null : emphasis;
+  const previous = last && lastIndex > 0 ? complete[lastIndex - 1] : null;
   const color = tone === "danger" ? "var(--rp-chart-fail)" : "var(--rp-chart-1)";
 
   return (
     <div ref={ref} className={className} style={{ height, width: fixedWidth }} role="img" aria-label={label} data-sparkline>
-      {width > 0 && (
+      {width > 0 && drawable && (
         <svg width={width} height={height} aria-hidden="true" focusable="false" className="block overflow-visible">
           <defs>
             <clipPath id={clipId}><rect x={0} y={0} width={width} height={height} /></clipPath>
@@ -53,10 +62,10 @@ export function Sparkline({ values, partial, label, tone = "accent", width: fixe
             {partialSegments.map((d, index) => <path key={index} d={d} fill="none" stroke="var(--rp-chart-history)" strokeWidth={1.5} strokeDasharray="2 2" data-partial-segment />)}
             {last && previous && <path d={linePath([previous, last])} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" />}
           </g>
-          {points.map((point, index) => point && isPartial(index)
+          {points.map((point, index) => point && isPartial(index) && !(partialLeads && index === lastKnown)
             ? <circle key={index} cx={point.x} cy={point.y} r={2} fill="var(--rp-surface)" stroke="var(--rp-chart-history)" strokeWidth={1.5} data-partial-point />
             : null)}
-          {last && <circle cx={last.x} cy={last.y} r={3} fill={color} stroke="var(--rp-surface)" strokeWidth={2} paintOrder="stroke" data-sparkline-end />}
+          {emphasis && <circle cx={emphasis.x} cy={emphasis.y} r={3} fill={color} stroke="var(--rp-surface)" strokeWidth={2} paintOrder="stroke" data-sparkline-end data-sparkline-end-partial={partialLeads || undefined} />}
         </svg>
       )}
     </div>
