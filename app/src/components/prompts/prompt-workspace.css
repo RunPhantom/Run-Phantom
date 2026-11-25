@@ -69,3 +69,10 @@
 @media (prefers-reduced-motion: reduce) {
   .prompt-workspace *, .prompt-dialog-shade { transition: none !important; animation: none !important; }
 }
+.prompt-ghost { margin: 12px -12px 0; opacity: .45; filter: saturate(.4); pointer-events: none; user-select: none; }
+.prompt-ghost-label { margin: 0 12px 6px; color: var(--rp-ink-muted); font-family: var(--font-mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+.prompt-ghost-row { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-top: 1px solid var(--rp-line-muted); }
+.prompt-ghost-row span { font-size: 13px; font-weight: 500; }
+.prompt-ghost-row small { color: var(--rp-ink-muted); font-family: var(--font-mono); font-size: 11px; }
+.prompt-editor > .prompt-actions { position: sticky; bottom: 0; z-index: 1; margin-inline: -24px; padding: 12px 24px; background: var(--rp-surface); border-top: 1px solid var(--rp-line-muted); }
+.prompt-save-reason { flex-basis: 100%; margin: 0; color: var(--rp-ink-muted); font-size: 12px; line-height: 18px; }
