@@ -23,7 +23,7 @@ function row(overrides: Partial<RunListRow> = {}): RunListRow {
     capture_completion: null, agent: "agent", duration_ms: 1200, input_tokens: 4936, output_tokens: 428, est_cost_usd: 0.021228,
     cost_source: "estimated", tool_count: 1, primary_model: "claude-sonnet-4-5", provider: "anthropic", models: ["claude-sonnet-4-5"],
     input_preview: "hi", llm_calls: 2, known_input_tokens: 4936, known_output_tokens: 428, token_unknown_calls: 0, known_cost_usd: 0.021228,
-    cost_unknown_calls: 0, ...overrides,
+    known_cost_source: "estimated", cost_unknown_calls: 0, ...overrides,
   };
 }
 
@@ -54,6 +54,22 @@ describe("runs table cells", () => {
     expect(unknown).toMatchObject({ text: "—", unknown: true });
     expect(unknown.title).toStartWith("Cost unknown:");
     expect(costCell(row({ llm_calls: 0, est_cost_usd: null }))).toMatchObject({ text: "—", title: "No model calls in this run" });
+  });
+
+  test("cost: a partial total says whether its known part was reported or estimated", () => {
+    const reported = costCell(row({ est_cost_usd: null, cost_source: "unknown", known_cost_usd: 0.5, known_cost_source: "reported", cost_unknown_calls: 1 }));
+    expect(reported).toEqual({ text: "$0.500+", title: "Reported by the provider $0.500 · 1 call without a reported cost or list price" });
+    const mixed = costCell(row({ est_cost_usd: null, cost_source: "unknown", known_cost_usd: 0.5, known_cost_source: "mixed", cost_unknown_calls: 1 }));
+    expect(mixed).toMatchObject({ text: "$0.500+", marker: "est." });
+    expect(mixed.title).toContain("part reported by the provider and part estimated");
+    expect(costCell(row({ known_cost_source: "mixed" })).title).toStartWith("Reported by the provider for some calls");
+  });
+
+  test("a search row without run facts shows every fact as unknown, never zero", () => {
+    const missing = row({ facts_unavailable: true, llm_calls: 0, est_cost_usd: null, primary_model: null, duration_ms: null, agent: null });
+    for (const cell of [costCell(missing), tokensCell(missing), durationCell(missing, "Still running"), modelCell(missing), agentCell(missing)]) {
+      expect(cell).toMatchObject({ text: "—", unknown: true, title: "Unknown: this run's details could not be loaded" });
+    }
   });
 
   test("duration and model", () => {

@@ -42,8 +42,8 @@ export const COLUMN_META: Record<RunsTableColumn, ColumnMeta> = {
 export const CHECKBOX_TRACK_PX = 36;
 
 /** Smallest width the visible columns fit in; below it the table scrolls sideways instead of squeezing cells. */
-export function minTableWidth(columns: readonly RunsTableColumn[]): number {
-  return columns.reduce((sum, column) => sum + Number(/(\d+)px/.exec(COLUMN_META[column].track)?.[1] ?? 0), CHECKBOX_TRACK_PX);
+export function minTableWidth(columns: readonly RunsTableColumn[], tracks?: Partial<Record<RunsTableColumn, string>>): number {
+  return columns.reduce((sum, column) => sum + Number(/(\d+)px/.exec(tracks?.[column] ?? COLUMN_META[column].track)?.[1] ?? 0), CHECKBOX_TRACK_PX);
 }
 
 export const SORT_LABELS: Record<RunsViewSort, string> = {
@@ -121,7 +121,10 @@ export interface CellText {
   marker?: string;
 }
 
+const FACTS_UNAVAILABLE: CellText = { text: "—", title: "Unknown: this run's details could not be loaded", unknown: true };
+
 export function tokensCell(row: RunListRow): CellText {
+  if (row.facts_unavailable) return FACTS_UNAVAILABLE;
   if (row.llm_calls === 0) return { text: "—", title: "No model calls in this run", unknown: true };
   if (row.input_tokens !== null && row.output_tokens !== null) {
     return { text: `${compactNumber(row.input_tokens)} / ${compactNumber(row.output_tokens)}`,
@@ -136,26 +139,32 @@ export function tokensCell(row: RunListRow): CellText {
 }
 
 export function costCell(row: RunListRow): CellText {
+  if (row.facts_unavailable) return FACTS_UNAVAILABLE;
   if (row.llm_calls === 0) return { text: "—", title: "No model calls in this run", unknown: true };
   if (row.est_cost_usd !== null) {
     if (row.cost_source === "reported") return { text: fmtCost(row.est_cost_usd), title: "Cost reported by the provider" };
+    if (row.known_cost_source === "mixed") return { text: fmtCost(row.est_cost_usd), marker: "est.", title: `Reported by the provider for some calls; the rest estimated from list prices (price table ${PRICE_TABLE_AS_OF})` };
     return { text: fmtCost(row.est_cost_usd), marker: "est.",
       title: `Estimated from list prices (price table ${PRICE_TABLE_AS_OF}); excludes discounts, cache storage and tool fees` };
   }
   if (row.known_cost_usd !== null) {
-    return { text: `${fmtCost(row.known_cost_usd)}+`, marker: "est.",
-      title: `Known estimates ${fmtCost(row.known_cost_usd)} · ${plural(row.cost_unknown_calls, "call")} without a reported cost or list price` };
+    const missing = `${plural(row.cost_unknown_calls, "call")} without a reported cost or list price`;
+    if (row.known_cost_source === "reported") return { text: `${fmtCost(row.known_cost_usd)}+`, title: `Reported by the provider ${fmtCost(row.known_cost_usd)} · ${missing}` };
+    if (row.known_cost_source === "mixed") return { text: `${fmtCost(row.known_cost_usd)}+`, marker: "est.", title: `Known ${fmtCost(row.known_cost_usd)}, part reported by the provider and part estimated from list prices · ${missing}` };
+    return { text: `${fmtCost(row.known_cost_usd)}+`, marker: "est.", title: `Known estimates ${fmtCost(row.known_cost_usd)} · ${missing}` };
   }
   return { text: "—", unknown: true,
     title: `Cost unknown: ${row.llm_calls === 1 ? "the model call has" : `the ${row.llm_calls} model calls have`} no reported cost and no matching list price` };
 }
 
 export function durationCell(row: RunListRow, runningLabel: string): CellText {
+  if (row.facts_unavailable) return FACTS_UNAVAILABLE;
   if (row.duration_ms === null) return { text: "—", title: runningLabel, unknown: true };
   return { text: fmt(row.duration_ms), title: `${grouped.format(row.duration_ms)} ms from the first step's start to the last step's end` };
 }
 
-export function agentCell(row: Pick<RunListRow, "agent">): CellText {
+export function agentCell(row: Pick<RunListRow, "agent" | "facts_unavailable">): CellText {
+  if (row.facts_unavailable) return FACTS_UNAVAILABLE;
   if (!row.agent) return { text: "—", title: "Agent unknown: the run did not name an agent", unknown: true };
   return { text: row.agent, title: row.agent };
 }
@@ -173,6 +182,7 @@ export function shortModelName(model: string): string {
 
 export function modelCell(row: RunListRow): CellText {
   const model = row.primary_model ?? row.model ?? null;
+  if (!model && row.facts_unavailable) return FACTS_UNAVAILABLE;
   if (!model) return { text: "—", title: row.llm_calls === 0 ? "No model calls in this run" : "The model calls did not name a model", unknown: true };
   const others = new Set(row.models.filter(item => item !== model).map(shortModelName));
   others.delete(shortModelName(model));

@@ -284,6 +284,45 @@ test("an imported trace older than the loaded page stays open, with or without a
   await expect(page).toHaveURL(new RegExp(`/search/${runId(0)}\\?q=amber-only$`));
 });
 
+test("runs whose ids hold commas or run to 1024 characters are found and listed with their facts", async ({ page, request, runPhantom }) => {
+  await seedSearchRuns(request, runPhantom.url, 3);
+  const ids = ["imported,with,commas", `imported-long-${"q".repeat(1010)}`];
+  expect(ids[1]).toHaveLength(1024);
+  for (const id of ids) {
+    const at = Date.now() - 5_000;
+    const imported = await request.post(`${runPhantom.url}/api/import-run`, { data: {
+      run: { id, name: "odd-id", event_name: "Odd id import", display_name: "Odd id import", started_at: at, last_updated_at: at + 100 },
+      spans: [{ id: `${id.slice(0, 40)}-span`, run_id: id, name: "ledger_lookup", span_type: "TOOL_CALL", status: "ERROR",
+        input_payload: '{"note":"saffron-marker"}', output_payload: '{"error":"saffron-marker timeout"}', start_time_ms: at, end_time_ms: at + 100, duration_ms: 100 }],
+      liveEvents: [] } });
+    expect(imported.ok(), `Import ${id.slice(0, 24)} (HTTP ${imported.status()})`).toBe(true);
+  }
+  await page.goto(`${runPhantom.url}/search`);
+  await expect(page.getByRole("status").filter({ hasText: "5 runs loaded" })).toBeVisible();
+  await expect(page.getByText("Search unavailable")).toHaveCount(0);
+  for (const id of ids) await expect(page.locator(`[data-run-id="${id}"]`)).toBeVisible();
+
+  await page.goto(`${runPhantom.url}/search?q=saffron-marker`);
+  await expect(page.getByRole("status").filter({ hasText: "2 runs loaded" })).toBeVisible();
+  for (const id of ids) {
+    const result = page.locator(`[data-run-id="${id}"]`);
+    await expect(result).toContainText("Odd id import");
+    await expect(result.locator("[data-run-list-status]")).toHaveAttribute("data-run-list-status", "failed");
+    await expect(result.locator("[data-run-match]")).toBeVisible();
+  }
+  await expect(page.locator("[data-search-facts-unavailable]")).toHaveCount(0);
+});
+
+test("a failed run-facts lookup still lists every search result, with facts shown as unknown", async ({ page, request, runPhantom }) => {
+  await seedSearchRuns(request, runPhantom.url, 3);
+  await page.route(url => url.pathname === "/api/runs" && url.searchParams.has("ids"), route => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Run list unavailable" }) }));
+  await page.goto(`${runPhantom.url}/search?q=cobalt-only`);
+  await expect(page.locator(row(1))).toBeVisible();
+  await expect(page.getByText("Search unavailable")).toHaveCount(0);
+  await expect(page.locator("[data-search-facts-unavailable]")).toContainText("Run details could not be loaded");
+  await expect(page.locator(row(1)).locator('[role="gridcell"]').filter({ hasText: "—" }).first()).toBeVisible();
+});
+
 test("search import reports malformed and oversized files before contacting the server", async ({ page, runPhantom }) => {
   let imports = 0;
   page.on("request", (request) => { if (new URL(request.url()).pathname === "/api/import-run") imports++; });

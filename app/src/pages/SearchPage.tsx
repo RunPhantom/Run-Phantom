@@ -8,7 +8,7 @@ import { RunListItem, useShortRunIds } from "../components/RunList";
 import { replayDemoTraces } from "../api/demo-traces";
 import { getOverview } from "../api/overview";
 import {
-  listRunsPage, searchRuns, searchSpanHits, searchSuggestions, getSearchScope, type RunListRow, type RunSearchMatch, type RunSearchResult, type SearchHitPage,
+  lookupRunFacts, runWithoutFacts, searchRuns, searchSpanHits, searchSuggestions, getSearchScope, type RunListRow, type RunSearchMatch, type RunSearchResult, type SearchHitPage,
 } from "../api/runs";
 import { SearchFilters } from "../components/SearchFilters";
 import { SearchSpanHits } from "../components/SearchSpanHits";
@@ -29,31 +29,48 @@ import { RunsTable } from "../runs/RunsTable";
 import type { RunsTableColumn } from "../../../src/saved-views-protocol";
 
 const PAGE_SIZE = 50;
-const SNIPPET_HEIGHT = 22;
+// A 28px compact line plus a 16px snippet keeps at least 16 matches in view at 1440x900 (design-direction §3).
+const SNIPPET_HEIGHT = 16;
 const BROWSE_COLUMNS: readonly RunsTableColumn[] = ["status", "run", "model", "duration", "tokens", "cost", "errors", "started"];
 const MATCH_COLUMNS: readonly RunsTableColumn[] = ["status", "run", "model", "tokens", "cost", "errors", "started"];
 const NO_IDS: ReadonlySet<string> = new Set();
+const SEARCH_TRACKS: Partial<Record<RunsTableColumn, string>> = {
+  status: "minmax(168px, 0.5fr)", run: "minmax(160px, 2fr)", model: "minmax(128px, 1fr)", cost: "minmax(112px, 120px)",
+};
 const noop = () => undefined;
 const matchSnippet = (row: SearchResultRow) => row.match ? <RunMatchSnippet match={row.match} matchedSpans={row.matched_span_count} inline /> : null;
 
 /** A search result with the run list's facts (duration, tokens, cost, model) and why it matched. */
 export type SearchResultRow = RunListRow & { match: RunSearchMatch | null; matched_span_count: number | null };
-type SearchResultPage = Omit<RunSearchResult, "runs"> & { runs: SearchResultRow[]; key: string };
+type SearchResultPage = Omit<RunSearchResult, "runs"> & { runs: SearchResultRow[]; key: string; factsUnavailable: boolean };
+type SpanHitResultPage = SearchHitPage & { key: string; runs: ReadonlyMap<string, RunListRow>; factsUnavailable: boolean };
+
+/** Run-list facts for these ids, or null when the lookup failed; search results never depend on it. */
+async function factsOrNull(ids: readonly string[], signal: AbortSignal): Promise<Map<string, RunListRow> | null> {
+  if (!ids.length) return new Map();
+  try {
+    return await lookupRunFacts(ids, signal);
+  } catch (cause) {
+    if (signal.aborted) throw cause;
+    return null;
+  }
+}
 
 /**
- * Search ranks and explains; /api/runs carries the per-run facts. A run deleted between the two requests is
- * dropped rather than shown with invented values.
+ * Search ranks and explains; /api/runs carries the per-run facts. A result whose facts are missing (the lookup
+ * failed, or the run was deleted in between) is still listed, with its facts shown as unknown.
  */
 async function searchWithFacts(options: Parameters<typeof searchRuns>[0], signal: AbortSignal): Promise<Omit<SearchResultPage, "key">> {
   const page = await searchRuns(options, signal);
-  if (!page.runs.length) return { ...page, runs: [] };
-  const facts = await listRunsPage({ ids: page.runs.map(run => run.id).join(","), limit: "100" }, signal);
-  const byId = new Map(facts.runs.map(row => [row.id, row]));
-  const runs = page.runs.flatMap(run => {
-    const row = byId.get(run.id);
-    return row ? [{ ...row, match: run.match ?? null, matched_span_count: run.matched_span_count ?? null }] : [];
-  });
-  return { ...page, runs };
+  const facts = await factsOrNull(page.runs.map(run => run.id), signal);
+  const runs = page.runs.map(run => ({ ...(facts?.get(run.id) ?? runWithoutFacts(run)), match: run.match ?? null, matched_span_count: run.matched_span_count ?? null }));
+  return { ...page, runs, factsUnavailable: facts === null };
+}
+
+async function spanHitsWithRuns(options: Parameters<typeof searchSpanHits>[0], signal: AbortSignal): Promise<Omit<SpanHitResultPage, "key">> {
+  const page = await searchSpanHits(options, signal);
+  const facts = await factsOrNull(page.items.map(hit => hit.runId), signal);
+  return { ...page, runs: facts ?? new Map(), factsUnavailable: facts === null };
 }
 
 export function SearchPage() {
@@ -89,7 +106,7 @@ export function SearchPage() {
   useScrollRestoration(railListRef, "searchpage-list");
   const isMobile = useIsMobile();
   const [result, setResult] = useState<SearchResultPage | null>(null);
-  const [hitResult, setHitResult] = useState<(SearchHitPage & { key: string }) | null>(null);
+  const [hitResult, setHitResult] = useState<SpanHitResultPage | null>(null);
   const [scope, setScope] = useState({ resource: "", key: "" });
   const scopeKey = scope.resource === resource ? scope.key : "";
   const [loading, setLoading] = useState(true);
@@ -117,6 +134,8 @@ export function SearchPage() {
     return () => controller.abort();
   }, [resource]);
   const shortRunIds = useShortRunIds(currentRunResult?.runs);
+  const hitRuns = useMemo(() => currentHitResult ? [...currentHitResult.runs.values()] : undefined, [currentHitResult]);
+  const hitShortIds = useShortRunIds(hitRuns);
   // A run the user or the page opened stays open for the search it was opened
   // under, even when a refresh pushes it off the loaded page: an imported trace
   // keeps its original started_at, so it can sort below 50 newer runs.
@@ -146,7 +165,7 @@ export function SearchPage() {
     const timer = setTimeout(async () => {
       try {
         if (resource === "span-hits") {
-          const next = await searchSpanHits(options, controller.signal);
+          const next = await spanHitsWithRuns(options, controller.signal);
           if (generation !== generationRef.current || controller.signal.aborted) return;
           setHitResult({ ...next, key: filterKey });
         } else {
@@ -181,12 +200,12 @@ export function SearchPage() {
     setError(null);
     try {
       if (resource === "span-hits") {
-        const next = await searchSpanHits({ ...options, cursor: currentResult.nextCursor }, controller.signal);
+        const next = await spanHitsWithRuns({ ...options, cursor: currentResult.nextCursor }, controller.signal);
         if (generation !== generationRef.current || controller.signal.aborted) return;
         setHitResult(previous => {
           if (!previous || previous.key !== filterKey) return previous;
           const seen = new Set(previous.items.map(hit => JSON.stringify([hit.runId, hit.spanId])));
-          return { ...next, key: filterKey, items: [...previous.items, ...next.items.filter(hit => !seen.has(JSON.stringify([hit.runId, hit.spanId])))] };
+          return { ...next, key: filterKey, runs: new Map([...previous.runs, ...next.runs]), factsUnavailable: previous.factsUnavailable || next.factsUnavailable, items: [...previous.items, ...next.items.filter(hit => !seen.has(JSON.stringify([hit.runId, hit.spanId])))] };
         });
       } else {
         const next = await searchWithFacts({ ...options, cursor: currentResult.nextCursor }, controller.signal);
@@ -194,7 +213,7 @@ export function SearchPage() {
         setResult(previous => {
           if (!previous || previous.key !== filterKey) return previous;
           const seen = new Set(previous.runs.map(run => run.id));
-          return { ...next, key: filterKey, runs: [...previous.runs, ...next.runs.filter(run => !seen.has(run.id))] };
+          return { ...next, key: filterKey, factsUnavailable: previous.factsUnavailable || next.factsUnavailable, runs: [...previous.runs, ...next.runs.filter(run => !seen.has(run.id))] };
         });
       }
     } catch (cause) {
@@ -274,13 +293,15 @@ export function SearchPage() {
   const moveActive = useCallback((delta: number) => {
     if (!runs.length) return;
     setActiveIndex(index => Math.max(0, Math.min(runs.length - 1, index < 0 ? 0 : index + delta)));
-    if (document.activeElement === document.body || !document.activeElement) gridRef.current?.focus({ preventScroll: true });
+    // j/k only fire outside text fields, so focus can move to the grid; leaving it on a button or the page let Enter
+    // press that button (Clear search) or do nothing instead of opening the highlighted run.
+    gridRef.current?.focus({ preventScroll: true });
   }, [runs.length]);
   useRegisterShortcuts(tableMode && !isMobile && resource === "runs" ? [
     { id: "search:next", keys: "j", scope: "Search results", description: "Next result", handler: () => moveActive(1) },
     { id: "search:prev", keys: "k", scope: "Search results", description: "Previous result", handler: () => moveActive(-1) },
     { id: "search:open", keys: "enter", scope: "Search results", description: "Open the highlighted result",
-      when: () => !!activeRow && (document.activeElement === gridRef.current || document.activeElement === document.body),
+      when: () => !!activeRow && (document.activeElement === gridRef.current || document.activeElement === document.body || !document.activeElement?.closest("input,textarea,select,button,a,[contenteditable=true]")),
       handler: () => { if (activeRow) openRow(activeRow.id); } },
   ] : [], [activeRow, isMobile, moveActive, openRow, resource, tableMode]);
 
@@ -435,7 +456,7 @@ export function SearchPage() {
       );
     }
     if (resource === "span-hits") {
-      return <div className="p-3"><SearchSpanHits items={hits} open={hit => openRun(hit.runId, `${tracePath("/search", hit.runId)}/span/${encodeURIComponent(hit.spanId)}${querySuffix}`)} /></div>;
+      return <div className="p-3"><SearchSpanHits items={hits} runs={currentHitResult?.runs} shortIds={hitShortIds} open={hit => openRun(hit.runId, `${tracePath("/search", hit.runId)}/span/${encodeURIComponent(hit.spanId)}${querySuffix}`)} /></div>;
     }
     if (variant === "table") {
       return (
@@ -443,7 +464,8 @@ export function SearchPage() {
           rows={runs}
           total={null}
           columns={query.trim() ? MATCH_COLUMNS : BROWSE_COLUMNS}
-          density="comfortable"
+          density={query.trim() ? "compact" : "comfortable"}
+          tracks={SEARCH_TRACKS}
           filters={{}}
           shortIds={shortRunIds}
           selected={NO_IDS}
@@ -494,6 +516,11 @@ export function SearchPage() {
   const statusBar = (
     <div className="flex min-h-10 shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-rp-line bg-rp-surface px-4 py-2">
       <p role="status" className="text-13 text-rp-ink">{statusLine}</p>
+      {currentResult?.factsUnavailable && !error && !loading && (
+        <p className="text-12 text-rp-ink-muted" data-search-facts-unavailable>
+          {resource === "span-hits" ? "Run names could not be loaded." : "Run details could not be loaded, so some columns show “—”."}
+        </p>
+      )}
       {order && <p className="text-12 text-rp-ink-subtle">{order}</p>}
     </div>
   );

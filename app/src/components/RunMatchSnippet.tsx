@@ -26,7 +26,7 @@ export function RunMatchSnippet({ match, matchedSpans, inline = false }: { match
   const text = match.snippet.state === "available" && match.snippet.text ? highlightedText(match.snippet) : null;
   if (inline) {
     return (
-      <span data-run-match={match.field} className="flex h-5 min-w-0 items-center gap-2 border-l-2 pl-2 text-12 leading-5" style={{ borderColor: failure ? "var(--rp-danger)" : "var(--rp-line-strong)" }}>
+      <span data-run-match={match.field} className="flex h-4 min-w-0 items-center gap-2 border-l-2 pl-2 text-12 leading-4" style={{ borderColor: failure ? "var(--rp-danger)" : "var(--rp-line-strong)" }}>
         <span className={failure ? "shrink-0 font-medium text-rp-danger" : "shrink-0 font-medium text-rp-ink-soft"}>{matchLabel(match)}{more}</span>
         {text && <span className="min-w-0 truncate text-rp-ink-muted">{text}</span>}
       </span>

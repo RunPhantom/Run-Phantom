@@ -56,13 +56,15 @@ export interface RunsTableProps {
   /** A second line under each row spanning every column, such as why a search result matched. */
   renderDetail?: (row: RunListRow) => ReactNode;
   detailHeight?: number;
+  /** Grid tracks that differ from COLUMN_META for this table. */
+  tracks?: Partial<Record<RunsTableColumn, string>>;
 }
 
 function Cell({ cell, className, mono = true }: { cell: CellText; className?: string; mono?: boolean }) {
   return (
-    <span title={cell.title} className={cn("truncate", mono && "font-mono tabular-nums", cell.unknown ? "text-rp-ink-subtle" : "text-rp-ink", className)}>
-      {cell.text}
-      {cell.marker && <span className="ml-1 font-sans text-[11px] text-rp-ink-subtle">{cell.marker}</span>}
+    <span title={cell.title} className={cn("flex min-w-0 items-baseline", mono && "font-mono tabular-nums", cell.unknown ? "text-rp-ink-subtle" : "text-rp-ink", className)}>
+      <span className="truncate">{cell.text}</span>
+      {cell.marker && <span className="ml-1 shrink-0 font-sans text-[11px] text-rp-ink-subtle">{cell.marker}</span>}
       {cell.unknown && <span className="sr-only">: {cell.title}</span>}
     </span>
   );
@@ -70,11 +72,11 @@ function Cell({ cell, className, mono = true }: { cell: CellText; className?: st
 
 export function RunsTable(props: RunsTableProps) {
   const { rows, total, columns, density, filters, shortIds, selected, activeIndex, flashIds, hasMore, loadingMore, loadMoreError, scrollRef, gridRef } = props;
-  const { label = "Runs", selectable = true, sortable = true, rowHref = runPath, renderDetail, detailHeight = 0 } = props;
+  const { label = "Runs", selectable = true, sortable = true, rowHref = runPath, renderDetail, detailHeight = 0, tracks } = props;
   const lineHeight = ROW_HEIGHT[density];
   const rowHeight = lineHeight + (renderDetail ? detailHeight : 0);
   const [viewport, setViewport] = useState({ top: 0, height: 800 });
-  const template = useMemo(() => `${selectable ? `${CHECKBOX_TRACK_PX}px ` : ""}${columns.map(column => COLUMN_META[column].track).join(" ")}`, [columns, selectable]);
+  const template = useMemo(() => `${selectable ? `${CHECKBOX_TRACK_PX}px ` : ""}${columns.map(column => tracks?.[column] ?? COLUMN_META[column].track).join(" ")}`, [columns, selectable, tracks]);
   const maxDuration = useMemo(() => rows.reduce((max, row) => Math.max(max, row.duration_ms ?? 0), 0), [rows]);
   const sort = filters.sort ?? "last_updated_at";
   const order = filters.order ?? "desc";
@@ -122,12 +124,12 @@ export function RunsTable(props: RunsTableProps) {
     else if (event.key === "End") move(rows.length - 1);
     else if (event.key === "PageDown") move(activeIndex + Math.max(1, Math.floor(viewport.height / rowHeight) - 1));
     else if (event.key === "PageUp") move(activeIndex - Math.max(1, Math.floor(viewport.height / rowHeight) - 1));
-    else if (event.key === " " && activeIndex >= 0 && rows[activeIndex]) { event.preventDefault(); props.onToggle(rows[activeIndex]!.id); }
+    else if (event.key === " " && selectable && activeIndex >= 0 && rows[activeIndex]) { event.preventDefault(); props.onToggle(rows[activeIndex]!.id); }
   };
 
   const rowClick = (event: ReactMouseEvent, row: RunListRow, index: number) => {
     if ((event.target as HTMLElement).closest("input,a,button")) return;
-    if (event.shiftKey || event.metaKey || event.ctrlKey) {
+    if (selectable && (event.shiftKey || event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       props.onActiveIndexChange(index);
       props.onToggle(row.id, { range: event.shiftKey });
@@ -156,7 +158,7 @@ export function RunsTable(props: RunsTableProps) {
         onKeyDown={onGridKeyDown}
         onFocus={event => { if (event.target === event.currentTarget && activeIndex < 0 && rows.length > 0) props.onActiveIndexChange(0); }}
         className="rp-runs-grid text-[13px] outline-none focus-visible:outline-none"
-        style={{ "--rp-runs-cols": template, minWidth: minTableWidth(columns) - (selectable ? 0 : CHECKBOX_TRACK_PX) } as CSSProperties}
+        style={{ "--rp-runs-cols": template, minWidth: minTableWidth(columns, tracks) - (selectable ? 0 : CHECKBOX_TRACK_PX) } as CSSProperties}
       >
         <div role="row" aria-rowindex={1} className="sticky top-0 z-10 grid h-8 items-center border-b border-rp-line bg-rp-canvas" style={{ gridTemplateColumns: "var(--rp-runs-cols)" }}>
           {selectable && <div role="columnheader" className="flex items-center justify-center">
