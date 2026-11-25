@@ -57,7 +57,7 @@ Goal: prove the local trace path works with the smallest top-level instrumentati
 
 Make the smallest change:
 
-- Point the app at the local debugger, usually with `RUNPHANTOM_LOCAL_DEBUGGER=http://127.0.0.1:5947/v1/`.
+- Point the app's OTLP/HTTP trace exporter at the local debugger with `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:5947/v1/traces`, using the daemon's actual port. The **Connect an agent** page in Run Phantom shows ready-to-run snippets for that port.
 - Add minimal instrumentation to one real entry point: wrapper call metadata, or begin before the invocation and finish after final output or error.
 - Run one representative invocation.
 - Verify a run appears in Run Phantom with enough input/output to prove the right code path is connected.

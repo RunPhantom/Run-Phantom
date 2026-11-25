@@ -643,7 +643,7 @@ function demoChatHtml(): string {
     <form id="form">
       <div class="composer-copy">
         <label for="input">Prompt</label>
-        <span class="hint">This standalone provider demo does not create a trace. Load demo traces in the main workspace to explore the debugger.</span>
+        <span class="hint">This standalone provider demo does not create a trace. Load sample runs in the main workspace to explore the debugger.</span>
       </div>
       <textarea id="input" placeholder="Ask the demo bot..." autofocus></textarea>
       <div class="actions">

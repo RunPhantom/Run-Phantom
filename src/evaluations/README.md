@@ -4,7 +4,7 @@ The Evaluations workspace turns captured agent runs into repeatable quality chec
 
 ## From a trace to a regression check
 
-1. Open an agent run and choose **Evaluate run**, or open **Evaluations** in the sidebar.
+1. Open an agent run and choose **More actions** > **Evaluate run**, or open **Evaluations** in the sidebar.
 2. Inspect its captured input and selected response. If several responses could represent the result, select the relevant span explicitly.
 3. Create a dataset and add a named case. Declare the expected output, JSON value, tool behavior or resource limit; review the expectation before saving.
 4. Choose a captured candidate run for every case and start an experiment. A later replay can supply another candidate run after its trace finishes.
@@ -36,7 +36,7 @@ Human pass/fail reviews and notes are separate, append-only decisions. They do n
 
 ## Repeated-trial evidence
 
-Choose **Analyze repeated trials** to select 2–20 completed or cancelled experiments from one frozen dataset revision. Every selected case and trial stays in the denominator. The same captured run cannot appear twice for a case, including when it was graded again under another experiment name. Distinct captures do not establish independent sampling or identical agent configuration.
+In the **Repeated trials** section of Evaluations, select 2–20 completed or cancelled experiments from one frozen dataset revision and choose **Analyze selected trials**. Every selected case and trial stays in the denominator. The same captured run cannot appear twice for a case, including when it was graded again under another experiment name. Distinct captures do not establish independent sampling or identical agent configuration.
 
 The analysis shows passing, failing and inconclusive outcomes, the observed pass fraction, and resolved coverage. Unresolved-outcome bounds range from the fraction already known to pass to the fraction that could pass if all inconclusive outcomes passed. This range reflects missing evidence; it is not a confidence interval. A cancelled or errored experiment keeps its available case results but prevents the all-trial gate from passing.
 
@@ -44,7 +44,7 @@ Download the versioned JSON analysis to retain its exact selection, dataset hash
 
 ## Numeric distributions and trends
 
-Choose **Distributions and trends** to analyze one precise frozen check or one captured metric across 1–20 compatible finished experiments. Actual zero stays known; unavailable observations remain excluded. Numeric preferences describe the selected direction and never change automatic verdicts. The current analysis can be downloaded without raw trace payloads or private compatibility hashes. See the [distribution guide](./distributions.md) for selection, units, keyboard scrolling, API fields and limits.
+Use the **Score distribution** section of Evaluations to analyze one precise frozen check or one captured metric across 1–20 compatible finished experiments. Actual zero stays known; unavailable observations remain excluded. Numeric preferences describe the selected direction and never change automatic verdicts. The current analysis can be downloaded without raw trace payloads or private compatibility hashes. See the [distribution guide](./distributions.md) for selection, units, keyboard scrolling, API fields and limits.
 
 ## Optional model grading
 
