@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { once } from "node:events";
 import type http from "node:http";
+import { PLAYGROUND_DEFAULT_MODEL } from "../src/playground/protocol";
 
 if (process.env.RUNPHANTOM_PLAYGROUND_LIVE !== "1") {
   console.error("Refusing to call paid provider APIs. Set RUNPHANTOM_PLAYGROUND_LIVE=1 to run the live Playground smoke test.");
@@ -21,9 +22,9 @@ if (process.env.RUNPHANTOM_PLAYGROUND_LIVE !== "1") {
 }
 
 const TARGETS = [
-  { provider: "openai", model: process.env.RUNPHANTOM_PLAYGROUND_LIVE_OPENAI_MODEL ?? "gpt-5-nano" },
-  { provider: "anthropic", model: process.env.RUNPHANTOM_PLAYGROUND_LIVE_ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001" },
-  { provider: "gemini", model: process.env.RUNPHANTOM_PLAYGROUND_LIVE_GEMINI_MODEL ?? "gemini-2.5-flash" },
+  { provider: "openai", model: process.env.RUNPHANTOM_PLAYGROUND_LIVE_OPENAI_MODEL ?? PLAYGROUND_DEFAULT_MODEL.openai },
+  { provider: "anthropic", model: process.env.RUNPHANTOM_PLAYGROUND_LIVE_ANTHROPIC_MODEL ?? PLAYGROUND_DEFAULT_MODEL.anthropic },
+  { provider: "gemini", model: process.env.RUNPHANTOM_PLAYGROUND_LIVE_GEMINI_MODEL ?? PLAYGROUND_DEFAULT_MODEL.gemini },
 ] as const;
 
 const WEATHER_TOOL = {
@@ -64,7 +65,7 @@ async function recorded(result: Result): Promise<Record<string, unknown>> {
   if (!result.runId) return { recorded: false };
   const detail = await (await fetch(`${base}/api/runs/detail/${result.runId}`)).json() as { run: { name: string; event_name: string }; spans: Array<Record<string, unknown>> };
   const llm = detail.spans.find(span => span.span_type === "LLM_GENERATION");
-  return { recorded: true, runName: detail.run?.name, spans: detail.spans.length, llmSpan: llm && { model: llm.model, provider: llm.provider, status: llm.status, input_tokens: llm.input_tokens, output_tokens: llm.output_tokens } };
+  return { recorded: true, runName: detail.run?.name, eventName: detail.run?.event_name, errorSpans: detail.spans.filter(span => span.status === "ERROR").length, spans: detail.spans.length, llmSpan: llm && { model: llm.model, provider: llm.provider, status: llm.status, input_tokens: llm.input_tokens, output_tokens: llm.output_tokens } };
 }
 
 async function main(): Promise<void> {

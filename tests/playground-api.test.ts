@@ -368,7 +368,7 @@ describe.serial("GET /api/playground/models", () => {
     expect(body.providers.map(item => [item.id, item.configured, item.keySource, item.models.map(model => model.id)])).toEqual([
       ["openai", true, "env", ["gpt-5-nano", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"]],
       ["anthropic", false, null, ["claude-haiku-4-5-20251001", "claude-haiku-5-5", "claude-sonnet-5-5"]],
-      ["gemini", true, "env", ["gemini-2.5-flash", "gemini-2.5-flash-lite"]],
+      ["gemini", true, "env", ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]],
     ]);
     expect(body.limits.maxOutputTokens).toBe(8192);
     expect(JSON.stringify(body)).not.toContain(KEYS.openai);
@@ -449,8 +449,8 @@ describe.serial("GET /api/playground/draft-from-span/:spanId", () => {
       "ai.prompt.tools": [JSON.stringify({ type: "function", name: "search", description: "Web search", parameters: { type: "object", properties: { q: { type: "string" } } } })],
     } });
     ({ body } = await draft("span-ai"));
-    expect(body).toMatchObject({ provider: "gemini", model: "gemini-2.5-flash", modelSubstituted: true, system: "Stay factual.", messages: [{ role: "user", content: "Summarise M5 news" }], params: { maxOutputTokens: 300 }, tools: [{ name: "search" }], source: { format: "ai-sdk" } });
-    expect(body.warnings).toContain("gemini-1.5-pro is not available in the Playground, so gemini-2.5-flash was selected instead.");
+    expect(body).toMatchObject({ provider: "gemini", model: "gemini-3.8-flash", modelSubstituted: true, system: "Stay factual.", messages: [{ role: "user", content: "Summarise M5 news" }], params: { maxOutputTokens: 300 }, tools: [{ name: "search" }], source: { format: "ai-sdk" } });
+    expect(body.warnings).toContain("gemini-1.5-pro is not available in the Playground, so gemini-3.8-flash was selected instead.");
   });
 
   test("reads legacy indexed GenAI prompts and refuses spans without a prompt", async () => {

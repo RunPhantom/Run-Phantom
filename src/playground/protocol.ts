@@ -23,6 +23,7 @@ export const PLAYGROUND_MODELS: readonly PlaygroundModel[] = Object.freeze([
   model("anthropic", "claude-haiku-4-5-20251001", "Claude Haiku 4.5", { maxTemperature: 1 }),
   model("anthropic", "claude-haiku-5-5", "Claude Haiku 5.5", { temperature: false, maxTemperature: 1 }),
   model("anthropic", "claude-sonnet-5-5", "Claude Sonnet 5.5", { temperature: false, maxTemperature: 1 }),
+  model("gemini", "gemini-3.8-flash", "Gemini 3.8 Flash"),
   model("gemini", "gemini-2.5-flash", "Gemini 2.5 Flash"),
   model("gemini", "gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite"),
 ]);
@@ -30,7 +31,8 @@ export const PLAYGROUND_MODELS: readonly PlaygroundModel[] = Object.freeze([
 export const PLAYGROUND_DEFAULT_MODEL: Readonly<Record<PlaygroundProvider, string>> = Object.freeze({
   openai: "gpt-5-nano",
   anthropic: "claude-haiku-4-5-20251001",
-  gemini: "gemini-2.5-flash",
+  // Google stopped serving gemini-2.5-* to newly created API keys (HTTP 404 "no longer available to new users").
+  gemini: "gemini-3.8-flash",
 });
 
 export const PLAYGROUND_LIMITS = Object.freeze({
