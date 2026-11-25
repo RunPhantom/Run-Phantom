@@ -1,7 +1,8 @@
-import { useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import type { LatestRunRow, Overview, OverviewWindow } from "../../api/overview";
+import type { LatestRunRow, Overview, OverviewLiveRun, OverviewWindow } from "../../api/overview";
+import { Skeleton } from "@/components/ui/skeleton";
 import { BarList, ChartFrame, StackedBars, compact, relativeTimeLabel, type StackSeries } from "../../components/charts";
 import { ago, fmt, runDisplayName, runStatus, runStatusTone } from "../../utils/helpers";
 import { fmtCost } from "../../utils/costs";
@@ -249,32 +250,37 @@ export function ModelsPanel({ overview }: { overview: Overview }) {
 }
 
 const TONE_DOT = { success: "success", warning: "warning", danger: "danger", neutral: "neutral" } as const;
+const NO_FRESH: ReadonlySet<string> = new Set();
 
-function ActivityRow({ run, fresh }: { run: LatestRunRow; fresh: boolean }) {
-  const status = useRunStatus(run) ?? runStatus(run);
-  const live = status.status === "live";
-  const tone = TONE_DOT[runStatusTone(status.status)];
-  const parts = [
-    `${run.span_count ?? 0} ${(run.span_count ?? 0) === 1 ? "step" : "steps"}`,
-    run.duration_ms !== null && !live ? fmt(run.duration_ms) : null,
-    run.primary_model,
-  ].filter(Boolean);
+function ActivityLine({ id, href, status, statusLabel, tone, live, name, meta, at, fresh }: {
+  id: string;
+  href: string;
+  status: string;
+  statusLabel: string;
+  tone: keyof typeof TONE_DOT;
+  live: boolean;
+  name: string;
+  meta: readonly (string | null | undefined)[];
+  at: number;
+  fresh: boolean;
+}) {
+  const parts = meta.filter(Boolean);
   return (
-    <li className={fresh ? "rp-enter rp-flash rounded-sm" : undefined}>
+    <li className={fresh ? "rp-flash rounded-sm" : undefined}>
       <Link
-        to={runPath(run.id)}
+        to={href}
         className="flex items-start gap-2.5 rounded-sm px-2 py-1 leading-5 transition-colors duration-fast hover:bg-rp-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]"
-        data-activity-run={run.id}
-        data-activity-status={status.status}
+        data-activity-run={id}
+        data-activity-status={status}
       >
-        <Dot tone={tone} pulse={live} />
+        <Dot tone={TONE_DOT[tone]} pulse={live} />
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline justify-between gap-3">
-            <span className="truncate text-13 font-medium text-rp-ink">{runDisplayName(run)}</span>
-            <span className="shrink-0 font-mono text-12 text-rp-ink-subtle">{ago(run.last_updated_at)}</span>
+            <span className="truncate text-13 font-medium text-rp-ink">{name}</span>
+            <span className="shrink-0 font-mono text-12 text-rp-ink-subtle">{ago(at)}</span>
           </span>
           <span className="block truncate text-12 text-rp-ink-subtle">
-            <span className={tone === "danger" ? "text-rp-danger" : tone === "warning" ? "text-rp-warning" : live ? "text-rp-success" : undefined}>{status.label}</span>
+            <span className={tone === "danger" ? "text-rp-danger" : tone === "warning" ? "text-rp-warning" : live ? "text-rp-success" : undefined}>{statusLabel}</span>
             {parts.length ? ` · ${parts.join(" · ")}` : ""}
           </span>
         </span>
@@ -283,21 +289,99 @@ function ActivityRow({ run, fresh }: { run: LatestRunRow; fresh: boolean }) {
   );
 }
 
-export function ActivityPanel({ runs, liveCount }: { runs: readonly LatestRunRow[]; liveCount: number }) {
+const stepCount = (count: number) => `${count} ${count === 1 ? "step" : "steps"}`;
+
+function ActivityRow({ run, fresh }: { run: LatestRunRow; fresh: boolean }) {
+  const status = useRunStatus(run) ?? runStatus(run);
+  const live = status.status === "live";
+  return (
+    <ActivityLine
+      id={run.id}
+      href={runPath(run.id)}
+      status={status.status}
+      statusLabel={status.label}
+      tone={runStatusTone(status.status)}
+      live={live}
+      name={runDisplayName(run)}
+      meta={[stepCount(run.span_count ?? 0), run.duration_ms !== null && !live ? fmt(run.duration_ms) : null, run.primary_model]}
+      at={run.last_updated_at}
+      fresh={fresh}
+    />
+  );
+}
+
+type ActivityItem = { id: string; run: LatestRunRow; live?: undefined } | { id: string; live: OverviewLiveRun; run?: undefined };
+
+/**
+ * Running runs first (the overview's liveRuns: still open, with a step in the last
+ * ten minutes), then the newest runs from GET /api/runs, up to `limit`. A run in both
+ * lists uses its /api/runs row, whose status the WebSocket keeps current.
+ */
+export function activityItems(runs: readonly LatestRunRow[], liveRuns: readonly OverviewLiveRun[], limit: number): ActivityItem[] {
+  const byId = new Map(runs.map(run => [run.id, run]));
+  const liveIds = new Set(liveRuns.map(run => run.runId));
+  const items: ActivityItem[] = liveRuns.map(live => {
+    const run = byId.get(live.runId);
+    return run ? { id: run.id, run } : { id: live.runId, live };
+  });
+  for (const run of runs) if (!liveIds.has(run.id)) items.push({ id: run.id, run });
+  return items.slice(0, limit);
+}
+
+/**
+ * Ids that appeared since the previous render with data. The first list that
+ * arrives is the baseline, so nothing flashes on load.
+ */
+function useFreshIds(ids: readonly string[] | null): ReadonlySet<string> {
   const seen = useRef<Set<string> | null>(null);
-  const fresh = new Set<string>();
-  if (seen.current === null) seen.current = new Set(runs.map(run => run.id));
-  else for (const run of runs) if (!seen.current.has(run.id)) { fresh.add(run.id); seen.current.add(run.id); }
+  const [fresh, setFresh] = useState<ReadonlySet<string>>(NO_FRESH);
+  const key = ids?.join("\n") ?? null;
+  useEffect(() => {
+    if (key === null) return;
+    const current = key ? key.split("\n") : [];
+    if (seen.current === null) { seen.current = new Set(current); return; }
+    const added = current.filter(id => !seen.current!.has(id));
+    for (const id of added) seen.current.add(id);
+    if (added.length) setFresh(new Set(added));
+  }, [key]);
+  return fresh;
+}
+
+export function ActivityPanel({ runs, liveRuns, limit = 8 }: { runs: readonly LatestRunRow[] | undefined; liveRuns: readonly OverviewLiveRun[]; limit?: number }) {
+  const items = runs ? activityItems(runs, liveRuns, limit) : null;
+  const fresh = useFreshIds(items ? items.map(item => item.id) : null);
   return (
     <Panel
       id="home-activity"
       title="Latest activity"
-      meta={liveCount ? <span className="flex items-center gap-1.5"><span aria-hidden="true" className="pulse-dot size-1.5 rounded-full bg-rp-mark-success" />{liveCount} running</span> : "Nothing running"}
+      meta={liveRuns.length ? <span className="flex items-center gap-1.5"><span aria-hidden="true" className="pulse-dot size-1.5 rounded-full bg-rp-mark-success" />{liveRuns.length} running</span> : "Nothing running"}
       footer={<Link className="text-rp-blue underline-offset-4 hover:underline" to="/runs">Open Runs</Link>}
     >
-      {runs.length === 0
-        ? <p className="py-2 text-13 text-rp-ink-subtle">New runs appear here as their steps arrive.</p>
-        : <ul className="-mx-2 flex flex-col">{runs.map(run => <ActivityRow key={run.id} run={run} fresh={fresh.has(run.id)} />)}</ul>}
+      {items === null
+        ? <div role="status" aria-label="Loading latest runs">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="mt-2 h-8 w-full first:mt-0" />)}</div>
+        : items.length === 0
+          ? <p className="py-2 text-13 text-rp-ink-subtle">New runs appear here as their steps arrive.</p>
+          : (
+            <ul className="-mx-2 flex flex-col">
+              {items.map(item => item.run
+                ? <ActivityRow key={item.id} run={item.run} fresh={fresh.has(item.id)} />
+                : (
+                  <ActivityLine
+                    key={item.id}
+                    id={item.id}
+                    href={runPath(item.id)}
+                    status="live"
+                    statusLabel="Running"
+                    tone="success"
+                    live
+                    name={item.live.name}
+                    meta={[stepCount(item.live.spanCount), item.live.model]}
+                    at={item.live.lastUpdatedAt}
+                    fresh={fresh.has(item.id)}
+                  />
+                ))}
+            </ul>
+          )}
     </Panel>
   );
 }

@@ -32,23 +32,33 @@ function useClock(intervalMs: number): number {
   return now;
 }
 
-/** One trailing-edge refresh per window, however many WebSocket frames arrive. */
+/**
+ * One trailing-edge refresh per window, however many WebSocket frames arrive.
+ * Frames are dropped while paused, so resuming refreshes once to catch up.
+ */
 function useThrottledRefresh(refresh: () => void, enabled: boolean) {
   const timer = useRef<number | null>(null);
   const pending = useRef(false);
   const refreshRef = useRef(refresh);
-  refreshRef.current = refresh;
-  const schedule = useCallback(() => {
-    if (!enabled) return;
+  const enabledRef = useRef(enabled);
+  const wasEnabled = useRef(enabled);
+  useEffect(() => { refreshRef.current = refresh; }, [refresh]);
+  const schedule = useCallback(function schedule() {
+    if (!enabledRef.current) { pending.current = false; return; }
     if (timer.current !== null) { pending.current = true; return; }
     refreshRef.current();
-    timer.current = window.setTimeout(function settle() {
+    timer.current = window.setTimeout(() => {
       timer.current = null;
       if (!pending.current) return;
       pending.current = false;
       schedule();
     }, LIVE_REFRESH_MS);
-  }, [enabled]);
+  }, []);
+  useEffect(() => {
+    enabledRef.current = enabled;
+    if (enabled && !wasEnabled.current) schedule();
+    wasEnabled.current = enabled;
+  }, [enabled, schedule]);
   useEffect(() => () => { if (timer.current !== null) window.clearTimeout(timer.current); }, []);
   return schedule;
 }
@@ -114,7 +124,9 @@ export function HomePage() {
   };
 
   const data = overview.data;
-  const empty = isWorkspaceEmpty(data, latest.data?.total ?? null);
+  // Both queries decide emptiness; rendering on the overview alone flashed a dashboard of zeros first.
+  const settled = !!data && !latest.isPending;
+  const empty = settled && isWorkspaceEmpty(data, latest.data?.total ?? null);
   const copy = WINDOW_COPY[selection];
   const stale = overview.isPlaceholderData;
 
@@ -124,7 +136,7 @@ export function HomePage() {
         <div className="min-w-0">
           <Eyebrow marker tone="accent">Overview / {copy.eyebrow}</Eyebrow>
           <h1 className="rp-type-headline mt-2 text-rp-ink" data-home-headline>
-            {data && !empty ? <Headline overview={data} /> : empty ? "Nothing captured yet." : "Overview"}
+            {settled && !empty ? <Headline overview={data} /> : empty ? "Nothing captured yet." : "Overview"}
           </h1>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -146,7 +158,7 @@ export function HomePage() {
       <div className="mt-5" aria-busy={overview.isFetching || undefined}>
         {overview.isError && !data ? (
           <OverviewError message={(overview.error as Error).message} onRetry={() => void overview.refetch()} />
-        ) : !data ? (
+        ) : !settled ? (
           <HomeSkeleton />
         ) : empty ? (
           <HomeEmptyState onLoadSamples={() => void loadSamples()} loading={sampleState.loading} loadError={sampleState.error} />
@@ -159,15 +171,15 @@ export function HomePage() {
               </p>
             )}
             <KpiStrip overview={data} />
-            <div className="grid gap-4 lg:grid-cols-12">
+            <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-12">
               <div className="min-w-0 lg:col-span-7 2xl:col-span-8"><RunsOverTimePanel overview={data} /></div>
               <div className="min-w-0 lg:col-span-5 2xl:col-span-4"><NeedsALookPanel overview={data} /></div>
             </div>
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div className="grid grid-cols-[minmax(0,1fr)] gap-4 md:grid-cols-2 xl:grid-cols-3">
               <AgentsPanel overview={data} />
               <ModelsPanel overview={data} />
               <div className="md:col-span-2 xl:col-span-1">
-                <ActivityPanel runs={latest.data?.runs ?? []} liveCount={data.liveRuns.length} />
+                <ActivityPanel runs={latest.data?.runs} liveRuns={data.liveRuns} limit={LATEST_RUNS} />
               </div>
             </div>
             <p className="flex items-center gap-1.5 text-12 text-rp-ink-subtle">

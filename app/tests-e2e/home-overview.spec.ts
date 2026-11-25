@@ -79,11 +79,41 @@ test("Home: KPIs, headline and tables match /api/overview", async ({ page, runPh
   for (const agent of overview.byAgent) await expect(agents.getByRole("link", { name: agent.agent!, exact: true })).toBeVisible();
 
   const chart = page.locator('[data-home-panel="runs-over-time"]');
-  await expect(chart.getByRole("img", { name: new RegExp(`^Runs per hour in the last 24 hours: ${runs} in total`) })).toBeVisible();
+  const plot = chart.getByRole("group", { name: new RegExp(`^Runs per hour in the last 24 hours: ${runs} in total`) });
+  await expect(plot).toBeVisible();
+  await expect(plot).toHaveAttribute("aria-roledescription", "chart");
+  await expect(chart.getByRole("img")).toHaveCount(0);
   await chart.getByRole("button", { name: "View as table" }).click();
   await expect(chart.getByRole("table", { name: "Runs per hour" })).toBeVisible();
   await chart.getByRole("button", { name: "View as chart" }).click();
-  await expect(chart.getByRole("img")).toBeVisible();
+  await expect(plot).toBeVisible();
+});
+
+test("Home: the runs chart reads each bar aloud from the keyboard and Enter opens its runs", async ({ page, runPhantom }) => {
+  await replaySamples(runPhantom.url);
+  const { timeseries } = await (await fetch(`${runPhantom.url}/api/overview?window=24h`)).json() as { timeseries: Array<{ runs: number }> };
+  const busiest = timeseries.map(bucket => bucket.runs).lastIndexOf(Math.max(...timeseries.map(bucket => bucket.runs)));
+  await page.goto(runPhantom.url);
+  const plot = page.locator('[data-home-panel="runs-over-time"]').getByRole("group", { name: /^Runs per hour/ });
+  await expect(plot).toBeVisible({ timeout: 15_000 });
+  await plot.focus();
+  await page.keyboard.press("End");
+  for (let step = timeseries.length - 1; step > busiest; step--) await page.keyboard.press("ArrowLeft");
+  const readout = plot.locator("[data-chart-readout]");
+  await expect(readout).toHaveAttribute("aria-live", "polite");
+  await expect(readout).toContainText(/^\d{2}:\d{2}–\d{2}:\d{2}: No errors \d+, With errors \d+, Failed \d+\./);
+  await expect(readout).toContainText("Press Enter to open these runs.");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/runs\?since=\d+&until=\d+$/);
+});
+
+test("Home: running runs lead the activity list and nothing flashes on first load", async ({ page, runPhantom }) => {
+  await replaySamples(runPhantom.url);
+  await page.goto(runPhantom.url);
+  const activity = page.locator('[data-home-panel="home-activity"]');
+  await expect(activity.locator("[data-activity-run]")).toHaveCount(3, { timeout: 15_000 });
+  await expect(activity.locator("li.rp-flash")).toHaveCount(0);
+  await expect(activity).toContainText("Nothing running");
 });
 
 test("Home: the window selector is kept in the URL and drives the numbers", async ({ page, runPhantom }) => {

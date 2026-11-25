@@ -4,6 +4,8 @@ import {
   bucketClock, failureOnset, formatRate, headlineParts, headlineText, isWorkspaceEmpty, kpiDelta, kpiSeries, runsLink, sumKnown,
 } from "../app/src/pages/overview/home-model";
 import { splitUnit } from "../app/src/pages/overview/HomeKpis";
+import { activityItems } from "../app/src/pages/overview/HomePanels";
+import type { LatestRunRow, OverviewLiveRun } from "../app/src/api/overview";
 import { sampleOverview } from "../app/src/pages/overview/sample-overview";
 
 const HOUR = 3_600_000;
@@ -117,4 +119,25 @@ describe("drill-down links and empty state", () => {
     expect(isWorkspaceEmpty(undefined, 0)).toBe(false);
     expect(isWorkspaceEmpty(overview({ runs: 3 }), 0)).toBe(false);
   });
+});
+
+describe("latest activity", () => {
+  const row = (id: string) => ({ id, last_updated_at: 0 }) as unknown as LatestRunRow;
+  const live = (runId: string): OverviewLiveRun => ({ runId, name: runId, agent: null, startedAt: 0, lastUpdatedAt: 0, spanCount: 2, model: null });
+
+  test("running runs come first, then the newest finished runs, without duplicates, up to the limit", () => {
+    const items = activityItems([row("a"), row("b"), row("c"), row("d")], [live("old-running"), live("b")], 4);
+    expect(items.map(item => item.id)).toEqual(["old-running", "b", "a", "c"]);
+    expect(items[0].live?.runId).toBe("old-running");
+    expect(items[1].run?.id).toBe("b");
+  });
+
+  test("with nothing running it is the newest runs as listed", () => {
+    expect(activityItems([row("a"), row("b")], [], 8).map(item => item.id)).toEqual(["a", "b"]);
+  });
+});
+
+test("kpi series carry the partial flag of each bucket", () => {
+  const buckets = [bucket(0, 2), { ...bucket(1, 1), partial: true }];
+  expect(kpiSeries(buckets).partial).toEqual([false, true]);
 });
