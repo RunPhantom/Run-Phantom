@@ -81,7 +81,7 @@ export function RunsOverTimePanel({ overview, interactive = true }: { overview: 
           label={summary}
           buckets={stack}
           series={RUN_SERIES}
-          minHeight={196}
+          minHeight={160}
           axisLabels={index => index === buckets.length - 1 ? "now"
             : relativeTimeLabel(index === 0 ? overview.window.from : (overview.window.from + overview.window.to) / 2, overview.window.to)}
           emptyLabel={`No runs ${WINDOW_COPY[window].phrase}`}
@@ -109,7 +109,7 @@ function Dot({ tone, pulse }: { tone: "danger" | "warning" | "success" | "neutra
 
 export function NeedsALookPanel({ overview }: { overview: Overview }) {
   const tools = overview.topFailingTools.slice(0, 2);
-  const failures = overview.recentFailures.slice(0, tools.length ? 4 : 6);
+  const failures = overview.recentFailures.slice(0, tools.length ? 2 : 4);
   const failed = overview.kpis.failed.value ?? 0;
   const withErrors = overview.kpis.completedWithErrors.value ?? 0;
   const window = overview.window.selection;
@@ -131,7 +131,7 @@ export function NeedsALookPanel({ overview }: { overview: Overview }) {
               <li key={failure.runId}>
                 <Link
                   to={target}
-                  className="flex items-start gap-2.5 rounded-sm px-2 py-1 leading-5 transition-colors duration-fast hover:bg-rp-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]"
+                  className="flex items-start gap-2.5 rounded-sm px-2 py-0.5 leading-5 transition-colors duration-fast hover:bg-rp-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]"
                   data-needs-a-look={failure.runId}
                 >
                   <Dot tone={failure.status === "failed" ? "danger" : "warning"} />
@@ -269,7 +269,7 @@ function ActivityLine({ id, href, status, statusLabel, tone, live, name, meta, a
     <li className={fresh ? "rp-flash rounded-sm" : undefined}>
       <Link
         to={href}
-        className="flex items-start gap-2.5 rounded-sm px-2 py-1 leading-5 transition-colors duration-fast hover:bg-rp-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]"
+        className="flex items-start gap-2.5 rounded-sm px-2 py-0.5 leading-5 transition-colors duration-fast hover:bg-rp-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]"
         data-activity-run={id}
         data-activity-status={status}
       >

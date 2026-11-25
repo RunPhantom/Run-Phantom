@@ -258,7 +258,7 @@ function HomeSkeleton() {
         ))}
       </div>
       <div className="grid gap-4 lg:grid-cols-12">
-        <div className="rounded-lg border border-rp-line bg-rp-surface p-4 lg:col-span-7"><Skeleton className="h-4 w-32" /><Skeleton className="mt-4 h-[196px] w-full" /></div>
+        <div className="rounded-lg border border-rp-line bg-rp-surface p-4 lg:col-span-7"><Skeleton className="h-4 w-32" /><Skeleton className="mt-4 h-[160px] w-full" /></div>
         <div className="rounded-lg border border-rp-line bg-rp-surface p-4 lg:col-span-5"><Skeleton className="h-4 w-24" />{Array.from({ length: 5 }, (_, index) => <Skeleton key={index} className="mt-4 h-6 w-full" />)}</div>
       </div>
     </div>
