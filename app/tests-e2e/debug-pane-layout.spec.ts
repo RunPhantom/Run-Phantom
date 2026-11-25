@@ -69,7 +69,7 @@ for (const width of [1440, 390, 320]) {
     const launcher = page.locator("[data-workspace-header]").getByRole("button", { name: /Ask (Claude Code|Codex)$/, exact: true });
     await expect(launcher).toBeVisible();
     await launcher.click();
-    await expect(launcher).toBeHidden();
+    await expect(launcher).toHaveAttribute("aria-expanded", "true");
     const pane = page.locator('aside[aria-label="Coding-agent debug chat"]');
     await expect(pane).toBeVisible();
     const paneBox = (await pane.boundingBox())!;
@@ -82,7 +82,7 @@ for (const width of [1440, 390, 320]) {
     await expect(hide).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(pane).toBeHidden();
-    await expect(launcher).toBeVisible();
+    await expect(launcher).toHaveAttribute("aria-expanded", "false");
     expect(await (await request.get(detailUrl)).json()).toEqual(before);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
   });

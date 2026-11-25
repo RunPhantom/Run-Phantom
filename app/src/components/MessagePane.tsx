@@ -746,7 +746,7 @@ export function MessagePane({ activeRunId, launcherSlot }: MessagePaneProps) {
     <HeaderAskButton
       provider={provider}
       expanded={!collapsed}
-      onOpen={openFromLauncher}
+      onToggle={toggleFromShortcut}
     />,
     launcherSlot,
   ) : null;
@@ -1060,21 +1060,18 @@ export function MessagePane({ activeRunId, launcherSlot }: MessagePaneProps) {
   );
 }
 
-/**
- * Hidden, not unmounted, while the pane is open: the header cluster keeps its width, and
- * the open pane (an overlay below 1280px that covers the header) owns its own Hide control.
- */
-function HeaderAskButton({ provider, expanded, onOpen }: { provider: AgentProviderId; expanded: boolean; onOpen: () => void }) {
+/** Stays in place while the pane is open, shown pressed, so the header cluster does not gain a gap and the button doubles as Hide. */
+function HeaderAskButton({ provider, expanded, onToggle }: { provider: AgentProviderId; expanded: boolean; onToggle: () => void }) {
   const label = `Ask ${providerLabel(provider)}`;
   return (
-    <div data-debug-launcher className={expanded ? "invisible flex" : "flex"}>
+    <div data-debug-launcher className="flex">
       <button
         type="button"
-        onClick={onOpen}
+        onClick={onToggle}
         aria-expanded={expanded}
         aria-keyshortcuts={ariaKeyShortcuts("mod+j")}
-        className="flex size-11 items-center justify-center gap-2 rounded-control border border-rp-line bg-rp-surface text-[13px] font-medium text-rp-ink transition-[background-color,border-color] duration-fast ease-out hover:border-rp-wash-border hover:bg-rp-wash lg:h-9 lg:w-auto lg:px-3"
-        title={`Open the ${providerLabel(provider)} debug chat (${formatKeys("mod+j")})`}
+        className={`flex size-11 items-center justify-center gap-2 rounded-control border text-[13px] font-medium text-rp-ink transition-[background-color,border-color] duration-fast ease-out hover:border-rp-wash-border hover:bg-rp-wash lg:h-9 lg:w-auto lg:px-3 ${expanded ? "border-rp-wash-border bg-rp-wash" : "border-rp-line bg-rp-surface"}`}
+        title={`${expanded ? "Hide" : "Open"} the ${providerLabel(provider)} debug chat (${formatKeys("mod+j")})`}
       >
         <Terminal aria-hidden="true" className="size-4 shrink-0 text-rp-blue" />
         <span className="sr-only lg:not-sr-only lg:whitespace-nowrap">{label}</span>
