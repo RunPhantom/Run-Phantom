@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CostAnalyticsReport, MetricPopulation } from "../../../../src/pricing/analytics";
-import { BarList, ChartFrame, Sparkline, StackedBars, compact, relativeTimeLabel, trendWord, type StackSeries } from "../charts";
+import { BarList, ChartFrame, Sparkline, StackedBars, compact, relativeTimeLabel, sparklineTrend, type StackSeries } from "../charts";
 import { fmtCost } from "../../utils/costs";
 import {
   COST_WINDOW_COPY, COST_WINDOWS, ESTIMATE_SOURCE_LABELS, comparableTotal, costBucketTitle, costBuckets, coverage, formatShare, metricText, modelRows, partialTitle,
@@ -161,7 +161,7 @@ export function CostKpis({ report, previous, source, window }: { report: CostAna
   return (
     <ul className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-rp-line bg-rp-line xl:grid-cols-4" aria-label="Spend and tokens" data-cost-kpis>
       {tiles.map(tile => {
-        const word = trendWord(tile.series.map((value, index) => (tile.partial[index] ? null : value)));
+        const word = sparklineTrend(tile.series, tile.partial, true);
         return (
           <li key={tile.id} className="flex min-w-0 flex-col bg-rp-surface px-4 pb-3 pt-3" data-testid={tile.testId} data-kpi={tile.id} title={tile.title}>
             <span className="rp-type-eyebrow text-rp-ink-subtle">{tile.label}</span>

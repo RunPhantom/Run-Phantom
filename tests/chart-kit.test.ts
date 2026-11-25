@@ -5,7 +5,7 @@ import {
 } from "../app/src/components/charts/scale";
 import { ChartFrame } from "../app/src/components/charts/ChartFrame";
 import { BarList, CellBar } from "../app/src/components/charts/BarList";
-import { Sparkline } from "../app/src/components/charts/Sparkline";
+import { Sparkline, sparklineTrend } from "../app/src/components/charts/Sparkline";
 import { StackedBars, stackReadout } from "../app/src/components/charts/StackedBars";
 import { TimeSeries, seriesReadout } from "../app/src/components/charts/TimeSeries";
 import { Histogram } from "../app/src/components/charts/Histogram";
@@ -278,6 +278,21 @@ describe("sparkline gaps and partial buckets", () => {
     const early = render(Sparkline, { values: [0, 3, 4, 1], partial: [false, false, false, true], cumulative: true, label: "Runs", width: 100 });
     expect(early).not.toContain("data-sparkline-end-partial");
     expect(count(early, "data-partial-point")).toBe(1);
+  });
+
+  test("a rate whose complete points are never joined draws nothing rather than unconnected dots", () => {
+    const sparse = render(Sparkline, { values: [null, 1, null, null, 0.46], partial: [false, false, false, false, true], label: "Error rate", width: 100 });
+    expect(sparse).not.toContain("<circle");
+    expect(sparse).not.toContain("<path");
+    expect(sparklineTrend([null, 1, null, null, 0.46], [false, false, false, false, true])).toBeNull();
+    expect(render(Sparkline, { values: [null, 1, 0.5, null, 0.46], partial: [false, false, false, false, true], label: "Error rate", width: 100 })).toContain("data-sparkline-end");
+  });
+
+  test("the trend word reads up to the emphasised point, so a leading partial bucket is not called a fall", () => {
+    expect(sparklineTrend([0, 0, 0, 21], [false, false, false, true], true)).toBe("rising");
+    expect(sparklineTrend([2, 3, 0, 5], [false, false, false, true], true)).toBe("rising");
+    expect(sparklineTrend([2, 3, 4, 1], [false, false, false, true], true)).toBe("rising");
+    expect(sparklineTrend([4, 4, 4, 1], [false, false, false, true])).toBe("flat");
   });
 });
 
