@@ -166,6 +166,9 @@ import {
   setStoredSecret,
   deleteStoredSecret,
 } from "./secret-store";
+import { maskSecret } from "./provider-connection-protocol";
+import { checkProviderConnection, type ProviderCheckFetch } from "./provider-connection";
+import { getDataSummary, writeDatabaseBackup } from "./data-admin";
 
 function parseAnnotationSource(value: unknown): AnnotationSource | null {
   return value === "user" || value === "claude-code" || value === "codex" || value === "opencode" ? value : null;
@@ -734,7 +737,7 @@ function demoChatHtml(): string {
 </html>`;
 }
 
-export async function createServer(port: number, options: { comparisons?: ComparisonRuntimeOptions; playgroundFetch?: PlaygroundFetch } = {}) {
+export async function createServer(port: number, options: { comparisons?: ComparisonRuntimeOptions; playgroundFetch?: PlaygroundFetch; providerCheckFetch?: ProviderCheckFetch } = {}) {
   const app = express();
   // Express 4 ignores a rejected async handler, so the request was never
   // answered (seen with /api/models/anthropic when the secret store threw).
@@ -1636,7 +1639,53 @@ export async function createServer(port: number, options: { comparisons?: Compar
   });
 
   app.get("/api/secrets", localOriginGuard, (_req, res) => {
-    res.json({ keys: getSecretStatuses() });
+    const keys = getSecretStatuses();
+    const hints = Object.fromEntries(Object.keys(keys).map(key => {
+      const value = getEffectiveSecret(key as keyof typeof keys);
+      return [key, value ? maskSecret(value) : null];
+    }));
+    res.json({ keys, hints });
+  });
+
+  const providerChecks = new Map<string, Promise<unknown>>();
+  app.post("/api/secrets/:key/test", localOriginGuard, (req, res) => {
+    const key = parseSecretKey(req.params.key);
+    if (!key) {
+      res.status(404).json({ error: "unknown secret key" });
+      return;
+    }
+    // A double click shares one upstream request instead of sending two.
+    let check = providerChecks.get(key);
+    if (!check) {
+      check = checkProviderConnection(key, { fetch: options.providerCheckFetch }).finally(() => providerChecks.delete(key));
+      providerChecks.set(key, check);
+    }
+    void check.then(result => res.json(result), () => res.status(500).json({ error: "Connection check failed." }));
+  });
+
+  app.get("/api/data", localOriginGuard, (_req, res) => {
+    try {
+      res.set("Cache-Control", "no-store").json(getDataSummary());
+    } catch (err) {
+      console.error("[runphantom] data summary failed:", err);
+      res.status(500).json({ error: "Local data details are unavailable." });
+    }
+  });
+
+  app.get("/api/data/backup", localOriginGuard, (_req, res) => {
+    let backup: ReturnType<typeof writeDatabaseBackup>;
+    try {
+      backup = writeDatabaseBackup();
+    } catch (err) {
+      console.error("[runphantom] database backup failed:", err);
+      res.status(500).json({ error: "The database copy could not be written." });
+      return;
+    }
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    res.set("Cache-Control", "no-store");
+    res.download(backup.file, `runphantom-backup-${stamp}.db`, () => {
+      fs.rmSync(backup.directory, { recursive: true, force: true });
+    });
   });
 
   app.put("/api/secrets/:key", localOriginGuard, (req, res) => {
