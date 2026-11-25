@@ -43,3 +43,76 @@ describe("detectSubAgents", () => {
     expect(detectSubAgents(spans)).toEqual([]);
   });
 });
+
+describe("detectSubAgents: agent -> agent hand-offs", () => {
+  test("reports every nested invoke_agent span, recursively, with its own spans and usage", () => {
+    const spans = [
+      row("root", null, "AGENT_ROOT", { name: "invoke_agent orchestrator" }),
+      row("root-chat", "root", "LLM_GENERATION", { model: "m", input_tokens: 5, output_tokens: 1 }),
+      row("planner", "root", "AGENT_ROOT", { name: "invoke_agent planner", start_time_ms: 1, status: "ERROR" }),
+      row("planner-chat", "planner", "LLM_GENERATION", { model: "m", input_tokens: 10, output_tokens: 2 }),
+      row("list", "planner", "TOOL_CALL"),
+      row("reader", "planner", "AGENT_ROOT", { name: "invoke_agent reader", start_time_ms: 2 }),
+      row("reader-chat", "reader", "LLM_GENERATION", { model: "m", input_tokens: 20, output_tokens: 4 }),
+      row("open", "reader", "TOOL_CALL", { status: "ERROR" }),
+    ];
+    const agents = detectSubAgents(spans);
+    expect(agents.map(agent => agent.root_span_id)).toEqual(["planner", "reader"]);
+    expect(agents[0]).toEqual(expect.objectContaining({
+      name: "planner", status: "ERROR", span_ids: ["planner", "planner-chat", "list", "reader", "reader-chat", "open"],
+      llm_count: 2, tool_count: 2, total_input_tokens: 30, total_output_tokens: 6,
+    }));
+    expect(agents[1]).toEqual(expect.objectContaining({ name: "reader", span_ids: ["reader", "reader-chat", "open"], llm_count: 1, tool_count: 1 }));
+  });
+
+  test("an agent that only delegates is a sub-agent when its descendants call a model", () => {
+    const spans = [
+      row("root", null, "AGENT_ROOT"),
+      row("group", "root", "AGENT_ROOT", { name: "invoke_agent group" }),
+      row("leaf", "group", "AGENT_ROOT", { name: "invoke_agent leaf" }),
+      row("chat", "leaf", "LLM_GENERATION"),
+    ];
+    expect(detectSubAgents(spans).map(agent => [agent.root_span_id, agent.name])).toEqual([["group", "group"], ["leaf", "leaf"]]);
+  });
+
+  test("the top-level agent and agent spans without model calls are not sub-agents", () => {
+    const spans = [
+      row("root", null, "AGENT_ROOT"),
+      row("chat", "root", "LLM_GENERATION"),
+      row("idle", "root", "AGENT_ROOT", { name: "invoke_agent idle" }),
+      row("idle-tool", "idle", "TOOL_CALL"),
+    ];
+    expect(detectSubAgents(spans)).toEqual([]);
+  });
+
+  test("an agent under a delegating tool is reported once, under the tool", () => {
+    const spans = [
+      row("root", null, "AGENT_ROOT"),
+      row("delegate", "root", "TOOL_CALL"),
+      row("researcher", "delegate", "AGENT_ROOT", { name: "invoke_agent researcher" }),
+      row("chat", "researcher", "LLM_GENERATION"),
+    ];
+    expect(detectSubAgents(spans).map(agent => agent.root_span_id)).toEqual(["delegate"]);
+  });
+
+  test("the 321-span orchestrator shape yields 20 sub-agents", () => {
+    const spans: Row[] = [row("root", null, "AGENT_ROOT")];
+    let t = 0;
+    for (let n = 0; n < 5; n++) {
+      spans.push(row(`sub-${n}`, "root", "AGENT_ROOT", { name: `invoke_agent sub-${n}`, start_time_ms: t }));
+      for (let m = 0; m < 3; m++) {
+        spans.push(row(`sub-${n}-${m}`, `sub-${n}`, "AGENT_ROOT", { name: `invoke_agent sub-${n}-${m}`, start_time_ms: t }));
+        for (let k = 0; k < 10; k++) {
+          spans.push(row(`c-${n}-${m}-${k}`, `sub-${n}-${m}`, "LLM_GENERATION", { start_time_ms: t }));
+          spans.push(row(`t-${n}-${m}-${k}`, `sub-${n}-${m}`, "TOOL_CALL", { start_time_ms: t }));
+          t++;
+        }
+      }
+    }
+    expect(spans).toHaveLength(321);
+    const agents = detectSubAgents(spans);
+    expect(agents).toHaveLength(20);
+    expect(agents.find(agent => agent.root_span_id === "sub-0")).toEqual(expect.objectContaining({ llm_count: 30, tool_count: 30 }));
+    expect(agents.find(agent => agent.root_span_id === "sub-0-0")).toEqual(expect.objectContaining({ llm_count: 10, tool_count: 10 }));
+  });
+});

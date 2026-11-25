@@ -6,6 +6,9 @@
  * agentic loop (LLM + tools), not just making a single LLM call.
  *
  * Pattern: TOOL_CALL > LLM_GENERATION > TOOL_CALL
+ *
+ * An agent span nested under another agent (agent -> agent hand-off, no tool
+ * span between) is also a sub-agent once anything below it calls a model.
  */
 
 interface SpanRow {
@@ -23,7 +26,7 @@ interface SpanRow {
 }
 
 export interface SubAgent {
-  /** The TOOL_CALL span that triggered this sub-agent */
+  /** The TOOL_CALL span that triggered this sub-agent, or the nested agent span itself */
   root_span_id: string;
   /** Name of the tool / agent */
   name: string;
@@ -62,6 +65,48 @@ export function detectSubAgents(spans: SpanRow[]): SubAgent[] {
 
   const agents: SubAgent[] = [];
 
+  function summarise(root: SpanRow, name: string): SubAgent {
+    const allSpanIds: string[] = [];
+    const collected = new Set<string>();
+    let llmCount = 0;
+    let toolCount = 0;
+    let totalIn = 0;
+    let totalOut = 0;
+    let model: string | null = null;
+    const stack = [root.id];
+    while (stack.length) {
+      const id = stack.shift()!;
+      if (collected.has(id)) continue;
+      collected.add(id);
+      allSpanIds.push(id);
+      const s = spanMap.get(id);
+      if (s) {
+        if (s.span_type?.includes("LLM")) {
+          llmCount++;
+          if (!model && s.model) model = s.model;
+          if (s.input_tokens) totalIn += s.input_tokens;
+          if (s.output_tokens) totalOut += s.output_tokens;
+        }
+        if (s.span_type === "TOOL_CALL" && s.id !== root.id) toolCount++;
+      }
+      stack.unshift(...(children.get(id) ?? []).map(kid => kid.id));
+    }
+    return {
+      root_span_id: root.id,
+      name,
+      span_ids: allSpanIds,
+      start_time_ms: root.start_time_ms,
+      end_time_ms: root.end_time_ms,
+      duration_ms: root.duration_ms,
+      model,
+      status: root.status,
+      llm_count: llmCount,
+      tool_count: toolCount,
+      total_input_tokens: totalIn,
+      total_output_tokens: totalOut,
+    };
+  }
+
   // Find TOOL_CALL spans that contain an agentic loop.
   // Detection: either strict parent-child (TOOL > LLM > TOOL),
   // or time-overlap (a TOOL_CALL whose time range contains an LLM span with TOOL children).
@@ -92,49 +137,40 @@ export function detectSubAgents(spans: SpanRow[]): SubAgent[] {
     }
 
     if (!hasAgenticLoop) continue;
-
-    // Collect all descendant span IDs — by parent-child AND time overlap
-    const allSpanIds: string[] = [];
-    const collected = new Set<string>();
-    let llmCount = 0;
-    let toolCount = 0;
-    let totalIn = 0;
-    let totalOut = 0;
-    let model: string | null = null;
-
-    function collect(id: string) {
-      if (collected.has(id)) return;
-      collected.add(id);
-      allSpanIds.push(id);
-      const s = spanMap.get(id);
-      if (s) {
-        if (s.span_type?.includes("LLM")) {
-          llmCount++;
-          if (!model && s.model) model = s.model;
-          if (s.input_tokens) totalIn += s.input_tokens;
-          if (s.output_tokens) totalOut += s.output_tokens;
-        }
-        if (s.span_type === "TOOL_CALL" && s.id !== span.id) toolCount++;
-      }
-      for (const kid of children.get(id) ?? []) collect(kid.id);
-    }
-    collect(span.id);
-
-    agents.push({
-      root_span_id: span.id,
-      name: nestedAgent ? nestedAgentName(nestedAgent.name) ?? span.name : span.name,
-      span_ids: allSpanIds,
-      start_time_ms: span.start_time_ms,
-      end_time_ms: span.end_time_ms,
-      duration_ms: span.duration_ms,
-      model,
-      status: span.status,
-      llm_count: llmCount,
-      tool_count: toolCount,
-      total_input_tokens: totalIn,
-      total_output_tokens: totalOut,
-    });
+    agents.push(summarise(span, nestedAgent ? nestedAgentName(nestedAgent.name) ?? span.name : span.name));
   }
 
-  return agents;
+  // Pattern 4: agent -> agent hand-off (OpenTelemetry GenAI invoke_agent or
+  // OpenInference AGENT nested under another agent, with no tool span between).
+  // The span is its own root. One already wrapped by a detected TOOL_CALL is
+  // covered by that tool's card.
+  const toolRoots = new Set(agents.map(agent => agent.root_span_id));
+  const hasAgentAncestor = (span: SpanRow) => {
+    const seen = new Set<string>();
+    for (let parentId = span.parent_span_id; parentId && !seen.has(parentId); parentId = spanMap.get(parentId)?.parent_span_id ?? null) {
+      seen.add(parentId);
+      if (spanMap.get(parentId)?.span_type === "AGENT_ROOT") return true;
+    }
+    return false;
+  };
+  const hasModelCall = (id: string) => {
+    const stack = [...(children.get(id) ?? [])];
+    const seen = new Set<string>();
+    while (stack.length) {
+      const next = stack.pop()!;
+      if (seen.has(next.id)) continue;
+      seen.add(next.id);
+      if (next.span_type?.includes("LLM")) return true;
+      stack.push(...(children.get(next.id) ?? []));
+    }
+    return false;
+  };
+  for (const span of spans) {
+    if (span.span_type !== "AGENT_ROOT" || !span.parent_span_id || toolRoots.has(span.parent_span_id)) continue;
+    if (!hasAgentAncestor(span) || !hasModelCall(span.id)) continue;
+    agents.push(summarise(span, nestedAgentName(span.name) ?? span.id));
+  }
+
+  return agents.sort((a, b) => a.start_time_ms - b.start_time_ms);
 }
+
