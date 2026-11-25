@@ -1,9 +1,5 @@
 .prompt-workspace { padding: var(--rp-page-pt) var(--rp-page-px) var(--rp-page-pb); max-width: 1600px; color: var(--rp-ink); font-family: var(--font-sans); font-size: 14px; line-height: 20px; }
-.prompt-heading { display: flex; gap: 24px; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
-.prompt-heading h1 { font-family: var(--font-display); font-size: clamp(28px, 1.25vw + 18px, 36px); line-height: 1.12; letter-spacing: -0.039em; margin: 12px 0 12px; font-weight: 600; }
-.prompt-heading p { color: var(--rp-ink-muted); line-height: 1.7; margin: 0; max-width: 70ch; }
-.prompt-heading .prompt-eyebrow { display: inline-flex; align-items: center; gap: 8px; color: var(--rp-blue); font-family: var(--font-mono); font-size: 11px; line-height: 16px; font-weight: 500; letter-spacing: .14em; text-transform: uppercase; }
-.prompt-heading .prompt-eyebrow::before { content: ""; flex: none; width: 7px; height: 7px; background: var(--rp-blue); }
+.prompt-heading { margin-bottom: 20px; }
 .prompt-status { min-height: 28px; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--rp-ink-muted); margin-bottom: 16px; }
 .prompt-status svg { color: var(--rp-success); }
 .prompt-status:empty { min-height: 0; margin-bottom: 0; }
@@ -59,7 +55,6 @@
   .prompt-library ul { display: flex; gap: 8px; flex-wrap: wrap; margin: 0; }
   .prompt-library li { flex: 1; min-width: 130px; }
   .prompt-library li button { border: 1px solid var(--rp-line); }
-  .prompt-heading { flex-wrap: wrap; }
   .prompt-library, .prompt-editor, .prompt-preview, .prompt-management { padding: 20px; }
 }
 @media (max-width: 390px) {
@@ -76,3 +71,4 @@
 .prompt-ghost-row small { color: var(--rp-ink-muted); font-family: var(--font-mono); font-size: 11px; }
 .prompt-editor > .prompt-actions { position: sticky; bottom: 0; z-index: 1; margin-inline: -24px; padding: 12px 24px; background: var(--rp-surface); border-top: 1px solid var(--rp-line-muted); }
 .prompt-save-reason { flex-basis: 100%; margin: 0; color: var(--rp-ink-muted); font-size: 12px; line-height: 18px; }
+@media (max-width: 850px) { .prompt-editor > .prompt-actions { position: static; margin-inline: 0; padding: 12px 0 0; } }

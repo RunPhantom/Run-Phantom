@@ -3,6 +3,7 @@ import { useBlocker } from "react-router-dom";
 import { Plus, Download, Trash2, CheckCircle2 } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { PageHeader } from "../ui/typography";
 import { useDialogFocus } from "../../hooks/use-dialog-focus";
 import type { PromptClient, PromptCapabilities, PromptRevision, PromptSummary, PromptHistoryEntry, PromptPage, PromptCompilation, PromptExport } from "./client";
 import "./prompt-workspace.css";
@@ -76,7 +77,7 @@ export function PromptWorkspace({ client, canEdit, canDelete, scopeLabel }: { cl
   const disabled = busy || !capabilities, historical = !!source && source.revision !== head;
   const saveBlocker = canEdit && capabilities && !busy && !historical && !dirty ? source ? "Change the name or template to save a new revision." : "Name the prompt and write a template to save it." : null;
   return <div className="prompt-workspace" data-testid="prompt-workspace">
-    <header className="prompt-heading"><div><p className="prompt-eyebrow">{scopeLabel}</p><h1>Prompts</h1><p>Save templates with variables, keep every revision, and fill in values to see the exact text.</p></div>{canEdit && <Button size="lg" disabled={disabled} onClick={() => afterDiscard(reset)}><Plus />New prompt</Button>}</header>
+    <PageHeader className="prompt-heading" eyebrow="Prompts" title="Prompts" description="Save templates with variables, keep every revision, and fill in values to see the exact text." actions={canEdit && source ? <Button size="lg" disabled={disabled} onClick={() => afterDiscard(reset)}><Plus />New prompt</Button> : undefined} />
     <div aria-live="polite" className="prompt-status">{busy ? "Working…" : notice && <><CheckCircle2 size={16} />{notice}</>}</div>
     {error && <div role="alert" className="prompt-error"><p>{error}</p><Button variant="outline" disabled={busy} onClick={() => void perform(refresh)}>Refresh prompts</Button>{source && canEdit && <Button variant="outline" disabled={busy} onClick={() => afterDiscard(() => void perform(reloadHead))}>Load current revision</Button>}</div>}
     <div className="prompt-layout"><aside className="prompt-library" aria-label="Saved prompts"><div className="prompt-section-title"><h2>Saved prompts</h2><span>{items.length}</span></div>
