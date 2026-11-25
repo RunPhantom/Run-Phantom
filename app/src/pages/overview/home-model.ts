@@ -144,9 +144,13 @@ export function sumKnown(...values: (number | null)[]): number | null {
   return known.length ? known.reduce((sum, value) => sum + value, 0) : null;
 }
 
-/** Per-bucket series for the KPI sparklines. Unknown buckets are null, not zero. */
+/**
+ * Per-bucket series for the KPI sparklines. Unknown buckets are null, not zero.
+ * `partial` marks the window-edge buckets that hold only part of their span.
+ */
 export function kpiSeries(buckets: readonly OverviewBucket[]) {
   return {
+    partial: buckets.map(bucket => bucket.partial),
     runs: buckets.map(bucket => bucket.runs),
     errorRate: buckets.map(bucket => bucket.runs ? (bucket.failed + bucket.completedWithErrors) / bucket.runs : null),
     p95: buckets.map(bucket => bucket.durationP95Ms),

@@ -17,6 +17,7 @@ interface Tile {
   detail: ReactNode;
   href: string;
   series: readonly (number | null)[];
+  partial: readonly boolean[];
   sparkTone?: "accent" | "danger";
   title?: string;
 }
@@ -27,8 +28,9 @@ export function splitUnit(text: string): { value: string; unit?: string } {
   return match ? { value: match[1], unit: match[2] } : { value: text };
 }
 
-function sparkLabel(name: string, values: readonly (number | null)[], window: string): string {
-  const word = trendWord(values);
+/** Partial buckets are left out of the trend: a bucket that is half over would read as a fall. */
+function sparkLabel(name: string, values: readonly (number | null)[], partial: readonly boolean[], window: string): string {
+  const word = trendWord(values.map((value, index) => (partial[index] ? null : value)));
   return word ? `${name} trend ${window}: ${word}` : `${name} trend ${window}: not enough data`;
 }
 
@@ -58,6 +60,7 @@ export function buildTiles(overview: Overview): Tile[] {
       detail: running ? `${running} running` : `${compact(kpis.activeAgents.value ?? 0)} ${(kpis.activeAgents.value ?? 0) === 1 ? "agent" : "agents"}`,
       href: runsLink({ window }),
       series: series.runs,
+      partial: series.partial,
       title: `Runs that started ${copy.phrase}`,
     },
     {
@@ -68,6 +71,7 @@ export function buildTiles(overview: Overview): Tile[] {
       detail: kpis.errorRate.value === null ? "No finished runs yet" : `${failed} failed · ${withErrors} with errors`,
       href: runsLink({ status: ["failed", "completed_with_errors"], window }),
       series: series.errorRate,
+      partial: series.partial,
       sparkTone: "danger",
       title: "Finished runs that failed or finished with errors",
     },
@@ -79,6 +83,7 @@ export function buildTiles(overview: Overview): Tile[] {
       detail: kpis.durationP95Ms.knownRuns ? `p50 ${fmt(kpis.durationP50Ms.value)} · ${kpis.durationP95Ms.knownRuns} ${kpis.durationP95Ms.knownRuns === 1 ? "run" : "runs"}` : "No finished runs yet",
       href: runsLink({ window, sort: "duration" }),
       series: series.p95,
+      partial: series.partial,
       title: "95th percentile duration of finished runs",
     },
     {
@@ -90,6 +95,7 @@ export function buildTiles(overview: Overview): Tile[] {
         : `${compact(kpis.inputTokens.value ?? 0)} in · ${compact(kpis.outputTokens.value ?? 0)} out${tokenUnknown ? ` · ${tokenUnknown} ${tokenUnknown === 1 ? "call" : "calls"} unknown` : ""}`,
       href: runsLink({ window, sort: "tokens" }),
       series: series.tokens,
+      partial: series.partial,
       title: "Input plus output tokens of every model call",
     },
     {
@@ -103,6 +109,7 @@ export function buildTiles(overview: Overview): Tile[] {
           : cost.estimatedCalls ? `List prices as of ${overview.pricing.asOf}` : `${cost.reportedCalls} reported ${cost.reportedCalls === 1 ? "call" : "calls"}`,
       href: runsLink({ window, sort: "cost" }),
       series: series.cost,
+      partial: series.partial,
       title: cost.estimatedCalls
         ? `Estimated from the bundled list prices (${overview.pricing.revision}); reported costs are used where a call carried one. Cache storage, audio, image and tool fees are not included.`
         : "Costs reported by the model calls",
@@ -141,7 +148,7 @@ export function KpiStrip({ overview, interactive = true }: { overview: Overview;
                 <span className="rp-type-kpi" data-kpi-value>{tile.value}</span>
                 {tile.unit && <span className="text-14 font-medium text-rp-ink-muted">{tile.unit}</span>}
               </span>
-              <Sparkline className={cn("mb-1 w-[64px] shrink-0 2xl:w-[88px]", index > 0 && "max-sm:hidden")} values={tile.series} tone={tile.sparkTone} label={sparkLabel(tile.label, tile.series, WINDOW_COPY[overview.window.selection].phrase)} />
+              <Sparkline className={cn("mb-1 w-[64px] shrink-0 2xl:w-[88px]", index > 0 && "max-sm:hidden")} values={tile.series} partial={tile.partial} tone={tile.sparkTone} label={sparkLabel(tile.label, tile.series, tile.partial, WINDOW_COPY[overview.window.selection].phrase)} />
             </span>
             <span className="mt-1.5 flex min-h-5 flex-wrap items-center gap-x-1 text-12"><DeltaBadge delta={tile.delta} window={window} /></span>
             <span className="mt-0.5 truncate text-12 text-rp-ink-subtle" title={typeof tile.detail === "string" ? tile.detail : undefined}>{tile.detail}</span>
