@@ -34,6 +34,13 @@ describe("actual app pricing consumer", () => {
     expect(fmtCost(0)).toBe("$0.00");
   });
 
+  test("sub-cent estimates keep two significant digits", () => {
+    expect(fmtCost(0.0000076)).toBe("$0.0000076");
+    expect(fmtCost(0.00004321)).toBe("$0.000043");
+    expect(fmtCost(0.0051)).toBe("$0.0051");
+    expect(fmtCost(1e-12)).toBe("<$0.000000001");
+  });
+
   test("refuses malformed numeric strings instead of accepting prefixes", async () => {
     setModelPricingConsent(true);
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ data: [model("fixture/bad", "0.000003junk"), model("fixture/control")] })));
