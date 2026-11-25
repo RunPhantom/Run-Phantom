@@ -178,6 +178,8 @@ test("mobile search keeps direct links and keyboard controls usable", async ({ p
   await expect(page).toHaveURL(new RegExp(`/search/${runId(1)}/spans\\?q=cobalt-only`));
   await page.locator("[data-span-row]").first().click();
   expect(new URL(page.url()).searchParams.get("q")).toBe("cobalt-only");
+  // On a phone the step opens as a full-screen sheet that covers the run.
+  await page.getByRole("button", { name: "Back to span list", exact: true }).click();
   await page.getByRole("button", { name: "Back to search", exact: true }).click();
   const search = page.getByLabel("Search captured runs", { exact: true });
   await expect(search).toBeVisible();

@@ -1,8 +1,9 @@
 import React, { useCallback, useMemo, useState } from "react";
+import { CopyButton } from "./run-detail/CopyButton";
 
 const MONO = 'var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace';
-const SIZE = 11;
-const LH = 1.4;
+const SIZE = 12;
+const LH = 1.6;
 const ROW_GAP = 2;
 const INDENT = 20;
 
@@ -31,8 +32,8 @@ const inlineButtonStyle: React.CSSProperties = {
 const dc = {
   key: "var(--rp-ink)",
   string: "var(--rp-json-view-string)",
-  number: "var(--rp-blue)",
-  boolean: "var(--rp-blue)",
+  number: "var(--rp-json-number)",
+  boolean: "var(--rp-json-boolean)",
   null: "var(--rp-ink-muted)",
   brace: "var(--rp-ink-muted)",
   comma: "var(--rp-ink-muted)",
@@ -81,9 +82,29 @@ const ExpandableString: React.FC<{ value: string }> = ({ value }) => {
   );
 };
 
-type NodeProps = { keyName?: string | number; value: unknown; depth: number; maxExpand: number; isLast: boolean };
+type NodeProps = { keyName?: string | number; value: unknown; depth: number; maxExpand: number; isLast: boolean; path: string; copyable: boolean };
 
-const JsonNode: React.FC<NodeProps> = ({ keyName, value, depth, maxExpand, isLast }) => {
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+export function jsonPath(parent: string, key: string | number): string {
+  if (typeof key === "number") return `${parent}[${key}]`;
+  return IDENTIFIER.test(key) ? `${parent}.${key}` : `${parent}[${JSON.stringify(key)}]`;
+}
+
+function copyValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === undefined) return "undefined";
+  return JSON.stringify(value, null, 2);
+}
+
+/** Copy controls for one row: hidden until the row is hovered or a control inside it has focus. */
+const RowCopy: React.FC<{ path: string; value: unknown }> = ({ path, value }) => (
+  <span className="absolute right-0 top-0 flex items-center gap-0.5 rounded-sm bg-rp-surface pl-1 opacity-0 shadow-e1 transition-opacity duration-fast group-hover/json:opacity-100 group-focus-within/json:opacity-100">
+    <CopyButton value={path} label={`Copy path ${path}`} title={`Copy path ${path}`} className="h-[20px] min-w-0 px-1 font-mono text-[11px]">path</CopyButton>
+    <CopyButton value={() => copyValue(value)} label={`Copy value at ${path}`} title={`Copy value at ${path}`} className="h-[20px] min-w-0 px-1 font-mono text-[11px]">value</CopyButton>
+  </span>
+);
+
+const JsonNode: React.FC<NodeProps> = ({ keyName, value, depth, maxExpand, isLast, path, copyable }) => {
   const isObj = value !== null && typeof value === "object" && !Array.isArray(value);
   const isArr = Array.isArray(value);
   const expandable = isObj || isArr;
@@ -112,10 +133,13 @@ const JsonNode: React.FC<NodeProps> = ({ keyName, value, depth, maxExpand, isLas
     } else { display = String(value); }
 
     return (
-      <div style={{ ...mono, paddingLeft: depth * INDENT, wordBreak: "break-word", marginTop: ROW_GAP }}>
-        {keyEl}
-        <span style={{ color, fontStyle: italic ? "italic" : "normal", fontFamily: MONO }}>{display}</span>
-        <span style={{ color: dc.comma, fontFamily: MONO }}>{trail}</span>
+      <div className={copyable ? "group/json relative flex items-start rounded-sm hover:bg-rp-row-hover" : undefined} title={copyable ? path : undefined} style={{ ...mono, paddingLeft: depth * INDENT, wordBreak: "break-word", marginTop: ROW_GAP }}>
+        <span className="min-w-0">
+          {keyEl}
+          <span style={{ color, fontStyle: italic ? "italic" : "normal", fontFamily: MONO }}>{display}</span>
+          <span style={{ color: dc.comma, fontFamily: MONO }}>{trail}</span>
+        </span>
+        {copyable && <RowCopy path={path} value={value} />}
       </div>
     );
   }
@@ -136,7 +160,7 @@ const JsonNode: React.FC<NodeProps> = ({ keyName, value, depth, maxExpand, isLas
   }
 
   if (!open) {
-    return (
+    const collapsedButton = (
       <button
         type="button"
         style={{ ...rowButtonStyle, paddingLeft: depth * INDENT }}
@@ -153,26 +177,31 @@ const JsonNode: React.FC<NodeProps> = ({ keyName, value, depth, maxExpand, isLas
         <span style={{ color: dc.comma, fontFamily: MONO }}>{trail}</span>
       </button>
     );
+    if (!copyable) return collapsedButton;
+    return <div className="group/json relative flex items-start rounded-sm hover:bg-rp-row-hover" title={path}>{collapsedButton}<RowCopy path={path} value={value} /></div>;
   }
 
+  const openButton = (
+    <button
+      type="button"
+      style={{ ...rowButtonStyle, paddingLeft: depth * INDENT }}
+      onClick={(e) => { e.stopPropagation(); setOpen(false); }}
+      aria-expanded
+      aria-label={`Collapse ${keyName === undefined ? "root" : String(keyName)}`}
+    >
+      <Arrow open />{keyEl}<span style={{ color: dc.brace, fontFamily: MONO }}>{br[0]}</span>
+    </button>
+  );
   return (
     <div>
-      <button
-        type="button"
-        style={{ ...rowButtonStyle, paddingLeft: depth * INDENT }}
-        onClick={(e) => { e.stopPropagation(); setOpen(false); }}
-        aria-expanded
-        aria-label={`Collapse ${keyName === undefined ? "root" : String(keyName)}`}
-      >
-        <Arrow open />{keyEl}<span style={{ color: dc.brace, fontFamily: MONO }}>{br[0]}</span>
-      </button>
+      {copyable ? <div className="group/json relative flex items-start rounded-sm hover:bg-rp-row-hover" title={path}>{openButton}<RowCopy path={path} value={value} /></div> : openButton}
       <div style={{ position: "relative" }}>
         <div
           aria-hidden="true"
           style={{ position: "absolute", top: 0, bottom: 0, left: depth * INDENT + 5, width: 8, borderLeft: `1px solid ${dc.guide}` }}
         />
         {entries.map(([k, v], i) => (
-          <JsonNode key={typeof k === "number" ? i : k} keyName={k} value={v} depth={depth + 1} maxExpand={maxExpand} isLast={i === n - 1} />
+          <JsonNode key={typeof k === "number" ? i : k} keyName={k} value={v} depth={depth + 1} maxExpand={maxExpand} isLast={i === n - 1} path={jsonPath(path, k)} copyable={copyable} />
         ))}
       </div>
       <div style={{ ...mono, paddingLeft: depth * INDENT + 10 }}>
@@ -183,7 +212,8 @@ const JsonNode: React.FC<NodeProps> = ({ keyName, value, depth, maxExpand, isLas
   );
 };
 
-export function JsonView({ data, maxExpand = 3 }: { data: unknown; maxExpand?: number }) {
+/** `copyable` adds copy-path and copy-value controls to every row, shown on hover or focus. */
+export function JsonView({ data, maxExpand = 3, copyable = false }: { data: unknown; maxExpand?: number; copyable?: boolean }) {
   const parsed = useMemo(() => {
     if (typeof data === "string") { try { return JSON.parse(data); } catch { return data; } }
     return data;
@@ -210,7 +240,7 @@ export function JsonView({ data, maxExpand = 3 }: { data: unknown; maxExpand?: n
   if (parsed !== null && typeof parsed === "object") {
     return (
       <div style={{ fontFamily: MONO, fontSize: SIZE }} onClick={(e) => e.stopPropagation()}>
-        <JsonNode value={normalized} depth={0} maxExpand={maxExpand} isLast />
+        <JsonNode value={normalized} depth={0} maxExpand={maxExpand} isLast path="$" copyable={copyable} />
       </div>
     );
   }

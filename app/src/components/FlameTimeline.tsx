@@ -132,10 +132,12 @@ function SpanTooltip({
   const inputRaw = span.input_payload?.trim() ?? "";
   const outputRaw = span.output_payload?.trim() ?? "";
 
+  // One tap on a sub-agent bar opens this and the sub-agent's popover (z 9999)
+  // together; the details for the bar just tapped stay on top and closable.
   return (
     <div
       data-span-tooltip
-      className="pointer-events-auto fixed z-[9999] flex flex-col overflow-hidden rounded-md border border-rp-line bg-rp-surface shadow-e3"
+      className="pointer-events-auto fixed z-[10000] flex flex-col overflow-hidden rounded-md border border-rp-line bg-rp-surface shadow-e3"
       style={{
         left,
         top,
