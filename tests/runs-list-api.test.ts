@@ -5,10 +5,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { clearAll, closeDb, getDbPath, getDrizzleDb, getRuns } from "../src/db";
 import { createServer } from "../src/server";
-import { registerServerCostRates } from "../src/stats/cost-rates";
 import { clearRunFactsCache } from "../src/stats/run-facts";
 import { listRuns } from "../src/stats/runs-list";
-import { FIXTURE_NOW, nominalRate, seedMetricsFixture } from "./fixtures/metrics-seed";
+import { FIXTURE_NOW, seedMetricsFixture } from "./fixtures/metrics-seed";
 
 const HOUR = 3_600_000;
 let directory: string;
@@ -21,9 +20,8 @@ beforeAll(() => {
   process.env.RUNPHANTOM_DB_PATH = path.join(directory, "runs.db");
   getDrizzleDb();
 });
-beforeEach(() => { clearAll(); clearRunFactsCache(); registerServerCostRates(null); seedMetricsFixture(getDrizzleDb().$client); });
+beforeEach(() => { clearAll(); clearRunFactsCache(); seedMetricsFixture(getDrizzleDb().$client); });
 afterAll(() => {
-  registerServerCostRates(null);
   closeDb();
   if (oldDb === undefined) delete process.env.RUNPHANTOM_DB_PATH; else process.env.RUNPHANTOM_DB_PATH = oldDb;
   rmSync(directory, { recursive: true, force: true });
@@ -66,18 +64,28 @@ describe("GET /api/runs rows", () => {
       error_count: 0, tool_count: 1, model: "gpt-4o-mini", primary_model: "gpt-4o-mini", provider: "openai", models: ["gpt-4o-mini"], input_preview: "Summarise the March invoices for ACME and flag anything overdue.",
       llm_calls: 1, known_input_tokens: 100, known_output_tokens: 20, token_unknown_calls: 0, known_cost_usd: 0.002, cost_unknown_calls: 0,
     });
-    expect(byId.get("r-tool-err")).toMatchObject({ status: "completed_with_errors", duration_ms: 20_000, input_tokens: 300, output_tokens: 50, est_cost_usd: null, cost_source: "unknown", error_count: 1, tool_count: 2, input_preview: "Review PR 842" });
+    expect(byId.get("r-tool-err")).toMatchObject({ status: "completed_with_errors", duration_ms: 20_000, input_tokens: 300, output_tokens: 50, est_cost_usd: 0.00055, cost_source: "estimated", error_count: 1, tool_count: 2, input_preview: "Review PR 842" });
     expect(byId.get("r-failed")).toMatchObject({ status: "failed", duration_ms: 30_000, error_count: 2, est_cost_usd: 0.004, input_preview: null });
     expect(byId.get("r-running")).toMatchObject({ status: "running", finished: 0, duration_ms: null, input_tokens: 50, output_tokens: null, est_cost_usd: null, cost_source: "unknown",
       llm_calls: 1, known_input_tokens: 50, known_output_tokens: null, token_unknown_calls: 1, known_cost_usd: null, cost_unknown_calls: 1 });
-    expect(byId.get("r-tool-err")).toMatchObject({ llm_calls: 1, known_cost_usd: null, cost_unknown_calls: 1 });
+    expect(byId.get("r-tool-err")).toMatchObject({ llm_calls: 1, known_cost_usd: 0.00055, cost_unknown_calls: 0 });
     expect(byId.get("r-nested")).toMatchObject({ input_tokens: 1000, output_tokens: 100, est_cost_usd: 0.01, cost_source: "reported", display_name: "Nested calls" });
     expect(byId.get("old")).toMatchObject({ status: "completed", input_tokens: null, est_cost_usd: null, cost_source: "unknown", model: null, primary_model: null, models: [], llm_calls: 0, known_input_tokens: null, token_unknown_calls: 0 });
   });
 
-  test("estimates unreported calls from a registered price table", () => {
-    registerServerCostRates(() => ({ estimateMode: "nominal-input-output", rates: [nominalRate("claude-haiku-4-5", 1, 5)] }));
-    expect(list().runs.find(row => row.id === "r-tool-err")).toMatchObject({ est_cost_usd: 0.00055, cost_source: "estimated" });
+  test("estimates unreported calls from the bundled list prices and keeps mixed runs truthful", () => {
+    const client = getDrizzleDb().$client;
+    const at = FIXTURE_NOW - 6 * HOUR;
+    client.query("INSERT INTO runs(id,name,event_name,started_at,last_updated_at) VALUES('mixed','mixed','mixed',?,?)").run(at, at + 5_000);
+    const insert = client.prepare(`INSERT INTO spans(run_id,id,parent_span_id,name,span_type,status,start_time_ms,end_time_ms,duration_ms,model,provider,input_tokens,output_tokens,attributes)
+      VALUES('mixed',?,?,?,?,'OK',?,?,?,?,?,?,?,?)`);
+    insert.run("root", null, "mixed", "AGENT_ROOT", at, at + 5_000, 5_000, null, null, null, null, null);
+    insert.run("reported", "root", "chat", "LLM_GENERATION", at + 100, at + 900, 800, "gpt-4o-mini", "openai", 10, 5, JSON.stringify({ "gen_ai.usage.cost_usd": 0.003 }));
+    // gpt-5-nano-2025-08-07 resolves to gpt-5-nano ($0.05 / $0.40 per million): 4,000 × 0.05 + 1,000 × 0.40 = $0.0006.
+    insert.run("dated", "root", "chat", "LLM_GENERATION", at + 1_000, at + 1_900, 900, "gpt-5-nano-2025-08-07", "openai", 4_000, 1_000, null);
+    expect(list({ q: "mixed" }).runs[0]).toMatchObject({ est_cost_usd: 0.0036, cost_source: "estimated", known_cost_usd: 0.0036, cost_unknown_calls: 0, llm_calls: 2 });
+    insert.run("unpriced", "root", "chat", "LLM_GENERATION", at + 2_000, at + 2_500, 500, "in-house-model", "openai", 10, 10, null);
+    expect(list({ q: "mixed" }).runs[0]).toMatchObject({ est_cost_usd: null, cost_source: "unknown", known_cost_usd: 0.0036, cost_unknown_calls: 1, llm_calls: 3 });
   });
 });
 
@@ -95,7 +103,7 @@ describe("GET /api/runs parameters", () => {
 
   test("sorts by metric with unknown values last in either direction", () => {
     expect(ids({ sort: "cost" })).toEqual(["r-nested", "r-failed", "r-ok", "p-ok", "r-tool-err", "r-running", "p-failed", "old"]);
-    expect(ids({ sort: "cost", order: "asc" })).toEqual(["p-ok", "r-ok", "r-failed", "r-nested", "old", "p-failed", "r-running", "r-tool-err"]);
+    expect(ids({ sort: "cost", order: "asc" })).toEqual(["r-tool-err", "p-ok", "r-ok", "r-failed", "r-nested", "old", "p-failed", "r-running"]);
     expect(ids({ sort: "duration" })).toEqual(["r-failed", "r-tool-err", "r-ok", "p-failed", "r-nested", "p-ok", "old", "r-running"]);
     expect(ids({ sort: "tokens" })).toEqual(["r-nested", "r-tool-err", "r-failed", "r-ok", "p-ok", "r-running", "p-failed", "old"]);
     expect(ids({ sort: "errors" }).slice(0, 3)).toEqual(["r-failed", "r-tool-err", "p-failed"]);

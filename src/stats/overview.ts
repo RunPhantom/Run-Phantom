@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { serverCostRates } from "./cost-rates";
+import { LIST_PRICE_REVISIONS, PRICE_TABLE_AS_OF, PRICE_TABLE_REVISION } from "../pricing/list-prices";
 import { percentile, queryString, roundUsd, runAgent, runDisplayName, runUsesModel, sortedNumbers, StatsRequestError } from "./common";
 import { loadRunRows, selectRunAggregates, type GenerationFact, type RunRow } from "./run-facts";
 import type { RunStatus } from "./run-status";
@@ -62,7 +62,8 @@ export interface Overview {
   asOf: number;
   window: { selection: OverviewWindow; from: number; to: number; previousFrom: number; previousTo: number; bucketMs: number; tzOffsetMinutes: number; field: "startedAt" };
   filters: { agent: string | null; model: string | null };
-  pricing: { estimateMode: "captured" | "nominal-input-output"; rateCount: number };
+  /** Unreported model calls are estimated from the bundled list-price table (src/pricing/list-prices.ts). */
+  pricing: { estimateMode: "list-prices"; rateCount: number; revision: string; asOf: string };
   kpis: {
     runs: Kpi;
     running: Kpi;
@@ -155,8 +156,7 @@ export function computeOverview(db: Database, dbPath: string, rawQuery: Record<s
   const { durationMs, bucketMs } = OVERVIEW_WINDOWS[query.selection];
   const to = now, from = to - durationMs, previousFrom = from - durationMs;
   const liveSince = now - OVERVIEW_LIMITS.liveActivityMs;
-  const rates = serverCostRates();
-  const all = loadRunRows(db, dbPath, selectRunAggregates(db, "((r.started_at >= ? AND r.started_at < ?) OR r.last_updated_at >= ?)", [previousFrom, to, liveSince]), rates)
+  const all = loadRunRows(db, dbPath, selectRunAggregates(db, "((r.started_at >= ? AND r.started_at < ?) OR r.last_updated_at >= ?)", [previousFrom, to, liveSince]))
     .filter(row => (!query.agent || runAgent(row) === query.agent) && (!query.model || runUsesModel(row, query.model)));
   const current = all.filter(row => row.started_at >= from && row.started_at < to);
   const previous = all.filter(row => row.started_at >= previousFrom && row.started_at < from);
@@ -241,7 +241,7 @@ export function computeOverview(db: Database, dbPath: string, rawQuery: Record<s
     version: OVERVIEW_VERSION, asOf: now,
     window: { selection: query.selection, from, to, previousFrom, previousTo: from, bucketMs, tzOffsetMinutes: query.tzOffsetMinutes, field: "startedAt" },
     filters: { agent: query.agent ?? null, model: query.model ?? null },
-    pricing: { estimateMode: rates.estimateMode, rateCount: rates.rates.length },
+    pricing: { estimateMode: "list-prices", rateCount: LIST_PRICE_REVISIONS.length, revision: PRICE_TABLE_REVISION, asOf: PRICE_TABLE_AS_OF },
     kpis: {
       runs: kpi(now_.runs, before.runs),
       running: kpi(now_.counts.running, before.counts.running),

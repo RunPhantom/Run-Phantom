@@ -1,12 +1,10 @@
 import type { Database } from "bun:sqlite";
 import { parseJsonEvidence } from "../evaluations/json-evidence";
 import { hasDuplicateJsonKeys } from "../json-keys";
-import { calculateCost } from "../pricing/calculator";
-import { NOMINAL_CATALOGUE_PROVIDER, NOMINAL_CATALOGUE_TIER, selectRateRevision } from "../pricing/rates";
+import { generationCost, requestModel } from "../pricing/span-cost";
 import { normalizeUsage } from "../pricing/usage";
 import { normalizeStoredSpan } from "../spans/normalize";
 import { captureCompletion } from "../spans/normalized";
-import type { ServerCostRates } from "./cost-rates";
 import { deriveRunStatus, type RunStatus } from "./run-status";
 import { rootFailed } from "../run-status";
 
@@ -172,12 +170,12 @@ export function clearRunFactsCache(): void {
   cache.clear();
 }
 
-export function loadRunRows(db: Database, dbPath: string, aggregates: readonly Aggregate[], rates: ServerCostRates): RunRow[] {
+export function loadRunRows(db: Database, dbPath: string, aggregates: readonly Aggregate[]): RunRow[] {
   const facts = new Map<string, RunFacts>();
   const missing: Aggregate[] = [];
   for (const aggregate of aggregates) {
     const hit = cache.get(cacheKey(dbPath, aggregate.id));
-    if (hit && hit.fingerprint === fingerprint(aggregate, rates)) {
+    if (hit && hit.fingerprint === fingerprint(aggregate)) {
       facts.set(aggregate.id, hit.facts);
       remember(cacheKey(dbPath, aggregate.id), hit.fingerprint, hit.facts);
     } else missing.push(aggregate);
@@ -186,9 +184,9 @@ export function loadRunRows(db: Database, dbPath: string, aggregates: readonly A
     const batch = missing.slice(offset, offset + RUN_FACT_LIMITS.idsPerQuery);
     const spans = selectSpans(db, batch.map(item => item.id));
     for (const aggregate of batch) {
-      const computed = computeRunFacts(aggregate, spans.get(aggregate.id) ?? [], rates);
+      const computed = computeRunFacts(aggregate, spans.get(aggregate.id) ?? []);
       facts.set(aggregate.id, computed);
-      remember(cacheKey(dbPath, aggregate.id), fingerprint(aggregate, rates), computed);
+      remember(cacheKey(dbPath, aggregate.id), fingerprint(aggregate), computed);
     }
   }
   return aggregates.map(aggregate => ({
@@ -199,10 +197,10 @@ export function loadRunRows(db: Database, dbPath: string, aggregates: readonly A
 }
 
 const cacheKey = (dbPath: string, runId: string) => `${dbPath}\u0000${runId}`;
-const fingerprint = (aggregate: Aggregate, rates: ServerCostRates) => JSON.stringify([aggregate.span_count, aggregate.error_count, aggregate.tool_count, aggregate.root_count,
+const fingerprint = (aggregate: Aggregate) => JSON.stringify([aggregate.span_count, aggregate.error_count, aggregate.tool_count, aggregate.root_count,
   aggregate.ended_root_count, aggregate.root_error_count, aggregate.tool_error_count, aggregate.agent_root_count, aggregate.agent_root_error_count, aggregate.min_start, aggregate.max_end, aggregate.fp_attributes, aggregate.fp_input,
   aggregate.fp_output, aggregate.fp_duration, aggregate.fp_tokens, aggregate.fp_ok, aggregate.fp_names, aggregate.fp_generations, aggregate.fp_model,
-  aggregate.fp_start, aggregate.fp_end, aggregate.fp_parent, aggregate.fp_rowid, aggregate.fp_model_min, aggregate.fp_model_max, rates.key]);
+  aggregate.fp_start, aggregate.fp_end, aggregate.fp_parent, aggregate.fp_rowid, aggregate.fp_model_min, aggregate.fp_model_max]);
 
 /** Least-recently-used: a hit is re-inserted, so the oldest key in Map order is the coldest entry. */
 function remember(key: string, value: string, facts: RunFacts): void {
@@ -227,7 +225,7 @@ function selectSpans(db: Database, runIds: readonly string[]): Map<string, SpanR
   return grouped;
 }
 
-function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[], rates: ServerCostRates): RunFacts {
+function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[]): RunFacts {
   const runRootFailed = rootFailed({ roots: aggregate.root_count, rootErrors: aggregate.root_error_count, agentRoots: aggregate.agent_root_count, agentRootErrors: aggregate.agent_root_error_count });
   const status = deriveRunStatus({ rootCount: aggregate.root_count, endedRootCount: aggregate.ended_root_count, rootErrorCount: aggregate.root_error_count, rootFailed: runRootFailed, errorCount: aggregate.error_count });
   const finished = aggregate.root_count > 0 && aggregate.ended_root_count === aggregate.root_count ? 1 : 0;
@@ -238,7 +236,7 @@ function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[], rates:
   let firstGeneration: SpanRow | null = null;
   for (const span of spans) {
     if (span.span_type !== "LLM_GENERATION") continue;
-    const generation = evaluateGeneration(span, byId, rates);
+    const generation = evaluateGeneration(span, byId);
     if (!generation) continue;
     firstGeneration ??= span;
     generations.push(generation);
@@ -286,7 +284,6 @@ function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[], rates:
   });
 }
 
-const REPORTED_COST_KEYS = ["gen_ai.usage.cost_usd", "gen_ai.usage.cost", "runphantom.cost.usd", "llm.cost.total", "llm.usage.cost", "ai.usage.cost"] as const;
 const MODEL_KEYS = ["gen_ai.response.model", "ai.response.model", "llm.response.model_name", "gen_ai.request.model", "ai.model.id", "llm.request.model", "llm.model_name"];
 const INPUT_KEYS = ["gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens", "ai.usage.inputTokens", "ai.usage.promptTokens", "ai.usage.prompt_tokens", "llm.token_count.prompt"];
 const OUTPUT_KEYS = ["gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens", "ai.usage.outputTokens", "ai.usage.completionTokens", "ai.usage.completion_tokens", "llm.token_count.completion"];
@@ -303,21 +300,13 @@ function parsedAttributes(span: SpanRow): { values: Record<string, unknown>; una
   } catch { return { values: {}, unavailable: true }; }
 }
 
-function reportedCost(values: Record<string, unknown>, unavailable: boolean): number | null {
-  if (unavailable) return null;
-  if (hasOwn(values, "runphantom.cost.currency") && values["runphantom.cost.currency"] !== "USD") return null;
-  const observed = REPORTED_COST_KEYS.filter(key => hasOwn(values, key)).map(key => values[key]);
-  if (!observed.length || observed.some(value => typeof value !== "number" || !Number.isFinite(value) || value < 0 || value !== observed[0])) return null;
-  return observed[0] as number;
-}
-
 /**
  * Mirrors aggregateCostAnalytics (pricing/analytics.ts) for one generation so
  * run totals agree with the Cost page: nested generations are counted once
  * through their outermost model call, and a broken ancestry makes the call's
  * usage unknown. tests/run-facts.test.ts pins the two against each other.
  */
-function evaluateGeneration(span: SpanRow, byId: ReadonlyMap<string, SpanRow>, rates: ServerCostRates): GenerationFact | null {
+function evaluateGeneration(span: SpanRow, byId: ReadonlyMap<string, SpanRow>): GenerationFact | null {
   const structure = ancestry(span, byId);
   if (structure === "nested") return null;
   const captured = parsedAttributes(span);
@@ -331,22 +320,9 @@ function evaluateGeneration(span: SpanRow, byId: ReadonlyMap<string, SpanRow>, r
   const provider = usage.provider ?? span.provider;
   const durationMs = typeof span.duration_ms === "number" && Number.isFinite(span.duration_ms) && span.duration_ms >= 0 ? span.duration_ms : null;
   if (structure === "unavailable") return { model, provider, durationMs, inputTokens: null, outputTokens: null, costUsd: null, costSource: "unknown" };
-  const reported = reportedCost(values, captured.unavailable);
-  let estimated: number | null = null;
-  if (reported === null && rates.rates.length) {
-    const quoteUsage = rates.estimateMode === "nominal-input-output" ? normalizeUsage({
-      "gen_ai.response.model": usage.model, "runphantom.usage.tier": NOMINAL_CATALOGUE_TIER,
-      "gen_ai.usage.input_tokens": usage.categories.input.count, "gen_ai.usage.output_tokens": usage.categories.output.count,
-    }, NOMINAL_CATALOGUE_PROVIDER) : usage;
-    const rate = selectRateRevision(quoteUsage, rates.rates);
-    const total = rate ? calculateCost(quoteUsage, rate).totalUsd : null;
-    estimated = typeof total === "number" && Number.isFinite(total) && total >= 0 ? total : null;
-  }
-  return {
-    model, provider, durationMs,
-    inputTokens: usage.categories.input.count, outputTokens: usage.categories.output.count,
-    costUsd: reported ?? estimated, costSource: reported !== null ? "reported" : estimated !== null ? "estimated" : "unknown",
-  };
+  const inputTokens = usage.categories.input.count, outputTokens = usage.categories.output.count;
+  const cost = generationCost({ values: captured.unavailable ? null : values, models: [model, requestModel(values)], provider, inputTokens, outputTokens, at: span.start_time_ms });
+  return { model, provider, durationMs, inputTokens, outputTokens, costUsd: cost.usd, costSource: cost.source === "reported" ? "reported" : cost.source === "list-price" ? "estimated" : "unknown" };
 }
 
 function ancestry(span: SpanRow, byId: ReadonlyMap<string, SpanRow>): "root" | "nested" | "unavailable" {

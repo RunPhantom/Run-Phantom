@@ -1,6 +1,5 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { serverCostRates } from "./cost-rates";
 import { queryString, queryTime, roundUsd, runAgent, runUsesModel, StatsRequestError } from "./common";
 import { loadRunRows, selectRunAggregates, type CostSource, type RunRow } from "./run-facts";
 import { RUN_STATUSES, type RunStatus } from "./run-status";
@@ -164,7 +163,7 @@ export function listRuns(db: Database, dbPath: string, rawQuery: Record<string, 
   if (query.since !== undefined) { where.push("r.started_at >= ?"); params.push(query.since); }
   if (query.until !== undefined) { where.push("r.started_at < ?"); params.push(query.until); }
   const needle = query.q?.toLowerCase();
-  const matching = loadRunRows(db, dbPath, selectRunAggregates(db, where.join(" AND "), params), serverCostRates()).filter(row =>
+  const matching = loadRunRows(db, dbPath, selectRunAggregates(db, where.join(" AND "), params)).filter(row =>
     (!query.statuses || query.statuses.includes(row.facts.status))
     && (!query.agent || runAgent(row) === query.agent)
     && (!query.model || runUsesModel(row, query.model))

@@ -5,10 +5,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { clearAll, closeDb, getDbPath, getDrizzleDb } from "../src/db";
 import { createServer } from "../src/server";
-import { registerServerCostRates } from "../src/stats/cost-rates";
+import { LIST_PRICE_REVISIONS } from "../src/pricing/list-prices";
 import { computeOverview } from "../src/stats/overview";
 import { clearRunFactsCache } from "../src/stats/run-facts";
-import { FIXTURE_NOW, nominalRate, seedMetricsFixture } from "./fixtures/metrics-seed";
+import { FIXTURE_NOW, seedMetricsFixture } from "./fixtures/metrics-seed";
 
 const HOUR = 3_600_000;
 let directory: string;
@@ -21,9 +21,8 @@ beforeAll(() => {
   process.env.RUNPHANTOM_DB_PATH = path.join(directory, "overview.db");
   getDrizzleDb();
 });
-beforeEach(() => { clearAll(); clearRunFactsCache(); registerServerCostRates(null); });
+beforeEach(() => { clearAll(); clearRunFactsCache(); });
 afterAll(() => {
-  registerServerCostRates(null);
   closeDb();
   if (oldDb === undefined) delete process.env.RUNPHANTOM_DB_PATH; else process.env.RUNPHANTOM_DB_PATH = oldDb;
   rmSync(directory, { recursive: true, force: true });
@@ -36,7 +35,7 @@ describe("GET /api/overview computation", () => {
     seedMetricsFixture(getDrizzleDb().$client);
     const result = overview();
     expect(result.window).toEqual({ selection: "24h", from: FIXTURE_NOW - 24 * HOUR, to: FIXTURE_NOW, previousFrom: FIXTURE_NOW - 48 * HOUR, previousTo: FIXTURE_NOW - 24 * HOUR, bucketMs: HOUR, tzOffsetMinutes: 0, field: "startedAt" });
-    expect(result.pricing).toEqual({ estimateMode: "captured", rateCount: 0 });
+    expect(result.pricing).toEqual({ estimateMode: "list-prices", rateCount: LIST_PRICE_REVISIONS.length, revision: "runphantom-list-prices/2026-11-25", asOf: "2026-11-25" });
     expect(result.kpis).toEqual({
       runs: { value: 5, previous: 2 },
       running: { value: 1, previous: 0 },
@@ -49,7 +48,7 @@ describe("GET /api/overview computation", () => {
       durationP95Ms: { value: 30_000, previous: 6_000, knownRuns: 4 },
       inputTokens: { value: 1650, previous: 10, knownCalls: 5, unknownCalls: 0 },
       outputTokens: { value: 210, previous: 5, knownCalls: 4, unknownCalls: 1 },
-      costUsd: { value: 0.016, previous: 0.001, knownCalls: 3, unknownCalls: 2, reportedCalls: 3, estimatedCalls: 0, previousUnknownCalls: 0 },
+      costUsd: { value: 0.01655, previous: 0.001, knownCalls: 4, unknownCalls: 1, reportedCalls: 3, estimatedCalls: 1, previousUnknownCalls: 0 },
       activeAgents: { value: 2, previous: 2 },
     });
   });
@@ -58,12 +57,12 @@ describe("GET /api/overview computation", () => {
     seedMetricsFixture(getDrizzleDb().$client);
     const result = overview();
     expect(result.byAgent).toEqual([
-      { agent: "alpha", runs: 3, failed: 0, completedWithErrors: 1, failureRate: 0, inputTokens: 1400, outputTokens: 170, tokenUnknownCalls: 0, costUsd: 0.012, costKnownCalls: 2, costUnknownCalls: 1, durationP50Ms: 10_000, durationP95Ms: 20_000 },
+      { agent: "alpha", runs: 3, failed: 0, completedWithErrors: 1, failureRate: 0, inputTokens: 1400, outputTokens: 170, tokenUnknownCalls: 0, costUsd: 0.01255, costKnownCalls: 3, costUnknownCalls: 0, durationP50Ms: 10_000, durationP95Ms: 20_000 },
       { agent: "beta", runs: 2, failed: 1, completedWithErrors: 0, failureRate: 1, inputTokens: 250, outputTokens: 40, tokenUnknownCalls: 1, costUsd: 0.004, costKnownCalls: 1, costUnknownCalls: 1, durationP50Ms: 30_000, durationP95Ms: 30_000 },
     ]);
     expect(result.byModel).toEqual([
       { model: "gpt-4o-mini", provider: "openai", runs: 4, failed: 1, completedWithErrors: 0, failureRate: 1 / 3, inputTokens: 1350, outputTokens: 160, tokenUnknownCalls: 1, costUsd: 0.016, costKnownCalls: 3, costUnknownCalls: 1, calls: 4, callP50Ms: 1_000, callP95Ms: 4_000, durationP50Ms: 10_000, durationP95Ms: 30_000 },
-      { model: "claude-haiku-4-5", provider: "anthropic", runs: 1, failed: 0, completedWithErrors: 1, failureRate: 0, inputTokens: 300, outputTokens: 50, tokenUnknownCalls: 0, costUsd: null, costKnownCalls: 0, costUnknownCalls: 1, calls: 1, callP50Ms: 1_500, callP95Ms: 1_500, durationP50Ms: 20_000, durationP95Ms: 20_000 },
+      { model: "claude-haiku-4-5", provider: "anthropic", runs: 1, failed: 0, completedWithErrors: 1, failureRate: 0, inputTokens: 300, outputTokens: 50, tokenUnknownCalls: 0, costUsd: 0.00055, costKnownCalls: 1, costUnknownCalls: 0, calls: 1, callP50Ms: 1_500, callP95Ms: 1_500, durationP50Ms: 20_000, durationP95Ms: 20_000 },
     ]);
     expect(result.topFailingTools).toEqual([
       { tool: "run_tests", failures: 2, calls: 2, failedRuns: 2, lastError: { message: "Expected status 401, got 200.", runId: "r-tool-err", spanId: "tests", at: FIXTURE_NOW - 2 * HOUR + 2_000 } },
@@ -89,7 +88,7 @@ describe("GET /api/overview computation", () => {
     expect(timeseries.map(bucket => bucket.partial)).toEqual([true, ...Array(23).fill(false), true]);
     expect(at(11)).toEqual({ start: Date.UTC(2027, 0, 15, 11), end: Date.UTC(2027, 0, 15, 12), partial: false, runs: 1, failed: 0, completedWithErrors: 0, inputTokens: 100, outputTokens: 20, tokenUnknownCalls: 0, costUsd: 0.002, costUnknownCalls: 0, durationP95Ms: 10_000 });
     expect(at(9)).toMatchObject({ runs: 1, failed: 1, inputTokens: 200, costUsd: 0.004, durationP95Ms: 30_000 });
-    expect(at(10)).toMatchObject({ runs: 1, completedWithErrors: 1, costUsd: null, costUnknownCalls: 1 });
+    expect(at(10)).toMatchObject({ runs: 1, completedWithErrors: 1, costUsd: 0.00055, costUnknownCalls: 0 });
     expect(at(12)).toMatchObject({ runs: 1, inputTokens: 50, outputTokens: 0, tokenUnknownCalls: 1, durationP95Ms: null, costUsd: null, costUnknownCalls: 1 });
     expect(at(3)).toMatchObject({ runs: 0, costUsd: 0, costUnknownCalls: 0, durationP95Ms: null });
   });
@@ -136,13 +135,27 @@ describe("GET /api/overview computation", () => {
     expect(haiku.topFailingTools[0]).toMatchObject({ tool: "run_tests", failures: 1 });
   });
 
-  test("a registered price table estimates unreported calls and labels them", () => {
+  test("unreported calls are estimated from the bundled list prices, dated ids included", () => {
     seedMetricsFixture(getDrizzleDb().$client);
-    registerServerCostRates(() => ({ estimateMode: "nominal-input-output", rates: [nominalRate("claude-haiku-4-5", 1, 5)] }));
+    const client = getDrizzleDb().$client;
+    const at = FIXTURE_NOW - 6 * HOUR;
+    client.query("INSERT INTO runs(id,name,event_name,started_at,last_updated_at) VALUES('priced','delta','delta',?,?)").run(at, at + 4_000);
+    const insert = client.prepare(`INSERT INTO spans(run_id,id,parent_span_id,name,span_type,status,start_time_ms,end_time_ms,duration_ms,model,provider,input_tokens,output_tokens,attributes)
+      VALUES('priced',?,?,?,?,'OK',?,?,?,?,?,?,?,?)`);
+    insert.run("root", null, "delta", "AGENT_ROOT", at, at + 4_000, 4_000, null, null, null, null, null);
+    // claude-haiku-4-5-20251001 at $1 / $5 per million: 2,000 × 1 + 400 × 5 = $0.004.
+    insert.run("haiku", "root", "chat", "LLM_GENERATION", at + 100, at + 1_100, 1_000, "claude-haiku-4-5-20251001", "anthropic", 2_000, 400, null);
+    // The response model is not priced, so the requested gpt-4.1-mini prices it ($0.40 / $1.60): 1,000 × 0.4 + 500 × 1.6 = $0.0012.
+    insert.run("mini", "root", "chat", "LLM_GENERATION", at + 1_200, at + 2_000, 800, "gpt-4.1-mini-custom", "openai", 1_000, 500, JSON.stringify({ "gen_ai.request.model": "gpt-4.1-mini", "gen_ai.response.model": "gpt-4.1-mini-custom" }));
+    // An invalid reported cost is never replaced by an estimate.
+    insert.run("invalid", "root", "chat", "LLM_GENERATION", at + 2_100, at + 2_600, 500, "gpt-4o-mini", "openai", 10, 10, JSON.stringify({ "gen_ai.usage.cost_usd": "free" }));
     const result = overview();
-    expect(result.pricing).toEqual({ estimateMode: "nominal-input-output", rateCount: 1 });
-    expect(result.kpis.costUsd).toMatchObject({ value: 0.01655, knownCalls: 4, unknownCalls: 1, reportedCalls: 3, estimatedCalls: 1 });
-    expect(result.byModel.find(row => row.model === "claude-haiku-4-5")).toMatchObject({ costUsd: 0.00055, costKnownCalls: 1 });
+    expect(result.kpis.costUsd).toEqual({ value: 0.02175, previous: 0.001, knownCalls: 6, unknownCalls: 2, reportedCalls: 3, estimatedCalls: 3, previousUnknownCalls: 0 });
+    expect(result.byAgent.find(row => row.agent === "delta")).toMatchObject({ costUsd: 0.0052, costKnownCalls: 2, costUnknownCalls: 1 });
+    expect(result.byModel.find(row => row.model === "claude-haiku-4-5-20251001")).toMatchObject({ costUsd: 0.004, costKnownCalls: 1, costUnknownCalls: 0 });
+    expect(result.byModel.find(row => row.model === "gpt-4.1-mini-custom")).toMatchObject({ costUsd: 0.0012, costKnownCalls: 1 });
+    expect(result.timeseries.find(bucket => bucket.start === Date.UTC(2027, 0, 15, 6))).toMatchObject({ runs: 1, costUsd: 0.0052, costUnknownCalls: 1 });
+    expect(overview({ model: "claude-haiku-4-5-20251001" }).kpis.costUsd).toMatchObject({ value: 0.004, knownCalls: 1, unknownCalls: 0, estimatedCalls: 1 });
   });
 
   test("an empty store answers with zeros and unknowns, never invented values", () => {
