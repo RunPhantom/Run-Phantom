@@ -2,7 +2,7 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 export const fieldClassName =
-  "w-full min-w-0 rounded-sm border border-rp-line bg-white px-3 text-sm text-rp-ink transition-[border-color,background-color] duration-250 ease-standard placeholder:text-rp-ink-faint hover:border-[color:var(--rp-n10)] focus-visible:border-rp-blue focus-visible:outline-none disabled:cursor-not-allowed disabled:bg-rp-canvas disabled:opacity-60 aria-[invalid=true]:border-rp-danger";
+  "w-full min-w-0 rounded-sm border border-rp-line bg-white px-3 text-sm text-rp-ink transition-[border-color,background-color] duration-250 ease-standard placeholder:text-rp-ink-subtle hover:border-[color:var(--rp-n10)] focus-visible:border-rp-blue focus-visible:outline-none disabled:cursor-not-allowed disabled:bg-rp-canvas disabled:opacity-60 aria-[invalid=true]:border-rp-danger";
 
 const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(
   ({ className, type, ...props }, ref) => {

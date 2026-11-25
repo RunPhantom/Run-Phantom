@@ -28,8 +28,8 @@ function spanTypeInfo(span: Span): { className: string; label: string } {
 // failure. A per-name hue palette made healthy tool bars read as status colours.
 const BAR_STYLE = {
   llm: { background: "var(--rp-wash)", border: "1px solid var(--rp-wash-border)", color: "var(--rp-blue)" },
-  action: { background: "var(--rp-ink-soft)", border: "1px solid var(--rp-ink-soft)", color: "#FFFFFF" },
-  error: { background: "var(--rp-danger)", border: "1px solid var(--rp-danger)", color: "#FFFFFF" },
+  action: { background: "var(--rp-ink-soft)", border: "1px solid var(--rp-ink-soft)", color: "var(--rp-on-ink)" },
+  error: { background: "var(--rp-danger-solid)", border: "1px solid var(--rp-danger-solid)", color: "var(--rp-on-solid)" },
 } as const;
 
 function TooltipPayloadBlock({

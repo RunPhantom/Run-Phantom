@@ -237,7 +237,7 @@ export function VerificationPage() {
   const verdictCount = (status: VerificationStatus) => loadedReports.filter(report => report.status === status).length;
   const connectedApps = sessions.data?.filter(item => item.connected).length ?? 0;
   const capabilities = observation.data?.session.capabilities ?? session?.capabilities;
-  return <div className="mx-auto flex min-h-full w-full max-w-[1440px] min-w-0 flex-col gap-6 px-5 py-8 text-rp-ink sm:px-10 sm:py-11">
+  return <div className="mx-auto flex min-h-full w-full max-w-[1440px] min-w-0 flex-col gap-6 rp-page text-rp-ink">
     <PageHeader
       eyebrow="Verification / Application checks"
       title="Verification"

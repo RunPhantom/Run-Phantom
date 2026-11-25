@@ -43,7 +43,7 @@ export function ReviewQueues({ initialQueueId = "", initialItemId = "", onRetain
   const queue = queues.find(value => value.id === selected);
   const reportDirty = useCallback((count: number, inFlight: number) => { dirty.current = count; onRetainedChange?.({ retained: count, inFlight }); }, [onRetainedChange]);
   const selectQueue = (id: string) => { if (workspaceBusy || dirty.current) { setError("Your drafts are retained. Save, retry or discard them before switching queues."); return; } setError(""); setSelected(id); };
-  return <main className="mx-auto w-full max-w-[1440px] space-y-6 px-5 py-8 text-rp-ink sm:px-10 sm:py-11">
+  return <main className="mx-auto w-full max-w-[1440px] space-y-6 rp-page text-rp-ink">
     <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
     <div className="min-w-0">
     <p className="rp-eyebrow" data-tone="accent"><span aria-hidden="true" className="rp-eyebrow-marker" />Local curation</p>

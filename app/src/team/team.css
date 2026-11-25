@@ -3,7 +3,7 @@
 :where(.team-root,.team-auth) a{color:inherit}
 .team-root a:focus-visible,.team-auth a:focus-visible,.team-root button:focus-visible,.team-auth button:focus-visible,.team-root pre:focus-visible,.team-root summary:focus-visible{outline:2px solid var(--rp-blue);outline-offset:-2px}
 
-.team-strip{height:var(--rp-strip-h,28px);padding:0 28px;display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--rp-blue);color:#fff;font-size:12px;line-height:16px;font-weight:500}
+.team-strip{height:var(--rp-strip-h,28px);padding:0 28px;display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--rp-blue-solid);color:var(--rp-on-solid);font-size:12px;line-height:16px;font-weight:500}
 .team-strip>span{display:inline-flex;align-items:center;gap:8px;min-width:0;white-space:nowrap}
 .team-strip-dot{width:6px;height:6px;border-radius:999px;background:#fff;flex:none}
 .team-strip-note{font-weight:400;opacity:.92;overflow:hidden;text-overflow:ellipsis}
@@ -20,7 +20,7 @@
 .team-action{max-width:100%;height:auto;min-height:36px;white-space:normal;text-align:center;padding:8px 14px}
 button.team-action:not([class*="bg-"]){display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--rp-line);border-radius:var(--rp-radius-control);background:var(--rp-surface);color:var(--rp-ink);font:500 13px/20px var(--font-sans);cursor:pointer;transition:background-color var(--rp-dur-standard) var(--rp-ease-standard),border-color var(--rp-dur-standard) var(--rp-ease-standard),color var(--rp-dur-standard) var(--rp-ease-standard)}
 button.team-action:not([class*="bg-"]):hover{background:var(--rp-wash);border-color:var(--rp-wash-border)}
-button.team-action.team-primary:not([class*="bg-"]){background:var(--rp-blue);border-color:var(--rp-blue);color:#fff}
+button.team-action.team-primary:not([class*="bg-"]){background:var(--rp-blue-solid);border-color:var(--rp-blue-solid);color:var(--rp-on-solid)}
 button.team-action.team-primary:not([class*="bg-"]):hover{background:var(--rp-blue-hover);border-color:var(--rp-blue-hover)}
 button.team-action:not([class*="bg-"]):disabled{opacity:.5;cursor:not-allowed}
 
@@ -70,7 +70,7 @@ div.team-section>form.team-form>section>h2{margin-bottom:4px}
 .team-field small{font-size:11px;line-height:16px;font-weight:400;color:var(--rp-ink-muted)}
 .team-input{border:1px solid var(--rp-line);background:var(--rp-surface);color:var(--rp-ink);border-radius:var(--rp-radius-sm);font-size:13px;line-height:20px;padding:8px 12px;min-height:40px;min-width:0;width:100%;font-family:inherit;font-weight:400;transition:border-color var(--rp-dur-standard) var(--rp-ease-standard)}
 .team-input:hover{border-color:var(--rp-wash-border)}
-.team-input::placeholder{color:var(--rp-ink-faint)}
+.team-input::placeholder{color:var(--rp-ink-subtle)}
 .team-input:focus-visible{outline:2px solid var(--rp-blue);outline-offset:-2px;border-color:var(--rp-blue)}
 .team-input:disabled{background:var(--rp-canvas-grey);color:var(--rp-ink-muted);cursor:not-allowed}
 .team-input[aria-invalid=true]{border-color:var(--rp-danger)}
@@ -185,7 +185,7 @@ a.team-text-link[href]:not(.team-row-link){display:inline-flex;align-items:cente
 .team-report-workspace .evidence-inventory-editor summary,.team-report-workspace .evidence-source summary,.team-report-workspace .evidence-panel>details>summary,.team-report-workspace .team-section>details>summary{cursor:pointer;min-height:44px;padding-block:12px;font-weight:500}
 .team-report-workspace :is(button,input,select,summary):focus-visible{outline:2px solid var(--rp-blue);outline-offset:-2px}
 .team-report-workspace .evidence-inventory-editor button{min-height:40px;white-space:normal}
-.team-report-workspace .evidence-inventory-editor .evidence-primary{background:var(--rp-blue);color:#fff}
+.team-report-workspace .evidence-inventory-editor .evidence-primary{background:var(--rp-blue-solid);color:var(--rp-on-solid)}
 .team-report-workspace input[type=file]{font-size:13px;overflow:hidden}
 .team-report-workspace input[type=file]::file-selector-button{background:var(--rp-surface);color:var(--rp-ink);border:1px solid var(--rp-line);border-radius:var(--rp-radius-control);padding:7px 12px;margin-right:10px;font:inherit;font-weight:500;cursor:pointer}
 .team-report-workspace input[type=file]::file-selector-button:hover{background:var(--rp-wash);border-color:var(--rp-wash-border)}

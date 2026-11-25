@@ -161,7 +161,7 @@ export function SettingsPage() {
         </nav>
       </div>
 
-      <div className="min-h-0 min-w-0 flex-1 overflow-auto px-5 py-8 sm:px-10 sm:py-11">
+      <div className="min-h-0 min-w-0 flex-1 overflow-auto rp-page">
         <div className="w-full max-w-3xl pb-16">
           <SectionBlock
             key={tab}
