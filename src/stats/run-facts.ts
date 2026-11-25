@@ -8,6 +8,7 @@ import { normalizeStoredSpan } from "../spans/normalize";
 import { captureCompletion } from "../spans/normalized";
 import type { ServerCostRates } from "./cost-rates";
 import { deriveRunStatus, type RunStatus } from "./run-status";
+import { rootFailed } from "../run-status";
 
 export type CostSource = "reported" | "estimated" | "unknown";
 
@@ -39,6 +40,9 @@ export interface ToolFailureFact {
 export interface RunFacts {
   readonly spanCount: number;
   readonly errorCount: number;
+  /** Errored TOOL_CALL spans, as in the run list's legacy `tool_error_count`. */
+  readonly toolErrorCount: number;
+  readonly rootFailed: boolean;
   readonly toolCount: number;
   readonly finished: number;
   readonly status: RunStatus;
@@ -101,7 +105,8 @@ export const RUN_FACT_LIMITS = Object.freeze({
 interface Aggregate {
   id: string; event_id: string | null; name: string | null; event_name: string | null; display_name: string | null; user_id: string | null; convo_id: string | null;
   started_at: number; last_updated_at: number; metadata: string | null; live_event_count: number; legacy_model: string | null;
-  span_count: number; error_count: number; tool_count: number; root_count: number; ended_root_count: number; root_error_count: number;
+  span_count: number; error_count: number; tool_error_count: number; tool_count: number; root_count: number; ended_root_count: number; root_error_count: number;
+  agent_root_count: number; agent_root_error_count: number;
   min_start: number | null; max_end: number | null;
   fp_attributes: number; fp_input: number; fp_output: number; fp_duration: number; fp_tokens: number; fp_ok: number;
   fp_names: number; fp_generations: number; fp_model: number; fp_start: number; fp_end: number; fp_parent: number; fp_rowid: number | null; fp_model_min: string | null; fp_model_max: string | null;
@@ -121,6 +126,9 @@ const AGGREGATE_COLUMNS = `
   COALESCE(SUM(s.id IS NOT NULL AND s.parent_span_id IS NULL), 0) AS root_count,
   COALESCE(SUM(s.parent_span_id IS NULL AND s.status IN ('OK', 'ERROR')), 0) AS ended_root_count,
   COALESCE(SUM(s.parent_span_id IS NULL AND s.status = 'ERROR'), 0) AS root_error_count,
+  COALESCE(SUM(s.status = 'ERROR' AND s.span_type = 'TOOL_CALL'), 0) AS tool_error_count,
+  COALESCE(SUM(s.parent_span_id IS NULL AND s.span_type = 'AGENT_ROOT'), 0) AS agent_root_count,
+  COALESCE(SUM(s.parent_span_id IS NULL AND s.span_type = 'AGENT_ROOT' AND s.status = 'ERROR'), 0) AS agent_root_error_count,
   MIN(s.start_time_ms) AS min_start,
   MAX(s.end_time_ms) AS max_end,
   TOTAL(octet_length(s.attributes)) AS fp_attributes,
@@ -192,7 +200,7 @@ export function loadRunRows(db: Database, dbPath: string, aggregates: readonly A
 
 const cacheKey = (dbPath: string, runId: string) => `${dbPath}\u0000${runId}`;
 const fingerprint = (aggregate: Aggregate, rates: ServerCostRates) => JSON.stringify([aggregate.span_count, aggregate.error_count, aggregate.tool_count, aggregate.root_count,
-  aggregate.ended_root_count, aggregate.root_error_count, aggregate.min_start, aggregate.max_end, aggregate.fp_attributes, aggregate.fp_input,
+  aggregate.ended_root_count, aggregate.root_error_count, aggregate.tool_error_count, aggregate.agent_root_count, aggregate.agent_root_error_count, aggregate.min_start, aggregate.max_end, aggregate.fp_attributes, aggregate.fp_input,
   aggregate.fp_output, aggregate.fp_duration, aggregate.fp_tokens, aggregate.fp_ok, aggregate.fp_names, aggregate.fp_generations, aggregate.fp_model,
   aggregate.fp_start, aggregate.fp_end, aggregate.fp_parent, aggregate.fp_rowid, aggregate.fp_model_min, aggregate.fp_model_max, rates.key]);
 
@@ -220,7 +228,8 @@ function selectSpans(db: Database, runIds: readonly string[]): Map<string, SpanR
 }
 
 function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[], rates: ServerCostRates): RunFacts {
-  const status = deriveRunStatus({ rootCount: aggregate.root_count, endedRootCount: aggregate.ended_root_count, rootErrorCount: aggregate.root_error_count, errorCount: aggregate.error_count });
+  const runRootFailed = rootFailed({ roots: aggregate.root_count, rootErrors: aggregate.root_error_count, agentRoots: aggregate.agent_root_count, agentRootErrors: aggregate.agent_root_error_count });
+  const status = deriveRunStatus({ rootCount: aggregate.root_count, endedRootCount: aggregate.ended_root_count, rootErrorCount: aggregate.root_error_count, rootFailed: runRootFailed, errorCount: aggregate.error_count });
   const finished = aggregate.root_count > 0 && aggregate.ended_root_count === aggregate.root_count ? 1 : 0;
   const durationMs = finished && aggregate.min_start !== null && aggregate.max_end !== null && aggregate.max_end >= aggregate.min_start
     ? aggregate.max_end - aggregate.min_start : null;
@@ -264,7 +273,7 @@ function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[], rates:
   for (const [name, tool] of toolFailureSpans) toolFailures[name] = Object.freeze({ failures: tool.failures, last: errorFact(tool.last) });
   const root = spans.find(span => span.parent_span_id === null && span.span_type === "AGENT_ROOT") ?? null;
   return Object.freeze({
-    spanCount: aggregate.span_count, errorCount: aggregate.error_count, toolCount: aggregate.tool_count, finished, status, durationMs,
+    spanCount: aggregate.span_count, errorCount: aggregate.error_count, toolErrorCount: aggregate.tool_error_count, rootFailed: runRootFailed, toolCount: aggregate.tool_count, finished, status, durationMs,
     inputTokens, outputTokens, costUsd, costSource,
     llmCalls: generations.length,
     knownInputTokens: partial(generations.map(item => item.inputTokens)), knownOutputTokens: partial(generations.map(item => item.outputTokens)),

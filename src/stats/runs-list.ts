@@ -4,6 +4,7 @@ import { serverCostRates } from "./cost-rates";
 import { queryString, queryTime, roundUsd, runAgent, runUsesModel, StatsRequestError } from "./common";
 import { loadRunRows, selectRunAggregates, type CostSource, type RunRow } from "./run-facts";
 import { RUN_STATUSES, type RunStatus } from "./run-status";
+import { deriveRunStatus as deriveSharedRunStatus, type RunStatus as SharedRunStatus } from "../run-status";
 
 export const RUN_LIST_SORTS = ["last_updated_at", "started_at", "duration", "cost", "tokens", "errors"] as const;
 export type RunListSort = typeof RUN_LIST_SORTS[number];
@@ -27,6 +28,10 @@ export interface LegacyRunListRow {
   live_event_count: number;
   capture_completion: "unavailable" | null;
   error_count: number;
+  tool_error_count: number;
+  root_failed: boolean;
+  /** The shared deriveRunStatus status (src/run-status.ts); time-dependent, so derived per request. */
+  run_status: SharedRunStatus;
 }
 
 export interface RunListRow extends LegacyRunListRow {
@@ -134,12 +139,15 @@ function compare(a: { value: number | null; id: string }, b: { value: number | n
   return a.id === b.id ? 0 : (a.id < b.id ? -1 : 1) * direction;
 }
 
-export function toRunListRow(row: RunRow): RunListRow {
+export function toRunListRow(row: RunRow, now: number = Date.now()): RunListRow {
   const facts = row.facts;
+  const runStatus = deriveSharedRunStatus({ last_updated_at: row.last_updated_at, finished: facts.finished, span_count: facts.spanCount, metadata: row.metadata,
+    capture_completion: facts.captureCompletion, error_count: facts.errorCount, tool_error_count: facts.toolErrorCount, root_failed: facts.rootFailed }, now).status;
   return {
     id: row.id, event_id: row.event_id, name: row.name, event_name: row.event_name, display_name: row.display_name, user_id: row.user_id, convo_id: row.convo_id,
     started_at: row.started_at, last_updated_at: row.last_updated_at, metadata: row.metadata, model: row.legacy_model, finished: facts.finished,
     span_count: facts.spanCount, live_event_count: row.live_event_count, capture_completion: facts.captureCompletion, error_count: facts.errorCount,
+    tool_error_count: facts.toolErrorCount, root_failed: facts.rootFailed, run_status: runStatus,
     status: facts.status, agent: runAgent(row), duration_ms: facts.durationMs, input_tokens: facts.inputTokens, output_tokens: facts.outputTokens,
     est_cost_usd: facts.costUsd === null ? null : roundUsd(facts.costUsd), cost_source: facts.costSource, tool_count: facts.toolCount,
     primary_model: facts.primaryModel, provider: facts.provider, models: [...facts.models], input_preview: facts.inputPreview,
@@ -150,6 +158,7 @@ export function toRunListRow(row: RunRow): RunListRow {
 
 export function listRuns(db: Database, dbPath: string, rawQuery: Record<string, unknown>): RunListPage & { envelope: boolean } {
   const query = parseRunListQuery(rawQuery);
+  const now = Date.now();
   const where: string[] = ["1 = 1"];
   const params: number[] = [];
   if (query.since !== undefined) { where.push("r.started_at >= ?"); params.push(query.since); }
@@ -168,7 +177,7 @@ export function listRuns(db: Database, dbPath: string, rawQuery: Record<string, 
   const hasMore = remaining.length > page.length;
   const last = page[page.length - 1];
   return {
-    runs: page.map(item => toRunListRow(item.row)),
+    runs: page.map(item => toRunListRow(item.row, now)),
     total: matching.length,
     hasMore,
     nextCursor: hasMore && last ? Buffer.from(JSON.stringify([1, query.filterKey, last.value, last.id])).toString("base64url") : null,

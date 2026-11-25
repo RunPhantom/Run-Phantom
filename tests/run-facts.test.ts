@@ -39,12 +39,15 @@ const run = (id: string) => db().query("INSERT INTO runs(id,name,started_at,last
 
 describe("deriveRunStatus", () => {
   test("separates failed runs from runs that finished with step errors", () => {
-    expect(deriveRunStatus({ rootCount: 0, endedRootCount: 0, rootErrorCount: 0, errorCount: 0 })).toBe("running");
-    expect(deriveRunStatus({ rootCount: 1, endedRootCount: 0, rootErrorCount: 0, errorCount: 1 })).toBe("running");
-    expect(deriveRunStatus({ rootCount: 1, endedRootCount: 1, rootErrorCount: 0, errorCount: 0 })).toBe("completed");
-    expect(deriveRunStatus({ rootCount: 1, endedRootCount: 1, rootErrorCount: 0, errorCount: 2 })).toBe("completed_with_errors");
-    expect(deriveRunStatus({ rootCount: 1, endedRootCount: 1, rootErrorCount: 1, errorCount: 1 })).toBe("failed");
-    expect(deriveRunStatus({ rootCount: 2, endedRootCount: 1, rootErrorCount: 1, errorCount: 1 })).toBe("failed");
+    const ok = { rootErrorCount: 0, rootFailed: false };
+    expect(deriveRunStatus({ rootCount: 0, endedRootCount: 0, ...ok, errorCount: 0 })).toBe("running");
+    expect(deriveRunStatus({ rootCount: 1, endedRootCount: 0, ...ok, errorCount: 1 })).toBe("running");
+    expect(deriveRunStatus({ rootCount: 1, endedRootCount: 1, ...ok, errorCount: 0 })).toBe("completed");
+    expect(deriveRunStatus({ rootCount: 1, endedRootCount: 1, ...ok, errorCount: 2 })).toBe("completed_with_errors");
+    expect(deriveRunStatus({ rootCount: 1, endedRootCount: 1, rootErrorCount: 1, rootFailed: true, errorCount: 1 })).toBe("failed");
+    expect(deriveRunStatus({ rootCount: 2, endedRootCount: 1, rootErrorCount: 1, rootFailed: true, errorCount: 1 })).toBe("failed");
+    // Legacy SDKs emit every span as a sibling root: one errored tool root is a step error, not a failed run (rootFailed in src/run-status.ts).
+    expect(deriveRunStatus({ rootCount: 2, endedRootCount: 2, rootErrorCount: 1, rootFailed: false, errorCount: 1 })).toBe("completed_with_errors");
   });
 });
 
