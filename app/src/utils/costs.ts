@@ -192,6 +192,9 @@ export interface ModelCostRow {
   sources: { reported: number; listPrice: number; catalogue: number };
   reportedUsd: number;
   listPriceUsd: number;
+  /** Part of listPriceUsd spent on cached input, and the cache tokens it covers. */
+  listPriceCacheUsd: number;
+  listPriceCacheTokens: number;
   catalogueUsd: number;
   /** Null when any generation of this model has no reported cost and no estimate. */
   totalUsd: number | null;
@@ -200,8 +203,9 @@ export interface ModelCostRow {
   unavailableReason: string | null;
 }
 
-function unavailableReason(span: Span, invalidReported: boolean, pricing: PricingSnapshot): string {
-  if (invalidReported) return "The captured reported cost is invalid or conflicting.";
+function unavailableReason(span: Span, reason: string | null, pricing: PricingSnapshot): string {
+  if (reason === "reported_cost_invalid") return "The captured reported cost is invalid or conflicting.";
+  if (reason === "cache_usage_ambiguous") return "The capture does not say whether input tokens include cached tokens.";
   if (!span.model) return "Model identity was not captured.";
   if (!validTokenCount(span.input_tokens) || !validTokenCount(span.output_tokens)) return "Input or output token capture is unavailable.";
   if (pricing.status === "disabled") return "No list price. Enable public pricing in Settings.";
@@ -223,7 +227,7 @@ export function getRunCostRows(spans: Span[], pricing: PricingSnapshot = getPric
     if (!span.span_type?.includes("LLM") || (span.parent_span_id && llmIds.has(span.parent_span_id))) continue;
     const key = span.model || null;
     const tokens = usage.get(key) ?? { inTok: null, outTok: null };
-    const row = rows.get(key) ?? { model: key, inTok: tokens.inTok, outTok: tokens.outTok, generations: 0, sources: { reported: 0, listPrice: 0, catalogue: 0 }, reportedUsd: 0, listPriceUsd: 0, catalogueUsd: 0, totalUsd: 0, listPrice: null, catalogue: null, unavailableReason: null };
+    const row = rows.get(key) ?? { model: key, inTok: tokens.inTok, outTok: tokens.outTok, generations: 0, sources: { reported: 0, listPrice: 0, catalogue: 0 }, reportedUsd: 0, listPriceUsd: 0, listPriceCacheUsd: 0, listPriceCacheTokens: 0, catalogueUsd: 0, totalUsd: 0, listPrice: null, catalogue: null, unavailableReason: null };
     rows.set(key, row);
     row.generations++;
     const cost = spanCost(span);
@@ -231,13 +235,14 @@ export function getRunCostRows(spans: Span[], pricing: PricingSnapshot = getPric
     if (cost.source === "reported") { amount = cost.usd; row.reportedUsd += cost.usd; row.sources.reported++; }
     else if (cost.source === "list-price") {
       amount = cost.usd; row.listPriceUsd += cost.usd; row.sources.listPrice++;
+      row.listPriceCacheUsd += cost.estimate.cacheUsd; row.listPriceCacheTokens += cost.estimate.cacheTokens;
       const family = cost.estimate.family;
       row.listPrice ??= { inRate: cost.estimate.inputUsdPerMillion, outRate: cost.estimate.outputUsdPerMillion, sourceName: PRICE_SOURCES[family].name, sourceUrl: PRICE_SOURCES[family].url, asOf: PRICE_TABLE_AS_OF, priceModel: cost.estimate.model };
     } else if (cost.reason !== "reported_cost_invalid" && pricing.catalogue) {
       const quote = getCostBreakdown(span.model, span.input_tokens, span.output_tokens);
       if (quote) { amount = quote.totalCost; row.catalogueUsd += quote.totalCost; row.catalogue ??= quote; row.sources.catalogue++; }
     }
-    if (amount === null) { row.totalUsd = null; row.unavailableReason ??= unavailableReason(span, cost.source === null && cost.reason === "reported_cost_invalid", pricing); }
+    if (amount === null) { row.totalUsd = null; row.unavailableReason ??= unavailableReason(span, cost.source === null ? cost.reason : null, pricing); }
     else if (row.totalUsd !== null) row.totalUsd = Number.isFinite(row.totalUsd + amount) ? row.totalUsd + amount : null;
   }
   return [...rows.values()];

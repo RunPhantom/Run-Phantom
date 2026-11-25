@@ -1,8 +1,7 @@
 import { hasDuplicateJsonKeys } from "../json-keys";
 import { parseJsonEvidence } from "../evaluations/json-evidence";
 import { reportedCost } from "./analytics";
-import { estimateListPriceCost, type ListPriceEstimate } from "./list-prices";
-import { normalizeUsage } from "./usage";
+import { estimateListPriceCost, spanCacheUsage, type ListPriceEstimate } from "./list-prices";
 
 export interface CostSpan {
   readonly model: string | null;
@@ -16,7 +15,7 @@ export interface CostSpan {
 export type SpanCost =
   | { readonly source: "reported"; readonly usd: number }
   | { readonly source: "list-price"; readonly usd: number; readonly estimate: Extract<ListPriceEstimate, { kind: "estimated" }> }
-  | { readonly source: null; readonly usd: null; readonly reason: "reported_cost_invalid" | "model_unpriced" | "usage_unavailable" | "estimate_failed" };
+  | { readonly source: null; readonly usd: null; readonly reason: "reported_cost_invalid" | "model_unpriced" | "usage_unavailable" | "cache_usage_ambiguous" | "estimate_failed" };
 
 function attributeValues(attributes: string | null): Record<string, unknown> | null {
   if (attributes === null) return {};
@@ -39,12 +38,11 @@ export function spanCost(span: CostSpan): SpanCost {
     if (reported.value !== null) return { source: "reported", usd: reported.value };
     if (reported.reasons[0] !== "reported_cost_missing") return { source: null, usd: null, reason: "reported_cost_invalid" };
   }
-  const usage = values ? normalizeUsage(values, null) : null;
+  const cache = values ? spanCacheUsage(values) : {};
   const requestModel = typeof values?.["gen_ai.request.model"] === "string" ? values["gen_ai.request.model"] as string : null;
   let estimate: ListPriceEstimate = { kind: "unavailable", reason: "model_unpriced" };
   for (const model of new Set([span.model, requestModel].filter((value): value is string => !!value))) {
-    estimate = estimateListPriceCost({ model, provider: span.provider, inputTokens: span.input_tokens, outputTokens: span.output_tokens,
-      cacheReadTokens: usage?.categories.cache_read.count, cacheWriteTokens: usage?.categories.cache_write.count, at: span.start_time_ms ?? null });
+    estimate = estimateListPriceCost({ model, provider: span.provider, inputTokens: span.input_tokens, outputTokens: span.output_tokens, ...cache, at: span.start_time_ms ?? null });
     if (estimate.kind === "estimated" || estimate.reason !== "model_unpriced") break;
   }
   return estimate.kind === "estimated" ? { source: "list-price", usd: estimate.totalUsd, estimate } : { source: null, usd: null, reason: estimate.reason };

@@ -39,12 +39,17 @@ export function measureJudgeUsage(provider: JudgeUsage["provider"], model: strin
   return { ...usage, costUsd: estimate.totalUsd, rateRevision: estimate.rateRevision?.revision ?? null };
 }
 
-/** Judge models outside the comparison roster are priced from the bundled list prices, response model first. */
+/**
+ * Judge models outside the comparison roster are priced from the bundled list
+ * prices, response model first. OpenAI's prompt_tokens includes cached
+ * tokens; Anthropic's input_tokens excludes cache reads and writes.
+ */
 function listPricedJudgeUsage(usage: JudgeUsage): JudgeUsage {
-  if ((usage.cacheReadTokens ?? 0) > 0 || (usage.cacheWriteTokens ?? 0) > 0) return { ...usage, costUnavailableReason: "List prices do not cover cached tokens" };
   for (const model of new Set([usage.responseModel, usage.model].filter((value): value is string => !!value))) {
-    const estimate = estimateListPriceCost({ model, provider: usage.provider, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens });
+    const estimate = estimateListPriceCost({ model, provider: usage.provider, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens,
+      cacheReadTokens: usage.cacheReadTokens, cacheWriteTokens: usage.cacheWriteTokens, inputIncludesCache: usage.provider === "openai" });
     if (estimate.kind === "estimated") return { ...usage, costUsd: estimate.totalUsd, rateRevision: estimate.revision.revision };
+    if (estimate.reason !== "model_unpriced") return { ...usage, costUnavailableReason: "Cached token usage could not be priced" };
   }
   return { ...usage, costUnavailableReason: "No list price for this judge model" };
 }

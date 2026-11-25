@@ -67,8 +67,64 @@ describe("bundled list price table", () => {
 
   test("prompt-length bands count Anthropic cache tokens and OpenAI long context", () => {
     expect(estimateListPriceCost({ model: "claude-haiku-5-5", inputTokens: 100_000, outputTokens: 0 })).toMatchObject({ inputUsdPerMillion: 0.1 });
-    expect(estimateListPriceCost({ model: "claude-haiku-5-5", inputTokens: 90_000, cacheReadTokens: 20_000, outputTokens: 1_000 })).toMatchObject({ inputUsdPerMillion: 0.5, outputUsdPerMillion: 2.5 });
+    expect(estimateListPriceCost({ model: "claude-haiku-5-5", inputTokens: 90_000, cacheReadTokens: 20_000, inputIncludesCache: false, outputTokens: 1_000 })).toMatchObject({ inputUsdPerMillion: 0.5, outputUsdPerMillion: 2.5 });
     expect(estimateListPriceCost({ model: "gpt-5.5", inputTokens: 272_001, cacheReadTokens: 0, outputTokens: 1 })).toMatchObject({ inputUsdPerMillion: 10, outputUsdPerMillion: 45 });
+  });
+
+  test("gpt-5.6 and gpt-6 models price prompts over 272K at the long-context rate", () => {
+    const cases: Array<[string, [number, number], [number, number]]> = [
+      ["gpt-5.6-sol", [4, 20], [8, 30]], ["gpt-5.6-terra", [2, 12], [4, 18]], ["gpt-5.6-luna", [0.2, 1.2], [0.4, 1.8]],
+      ["gpt-6.2-astra", [8, 40], [16, 60]], ["gpt-6.2-sol", [2, 10], [4, 15]], ["gpt-6.1-sol", [2, 10], [4, 15]], ["gpt-6.1-terra", [1, 5], [2, 7.5]],
+      ["gpt-6-astra", [10, 50], [20, 75]], ["gpt-6-sol", [2, 10], [4, 15]], ["gpt-6-luna", [0.1, 0.5], [0.2, 0.75]],
+    ];
+    for (const [model, short, long] of cases) {
+      expect(priced(model, "openai", 272_000, 1)).toMatchObject({ inputUsdPerMillion: short[0], outputUsdPerMillion: short[1] });
+      expect(priced(`${model}-2026-11-01`, "openai", 272_001, 1)).toMatchObject({ model, inputUsdPerMillion: long[0], outputUsdPerMillion: long[1] });
+    }
+    expect(priced("o3-pro", "openai", 1_000_000, 1_000_000).totalUsd).toBeCloseTo(20 + 80, 12);
+    expect(priced("o3-pro-2025-06-10", "openai", 10, 10).model).toBe("o3-pro");
+  });
+
+  test("retired Claude 4 and 4.1 snapshots still listed on the pricing page are priced", () => {
+    expect(priced("claude-sonnet-4-20250514", "anthropic", 1_000_000, 1_000_000).totalUsd).toBeCloseTo(3 + 15, 12);
+    expect(priced("claude-opus-4-1-20250805", "anthropic", 1_000_000, 1_000_000).totalUsd).toBeCloseTo(15 + 75, 12);
+    expect(priced("claude-opus-4-20250514", "anthropic", 1_000_000, 1_000_000).totalUsd).toBeCloseTo(15 + 75, 12);
+  });
+
+  test("gemini-2.5-flash is unpriced from Google's 2026-12-01 routing change", () => {
+    expect(lookupListPrice("gemini-2.5-flash", { at: Date.parse("2026-11-30T23:59:59Z") })).not.toBeNull();
+    expect(lookupListPrice("gemini-2.5-flash", { at: Date.parse("2026-12-01T00:00:00Z") })).toBeNull();
+    expect(PRICE_SOURCES.google.url).toBe("https://aistudio.google.com/docs/pricing");
+  });
+});
+
+describe("cached input pricing", () => {
+  const estimate = (usage: Parameters<typeof estimateListPriceCost>[0]) => {
+    const result = estimateListPriceCost(usage);
+    if (result.kind !== "estimated") throw new Error(`not priced: ${result.reason}`);
+    return result;
+  };
+  test("OpenAI and Gemini cached tokens are a discounted part of the prompt", () => {
+    const openai = estimate({ model: "gpt-5-nano", provider: "openai", inputTokens: 1_000, cacheReadTokens: 800, outputTokens: 100 });
+    expect(openai.totalUsd).toBeCloseTo((200 * 0.05 + 800 * 0.005 + 100 * 0.4) / 1e6, 15);
+    expect(openai).toMatchObject({ cacheTokens: 800 });
+    expect(openai.cacheUsd).toBeCloseTo(800 * 0.005 / 1e6, 15);
+    expect(estimate({ model: "gpt-4o", inputTokens: 1_000, cacheReadTokens: 1_000, outputTokens: 0 }).totalUsd).toBeCloseTo(1_000 * 1.25 / 1e6, 15);
+    expect(estimate({ model: "gemini-4-neon", inputTokens: 1_000, cacheReadTokens: 1_000, outputTokens: 0 }).totalUsd).toBeCloseTo(1_000 * 0.15 / 1e6, 15);
+  });
+  test("Anthropic cache reads and writes are billed on top of input at the listed multipliers", () => {
+    const sonnet = estimate({ model: "claude-sonnet-4-6", provider: "anthropic", inputTokens: 50, cacheReadTokens: 9_000, cacheWriteTokens: 1_000, outputTokens: 100 });
+    expect(sonnet.totalUsd).toBeCloseTo((50 * 3 + 9_000 * 0.3 + 1_000 * 3.75 + 100 * 15) / 1e6, 15);
+    const opus = estimate({ model: "claude-opus-5-5", inputTokens: 10, cacheReadTokens: 1_000, cacheWrite1hTokens: 100, inputIncludesCache: false, outputTokens: 0 });
+    expect(opus.totalUsd).toBeCloseTo((10 * 4 + 1_000 * 0.2 + 100 * 8) / 1e6, 15);
+  });
+  test("undeclared Anthropic cache inclusion that the counts cannot settle stays unavailable", () => {
+    expect(estimateListPriceCost({ model: "claude-haiku-4-5", inputTokens: 1_000, cacheReadTokens: 200, outputTokens: 10 })).toEqual({ kind: "unavailable", reason: "cache_usage_ambiguous" });
+    expect(estimate({ model: "claude-haiku-4-5", inputTokens: 1_000, cacheReadTokens: 200, inputIncludesCache: true, outputTokens: 10 }).totalUsd).toBeCloseTo((800 * 1 + 200 * 0.1 + 10 * 5) / 1e6, 15);
+  });
+  test("models without a listed cached-input price refuse cached usage", () => {
+    expect(estimateListPriceCost({ model: "gpt-5-pro", inputTokens: 1_000, cacheReadTokens: 10, outputTokens: 1 })).toMatchObject({ kind: "unavailable", reason: "estimate_failed" });
+    expect(estimateListPriceCost({ model: "gpt-5-nano", inputTokens: 1_000, cacheWriteTokens: 10, outputTokens: 1 })).toMatchObject({ kind: "unavailable", reason: "estimate_failed" });
   });
 });
 
@@ -85,6 +141,12 @@ describe("span cost: reported always wins, estimates fill the rest", () => {
   test("falls back to the requested model when the response model has no price", () => {
     const cost = spanCost({ ...span, model: "gpt-5-nano-custom-build", attributes: JSON.stringify({ "gen_ai.request.model": "gpt-5-nano" }) });
     expect(cost.source).toBe("list-price");
+  });
+  test("Claude Code hook spans price their cache reads and writes", () => {
+    const attributes = JSON.stringify({ source: "claude_hook", usage: { freshInputTokens: 20, outputTokens: 30, cacheCreatedInputTokens: 2_000, cacheReadInputTokens: 40_000 } });
+    const cost = spanCost({ model: "claude-sonnet-4-6", provider: "anthropic", input_tokens: 20, output_tokens: 30, attributes, start_time_ms: span.start_time_ms });
+    expect(cost.source).toBe("list-price");
+    expect(cost.usd).toBeCloseTo((20 * 3 + 40_000 * 0.3 + 2_000 * 3.75 + 30 * 15) / 1e6, 15);
   });
   test("an invalid reported cost is never replaced by an estimate", () => {
     expect(spanCost({ ...span, attributes: JSON.stringify({ "gen_ai.usage.cost_usd": -1 }) })).toMatchObject({ source: null, reason: "reported_cost_invalid" });

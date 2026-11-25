@@ -474,7 +474,7 @@ function StatsLine({ stats, model, spans, active, startedAt, completionUnavailab
               <div ref={costPanelRef} id={costPanelId} role="region" aria-label="Cost breakdown" className="fixed z-50 overflow-y-auto rounded-md border border-rp-line bg-rp-surface p-4 text-[12px] shadow-e3"
                 style={{ ...costPosition, maxHeight: "min(400px, calc(100vh - 32px))", visibility: costPosition ? "visible" : "hidden" }}>
                 <div className="rp-eyebrow mb-2">Cost by model</div>
-                <p className="mb-3 whitespace-normal leading-5 text-rp-ink-muted">Reported costs are used as is. Estimates price input and output at list prices as of {PRICE_TABLE_AS_OF}, or OpenRouter catalogue quotes; cache and fees excluded.</p>
+                <p className="mb-3 whitespace-normal leading-5 text-rp-ink-muted">Reported costs are used as is. Estimates price input, output and cached input at list prices as of {PRICE_TABLE_AS_OF}, or input and output at OpenRouter catalogue quotes; fees excluded.</p>
                 {breakdown.map(b => (
                   <div key={b.model === null ? "missing-model" : `model:${b.model}`} className="mb-3 last:mb-0 whitespace-normal break-words">
                     <div className="mb-1 font-mono text-[12px] font-medium text-rp-ink">{b.model ?? "Model unavailable"}</div>
@@ -512,7 +512,8 @@ function CostRowDetail({ row }: { row: ModelCostRow }) {
           <CostLine label={`${row.inTok!.toLocaleString()} input @ ${fmtRate(row.listPrice.inRate)}/M`} amount={row.inTok! * row.listPrice.inRate / 1_000_000} />
           <CostLine label={`${row.outTok!.toLocaleString()} output @ ${fmtRate(row.listPrice.outRate)}/M`} amount={row.outTok! * row.listPrice.outRate / 1_000_000} />
         </>}
-        <CostLine label="Estimated at list price" amount={row.listPriceUsd} strong={tokens} />
+        {row.listPriceCacheTokens > 0 && <CostLine label={`${row.listPriceCacheTokens.toLocaleString()} cached input tokens`} amount={row.listPriceCacheUsd} />}
+        <CostLine label="Estimated at list price" amount={row.listPriceUsd} strong={tokens || row.listPriceCacheTokens > 0} />
         <p>Price for {row.listPrice.priceModel} from <a className="text-rp-blue underline underline-offset-4 hover:text-rp-blue-hover" href={row.listPrice.sourceUrl} target="_blank" rel="noreferrer">{row.listPrice.sourceName}</a>, as of {row.listPrice.asOf}.</p>
       </>}
       {row.catalogue && <>

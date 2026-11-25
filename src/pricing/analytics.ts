@@ -3,7 +3,7 @@ import { parseJsonEvidence } from "../evaluations/json-evidence";
 import { calculateCost } from "./calculator";
 import { TOKEN_CATEGORIES, type FrozenRateRevision, type TokenCategory } from "./protocol";
 import { freezeRateRevision, NOMINAL_CATALOGUE_PROVIDER, NOMINAL_CATALOGUE_TIER, NOMINAL_CATALOGUE_URL, selectRateRevision } from "./rates";
-import { estimateListPriceCost, resolveModelIdentity } from "./list-prices";
+import { estimateListPriceCost, resolveModelIdentity, spanCacheUsage } from "./list-prices";
 import { normalizeUsage } from "./usage";
 
 export const COST_ANALYTICS_VERSION = "runphantom-cost-analytics/1" as const;
@@ -237,7 +237,7 @@ export function aggregateCostAnalytics(spans: readonly AnalyticsSpan[], input: C
     let estimate: { totalUsd: number | null; reasons: readonly string[] } | null;
     if (request.estimateMode === "list-prices") {
       const quote = estimateListPriceCost({ model: usage.model, provider: usage.provider, inputTokens: usage.categories.input.count, outputTokens: usage.categories.output.count,
-        cacheReadTokens: usage.categories.cache_read.count, cacheWriteTokens: usage.categories.cache_write.count, at: timed ? span.startedAt : null });
+        ...spanCacheUsage(values), at: timed ? span.startedAt : null });
       if (quote.kind === "estimated") listRates.set(quote.revision.model, quote.revision);
       estimate = quote.kind === "estimated" ? { totalUsd: quote.totalUsd, reasons: [] } : { totalUsd: null, reasons: [quote.reason === "model_unpriced" ? "rate_identity_unavailable" : quote.reason] };
     } else {
