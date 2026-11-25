@@ -20,6 +20,7 @@ import { VerificationPage } from "./pages/VerificationPage";
 import { EvaluationsPage } from "./pages/EvaluationsPage";
 import { ReviewQueuesRoute } from "./components/review-queues/ReviewQueuesRoute";
 import { PromptsPage } from "./pages/PromptsPage";
+import { PlaygroundPage } from "./pages/PlaygroundPage";
 import { RouteError } from "./components/RouteError";
 import { sendRunPhantomMessage, useRunPhantomConnectionStatus } from "./hooks/use-runphantom-ws";
 import { useAgentUiCommands } from "./hooks/use-agent-ui-commands";
@@ -179,6 +180,7 @@ export const localRoutes: RouteObject[] = [
       { path: "costs", element: <CostAnalyticsPage />, errorElement: <RouteError /> },
       { path: "review-queues", element: <ReviewQueuesRoute />, errorElement: <RouteError /> },
       { path: "prompts", element: <PromptsPage />, errorElement: <RouteError /> },
+      { path: "playground", element: <PlaygroundPage />, errorElement: <RouteError /> },
       { path: "*", element: <NotFoundPage />, errorElement: <RouteError /> },
     ],
   },

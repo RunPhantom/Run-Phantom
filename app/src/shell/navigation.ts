@@ -1,4 +1,4 @@
-import { Activity, Bookmark, CheckCircle2, ClipboardCheck, Coins, FileCode2, FlaskConical, LayoutDashboard, Search, type LucideIcon } from "lucide-react";
+import { Activity, Bookmark, CheckCircle2, ClipboardCheck, Coins, FileCode2, FlaskConical, LayoutDashboard, Search, SquareTerminal, type LucideIcon } from "lucide-react";
 
 export type NavGroupId = "overview" | "debug" | "improve" | "ship";
 
@@ -31,6 +31,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { id: "evaluations", label: "Evaluations", path: "/evaluations", icon: FlaskConical, group: "improve", shortcut: "g e", keywords: ["test sets", "datasets", "experiments", "graders"] },
   { id: "review-queues", label: "Review queues", path: "/review-queues", icon: ClipboardCheck, group: "improve", shortcut: "g q", keywords: ["annotate", "label", "human review"] },
   { id: "prompts", label: "Prompts", path: "/prompts", icon: FileCode2, group: "improve", shortcut: "g p", keywords: ["templates", "revisions"] },
+  { id: "playground", label: "Playground", path: "/playground", icon: SquareTerminal, group: "improve", shortcut: "g y", keywords: ["try", "model", "prompt", "compare"] },
   { id: "verification", label: "Verification", path: "/verification", icon: CheckCircle2, group: "ship", shortcut: "g v", keywords: ["browser", "flows", "app checks"] },
   { id: "costs", label: "Cost & usage", path: "/costs", icon: Coins, group: "ship", shortcut: "g c", keywords: ["spend", "tokens", "pricing", "billing"] },
 ];
