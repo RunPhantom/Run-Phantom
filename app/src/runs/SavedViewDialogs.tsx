@@ -1,12 +1,13 @@
 import { useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogFooter } from "@/components/ui/dialog";
+import { useReturnFocus } from "@/components/ui/confirm-dialog";
 import { fieldClassName } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { RUNS_VIEW_LIMITS } from "../../../src/saved-views-protocol";
 
 /** Name entry for saving or renaming a view; keeps the dialog open with the server's message on failure. */
-export function ViewNameDialog({ open, onOpenChange, title, description, initialName, submitLabel, includeColumnsChoice, onSubmit }: {
+export function ViewNameDialog({ open, onOpenChange, title, description, initialName, submitLabel, includeColumnsChoice, onSubmit, returnFocus }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
@@ -15,7 +16,9 @@ export function ViewNameDialog({ open, onOpenChange, title, description, initial
   submitLabel: string;
   includeColumnsChoice?: boolean;
   onSubmit: (name: string, includeColumns: boolean) => Promise<void>;
+  returnFocus?: () => HTMLElement | null | undefined;
 }) {
+  const focus = useReturnFocus(returnFocus);
   const [name, setName] = useState(initialName);
   const [includeColumns, setIncludeColumns] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -41,7 +44,7 @@ export function ViewNameDialog({ open, onOpenChange, title, description, initial
 
   return (
     <Dialog open={open} onOpenChange={next => { if (!busy) onOpenChange(next); }}>
-      <DialogContent title={title} description={description}>
+      <DialogContent title={title} description={description} onOpenAutoFocus={focus.capture} onCloseAutoFocus={focus.restore}>
         <form className="mt-4 space-y-3" onSubmit={event => { event.preventDefault(); void submit(); }}>
           <div>
             <label htmlFor={nameId} className="rp-field-label">View name</label>

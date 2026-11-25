@@ -90,7 +90,7 @@ export function RunRail({ selectedId, shortRunIds, listRef, highlightedId, onSel
   if (collapsed) {
     return (
       <div className="flex w-10 shrink-0 flex-col items-center border-r border-rp-line bg-rp-surface pt-2">
-        <button type="button" aria-expanded={false} aria-controls={railId} aria-label="Show run list" title="Show run list (\)"
+        <button type="button" aria-expanded={false} aria-label="Show run list" title="Show run list (\)"
           onClick={() => setRail(false)}
           className="flex size-8 items-center justify-center rounded-control text-rp-ink-muted hover:bg-rp-row-hover hover:text-rp-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-rp-blue">
           <PanelLeftOpen aria-hidden="true" className="size-4" />

@@ -142,6 +142,7 @@ test("saved views keep filters and columns, list in the sidebar with a live coun
   await link.click();
   await expect(page).toHaveURL(/agent=billing_agent/);
   await expect(link).toHaveAttribute("aria-current", "page");
+  await expect(navigation.getByRole("link", { name: "Runs", exact: true })).not.toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("heading", { name: "Billing runs", level: 1 })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Input" })).toHaveCount(0);
 
@@ -196,6 +197,26 @@ test("bulk delete asks in an accessible dialog and removes only the chosen runs"
   await expect.poll(() => rowIds(page)).toEqual([BROKEN, CHEAP]);
   const stored = await (await fetch(`${runPhantom.url}/api/runs`)).json() as { id: string }[];
   expect(stored.map(run => run.id).sort()).toEqual([CHEAP, BROKEN].sort());
+});
+
+test("clear all states the count, says filters do not apply and gives focus back", async ({ page, runPhantom }) => {
+  await seedThree(runPhantom.url);
+  await page.goto(`${runPhantom.url}/runs?status=failed`);
+  await expect(rows(page)).toHaveCount(1);
+  const trigger = page.getByRole("button", { name: "Clear all runs", exact: true });
+  await trigger.click();
+  const confirm = page.getByRole("alertdialog", { name: "Clear all runs?" });
+  await expect(confirm).toContainText("All 3 captured runs on this machine are deleted");
+  await expect(confirm).toContainText("The filters do not apply: this is not limited to the 1 matching run shown.");
+  await page.keyboard.press("Escape");
+  await expect(confirm).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+
+  await page.getByRole("checkbox", { name: "Select billing_agent" }).check();
+  const bar = page.getByRole("region", { name: "Selected runs" });
+  await bar.getByRole("button", { name: "Clear selection" }).click();
+  await expect(bar).toHaveCount(0);
+  await expect(page.getByRole("grid", { name: "Runs" })).toBeFocused();
 });
 
 test("bulk export and add to test set use the selected rows", async ({ page, runPhantom }) => {

@@ -29,7 +29,8 @@ export function NavSidebar() {
   const counts = useNavCounts();
   const savedViews = useSavedViews();
   const [searchParams] = useSearchParams();
-  const activeViewId = location.pathname === "/runs" ? searchParams.get("view") : null;
+  const viewParam = location.pathname === "/runs" ? searchParams.get("view") : null;
+  const activeViewId = viewParam && savedViews.data?.some(view => view.id === viewParam) ? viewParam : null;
   const closeMobile = () => {
     if (isMobile) setOpenMobile(false);
   };
@@ -67,7 +68,8 @@ export function NavSidebar() {
                 <SidebarGroupContent>
                   <SidebarMenu aria-labelledby={`rp-nav-group-${group.id}`}>
                     {items.map(({ id, label, path, icon: Icon }) => {
-                      const active = isNavPathActive(location.pathname, path);
+                      // An open saved view is the current page in the list below, so Runs is not marked twice.
+                      const active = isNavPathActive(location.pathname, path) && !(id === "runs" && activeViewId);
                       const count = counts[id];
                       const index = NAV_ITEMS.findIndex(item => item.id === id);
                       return (
@@ -77,7 +79,7 @@ export function NavSidebar() {
                                 push added a history entry per click, so after a few
                                 taps on the current tab the Back button did nothing
                                 visible several presses in a row. */}
-                            <NavLink to={path} end={false} replace={active} onClick={closeMobile} aria-describedby={count ? `rp-nav-count-${id}` : undefined}>
+                            <NavLink to={path} end={false} replace={active} onClick={closeMobile} aria-current={id === "runs" && activeViewId ? "false" : undefined} aria-describedby={count ? `rp-nav-count-${id}` : undefined}>
                               <Icon aria-hidden="true" className="hidden size-4 shrink-0 group-data-[collapsible=icon]:block" />
                               <span aria-hidden="true" className={`w-5 shrink-0 font-mono text-[11px] tabular-nums group-data-[collapsible=icon]:hidden ${active ? "text-rp-blue" : "text-rp-index"}`}>
                                 {String(index + 1).padStart(2, "0")}

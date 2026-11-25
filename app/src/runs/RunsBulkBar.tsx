@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { GitCompare, Download, FlaskConical, Trash2, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { ConfirmDialog, useReturnFocus } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogClose, DialogContent, DialogFooter } from "@/components/ui/dialog";
 import { fieldClassName } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -17,13 +17,15 @@ const MAX_CASES = EVALUATION_LIMITS.MAX_CASES;
 /** Deletes in flight at once; a select-all over thousands of rows must not open thousands of requests. */
 const DELETE_BATCH = 6;
 
-export function RunsBulkBar({ rows, shortIds, onCompare, onClear, onDeleted, announce }: {
+export function RunsBulkBar({ rows, shortIds, onCompare, onClear, onDeleted, announce, returnFocus }: {
   rows: readonly RunListRow[];
   shortIds: ReadonlyMap<string, string>;
   onCompare: (baseline: string, candidate: string) => void;
   onClear: () => void;
   onDeleted: (ids: string[]) => void;
   announce: (message: string) => void;
+  /** Focus target once the bar's own buttons are gone (the selection was cleared or deleted). */
+  returnFocus: () => HTMLElement | null | undefined;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [datasetOpen, setDatasetOpen] = useState(false);
@@ -91,6 +93,7 @@ export function RunsBulkBar({ rows, shortIds, onCompare, onClear, onDeleted, ann
         confirmLabel={`Delete ${plural(count, "run")}`}
         busyLabel="Deleting…"
         onConfirm={remove}
+        returnFocus={returnFocus}
       >
         <ul className="mt-4 max-h-40 space-y-1 overflow-auto rounded-sm border border-rp-line bg-rp-canvas p-2 text-[13px]">
           {rows.slice(0, 20).map(row => (
@@ -102,7 +105,7 @@ export function RunsBulkBar({ rows, shortIds, onCompare, onClear, onDeleted, ann
           {rows.length > 20 && <li className="text-rp-ink-subtle">and {rows.length - 20} more</li>}
         </ul>
       </ConfirmDialog>
-      <AddToDatasetDialog open={datasetOpen} onOpenChange={setDatasetOpen} rows={rows} shortIds={shortIds} announce={announce} />
+      <AddToDatasetDialog open={datasetOpen} onOpenChange={setDatasetOpen} rows={rows} shortIds={shortIds} announce={announce} returnFocus={returnFocus} />
     </div>
   );
 }
@@ -112,13 +115,15 @@ function toDraft(item: DatasetRevision["cases"][number]): DatasetCaseDraft {
     ...(item.sourceSpanId ? { sourceSpanId: item.sourceSpanId } : {}), tags: item.tags, rules: item.rules };
 }
 
-function AddToDatasetDialog({ open, onOpenChange, rows, shortIds, announce }: {
+function AddToDatasetDialog({ open, onOpenChange, rows, shortIds, announce, returnFocus }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   rows: readonly RunListRow[];
   shortIds: ReadonlyMap<string, string>;
   announce: (message: string) => void;
+  returnFocus: () => HTMLElement | null | undefined;
 }) {
+  const focus = useReturnFocus(returnFocus);
   const datasets = useQuery({ queryKey: ["evaluation-datasets"], queryFn: evaluationsApi.datasets, enabled: open });
   const queryClient = useQueryClient();
   const [target, setTarget] = useState<string>("new");
@@ -175,7 +180,7 @@ function AddToDatasetDialog({ open, onOpenChange, rows, shortIds, announce }: {
 
   return (
     <Dialog open={open} onOpenChange={next => { if (!busy) onOpenChange(next); }}>
-      <DialogContent title={`Add ${plural(rows.length, "run")} to a test set`}
+      <DialogContent title={`Add ${plural(rows.length, "run")} to a test set`} onOpenAutoFocus={focus.capture} onCloseAutoFocus={focus.restore}
         description="Each run becomes a test case that checks the run finishes with no errors. Add more checks in Evaluations.">
         {done ? (
           <>

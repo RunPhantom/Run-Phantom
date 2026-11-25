@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowUp, Bookmark, Pencil, Trash2 } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Eyebrow, PageTitle } from "@/components/ui/typography";
 import { EmptyState } from "../components/EmptyState";
 import { useShortRunIds } from "../components/RunList";
-import { clearRuns, type RunListRow } from "../api/runs";
+import { clearRuns, listRunsPage, type RunListRow } from "../api/runs";
 import { SAVED_VIEWS_KEY, savedViewsApi, useSavedViews } from "../api/saved-views";
 import { useRuns } from "../hooks/use-runs";
 import { useIsMobile } from "../hooks/use-mobile";
@@ -147,6 +147,17 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
   }, [rows]);
 
   const clearSelection = useCallback(() => { setSelected(new Set()); selectionAnchor.current = null; }, []);
+  const focusFallback = useCallback(() => gridRef.current ?? searchRef.current, []);
+
+  // The bulk bar unmounts when the selection empties; if focus was on one of its buttons it would fall to <body>.
+  const hadSelection = useRef(false);
+  useEffect(() => {
+    const had = hadSelection.current;
+    hadSelection.current = selected.size > 0;
+    if (!had || selected.size > 0) return;
+    const active = document.activeElement;
+    if (!active || active === document.body) focusFallback()?.focus({ preventScroll: true });
+  }, [focusFallback, selected.size]);
 
   // Selection outlives a refresh only for rows that still exist.
   useEffect(() => {
@@ -217,6 +228,22 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
   const countLabel = data.total === null ? "Loading runs…"
     : data.total === 0 ? (filtered ? "No matching runs" : "No runs")
     : filtered ? `${plural(data.total, "matching run")}` : plural(data.total, "run");
+
+  const storedTotal = useQuery({
+    queryKey: ["runs", "clear-all-total"],
+    queryFn: ({ signal }) => listRunsPage({ limit: "1" }, signal).then(page => page.total),
+    enabled: dialog === "clear-all" && filtered,
+    staleTime: 0,
+  });
+  const storedRuns = filtered ? storedTotal.data : data.total ?? undefined;
+  const everyRun = storedRuns === undefined ? "Every captured run" : storedRuns === 1 ? "The 1 captured run" : `All ${storedRuns.toLocaleString("en-US")} captured runs`;
+  const clearAllDescription = (
+    <>
+      {everyRun} on this machine {storedRuns === 1 ? "is" : "are"} deleted, with {storedRuns === 1 ? "its" : "their"} steps and events.
+      {filtered && <> The filters do not apply: this is not limited to the {data.total === null ? "matching runs" : plural(data.total, "matching run")} shown.</>}
+      {" "}Saved runs and saved views are kept.
+    </>
+  );
 
   const liveState = (
     <span className="flex items-center gap-1.5 text-[12px] text-rp-ink-subtle" title={paused ? "New runs wait while you scroll or select. Scroll to the top or clear the selection to resume." : "New runs appear as they arrive"}>
@@ -297,6 +324,7 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
           onClear={clearSelection}
           onDeleted={ids => { data.removeLocal(ids); setSelected(previous => new Set([...previous].filter(id => !ids.includes(id)))); }}
           announce={setMessage}
+          returnFocus={focusFallback}
         />
       )}
 
@@ -365,6 +393,7 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
         initialName={activeView ? `${activeView.name} copy` : ""}
         submitLabel="Save view"
         includeColumnsChoice
+        returnFocus={focusFallback}
         onSubmit={async (name, includeColumns) => {
           const view = await savedViewsApi.create({ name, filters, columns: includeColumns ? columns : null });
           await refreshViews();
@@ -384,6 +413,7 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
           description="The filters and columns stay the same."
           initialName={activeView.name}
           submitLabel="Rename"
+          returnFocus={focusFallback}
           onSubmit={async name => {
             await savedViewsApi.update(activeView.id, { name });
             await refreshViews();
@@ -398,6 +428,7 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
           title={`Delete the view ${activeView.name}?`}
           description="Only the saved filters are removed. No runs are deleted."
           confirmLabel="Delete view"
+          returnFocus={focusFallback}
           onConfirm={async () => {
             await savedViewsApi.remove(activeView.id);
             await refreshViews();
@@ -412,9 +443,10 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
         open={dialog === "clear-all"}
         onOpenChange={value => setDialog(value ? "clear-all" : null)}
         title="Clear all runs?"
-        description="Every captured run, step and event on this machine is deleted. Saved runs and saved views are kept."
+        description={clearAllDescription}
         confirmLabel="Clear all runs"
         busyLabel="Clearing…"
+        returnFocus={focusFallback}
         onConfirm={async () => {
           await clearRuns();
           clearSelection();
