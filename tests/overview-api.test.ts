@@ -144,6 +144,7 @@ describe("GET /api/overview computation", () => {
   test("tz must name a real IANA zone", () => {
     expect(() => overview({ tz: "Mars/Olympus_Mons" })).toThrow("tz must be an IANA time zone");
     expect(() => overview({ tz: "../etc" })).toThrow("tz must be an IANA time zone");
+    expect(overview({ tz: "europe/LONDON" }).window.timeZone).toBe("Europe/London");
   });
 
   test("models rank by calls, the measure the Home panel shows", () => {

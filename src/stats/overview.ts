@@ -4,7 +4,7 @@ import { percentile, queryString, roundUsd, runAgent, runDisplayName, runUsesMod
 import { loadRunRows, runRowStatus, selectRunAggregates, type GenerationFact, type RunRow } from "./run-facts";
 import { AGENT_FILTER_CHARS } from "../run-agent";
 import { FINISHED_RUN_OUTCOMES, RUN_OUTCOMES, runOutcome, type RunOutcome } from "../run-status";
-import { bucketEdges, bucketIndex, isTimeZone, zoneOffsetMs, type BucketClock } from "./time-buckets";
+import { bucketEdges, bucketIndex, canonicalTimeZone, zoneOffsetMs, type BucketClock } from "./time-buckets";
 import { OVERVIEW_LIMITS, OVERVIEW_VERSION, OVERVIEW_WINDOWS, type CostKpi, type DurationKpi, type Kpi, type Overview, type OverviewAgentRow, type OverviewBucket, type OverviewFailingTool, type OverviewFailure, type OverviewGroupStats, type OverviewLiveRun, type OverviewModelRow, type OverviewWindow, type TokenKpi } from "./overview-types";
 
 export { OVERVIEW_LIMITS, OVERVIEW_VERSION, OVERVIEW_WINDOWS };
@@ -19,8 +19,9 @@ function parseOverviewQuery(query: Record<string, unknown>): OverviewQuery {
   if (rawOffset && !/^-?\d{1,3}$/.test(rawOffset)) throw new StatsRequestError("tz_offset_minutes must be an integer from -840 to 840");
   const tzOffsetMinutes = rawOffset ? Number(rawOffset) : 0;
   if (!Number.isInteger(tzOffsetMinutes) || tzOffsetMinutes < -840 || tzOffsetMinutes > 840) throw new StatsRequestError("tz_offset_minutes must be an integer from -840 to 840");
-  const timeZone = queryString(query, "tz", 64) || undefined;
-  if (timeZone !== undefined && !isTimeZone(timeZone)) throw new StatsRequestError("tz must be an IANA time zone such as Europe/London");
+  const rawZone = queryString(query, "tz", 64);
+  const timeZone = rawZone ? canonicalTimeZone(rawZone) ?? undefined : undefined;
+  if (rawZone && timeZone === undefined) throw new StatsRequestError("tz must be an IANA time zone such as Europe/London");
   return { selection, agent: queryString(query, "agent", AGENT_FILTER_CHARS) || undefined, model: queryString(query, "model") || undefined, tzOffsetMinutes, timeZone };
 }
 
