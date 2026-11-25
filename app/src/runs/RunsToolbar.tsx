@@ -164,7 +164,7 @@ export function DensityToggle({ density, onChange }: { density: RunsDensity; onC
   );
 }
 
-export function ColumnChooser({ columns, onToggle }: { columns: readonly RunsTableColumn[]; onToggle: (column: RunsTableColumn) => void }) {
+export function ColumnChooser({ columns, narrowHidden = [], onToggle }: { columns: readonly RunsTableColumn[]; narrowHidden?: readonly RunsTableColumn[]; onToggle: (column: RunsTableColumn) => void }) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
   const root = useRef<HTMLDivElement>(null);
@@ -198,6 +198,7 @@ export function ColumnChooser({ columns, onToggle }: { columns: readonly RunsTab
                 <input type="checkbox" className="rp-checkbox" checked={columns.includes(column)} disabled={required} onChange={() => onToggle(column)} />
                 {COLUMN_META[column].label}
                 {required && <span className="ml-auto text-[11px]">Always shown</span>}
+                {narrowHidden.includes(column) && <span className="ml-auto text-[11px] text-rp-ink-subtle">Needs a wider window</span>}
               </label>
             );
           })}

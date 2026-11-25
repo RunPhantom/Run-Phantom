@@ -51,6 +51,7 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
   /** A saved view's own columns, applied only while that view is open; the reader's choice stays in `ownColumns`. */
   const [viewColumns, setViewColumns] = useState<RunsTableColumn[] | null>(null);
   const columns = viewColumns ?? ownColumns;
+  const [narrowHidden, setNarrowHidden] = useState<readonly RunsTableColumn[]>([]);
   const [density, setDensity] = useState<RunsDensity>(loadDensity);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -269,7 +270,7 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
             {!isMobile && (
               <>
                 {liveState}
-                <ColumnChooser columns={columns} onToggle={changeColumns} />
+                <ColumnChooser columns={columns} narrowHidden={narrowHidden} onToggle={changeColumns} />
                 <DensityToggle density={density} onChange={changeDensity} />
                 <span aria-hidden="true" className="mx-1 h-5 w-px bg-rp-line" />
               </>
@@ -363,6 +364,7 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
             rows={rows}
             total={data.total}
             columns={columns}
+            onNarrowHiddenChange={setNarrowHidden}
             density={density}
             filters={filters}
             shortIds={shortIds}
