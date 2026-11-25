@@ -41,8 +41,3 @@ export interface LatestRunRow extends Run {
   tool_count: number;
 }
 
-export interface LatestRunsPage { runs: LatestRunRow[]; total: number }
-
-export function getLatestRuns(limit: number, signal?: AbortSignal): Promise<LatestRunsPage> {
-  return apiJson<LatestRunsPage>(`/api/runs?envelope=1&limit=${limit}`, { signal });
-}
