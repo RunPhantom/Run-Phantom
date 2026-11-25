@@ -101,6 +101,17 @@ export function buildChatItems({ spans, liveEvents, subAgents, fallbackInput }: 
     }
   }
 
+  const spanById = new Map(spans.map(s => [s.id, s]));
+  const toolSpans = spans.filter(s => s.span_type === "TOOL_CALL");
+  const wrapsToolCalls = (llm: Span) => toolSpans.some(tool => {
+    const seen = new Set<string>();
+    for (let id = tool.parent_span_id; id && !seen.has(id); id = spanById.get(id)?.parent_span_id ?? null) {
+      if (id === llm.id) return true;
+      seen.add(id);
+    }
+    return false;
+  });
+
   const hasRealOtlpLlmSpan = llmSpans.some(span => !isSyntheticPartialLlmSpan(span));
   const visibleLlmSpans = (hasRealOtlpLlmSpan ? llmSpans.filter(span => !isSyntheticPartialLlmSpan(span)) : llmSpans)
     .sort((a, b) => a.start_time_ms - b.start_time_ms);
@@ -144,7 +155,9 @@ export function buildChatItems({ spans, liveEvents, subAgents, fallbackInput }: 
     if (childrenWithOutput.length > 0) {
       for (const child of childrenWithOutput) all.push({ type: "llm_out", span: child, time: child.start_time_ms });
     } else if (span.output_payload) {
-      all.push({ type: "llm_out", span, time: span.start_time_ms });
+      // A span that wraps the whole loop (ai.generateText with tool children
+      // and no per-call output) holds the answer written after those tools.
+      all.push({ type: "llm_out", span, time: wrapsToolCalls(span) ? span.end_time_ms : span.start_time_ms });
     } else {
       // No answer text: say why when the span reports it.
       const error = span.status === "ERROR" ? spanErrorReason(span) || null : null;
@@ -187,7 +200,6 @@ export function buildChatItems({ spans, liveEvents, subAgents, fallbackInput }: 
   }
   const seenStart = new Map<string, number>();
   const seenResult = new Map<string, number>();
-  const spanById = new Map(spans.map(s => [s.id, s]));
 
   for (const evt of liveEvents) {
     if (evt.type === "tool_start" || evt.type === "tool_result") {

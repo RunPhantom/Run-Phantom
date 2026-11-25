@@ -65,6 +65,50 @@ describe("conversation order follows causality", () => {
   });
 });
 
+describe("causal order across provider shapes", () => {
+  test("OpenAI: text alongside tool_calls reads before the tools, and the failed tool ends the turn", () => {
+    const spans = [
+      span({ id: "chat-1", span_type: "LLM_GENERATION", start: 0, end: 800, input_payload: userInput("Refund order 42."), output_payload: "Let me check order 42." }),
+      span({ id: "lookup_order", start: 800, end: 820 }),
+      span({ id: "chat-2", span_type: "LLM_GENERATION", start: 820, end: 1500, input_payload: userInput("Refund order 42."), output_payload: "Issuing the refund." }),
+      span({ id: "issue_refund", status: "ERROR", start: 1500, end: 1500 }),
+    ];
+    expect(describeItems(buildChatItems({ spans, liveEvents: [], subAgents: [] }))).toEqual([
+      "user: Refund order 42.",
+      "assistant: Let me check order 42.",
+      "tools: lookup_order",
+      "assistant: Issuing the refund.",
+      "tools: issue_refund",
+    ]);
+  });
+
+  test("Gemini: tool-only calls carry no reply text, so the failed tool is the last thing shown", () => {
+    const spans = [
+      span({ id: "chat-1", span_type: "LLM_GENERATION", start: 0, end: 600, input_payload: userInput("Refund order 42.") }),
+      span({ id: "lookup_order", start: 600, end: 610 }),
+      span({ id: "chat-2", span_type: "LLM_GENERATION", start: 610, end: 1200, input_payload: userInput("Refund order 42.") }),
+      span({ id: "issue_refund", status: "ERROR", start: 1200, end: 1200 }),
+    ];
+    expect(describeItems(buildChatItems({ spans, liveEvents: [], subAgents: [] }))).toEqual([
+      "user: Refund order 42.",
+      "tools: lookup_order, issue_refund",
+    ]);
+  });
+
+  test("a model span that wraps the whole loop places its answer after the tools it consumed", () => {
+    const spans = [
+      span({ id: "generate", name: "ai.generateText", span_type: "LLM_GENERATION", start: 0, end: 1000,
+        input_payload: userInput("Refund order 42."), output_payload: "Final answer: refund issued" }),
+      span({ id: "issue_refund", parent_span_id: "generate", status: "ERROR", start: 300, end: 300 }),
+    ];
+    expect(describeItems(buildChatItems({ spans, liveEvents: [], subAgents: [] }))).toEqual([
+      "user: Refund order 42.",
+      "tools: issue_refund",
+      "assistant: Final answer: refund issued",
+    ]);
+  });
+});
+
 describe("sub-agents in a transcript", () => {
   // orchestrator (no model call) -> planner -> reader
   const spans = [

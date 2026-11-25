@@ -36,9 +36,10 @@ describe("conversation stream for a multi-step agent turn", () => {
     expect(userMsg && "content" in userMsg ? userMsg.content : null).toBe("Why is checkout failing?");
   });
 
-  test("shows the final answer, not the model's opening tool-call decision", () => {
-    expect(llmOut && "content" in llmOut ? llmOut.content : null)
-      .toBe("Checkout fails because the Stripe webhook secret rotated.");
+  test("shows every reply between the tools, ending on the final answer", () => {
+    expect(llmOut && "content" in llmOut ? llmOut.content : null).toBe("I'll look at the logs.");
+    expect(events.filter(e => e.type !== "turn_start").map(e => e.type === "llm_out" ? e.content : e.type === "tool_group" ? `tools:${e.spans.map(s => s.id).join(",")}` : e.type))
+      .toEqual(["user_msg", "I'll look at the logs.", "tools:tool1", "Checking the payment service next.", "tools:tool2", "Checkout fails because the Stripe webhook secret rotated."]);
   });
 
   test("a single-step turn is unchanged", () => {
@@ -81,9 +82,8 @@ describe("conversation stream for a turn that delegated to a sub-agent", () => {
       .toEqual(["lookup", "agent:researcher"]);
   });
 
-  test("the answer is the parent's last reply, not the sub-agent's", () => {
-    const out = events.find(e => e.type === "llm_out");
-    expect(out && "content" in out ? out.content : null).toBe("Yes, it is covered.");
+  test("the replies are the parent's, never the sub-agent's", () => {
+    expect(events.flatMap(e => e.type === "llm_out" ? [e.content] : [])).toEqual(["Looking it up.", "Yes, it is covered."]);
   });
 });
 
@@ -118,5 +118,23 @@ describe("conversation stream for an orchestrator that hands off to nested agent
   test("the answer is the root agent's output", () => {
     const out = events.find(e => e.type === "llm_out");
     expect(out && "content" in out ? out.content : null).toBe("Found it in shard 0-0.");
+  });
+});
+
+describe("conversation stream for a run that failed after a reply", () => {
+  // Anthropic ledger-conflict shape: each tool starts in the millisecond its requesting call ends.
+  const at = (o: Record<string, unknown>, end: number) => ({ ...(span(o) as object), end_time_ms: end, duration_ms: end - (o.start_time_ms as number) }) as never;
+  const spans = [
+    at({ id: "chat-1", span_type: "LLM_GENERATION", start_time_ms: 1000,
+      input_payload: JSON.stringify([{ role: "user", content: "Refund order 42." }]), output_payload: "I'll look up your order." }, 2290),
+    at({ id: "lookup_order", span_type: "TOOL_CALL", start_time_ms: 2290 }, 2290),
+    at({ id: "chat-2", span_type: "LLM_GENERATION", start_time_ms: 2290, output_payload: "I'm issuing a $249 refund now." }, 3616),
+    at({ id: "issue_refund", span_type: "TOOL_CALL", start_time_ms: 3616, status: "ERROR" }, 3616),
+  ];
+  const events = buildConvoEvents([{ run, spans }]);
+
+  test("ends on the failed tool, not on the reply written before it", () => {
+    expect(events.filter(e => e.type !== "turn_start").map(e => e.type === "llm_out" ? e.content : e.type === "tool_group" ? `tools:${e.spans.map(s => s.id).join(",")}` : e.type))
+      .toEqual(["user_msg", "I'll look up your order.", "tools:lookup_order", "I'm issuing a $249 refund now.", "tools:issue_refund"]);
   });
 });
