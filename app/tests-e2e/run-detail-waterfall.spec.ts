@@ -163,6 +163,13 @@ test("span drawer at laptop widths keeps the time track beside it and clamps a w
     expect((await axis.boundingBox())!.width).toBeGreaterThan(120);
     const handle = page.getByRole("separator", { name: "Resize step details" });
     expect(Number(await handle.getAttribute("aria-valuenow"))).toBeLessThan(720);
+    if (width === 1280) {
+      await expect(handle).toHaveAttribute("aria-disabled", "true");
+      await expect(handle).toHaveAttribute("aria-valuemin", await handle.getAttribute("aria-valuemax") ?? "");
+      await handle.focus();
+      for (const key of ["ArrowRight", "ArrowLeft", "Home", "End"]) await page.keyboard.press(key);
+      expect(await page.evaluate(() => localStorage.getItem("runphantom:span-drawer:width"))).toBe("720");
+    }
   }
 });
 

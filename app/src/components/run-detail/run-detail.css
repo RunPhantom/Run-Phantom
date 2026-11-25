@@ -62,6 +62,9 @@
 .rp-drawer-handle:focus-visible {
   outline: none;
 }
+.rp-drawer-handle[aria-disabled="true"]:hover:not(:focus-visible)::after {
+  background: transparent;
+}
 
 @keyframes rp-sheet-in {
   from { opacity: 0; transform: translateY(12px); }
