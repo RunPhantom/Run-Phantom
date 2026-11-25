@@ -1,4 +1,4 @@
-import { Activity, Bookmark, CheckCircle2, ClipboardCheck, Coins, FileCode2, FlaskConical, Search, type LucideIcon } from "lucide-react";
+import { Activity, Bookmark, CheckCircle2, ClipboardCheck, Coins, FileCode2, FlaskConical, LayoutDashboard, Search, type LucideIcon } from "lucide-react";
 
 export type NavGroupId = "overview" | "debug" | "improve" | "ship";
 
@@ -22,12 +22,9 @@ export interface NavItem {
   keywords?: readonly string[];
 }
 
-/**
- * Display order is array order within each group; the mono index numbers follow it.
- * Adding Home is one entry here, { id: "home", label: "Home", path: "/", group: "overview", shortcut: "g h" },
- * once the "/" route renders a page instead of redirecting to /runs.
- */
+/** Display order is array order within each group; the mono index numbers follow it. */
 export const NAV_ITEMS: readonly NavItem[] = [
+  { id: "home", label: "Home", path: "/", icon: LayoutDashboard, group: "overview", shortcut: "g h", keywords: ["overview", "dashboard"] },
   { id: "runs", label: "Runs", path: "/runs", icon: Activity, group: "debug", shortcut: "g r", keywords: ["traces", "list"] },
   { id: "search", label: "Search", path: "/search", icon: Search, group: "debug", shortcut: "g s", keywords: ["find", "filter", "query"] },
   { id: "saved", label: "Saved", path: "/saved", icon: Bookmark, group: "debug", shortcut: "g b", keywords: ["bookmarks", "folders"] },

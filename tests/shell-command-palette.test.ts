@@ -224,7 +224,7 @@ describe("theme", () => {
 
 describe("navigation", () => {
   test("nav labels stay pinned and every item belongs to a known group", () => {
-    expect(NAV_ITEMS.map(item => item.label)).toEqual(["Runs", "Search", "Saved", "Evaluations", "Review queues", "Prompts", "Verification", "Cost & usage"]);
+    expect(NAV_ITEMS.map(item => item.label)).toEqual(["Home", "Runs", "Search", "Saved", "Evaluations", "Review queues", "Prompts", "Verification", "Cost & usage"]);
     const groups = new Set(NAV_GROUPS.map(group => group.id));
     expect(NAV_ITEMS.every(item => groups.has(item.group))).toBe(true);
     expect(new Set(NAV_ITEMS.map(item => item.shortcut)).size).toBe(NAV_ITEMS.length);
@@ -238,5 +238,7 @@ describe("navigation", () => {
     expect(sectionLabel("/settings")).toBe("Settings");
     expect(sectionLabel("/costs")).toBe("Cost & usage");
     expect(sectionLabel("/nope")).toBe("Not found");
+    expect(sectionLabel("/")).toBe("Home");
+    expect(sectionLabel("/runs/abc")).toBe("Runs");
   });
 });

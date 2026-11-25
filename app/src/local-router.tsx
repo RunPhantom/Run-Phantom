@@ -2,7 +2,6 @@ import { type CSSProperties, useEffect, useRef, useState } from "react";
 import {
   type RouteObject,
   Link,
-  Navigate,
   Outlet,
   useLocation,
   useMatch,
@@ -10,6 +9,7 @@ import {
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { NavSidebar } from "./components/NavSidebar";
 import { MessagePane } from "./components/MessagePane";
+import { HomePage } from "./pages/HomePage";
 import { RunsPage } from "./pages/RunsPage";
 import { CostAnalyticsPage } from "./pages/CostAnalyticsPage";
 import { SearchPage } from "./pages/SearchPage";
@@ -78,7 +78,7 @@ function AppLayout() {
                 <SidebarTrigger className="size-11 shrink-0 rounded-control border border-rp-line text-rp-ink hover:bg-rp-row-hover hover:text-rp-ink lg:size-9" />
                 <nav aria-label="Workspace breadcrumb" className="min-w-0 text-[13px]">
                   <ol className="flex min-w-0 items-center gap-3">
-                    <li className="hidden shrink-0 sm:block"><Link to="/runs" className="text-rp-ink-muted transition-colors duration-250 ease-standard hover:text-rp-blue">Workspace</Link></li>
+                    <li className="hidden shrink-0 sm:block"><Link to="/" className="text-rp-ink-muted transition-colors duration-250 ease-standard hover:text-rp-blue">Workspace</Link></li>
                     <li aria-hidden="true" className="hidden text-rp-ink-faint sm:block">/</li>
                     <li aria-current={activeRunId ? undefined : "page"} className="shrink-0 font-medium text-rp-ink">{section}</li>
                     {activeRunId && <>
@@ -157,7 +157,7 @@ export const localRoutes: RouteObject[] = [
     // defence for a throw in the layout itself.
     errorElement: <RouteError />,
     children: [
-      { index: true, element: <Navigate to="/runs" replace />, errorElement: <RouteError /> },
+      { index: true, element: <HomePage />, errorElement: <RouteError /> },
       { path: "runs", element: <RunsPage />, errorElement: <RouteError /> },
       { path: "runs/:runId/span/:spanId", element: <RunsPage />, errorElement: <RouteError /> },
       { path: "runs/:runId/spans", element: <RunsPage />, errorElement: <RouteError /> },

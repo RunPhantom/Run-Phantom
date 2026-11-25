@@ -25,7 +25,7 @@ test.beforeEach(async ({ runPhantom }) => {
 test("Run Phantom UI: clean-break branding and setup state use Run Phantom keys", async ({ page, runPhantom }) => {
   await seedRunPhantomFixtures(runPhantom.url);
 
-  await page.goto(runPhantom.url);
+  await page.goto(`${runPhantom.url}/runs`);
   await expectRunPhantomBranding(page);
   await expect
     .poll(async () => page.evaluate(() => localStorage.getItem("runphantom:firstTimeSetupDismissed")), {
@@ -88,7 +88,7 @@ test("Run Phantom UI: clear button empties runs list and database", async ({ pag
   const before = await listRunPhantomRuns(runPhantom.url);
   expect(before.length).toBeGreaterThanOrEqual(3);
 
-  await page.goto(runPhantom.url);
+  await page.goto(`${runPhantom.url}/runs`);
   page.on("dialog", (dialog) => dialog.accept());
 
   const clearButton = page.getByRole("button", { name: /^clear all runs$/i });
@@ -101,7 +101,7 @@ test("Run Phantom UI: clear button empties runs list and database", async ({ pag
 });
 
 test("Run Phantom UI: seeded runs appear live without a reload", async ({ page, runPhantom }) => {
-  await page.goto(runPhantom.url);
+  await page.goto(`${runPhantom.url}/runs`);
   await expect(page.getByText(/no runs/i).first()).toBeVisible({ timeout: 10_000 });
 
   await seedRunPhantomFixtures(runPhantom.url);
@@ -470,7 +470,7 @@ test("Run Phantom UI: saved conversation routes stay scoped to saved and live tr
 test("Run Phantom UI: deleting a trace via the API removes only that sidebar row", async ({ page, runPhantom }) => {
   await seedRunPhantomFixtures(runPhantom.url);
 
-  await page.goto(runPhantom.url);
+  await page.goto(`${runPhantom.url}/runs`);
   const targetRow = page.locator(`[data-run-id="${FIXTURE_PRIMARY_RUN_ID}"]`);
   await expect(targetRow).toBeVisible({ timeout: 10_000 });
 
