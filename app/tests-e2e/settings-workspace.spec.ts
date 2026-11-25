@@ -187,3 +187,20 @@ test("settings keeps saved keys write-only and clears the actual local store", a
   expect((await (await page.request.get(`${local.url}/api/secrets`)).json()).keys.openai.stored).toBe(false);
   await screenshot(page, "settings-keys-desktop");
 });
+
+test("settings saves and clears a write-only Google Gemini key", async ({ page, local }) => {
+  await page.goto(`${local.url}/settings`);
+  const panel = page.getByRole("tabpanel", { name: "API keys" });
+  await expect(panel.getByText("Checking saved key status…", { exact: true })).toHaveCount(0);
+  const input = panel.getByLabel("Google Gemini", { exact: true });
+  await expect(input).toHaveAttribute("type", "password");
+  await expect(panel.getByText("Used when the Playground calls Gemini models.", { exact: true })).toBeVisible();
+  const synthetic = "fixture-only-gemini-key-without-authority";
+  await input.fill(synthetic); await panel.getByRole("button", { name: "Save Google Gemini key" }).click();
+  await expect(input).toHaveValue(""); await expect(input).toHaveAttribute("placeholder", "********");
+  const body = await (await page.request.get(`${local.url}/api/secrets`)).text();
+  expect(body).not.toContain(synthetic);
+  expect(JSON.parse(body).keys.gemini).toEqual({ configured: true, source: "store", env_var: "GEMINI_API_KEY", stored: true });
+  await panel.getByRole("button", { name: "Clear saved Google Gemini key" }).click();
+  await expect.poll(async () => (await (await page.request.get(`${local.url}/api/secrets`)).json()).keys.gemini.stored).toBe(false);
+});

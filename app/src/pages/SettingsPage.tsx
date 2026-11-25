@@ -392,6 +392,7 @@ function KeysSection() {
   const [drafts, setDrafts] = useState<Record<SecretKey, string>>({
     anthropic: "",
     openai: "",
+    gemini: "",
   });
   const [statuses, setStatuses] = useState<SecretStatuses | null>(null);
   const active = useRef(true);
@@ -488,7 +489,7 @@ function KeysSection() {
         className="rounded-lg border border-rp-line-muted bg-rp-canvas-blue px-4 py-3 text-[13px] leading-6 text-rp-ink-soft"
       >
         <Eyebrow className="mb-1.5">Data boundary</Eyebrow>
-        <p>Provider-backed Ask Agent and summaries send the selected trace content to the configured external provider. Model discovery contacts Anthropic. Optional model pricing contacts OpenRouter only after you enable it below. Capture, browsing, saved data, and registered local replay otherwise stay local unless the replay endpoint itself calls a provider.</p>
+        <p>Provider-backed Ask Agent and summaries send the selected trace content to the configured external provider. Model discovery contacts Anthropic. Optional model pricing contacts OpenRouter only after you enable it below. Playground runs send the prompt you write to the provider you choose. Capture, browsing, saved data, and registered local replay otherwise stay local unless the replay endpoint itself calls a provider.</p>
       </div>
       <label className="rp-ease flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border border-rp-line bg-white px-4 py-3.5 hover:border-rp-wash-border">
         <input
@@ -537,6 +538,19 @@ function KeysSection() {
         onSave={(value) => void persist("openai", value)}
         onClear={canClearSecret("openai") ? () => void clearSecret("openai") : undefined}
         getKeyUrl="https://platform.openai.com/api-keys"
+      />
+      <SecretInput
+        label="Google Gemini"
+        placeholder="AIza..."
+        description={sourceText("gemini", "Used when the Playground calls Gemini models.")}
+        value={drafts.gemini}
+        saved={secretSaved("gemini")}
+        sourceIsEnv={secretFromEnv("gemini")}
+        saving={!statuses || savingKey !== null}
+        onChange={(value) => setDraft("gemini", value)}
+        onSave={(value) => void persist("gemini", value)}
+        onClear={canClearSecret("gemini") ? () => void clearSecret("gemini") : undefined}
+        getKeyUrl="https://aistudio.google.com/app/apikey"
       />
       </div>
       {saveError && (

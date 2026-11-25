@@ -404,8 +404,8 @@ export async function startManagedDaemon(repoRoot: string, env: NodeJS.ProcessEn
       if (selection.mode !== "installed" || await fileSha256(copied) !== selection.sha256) throw refusal("native_copy_mismatch");
     }
     const port = await reservePort(), dbPath = path.join(directory, "runphantom.db"), url = `http://127.0.0.1:${port}`;
-    const cleanEnv = Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith("RUNPHANTOM_") && key !== "ANTHROPIC_API_KEY" && key !== "OPENAI_API_KEY"));
-    const childEnv = { ...cleanEnv, HOME: profile, USERPROFILE: profile, ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "", RUNPHANTOM_OPENAI_API_KEY: "",
+    const cleanEnv = Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith("RUNPHANTOM_") && !["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"].includes(key)));
+    const childEnv = { ...cleanEnv, HOME: profile, USERPROFILE: profile, ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "", RUNPHANTOM_OPENAI_API_KEY: "", GEMINI_API_KEY: "", GOOGLE_API_KEY: "",
       RUNPHANTOM_PORT: String(port), RUNPHANTOM_BIND_HOST: "127.0.0.1", RUNPHANTOM_ALLOWED_HOSTS: "", RUNPHANTOM_ALLOWED_SOURCE_IPS: "", RUNPHANTOM_ALLOWED_ORIGINS: "",
       RUNPHANTOM_DB_PATH: dbPath, RUNPHANTOM_SECRET_STORE_PATH: path.join(directory, "secrets.json"), RUNPHANTOM_CLAUDE_CLI_CHAT: "0" };
     const file = copied ?? "bun", args = copied ? ["serve"] : ["--no-env-file", "--no-install", path.join(repoRoot, "src/index.ts"), "serve"];
