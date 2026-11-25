@@ -508,7 +508,7 @@ function CostRowDetail({ row }: { row: ModelCostRow }) {
     <div className="space-y-1 text-rp-ink-muted">
       {sources.reported > 0 && <CostLine label="Reported on the span" amount={row.reportedUsd} />}
       {row.listPrice && <>
-        {tokens && Math.abs(row.inTok! * row.listPrice.inRate / 1_000_000 + row.outTok! * row.listPrice.outRate / 1_000_000 - row.listPriceUsd) <= 1e-9 * Math.max(1, row.listPriceUsd) && <>
+        {tokens && Math.abs(row.inTok! * row.listPrice.inRate / 1_000_000 + row.outTok! * row.listPrice.outRate / 1_000_000 + row.listPriceCacheUsd - row.listPriceUsd) <= 1e-9 * Math.max(1, row.listPriceUsd) && <>
           <CostLine label={`${row.inTok!.toLocaleString()} input @ ${fmtRate(row.listPrice.inRate)}/M`} amount={row.inTok! * row.listPrice.inRate / 1_000_000} />
           <CostLine label={`${row.outTok!.toLocaleString()} output @ ${fmtRate(row.listPrice.outRate)}/M`} amount={row.outTok! * row.listPrice.outRate / 1_000_000} />
         </>}
