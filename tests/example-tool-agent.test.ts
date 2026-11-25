@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { MAX_STEPS, runTurn, type TurnResult } from "../examples/tool-agent/agent";
-import { observedOutcome, SCENARIOS } from "../examples/tool-agent/scenarios";
+import { matchesExpectation, observedOutcome, SCENARIOS } from "../examples/tool-agent/scenarios";
 import { checkInventory, FatalToolError, issueRefund, lookupOrder, searchKb, ToolError } from "../examples/tool-agent/tools";
 import { detectSubAgents } from "../src/agents";
 import { parseOtlpRequest, type ParsedSpan } from "../src/parse";
@@ -174,8 +174,9 @@ describe("tool-agent example: exported traces", () => {
     ];
     const result = await runTurn("Refund A1005, it was lost.", { provider: "gemini", conversationId: "conv_gem" });
 
-    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ ok: false, errorType: "ledger_write_conflict" });
     expect(result.error).toContain("issue_refund failed and the run was stopped");
+    expect(matchesExpectation(SCENARIOS.find((scenario) => scenario.id === "ledger-conflict")!, result)).toBe(true);
     expect(providerRequests[0]!.url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent");
     expect(providerRequests[0]!.headers["x-goog-api-key"]).toBe("test-gemini");
     const contents = providerRequests[1]!.body.contents as { role: string; parts: Record<string, unknown>[] }[];
@@ -198,7 +199,8 @@ describe("tool-agent example: exported traces", () => {
     replies = [{ status: 404, body: { error: { code: 404, message: "This model models/gemini-2.5-flash is no longer available to new users.", status: "NOT_FOUND" } } }];
     const result = await runTurn("Where is A1002?", { provider: "gemini", conversationId: "conv_404" });
 
-    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ ok: false, errorType: "provider_error" });
+    expect(matchesExpectation(SCENARIOS.find((scenario) => scenario.id === "ledger-conflict")!, result)).toBe(false);
     expect(result.error).toBe("gemini returned HTTP 404: This model models/gemini-2.5-flash is no longer available to new users.");
     const spans = exported();
     const [llm] = byType(spans, "LLM_GENERATION");

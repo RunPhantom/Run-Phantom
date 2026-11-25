@@ -11,6 +11,8 @@ export interface Scenario {
   turns: string[];
   /** What a well-behaved model run should end as in Run Phantom. Models can still deviate; the runner reports it. */
   expected: "complete" | "completed_with_errors" | "failed";
+  /** For an expected failure, the root error.type that makes it the intended one. */
+  expectedErrorType?: string;
 }
 
 export const SCENARIOS: Scenario[] = [
@@ -31,6 +33,7 @@ export const SCENARIOS: Scenario[] = [
     title: "Refund stopped by a ledger conflict",
     turns: ["My speakers from order A1005 were lost by the courier. Please refund me."],
     expected: "failed",
+    expectedErrorType: "ledger_write_conflict",
   },
   {
     id: "warranty-subagent",
@@ -62,6 +65,11 @@ export interface ScenarioRun {
 export function observedOutcome(turn: TurnResult): Scenario["expected"] {
   if (!turn.ok) return "failed";
   return turn.toolCalls.some((call) => !call.ok) ? "completed_with_errors" : "complete";
+}
+
+export function matchesExpectation(scenario: Scenario, turn: TurnResult): boolean {
+  if (observedOutcome(turn) !== scenario.expected) return false;
+  return !scenario.expectedErrorType || turn.errorType === scenario.expectedErrorType;
 }
 
 export async function runScenario(scenario: Scenario, provider: Provider, model = DEFAULT_MODELS[provider]): Promise<ScenarioRun> {
@@ -124,7 +132,9 @@ async function main(): Promise<number> {
       }
       const last = run.turns[run.turns.length - 1];
       const outcome = observedOutcome(last);
-      const verdict = outcome === scenario.expected ? "as expected" : `expected ${scenario.expected}`;
+      const verdict = matchesExpectation(scenario, last)
+        ? "as expected"
+        : `expected ${scenario.expected}${scenario.expectedErrorType ? ` (${scenario.expectedErrorType})` : ""}`;
       const reason = last.ok ? "" : `  (${(last.error ?? "").slice(0, 80)})`;
       summary.push(`${provider.padEnd(9)} ${scenario.id.padEnd(18)} ${outcome.padEnd(22)} ${verdict.padEnd(32)} ${last.runUrl}${reason}`);
     }

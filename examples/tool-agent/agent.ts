@@ -51,6 +51,8 @@ export interface TurnResult {
   ok: boolean;
   text: string;
   error?: string;
+  /** The root span's error.type when the run failed, for example ledger_write_conflict or provider_error. */
+  errorType?: string;
   steps: number;
   toolCalls: ToolCallRecord[];
   /** The conversation after this turn; unchanged from the input when the turn failed. */
@@ -270,10 +272,11 @@ export async function runTurn(userText: string, options: TurnOptions): Promise<T
     result = { traceId: trace.traceId, runUrl: runUrl(trace.traceId), ok: true, text, steps: steps.count, toolCalls, history: messages };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    root.set({ "error.type": error instanceof AgentFailure ? error.type : "agent_error", "runphantom.output": message });
+    const errorType = error instanceof AgentFailure ? error.type : "agent_error";
+    root.set({ "error.type": errorType, "runphantom.output": message });
     root.recordException(error instanceof Error ? error : new Error(message));
     root.end({ code: 2, message });
-    result = { traceId: trace.traceId, runUrl: runUrl(trace.traceId), ok: false, text: "", error: message, steps: steps.count, toolCalls, history };
+    result = { traceId: trace.traceId, runUrl: runUrl(trace.traceId), ok: false, text: "", error: message, errorType, steps: steps.count, toolCalls, history };
   }
 
   try {
