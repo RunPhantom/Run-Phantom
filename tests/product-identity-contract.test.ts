@@ -166,6 +166,7 @@ describe("Run Phantom product identity contract", () => {
     expect(health.body?.ok).toBe(true);
     expect(health.body?.service).toBe("runphantom");
     expect(health.body?.port).toBeGreaterThan(0);
+    expect(health.body?.runtime).toBe("source");
 
     const forbidden = await request(server).get("/health").set("Host", "evil.example");
     expect(forbidden.status).toBe(403);

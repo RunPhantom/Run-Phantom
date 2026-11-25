@@ -128,6 +128,7 @@ import {
   type AnnotationSource,
 } from "./annotations";
 import { replayDefaultDemoTraces } from "./demo-traces";
+import { IS_PACKAGED_RUNTIME } from "./version";
 import { createVerificationService } from "./verification/service";
 import { createVerificationRouter, verifyVerificationChangeRequest } from "./verification/router";
 import { ChangeContextReader } from "./verification/change-context";
@@ -1266,7 +1267,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
 
   // Health check endpoint — used by SDKs to auto-detect a running debugger
   app.get("/health", (_req, res) => {
-    res.json({ ok: true, service: "runphantom", port: currentServerPort() ?? port, pid: process.pid });
+    res.json({ ok: true, service: "runphantom", port: currentServerPort() ?? port, pid: process.pid, runtime: IS_PACKAGED_RUNTIME ? "binary" : "source" });
   });
 
   app.get("/demo-chat", (_req, res) => {
