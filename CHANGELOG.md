@@ -11,8 +11,8 @@ Run Phantom has no tagged releases yet, so everything below is unreleased.
   runs, error rate, p95 duration, tokens and cost for the last hour, day, week
   or month, each with a sparkline and a change against the previous window.
   It also shows runs per time bucket, runs that need a look, agent and model
-  tables, and the latest activity. Every tile and row links to the matching
-  runs, and charts can be read as a table.
+  tables, and the latest activity. Tiles and named agent and model rows link
+  to the matching runs, and charts can be read as a table.
   ([#171](https://github.com/RunPhantom/Run-Phantom/pull/171),
   [#177](https://github.com/RunPhantom/Run-Phantom/pull/177))
 - **Runs table.** Runs are a full-width table with status, agent, input
@@ -111,5 +111,8 @@ Run Phantom has no tagged releases yet, so everything below is unreleased.
 - Cancelled or broken model streams record unknown token counts with a
   warning instead of a placeholder count.
   ([#172](https://github.com/RunPhantom/Run-Phantom/pull/172))
-- A Cost & usage check now formats sub-cent amounts the same way the app does.
+
+### Internal
+
+- An end-to-end Cost & usage test now expects the app's sub-cent formatting.
   ([#173](https://github.com/RunPhantom/Run-Phantom/pull/173))
