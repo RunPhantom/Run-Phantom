@@ -15,7 +15,7 @@ export type ColumnState =
   | { status: "idle" }
   | { status: "running"; text: string; startedAt: number }
   | { status: "done"; result: PlaygroundCallResult; text: string }
-  | { status: "stopped"; text: string; note: string };
+  | { status: "stopped"; text: string; note: string; comparisonId: string | null; runId?: string; spanId?: string | null };
 
 function Elapsed({ since }: { since: number }) {
   const [now, setNow] = useState(() => Date.now());
@@ -206,6 +206,19 @@ export function ResultColumn({ index, title, subtitle, state, diffBase, leads = 
           ) : (
             <span className="text-rp-ink-muted">Not recorded: nothing was sent to the provider.</span>
           )}
+        </footer>
+      )}
+      {state.status === "stopped" && state.runId && (
+        <footer className="flex items-center justify-between gap-2 border-t border-rp-line-muted px-3 py-2 text-[12px]">
+          <span className="min-w-0 truncate text-rp-ink-muted">Recorded as cancelled</span>
+          <Link
+            to={state.spanId ? `/runs/${state.runId}/span/${state.spanId}` : `/runs/${state.runId}`}
+            className="inline-flex shrink-0 items-center gap-1 font-medium text-rp-blue underline-offset-2 hover:underline"
+            data-playground-run-link={state.runId}
+            aria-label={`Open cancelled run ${state.runId.slice(0, 8)} in Runs`}
+          >
+            Run <span className="font-mono">{state.runId.slice(0, 8)}</span> <ArrowUpRight aria-hidden="true" className="size-3.5" />
+          </Link>
         </footer>
       )}
     </section>

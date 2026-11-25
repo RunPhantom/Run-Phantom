@@ -166,10 +166,16 @@ test("compare runs stream into side-by-side columns with metrics, run links and 
 });
 
 test("provider failures read as plain errors with the next step", async ({ page, runPhantom }) => {
-  let reply: "errors" | "busy" = "errors";
+  let reply: "errors" | "quota" | "busy" = "errors";
   await mockRuns(page, () => reply === "busy"
     ? { status: 429, contentType: "application/json", body: JSON.stringify({ error: "The Playground is already running 6 model calls. Wait for them to finish, then try again." }) }
-    : {
+    : reply === "quota" ? {
+      body: sse([
+        ["start", { comparisonId: "q", targets: [] }],
+        ["result", callResult({ index: 0, provider: "openai", model: "gpt-5-nano", status: "error", finishReason: "error", output: { text: "", toolCalls: [] }, error: { kind: "quota", message: "OpenAI says this account has no quota left.", providerMessage: "You exceeded your current quota.", httpStatus: 429, retryable: false } })],
+        ["done", { comparisonId: "q" }],
+      ]),
+    } : {
       body: sse([
         ["start", { comparisonId: "e", targets: [] }],
         ["result", callResult({ index: 0, provider: "openai", model: "gpt-5-nano", status: "error", finishReason: "error", output: { text: "", toolCalls: [] }, usage: { inputTokens: null, outputTokens: null, cachedInputTokens: null, cacheWriteInputTokens: null, reasoningTokens: null, totalTokens: null }, timeToFirstTokenMs: null, error: { kind: "auth", message: "OpenAI rejected the API key.", providerMessage: "Incorrect API key provided: sk-…", httpStatus: 401, retryable: false } })],
@@ -196,6 +202,14 @@ test("provider failures read as plain errors with the next step", async ({ page,
   await expect(page.locator("[data-playground-column='2']")).toContainText("Not recorded: nothing was sent to the provider.");
   await expect(page.locator("[data-playground-column='0'] [data-playground-metrics]")).toContainText("Est. cost—");
   await expect(page.getByRole("status").filter({ hasText: "Finished. 0 succeeded, 3 failed." })).toBeAttached();
+
+  reply = "quota";
+  await page.getByRole("button", { name: "Run 3 models", exact: true }).click();
+  const quota = page.locator("[data-playground-error='quota']");
+  await expect(quota).toContainText("Out of quota");
+  await expect(quota).toContainText("Add billing with the provider, or pick another model.");
+  await expect(quota.getByRole("link", { name: "Open Settings" })).toHaveCount(0);
+  await expect(page.locator("[data-playground-column='1']")).toContainText("No result was received.");
 
   reply = "busy";
   await page.getByRole("button", { name: "Run 3 models", exact: true }).click();
@@ -274,6 +288,26 @@ test("History lists compare runs in column order and loads them back into the ed
   await expect(page.getByRole("textbox", { name: "Content of message 1" })).toHaveValue("Which order is late?");
   await expect(page.getByLabel("Max output tokens")).toHaveValue("300");
   await expect(page.locator("[data-playground-opened-from]")).toHaveCount(0);
+});
+
+test("Open in Playground offers the replaced draft back", async ({ page, runPhantom }) => {
+  expect((await page.request.post(`${runPhantom.url}/api/demo-traces/replay`)).ok()).toBe(true);
+  await expect.poll(async () => {
+    const detail = await (await page.request.get(`${runPhantom.url}/api/runs/detail/demo_triage`)).json().catch(() => null) as { spans?: Array<{ id: string }> } | null;
+    return !!detail?.spans?.some(span => span.id === "demo_triage_llm-2");
+  }, { timeout: 30_000 }).toBe(true);
+  await openPlayground(page, runPhantom.url, {
+    ...baseDraft, system: "My own prompt", messages: [{ id: "a", role: "user", content: "Keep me" }],
+    targets: [{ provider: "openai", model: "gpt-5-nano" }, { provider: "anthropic", model: "claude-haiku-4-5-20251001" }],
+  });
+  await page.goto(`${runPhantom.url}/playground?span=demo_triage_llm-2&run=demo_triage`);
+  const banner = page.locator("[data-playground-opened-from]");
+  await expect(banner).toContainText("This replaced your previous draft.");
+  await expect(page.getByLabel("System")).toHaveValue(/^You triage incoming support tickets\./);
+  await banner.getByRole("button", { name: "Restore previous draft" }).click();
+  await expect(page.getByLabel("System")).toHaveValue("My own prompt");
+  await expect(page.getByRole("textbox", { name: "Content of message 1" })).toHaveValue("Keep me");
+  await expect(page.getByRole("combobox", { name: "Model 2", exact: true })).toHaveValue("anthropic/claude-haiku-4-5-20251001");
 });
 
 test("a failed check moves focus to the field at fault", async ({ page, runPhantom }) => {

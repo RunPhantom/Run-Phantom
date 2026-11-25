@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createSseParser, toStreamEvent, type PlaygroundCallResult, type PlaygroundDraft } from "../app/src/api/playground";
 import {
-  appendToolRound, buildRunBody, defaultDraft, errorHelp, estimateResultCost, groupHistory, metricLeaders, orderByColumn,
+  appendToolRound, buildRunBody, defaultDraft, draftHasContent, errorHelp, estimateResultCost, groupHistory, metricLeaders, orderByColumn,
   parseStoredDraft, parseToolsText, recordedCostUsd, stateFromDraft, targetIndexOf, type PlaygroundDraftState,
 } from "../app/src/components/playground/playground-model";
 import { diffStats, wordDiff } from "../app/src/components/playground/word-diff";
@@ -120,6 +120,13 @@ describe("drafts", () => {
     expect(reloaded.openedFrom).toBeNull();
     expect(reloaded.targets).toHaveLength(2);
     expect(stateFromDraft(source, draft({ reasoningEffort: "high" }), { openedFrom: false }).reasoningEffort).toBe("");
+  });
+
+  test("only a draft with real work is offered back after Open in Playground replaces it", () => {
+    expect(draftHasContent(defaultDraft())).toBe(false);
+    expect(draftHasContent(draft())).toBe(true);
+    expect(draftHasContent({ ...defaultDraft(), system: "Be brief." })).toBe(true);
+    expect(draftHasContent({ ...defaultDraft(), targets: [{ provider: "openai", model: "gpt-5-nano" }, { provider: "gemini", model: "gemini-3.8-flash" }] })).toBe(true);
   });
 
   test("continuing a tool round appends the calls and one result per call", () => {

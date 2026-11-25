@@ -375,7 +375,6 @@ export function groupHistory(runs: readonly PlaygroundHistoryRun[]): HistoryGrou
   return [...groups.values()].sort((a, b) => b.startedAt - a.startedAt);
 }
 
-
 export type LeadMetric = "latency" | "firstToken" | "cost";
 
 /**
@@ -400,4 +399,9 @@ export function metricLeaders(results: ReadonlyArray<Pick<PlaygroundCallResult, 
     values[metric].forEach((value, index) => { if (value === low) leaders[index]!.push(metric); });
   }
   return leaders;
+}
+
+/** True when the editor holds work worth offering to restore after it is replaced. */
+export function draftHasContent(state: PlaygroundDraftState): boolean {
+  return !!state.system.trim() || state.targets.length > 1 || state.messages.some(message => message.content.trim() || message.toolCalls?.length);
 }
