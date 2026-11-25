@@ -173,7 +173,12 @@ export function runMatchesQuery(row: RunRow, query: Pick<RunListQuery, "statuses
 export function countRuns(db: Database, dbPath: string, rawQueries: readonly Record<string, unknown>[]): number[] {
   const queries = rawQueries.map(parseRunListQuery);
   if (queries.length === 0) return [];
-  const rows = loadRunRows(db, dbPath, selectRunAggregates(db, "1 = 1", []));
+  // When every view is time-bounded (the common "last 24 hours" kind), only runs inside the widest bound are read.
+  const where: string[] = ["1 = 1"];
+  const params: number[] = [];
+  if (queries.every(query => query.since !== undefined)) { where.push("r.started_at >= ?"); params.push(Math.min(...queries.map(query => query.since!))); }
+  if (queries.every(query => query.until !== undefined)) { where.push("r.started_at < ?"); params.push(Math.max(...queries.map(query => query.until!))); }
+  const rows = loadRunRows(db, dbPath, selectRunAggregates(db, where.join(" AND "), params));
   return queries.map(query => rows.reduce((count, row) => count + (runMatchesQuery(row, query) ? 1 : 0), 0));
 }
 

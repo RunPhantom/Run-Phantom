@@ -187,6 +187,14 @@ describe("saved views store", () => {
     const dbPath = getDbPath();
     const queries = [{}, { status: "failed" }, { status: "completed,completed_with_errors" }, { agent: "triage_agent" }, { q: "zzz-no-match" }];
     expect(countRuns(db, dbPath, queries)).toEqual(queries.map(query => listRuns(db, dbPath, { ...query, limit: "1" }).total));
+    const starts = listRuns(db, dbPath, { sort: "started_at", order: "asc" }).runs.map(run => run.started_at);
+    const middle = starts[Math.floor(starts.length / 2)]!;
+    const bounded = [{ since: String(middle) }, { since: String(starts[0]), until: String(middle) }, { since: String(middle), status: "failed" }];
+    const expected = bounded.map(query => listRuns(db, dbPath, { ...query, limit: "1" }).total);
+    expect(expected[0]).toBeGreaterThan(0);
+    expect(expected[1]).toBeGreaterThan(0);
+    expect(countRuns(db, dbPath, bounded)).toEqual(expected);
+    expect(countRuns(db, dbPath, bounded.slice(1, 2))).toEqual([expected[1]]);
     const views = [
       createSavedView(dbPath, { name: "All", filters: {}, columns: null }),
       createSavedView(dbPath, { name: "Failed", filters: { status: ["failed"] }, columns: null }),
