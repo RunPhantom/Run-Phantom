@@ -8,7 +8,7 @@ import { deriveRunStatus as deriveSharedRunStatus, type RunStatus as SharedRunSt
 
 export const RUN_LIST_SORTS = ["last_updated_at", "started_at", "duration", "cost", "tokens", "errors"] as const;
 export type RunListSort = typeof RUN_LIST_SORTS[number];
-export const RUN_LIST_LIMITS = Object.freeze({ defaultLimit: 5000, maxLimit: 5000, queryChars: 256 });
+export const RUN_LIST_LIMITS = Object.freeze({ defaultLimit: 5000, maxLimit: 5000, queryChars: 256, ids: 100, idChars: 256 });
 
 /** Fields of GET /api/runs before metrics were added; kept identical for existing callers. */
 export interface LegacyRunListRow {
@@ -68,6 +68,8 @@ export interface RunListQuery {
   agent?: string;
   model?: string;
   q?: string;
+  /** Exact run ids, for enriching rows another endpoint already chose (Search results). */
+  ids?: string[];
   since?: number;
   until?: number;
   sort: RunListSort;
@@ -95,12 +97,20 @@ export function parseRunListQuery(query: Record<string, unknown>): RunListQuery 
   const agent = queryString(query, "agent", AGENT_FILTER_CHARS) || undefined;
   const model = queryString(query, "model") || undefined;
   const q = queryString(query, "q", RUN_LIST_LIMITS.queryChars)?.trim() || undefined;
+  const rawIds = queryString(query, "ids", RUN_LIST_LIMITS.ids * (RUN_LIST_LIMITS.idChars + 1));
+  let ids: string[] | undefined;
+  if (rawIds !== undefined && rawIds !== "") {
+    ids = [...new Set(rawIds.split(","))];
+    if (ids.length > RUN_LIST_LIMITS.ids || ids.some(id => !id || id.length > RUN_LIST_LIMITS.idChars)) {
+      throw new StatsRequestError(`ids must be a comma-separated list of at most ${RUN_LIST_LIMITS.ids} run ids of at most ${RUN_LIST_LIMITS.idChars} characters`);
+    }
+  }
   const since = queryTime(query, "since");
   const until = queryTime(query, "until");
   if (since !== undefined && until !== undefined && until <= since) throw new StatsRequestError("until must be later than since");
   const rawEnvelope = queryString(query, "envelope", 8);
   if (rawEnvelope !== undefined && rawEnvelope !== "0" && rawEnvelope !== "1") throw new StatsRequestError("envelope must be 0 or 1");
-  const filterKey = createHash("sha256").update(JSON.stringify([statuses, agent ?? null, model ?? null, q ?? null, since ?? null, until ?? null, sort, order])).digest("base64url").slice(0, 16);
+  const filterKey = createHash("sha256").update(JSON.stringify([statuses, agent ?? null, model ?? null, q ?? null, since ?? null, until ?? null, sort, order, ids ?? null])).digest("base64url").slice(0, 16);
   const encoded = queryString(query, "cursor", 1024);
   let cursor: RunListQuery["cursor"];
   if (encoded) {
@@ -113,7 +123,7 @@ export function parseRunListQuery(query: Record<string, unknown>): RunListQuery 
       cursor = { value, id };
     } catch { throw new StatsRequestError("cursor is invalid for these filters; request the first page again"); }
   }
-  return { limit, statuses, agent, model, q, since, until, sort, order, cursor, filterKey, envelope: rawEnvelope === "1" };
+  return { limit, statuses, agent, model, q, ids, since, until, sort, order, cursor, filterKey, envelope: rawEnvelope === "1" };
 }
 
 function sortValue(row: RunRow, sort: RunListSort): number | null {
@@ -157,9 +167,10 @@ export function toRunListRow(row: RunRow, now: number = Date.now()): RunListRow 
 }
 
 /** The filter half of GET /api/runs: everything except sort, cursor and limit. */
-export function runMatchesQuery(row: RunRow, query: Pick<RunListQuery, "statuses" | "agent" | "model" | "q" | "since" | "until">): boolean {
+export function runMatchesQuery(row: RunRow, query: Pick<RunListQuery, "statuses" | "agent" | "model" | "q" | "since" | "until"> & { ids?: readonly string[] }): boolean {
   const needle = query.q?.toLowerCase();
-  return (query.since === undefined || row.started_at >= query.since)
+  return (!query.ids || query.ids.includes(row.id))
+    && (query.since === undefined || row.started_at >= query.since)
     && (query.until === undefined || row.started_at < query.until)
     && (!query.statuses || query.statuses.includes(row.facts.status))
     && (!query.agent || runAgent(row) === query.agent)
@@ -187,7 +198,8 @@ export function listRuns(db: Database, dbPath: string, rawQuery: Record<string, 
   const query = parseRunListQuery(rawQuery);
   const now = Date.now();
   const where: string[] = ["1 = 1"];
-  const params: number[] = [];
+  const params: (string | number)[] = [];
+  if (query.ids) { where.push(`r.id IN (${query.ids.map(() => "?").join(", ")})`); params.push(...query.ids); }
   if (query.since !== undefined) { where.push("r.started_at >= ?"); params.push(query.since); }
   if (query.until !== undefined) { where.push("r.started_at < ?"); params.push(query.until); }
   const matching = loadRunRows(db, dbPath, selectRunAggregates(db, where.join(" AND "), params)).filter(row => runMatchesQuery(row, query));

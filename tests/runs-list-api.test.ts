@@ -101,6 +101,17 @@ describe("GET /api/runs parameters", () => {
     expect(ids({ since: new Date(FIXTURE_NOW - 48 * HOUR).toISOString(), until: String(FIXTURE_NOW - 24 * HOUR), sort: "started_at" })).toEqual(["p-ok", "p-failed"]);
   });
 
+  test("returns exactly the requested run ids, with the other filters still applied", () => {
+    expect(ids({ ids: "r-ok,p-failed,missing-run", sort: "started_at" })).toEqual(["r-ok", "p-failed"]);
+    expect(ids({ ids: "r-ok,r-ok" })).toEqual(["r-ok"]);
+    expect(ids({ ids: "r-ok,p-failed", status: "failed" })).toEqual(["p-failed"]);
+    expect(list({ ids: "r-ok,p-failed" }).total).toBe(2);
+    expect(() => list({ ids: Array.from({ length: 101 }, (_, index) => `run-${index}`).join(",") })).toThrow(/at most 100 run ids/);
+    expect(() => list({ ids: "r-ok,,p-ok" })).toThrow(/ids must be/);
+    const first = list({ ids: "r-ok,p-failed,r-failed", sort: "started_at", limit: "1" });
+    expect(() => list({ ids: "r-ok", sort: "started_at", limit: "1", cursor: first.nextCursor! })).toThrow(/cursor is invalid/);
+  });
+
   test("sorts by metric with unknown values last in either direction", () => {
     expect(ids({ sort: "cost" })).toEqual(["r-nested", "r-failed", "r-ok", "p-ok", "r-tool-err", "r-running", "p-failed", "old"]);
     expect(ids({ sort: "cost", order: "asc" })).toEqual(["r-tool-err", "p-ok", "r-ok", "r-failed", "r-nested", "old", "p-failed", "r-running"]);
