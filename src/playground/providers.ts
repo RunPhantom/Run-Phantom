@@ -97,6 +97,14 @@ function geminiResponse(content: string): Record<string, unknown> {
   return { result: content };
 }
 
+/**
+ * Gemini 3 rejects a replayed model turn whose first functionCall part has no thoughtSignature (HTTP 400 "Function call
+ * is missing a thought_signature"). Calls captured from OpenAI, Anthropic or OTel GenAI traces never carry one, so the
+ * turn is sent with the placeholder Google documents for function calls the model did not produce itself (Gemini API
+ * "Thought signatures"). Like Gemini's own output, only the first call of a parallel batch carries it.
+ */
+export const GEMINI_UNSIGNED_CALL_SIGNATURE = "skip_thought_signature_validator";
+
 function geminiContents(messages: PlaygroundMessage[]): unknown[] {
   const names = new Map<string, string>();
   const out: Array<{ role: "user" | "model"; parts: unknown[] }> = [];
@@ -108,10 +116,15 @@ function geminiContents(messages: PlaygroundMessage[]): unknown[] {
   for (const message of messages) {
     if (message.role === "user") push("user", [{ text: message.content }]);
     else if (message.role === "assistant") {
-      for (const call of message.toolCalls ?? []) names.set(call.id, call.name);
+      const calls = message.toolCalls ?? [];
+      const signed = calls.some(call => call.signature);
+      for (const call of calls) names.set(call.id, call.name);
       push("model", [
         ...(message.content.trim() ? [{ text: message.content }] : []),
-        ...(message.toolCalls ?? []).map(call => ({ functionCall: { ...geminiCallId(call.id), name: call.name, args: call.arguments }, ...(call.signature ? { thoughtSignature: call.signature } : {}) })),
+        ...calls.map((call, position) => ({
+          functionCall: { ...geminiCallId(call.id), name: call.name, args: call.arguments },
+          ...(call.signature ? { thoughtSignature: call.signature } : position === 0 && !signed ? { thoughtSignature: GEMINI_UNSIGNED_CALL_SIGNATURE } : {}),
+        })),
       ]);
     } else push("user", [{ functionResponse: { ...geminiCallId(message.toolCallId), name: message.name ?? names.get(message.toolCallId) ?? "tool", response: geminiResponse(message.content) } }]);
   }
