@@ -19,8 +19,11 @@ test("Evaluate run opens Evaluations with that run preselected as the source of 
   await expect(linked).toContainText("Create a dataset first");
   const name = page.getByRole("textbox", { name: "Dataset name", exact: true });
   await expect(name).toHaveValue(/ regression cases$/);
+  const defaultName = await name.inputValue();
   await page.getByRole("button", { name: "Create dataset", exact: true }).click();
   await expect(linked).toContainText("preselected as the source run");
+  await expect(page.getByRole("combobox", { name: "Dataset", exact: true }).locator("option", { hasText: defaultName })).toHaveCount(1);
+  await expect(name).toHaveValue("");
   await expect(page.getByRole("combobox", { name: "Source run", exact: true })).toHaveValue(EVALUATION_RUNS.baseline);
   await expect(page.getByRole("region", { name: "Source snapshot", exact: true })).toBeVisible();
   await page.getByRole("textbox", { name: "Case name", exact: true }).fill("Linked run case");
@@ -33,6 +36,18 @@ test("Evaluate run opens Evaluations with that run preselected as the source of 
   await page.goto(`${runPhantom.url}/evaluations?view=evidence&anchorKind=run&anchorId=${EVALUATION_RUNS.baseline}`);
   await expect(page.getByLabel("Report files", { exact: true })).toBeVisible();
   expect(errors.filter(text => /404|Inventory revision not found/.test(text))).toEqual([]);
+});
+
+test("Evaluate run names the dataset after a run that is not in the loaded run list", async ({ page, request, runPhantom }) => {
+  await seedEvaluationRuns(request, runPhantom.url);
+  const listed = await (await request.get(`${runPhantom.url}/api/runs`)).json() as { id: string; display_name?: string | null; event_name?: string | null; name?: string | null }[];
+  const run = listed.find(item => item.id === EVALUATION_RUNS.baseline)!;
+  await page.route(url => url.pathname === "/api/runs", route => route.fulfill({ json: [] }));
+  await page.goto(`${runPhantom.url}/evaluations?runId=${EVALUATION_RUNS.baseline}`);
+  const name = page.getByRole("textbox", { name: "Dataset name", exact: true });
+  await expect(name).toHaveValue(/ regression cases$/);
+  expect(await name.inputValue()).not.toContain(EVALUATION_RUNS.baseline.slice(0, 12));
+  await expect(page.getByRole("region", { name: "Run to evaluate", exact: true })).toContainText(run.display_name || run.event_name || run.name || "");
 });
 
 test("attaching a test report to a run links it from the run with the current count", async ({ page, request, runPhantom }) => {

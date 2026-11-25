@@ -55,6 +55,12 @@ export async function getRunDetail(runId: string, signal?: AbortSignal): Promise
   return apiJson<RunDetailData>(`/api/runs/detail/${encodeURIComponent(runId)}`, { signal });
 }
 
+/** The run row alone, without span payloads; null when the run does not exist. */
+export async function getRunRow(runId: string, signal?: AbortSignal): Promise<Run | null> {
+  const outline = await apiJsonOrNull<{ run: Run | null }>(`/api/runs/${encodeURIComponent(runId)}/outline?payload_preview_chars=0`, { signal });
+  return outline?.run ?? null;
+}
+
 export async function getRunDetailOrNull(runId: string): Promise<RunDetailData | null> {
   return apiJsonOrNull<RunDetailData>(`/api/runs/detail/${encodeURIComponent(runId)}`);
 }

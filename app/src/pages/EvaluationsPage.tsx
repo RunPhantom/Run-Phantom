@@ -17,6 +17,7 @@ import { EvaluationNavigation } from "../components/evaluations/EvaluationNaviga
 import { ExperimentIndex } from "../components/evaluations/ExperimentIndex";
 import { useRuns } from "../hooks/use-runs";
 import { runDisplayName } from "../utils/helpers";
+import { getRunRow } from "../api/runs";
 
 export function EvaluationsPage() {
   const [params, setParams] = useSearchParams();
@@ -51,13 +52,20 @@ export function EvaluationsPage() {
   const [datasetName, setDatasetName] = useState("");
   const linkedRunId = params.get("runId") ?? "";
   const runs = useRuns();
-  const linkedRun = runs.data?.find(item => item.id === linkedRunId);
+  const listedRun = runs.data?.find(item => item.id === linkedRunId);
+  const fetchedRun = useQuery({ queryKey: ["evaluations", "linked-run", linkedRunId], enabled: !!linkedRunId && runs.isSuccess && !listedRun,
+    queryFn: ({ signal }) => getRunRow(linkedRunId, signal), staleTime: Infinity, retry: false });
+  const linkedRun = listedRun ?? fetchedRun.data ?? undefined;
   const linkedRunName = linkedRun ? runDisplayName(linkedRun) : linkedRunId.slice(0, 12);
   const [nameTouched, setNameTouched] = useState(false);
+  const seededName = useRef("");
+  const defaultName = linkedRun ? `${runDisplayName(linkedRun)} regression cases`.slice(0, 128) : "";
   useEffect(() => {
-    // Offer a ready dataset name for the linked run until the user edits it.
-    if (linkedRun && !nameTouched) setDatasetName(`${runDisplayName(linkedRun)} regression cases`.slice(0, 128));
-  }, [linkedRun, nameTouched]);
+    // Offer a ready dataset name once per linked run; a later refetch must not refill a cleared field.
+    if (!defaultName || nameTouched || seededName.current === linkedRunId) return;
+    seededName.current = linkedRunId;
+    setDatasetName(defaultName);
+  }, [defaultName, linkedRunId, nameTouched]);
   const [selectedExperiment, setSelectedExperiment] = useState("");
   const [portableJson, setPortableJson] = useState("");
   const [error, setError] = useState("");
