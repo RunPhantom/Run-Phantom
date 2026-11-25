@@ -8,6 +8,7 @@ import { EmptyPanel } from "@/components/ui/empty-panel";
 import { ReplayView } from "../components/ReplayView";
 import { RunComparison } from "../components/RunComparison";
 import { useReplay } from "../hooks/use-replay";
+import { replayDemoTraces } from "../api/demo-traces";
 import { RotateCcw, ArrowRight, X, ArrowLeft, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -241,14 +242,12 @@ export function RunsPage() {
   };
 
   const openDemoTrace = useCallback(async () => {
-    const response = await fetch("/api/demo-traces/replay", { method: "POST" });
-    if (!response.ok) throw new Error("Failed to load demo traces");
-    const body = await response.json().catch(() => null) as { runIds?: string[] } | null;
+    const runIds = await replayDemoTraces();
     if (replayOriginalId) { replay.reset(); setReplayOriginalId(null); }
     const fresh: Run[] = await (await fetch("/api/runs")).json();
     setRuns(fresh);
     const firstDemoRunId =
-      body?.runIds?.find((id) => fresh.some((run) => run.id === id)) ??
+      runIds.find((id) => fresh.some((run) => run.id === id)) ??
       fresh.find(isDefaultDemoRun)?.id ??
       "demo_triage";
     navigate(runPath(firstDemoRunId));

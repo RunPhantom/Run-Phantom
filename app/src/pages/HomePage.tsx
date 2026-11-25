@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   DEFAULT_OVERVIEW_WINDOW, OVERVIEW_WINDOW_OPTIONS, getLatestRuns, getOverview, isOverviewWindow, type Overview, type OverviewWindow,
 } from "../api/overview";
+import { replayDemoTraces } from "../api/demo-traces";
 import { useRunPhantomConnectionStatus, useRunPhantomEvent } from "../hooks/use-runphantom-ws";
 import { useRegisterCommands } from "../shell/commands";
 import { KpiStrip } from "./overview/HomeKpis";
@@ -21,13 +22,6 @@ const LATEST_RUNS = 8;
 // agent emits a WebSocket frame per token, so live refreshes are throttled harder than the Runs list's 400 ms.
 const LIVE_REFRESH_MS = 1_000;
 const CLOCK_TICK_MS = 30_000;
-
-async function replaySampleRuns(): Promise<void> {
-  const response = await fetch("/api/demo-traces/replay", { method: "POST" });
-  if (response.ok) return;
-  const body = await response.json().catch(() => null) as { error?: unknown } | null;
-  throw new Error(typeof body?.error === "string" ? body.error : "Could not load sample runs.");
-}
 
 function useClock(intervalMs: number): number {
   const [now, setNow] = useState(() => Date.now());
@@ -108,7 +102,7 @@ export function HomePage() {
   const loadSamples = async () => {
     setSampleState({ loading: true, error: null });
     try {
-      await replaySampleRuns();
+      await replayDemoTraces();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["home"] }),
         queryClient.invalidateQueries({ queryKey: ["runs"], exact: true }),

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { Contrast, Keyboard, Link2, PanelLeft, PlayCircle, Settings, type LucideIcon } from "lucide-react";
 import { useSidebar } from "@/components/ui/sidebar";
+import { replayDemoTraces } from "../api/demo-traces";
 import { useRuns } from "../hooks/use-runs";
 import { ago, runAgentName, runDisplayName, runStatus, type RunStatus } from "../utils/helpers";
 import { runPath } from "../utils/navigation";
@@ -16,13 +17,6 @@ import { readOtlpEndpoint } from "./otlp";
 const RECENT_RUN_LIMIT = 8;
 
 let sampleLoad: Promise<string[]> | null = null;
-
-async function loadSampleRuns(): Promise<string[]> {
-  const response = await fetch("/api/demo-traces/replay", { method: "POST" });
-  const body = await response.json().catch(() => null) as { runIds?: unknown; error?: unknown } | null;
-  if (!response.ok) throw new Error(typeof body?.error === "string" ? body.error : "Could not load sample runs.");
-  return Array.isArray(body?.runIds) ? body.runIds.filter((id): id is string => typeof id === "string") : [];
-}
 
 function recentRuns(runs: readonly Run[] | undefined): Run[] {
   return [...(runs ?? [])].sort((a, b) => b.last_updated_at - a.last_updated_at).slice(0, RECENT_RUN_LIMIT);
@@ -96,7 +90,7 @@ export function ShellCommands() {
         if (sampleLoad) { announce("Already loading sample runs…"); return; }
         announce("Loading sample runs…");
         const openedIn = paletteSession();
-        sampleLoad = loadSampleRuns();
+        sampleLoad = replayDemoTraces();
         try {
           const ids = await sampleLoad;
           await queryClient.invalidateQueries({ queryKey: ["runs"], exact: true });
