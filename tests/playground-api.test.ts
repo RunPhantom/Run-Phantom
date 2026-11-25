@@ -213,6 +213,7 @@ describe.serial("POST /api/playground/runs", () => {
       ["gemini", "tool_calls", "get_weather", { city: "Paris" }],
     ]);
     expect(first.results[2].output.toolCalls[0].signature).toBe("c2lnbmF0dXJl");
+    expect(first.results.map(result => result.timeToFirstTokenMs)).not.toContain(null);
     const toolBodies = Object.fromEntries(calls.map(call => [call.url.includes("openai") ? "openai" : call.url.includes("anthropic") ? "anthropic" : "gemini", call.body]));
     expect(toolBodies.openai.tools).toEqual([{ type: "function", function: tools[0] }]);
     expect(toolBodies.anthropic.tools).toEqual([{ name: "get_weather", description: "Weather for a city", input_schema: tools[0].parameters }]);
@@ -283,7 +284,9 @@ describe.serial("POST /api/playground/runs", () => {
       { event: "error", data: { type: "error", error: { type: "overloaded_error", message: "Overloaded" } } },
     ]);
     let { results: [result] } = await (await post({ ...userTurn, provider: "anthropic", model: "claude-haiku-4-5-20251001" })).json() as { results: Array<Record<string, any>> };
-    expect(result).toMatchObject({ status: "error", output: { text: "Partial" }, error: { kind: "overloaded", retryable: true } });
+    expect(result).toMatchObject({ status: "error", output: { text: "Partial" }, error: { kind: "overloaded", retryable: true }, usage: { inputTokens: 5, outputTokens: null, totalTokens: null } });
+    expect(result.warnings).toContain("The response stopped before it finished, so the output token count is unknown.");
+    expect(llmSpan(result.runId).span.output_tokens ?? null).toBeNull();
 
     upstream = () => sse([{ data: { id: "c", model: "gpt-5-nano", choices: [{ index: 0, delta: { content: "Cut" } }] } }]);
     ({ results: [result] } = await (await post({ ...userTurn, provider: "openai", model: "gpt-5-nano" })).json() as { results: Array<Record<string, any>> });
@@ -332,6 +335,18 @@ describe.serial("POST /api/playground/runs", () => {
     expect(results.map(item => [item.index, item.status, item.output.text])).toEqual(expect.arrayContaining([[0, "ok", "Streaming works"], [1, "ok", "Also streams"]]));
     expect(results.every(item => typeof item.runId === "string" && item.timeToFirstTokenMs !== null)).toBe(true);
     expect(events[events.length - 1]).toEqual({ event: "done", data: { comparisonId: events[0].data.comparisonId } });
+  });
+
+  test("warns when a reasoning model spends every output token on reasoning", async () => {
+    upstream = () => sse([
+      { data: { id: "c", model: "gpt-5-nano", choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] } },
+      { data: { id: "c", model: "gpt-5-nano", choices: [{ index: 0, delta: {}, finish_reason: "length" }] } },
+      { data: { id: "c", model: "gpt-5-nano", choices: [], usage: { prompt_tokens: 30, completion_tokens: 512, total_tokens: 542, completion_tokens_details: { reasoning_tokens: 512 } } } },
+      { data: "[DONE]" },
+    ]);
+    const { results: [result] } = await (await post({ ...userTurn, provider: "openai", model: "gpt-5-nano", params: { maxOutputTokens: 512 } })).json() as { results: Array<Record<string, any>> };
+    expect(result).toMatchObject({ status: "ok", finishReason: "length", output: { text: "" }, usage: { outputTokens: 512, reasoningTokens: 512 }, timeToFirstTokenMs: null });
+    expect(result.warnings).toContain("All output tokens were used for reasoning, so there is no answer. Raise max output tokens or lower the reasoning effort.");
   });
 
   test("refuses invalid requests before contacting any provider", async () => {

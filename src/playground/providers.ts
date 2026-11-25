@@ -164,11 +164,14 @@ export interface Accumulated {
   usage: PlaygroundUsage;
   /** True once the provider signalled the end of the response, so a dropped connection is distinguishable from a finished one. */
   complete: boolean;
+  /** True once the model began producing output of any kind: text, a tool call or a reasoning block. */
+  started: boolean;
 }
 
 export interface StreamAccumulator {
   /** Returns the visible text delta carried by this event, if any. Throws ProviderStreamError for in-band errors. */
   push(event: SseEvent): string | undefined;
+  hasStarted(): boolean;
   result(): Accumulated;
 }
 
@@ -203,7 +206,7 @@ function streamedErrorKind(type: unknown): PlaygroundErrorKind {
 }
 
 function openAiAccumulator(): StreamAccumulator {
-  const state: Accumulated = { text: "", toolCalls: [], providerFinishReason: null, finishReason: null, responseModel: null, responseId: null, usage: emptyUsage(), complete: false };
+  const state: Accumulated = { text: "", toolCalls: [], providerFinishReason: null, finishReason: null, responseModel: null, responseId: null, usage: emptyUsage(), complete: false, started: false };
   const calls = new Map<number, { id: string; name: string; args: string }>();
   return {
     push(event) {
@@ -227,10 +230,11 @@ function openAiAccumulator(): StreamAccumulator {
         if (!choice || (choice.index !== undefined && choice.index !== 0)) continue;
         const message = record(choice.delta);
         const content = typeof message?.content === "string" ? message.content : typeof message?.refusal === "string" ? message.refusal : "";
-        if (content) { state.text += content; delta = (delta ?? "") + content; }
+        if (content) { state.text += content; state.started = true; delta = (delta ?? "") + content; }
         for (const callValue of Array.isArray(message?.tool_calls) ? message.tool_calls : []) {
           const call = record(callValue);
           if (!call) continue;
+          state.started = true;
           const index = typeof call.index === "number" ? call.index : calls.size;
           const fn = record(call.function);
           const entry = calls.get(index) ?? { id: "", name: "", args: "" };
@@ -246,6 +250,7 @@ function openAiAccumulator(): StreamAccumulator {
       }
       return delta;
     },
+    hasStarted: () => state.started,
     result() {
       state.toolCalls = [...calls.entries()].sort(([a], [b]) => a - b).map(([index, call]) => ({ id: call.id || `call_${index}`, name: call.name, arguments: parseArguments(call.args) }));
       return state;
@@ -254,7 +259,7 @@ function openAiAccumulator(): StreamAccumulator {
 }
 
 function anthropicAccumulator(): StreamAccumulator {
-  const state: Accumulated = { text: "", toolCalls: [], providerFinishReason: null, finishReason: null, responseModel: null, responseId: null, usage: emptyUsage(), complete: false };
+  const state: Accumulated = { text: "", toolCalls: [], providerFinishReason: null, finishReason: null, responseModel: null, responseId: null, usage: emptyUsage(), complete: false, started: false };
   const blocks = new Map<number, { type: string; id?: string; name?: string; json: string }>();
   let input: number | null = null, cacheRead: number | null = null, cacheWrite: number | null = null, output: number | null = null, thinking: number | null = null;
   const applyUsage = (usage: Record<string, unknown> | null) => {
@@ -283,6 +288,7 @@ function anthropicAccumulator(): StreamAccumulator {
         const block = record(data.content_block);
         const index = typeof data.index === "number" ? data.index : blocks.size;
         blocks.set(index, { type: String(block?.type ?? "unknown"), id: str(block?.id) ?? undefined, name: str(block?.name) ?? undefined, json: "" });
+        state.started = true;
         if (block?.type === "text" && typeof block.text === "string" && block.text) { state.text += block.text; return block.text; }
       } else if (type === "content_block_delta") {
         const delta = record(data.delta);
@@ -301,6 +307,7 @@ function anthropicAccumulator(): StreamAccumulator {
       }
       return undefined;
     },
+    hasStarted: () => state.started,
     result() {
       state.toolCalls = [...blocks.entries()].sort(([a], [b]) => a - b).filter(([, block]) => block.type === "tool_use")
         .map(([index, block]) => ({ id: block.id ?? `toolu_${index}`, name: block.name ?? "", arguments: parseArguments(block.json) }));
@@ -314,7 +321,7 @@ function anthropicAccumulator(): StreamAccumulator {
 const GEMINI_FILTERED = new Set(["SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY", "LANGUAGE"]);
 
 function geminiAccumulator(): StreamAccumulator {
-  const state: Accumulated = { text: "", toolCalls: [], providerFinishReason: null, finishReason: null, responseModel: null, responseId: null, usage: emptyUsage(), complete: false };
+  const state: Accumulated = { text: "", toolCalls: [], providerFinishReason: null, finishReason: null, responseModel: null, responseId: null, usage: emptyUsage(), complete: false, started: false };
   return {
     push(event) {
       const data = parseData(event);
@@ -342,7 +349,9 @@ function geminiAccumulator(): StreamAccumulator {
       const candidate = record(Array.isArray(data.candidates) ? data.candidates[0] : undefined);
       for (const partValue of Array.isArray(record(candidate?.content)?.parts) ? record(candidate?.content)!.parts as unknown[] : []) {
         const part = record(partValue);
-        if (!part || part.thought === true) continue;
+        if (!part) continue;
+        state.started = true;
+        if (part.thought === true) continue;
         if (typeof part.text === "string" && part.text) { state.text += part.text; delta = (delta ?? "") + part.text; }
         const call = record(part.functionCall);
         if (call) state.toolCalls.push({
@@ -357,6 +366,7 @@ function geminiAccumulator(): StreamAccumulator {
       }
       return delta;
     },
+    hasStarted: () => state.started,
     result() {
       // Gemini reports STOP even when the turn ends in function calls.
       if (state.finishReason === "stop" && state.toolCalls.length) state.finishReason = "tool_calls";

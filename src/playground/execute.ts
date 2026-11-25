@@ -58,10 +58,8 @@ export async function executePlaygroundCall(options: ExecuteOptions): Promise<Ex
     } else {
       for await (const event of readSse(response.body, PLAYGROUND_LIMITS.providerResponseBytes)) {
         const delta = accumulator.push(event);
-        if (delta) {
-          firstTokenAt ??= now();
-          options.onDelta?.(delta);
-        }
+        if (firstTokenAt === null && (delta || accumulator.hasStarted())) firstTokenAt = now();
+        if (delta) options.onDelta?.(delta);
       }
     }
   } catch (cause) {
@@ -80,6 +78,16 @@ export async function executePlaygroundCall(options: ExecuteOptions): Promise<Ex
 
   let text = accumulated.text;
   const warnings = [...providerRequest.warnings];
+  let usage = accumulated.usage;
+  // Providers report output tokens as a running or placeholder count until the stream ends (Anthropic's message_start says 1).
+  if (!accumulated.complete && (usage.outputTokens !== null || usage.reasoningTokens !== null)) {
+    usage = { ...usage, outputTokens: null, reasoningTokens: null, totalTokens: null };
+    warnings.push("The response stopped before it finished, so the output token count is unknown.");
+  }
+  if (!error && accumulated.finishReason === "length" && !text.trim() && !accumulated.toolCalls.length
+    && usage.reasoningTokens !== null && usage.outputTokens !== null && usage.reasoningTokens >= usage.outputTokens) {
+    warnings.push("All output tokens were used for reasoning, so there is no answer. Raise max output tokens or lower the reasoning effort.");
+  }
   if (text.length > PLAYGROUND_LIMITS.outputChars) {
     text = text.slice(0, PLAYGROUND_LIMITS.outputChars);
     warnings.push(`The output was longer than ${PLAYGROUND_LIMITS.outputChars} characters and was shortened.`);
@@ -101,7 +109,7 @@ export async function executePlaygroundCall(options: ExecuteOptions): Promise<Ex
       providerFinishReason: accumulated.providerFinishReason,
       responseModel: accumulated.responseModel,
       responseId: accumulated.responseId,
-      usage: accumulated.usage,
+      usage,
       latencyMs: Math.max(0, endedAt - startedAt),
       timeToFirstTokenMs: firstTokenAt === null ? null : Math.max(0, firstTokenAt - startedAt),
       warnings,
