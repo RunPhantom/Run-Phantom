@@ -33,7 +33,7 @@ function Eyebrow({ children, className }: { children: ReactNode; className?: str
 
 function RenderToggle({ mode, onChange }: { mode: RenderMode; onChange: (mode: RenderMode) => void }) {
   return (
-    <div role="group" aria-label="Payload view" className="inline-flex h-6 overflow-hidden rounded-control border border-rp-line">
+    <div role="group" aria-label="Payload view" className="inline-flex min-h-6 overflow-hidden rounded-control border border-rp-line">
       {(["pretty", "raw"] as const).map(option => (
         <button key={option} type="button" aria-pressed={mode === option} onClick={() => onChange(option)}
           className={cn("px-2 text-11 transition-colors duration-fast", mode === option ? "bg-rp-wash text-rp-blue" : "bg-rp-surface text-rp-ink-subtle hover:text-rp-ink")}>
