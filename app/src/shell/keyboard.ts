@@ -54,7 +54,6 @@ export function chordMatches(event: KeyLike, chord: Chord, mac: boolean): boolea
   return true;
 }
 
-/** Human-readable chord text for kbd chips: "⌘K" on macOS, "Ctrl+K" elsewhere, "G R" for sequences. */
 /**
  * aria-keyshortcuts value for one chord on this platform: "Meta+K" on macOS, "Control+K"
  * elsewhere. The attribute separates alternatives with spaces and cannot express
@@ -67,6 +66,7 @@ export function ariaKeyShortcuts(keys: string, mac = isMacPlatform()): string {
   }).join("");
 }
 
+/** Human-readable chord text for kbd chips: "⌘K" on macOS, "Ctrl+K" elsewhere, "G R" for sequences. */
 export function formatKeys(keys: string, mac = isMacPlatform()): string {
   return parseKeys(keys).map(chord => {
     const key = chord.key === " " ? "Space" : chord.key === "escape" ? "Esc" : chord.key.length === 1 ? chord.key.toUpperCase() : chord.key[0]!.toUpperCase() + chord.key.slice(1);
