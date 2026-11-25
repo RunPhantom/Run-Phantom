@@ -146,7 +146,7 @@ interface RunPhantomPortSelection {
 }
 
 async function ensureDaemonRunning(): Promise<EnsureDaemonResult> {
-  fs.mkdirSync(STATE_DIR, { recursive: true });
+  fs.mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
 
   const requestedPort = getConfiguredPort();
   const selection = hasExplicitPort()
