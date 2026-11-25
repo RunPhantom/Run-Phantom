@@ -15,6 +15,8 @@ import { readOtlpEndpoint } from "./otlp";
 
 const RECENT_RUN_LIMIT = 8;
 
+let sampleLoad: Promise<string[]> | null = null;
+
 async function loadSampleRuns(): Promise<string[]> {
   const response = await fetch("/api/demo-traces/replay", { method: "POST" });
   const body = await response.json().catch(() => null) as { runIds?: unknown; error?: unknown } | null;
@@ -80,11 +82,17 @@ export function ShellCommands() {
       order: 0,
       keepOpen: true,
       run: async ({ navigate: go, announce, close }) => {
+        if (sampleLoad) { announce("Already loading sample runs…"); return; }
         announce("Loading sample runs…");
-        const ids = await loadSampleRuns();
-        await queryClient.invalidateQueries({ queryKey: ["runs"], exact: true });
-        close();
-        go(ids[0] ? runPath(ids[0]) : "/runs");
+        sampleLoad = loadSampleRuns();
+        try {
+          const ids = await sampleLoad;
+          await queryClient.invalidateQueries({ queryKey: ["runs"], exact: true });
+          close();
+          go(ids[0] ? runPath(ids[0]) : "/runs");
+        } finally {
+          sampleLoad = null;
+        }
       },
     }),
     action({ id: "action:toggle-theme", label: "Toggle theme", keywords: ["dark", "light", "appearance", "colour", "color"], icon: Contrast, order: 1, run: toggleTheme }),
