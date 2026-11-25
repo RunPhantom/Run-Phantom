@@ -43,13 +43,13 @@ function countModels(provider: ProviderId, body: unknown): { count: number | nul
   return { count: list.length, complete: !more };
 }
 
-/** Tests the effective key (environment first, then the saved key) with one models-list request. Never throws. */
+/** Tests the effective key (the saved key first, then the environment) with one models-list request. Never throws. */
 export async function checkProviderConnection(provider: ProviderId, options: { fetch?: ProviderCheckFetch; now?: () => number } = {}): Promise<ProviderCheckResult> {
   const now = options.now ?? Date.now;
-  const env = getEnvSecret(provider);
-  const stored = env ? null : getStoredSecret(provider);
-  const key = env?.value ?? stored;
-  const source = env ? "env" : stored ? "store" : null;
+  const stored = getStoredSecret(provider);
+  const env = stored ? null : getEnvSecret(provider);
+  const key = stored ?? env?.value ?? null;
+  const source = stored ? "store" : env ? "env" : null;
   const base = { provider, source, checkedAt: now(), modelCount: null, modelCountComplete: false, httpStatus: null, providerMessage: null } as const;
   if (!key) return { ...base, ok: false, latencyMs: null, failure: "missing_key", message: failureMessage(provider, "missing_key", null) };
 
@@ -89,7 +89,7 @@ export async function checkProviderConnection(provider: ProviderId, options: { f
 }
 
 function keyFingerprint(provider: ProviderId): string | null {
-  const key = getEnvSecret(provider)?.value ?? getStoredSecret(provider);
+  const key = getStoredSecret(provider) ?? getEnvSecret(provider)?.value;
   return key ? createHash("sha256").update(key).digest("hex") : null;
 }
 

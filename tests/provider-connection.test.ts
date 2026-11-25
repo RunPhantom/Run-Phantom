@@ -60,6 +60,18 @@ describe.serial("provider connection check", () => {
     expect(typeof openai.latencyMs).toBe("number");
   });
 
+  test("checks the saved key when the environment also sets one, matching the key the app uses", async () => {
+    const seen: string[] = [];
+    setStoredSecret("openai", "sk-proj-saved-0005");
+    process.env.OPENAI_API_KEY = "sk-proj-env-0006";
+    const result = await checkProviderConnection("openai", { fetch: async (_url: string, init: RequestInit) => {
+      seen.push((init.headers as Record<string, string>).Authorization!);
+      return json(200, { object: "list", data: [] });
+    } });
+    expect(seen).toEqual(["Bearer sk-proj-saved-0005"]);
+    expect(result).toMatchObject({ ok: true, source: "store" });
+  });
+
   test("classifies a rejected key and strips the key from the provider's message", async () => {
     const key = "sk-proj-rejected-9999";
     setStoredSecret("openai", key);

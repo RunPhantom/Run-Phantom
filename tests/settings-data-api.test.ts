@@ -47,7 +47,7 @@ describe.serial("settings provider and data endpoints", () => {
     expect(body).not.toContain(key);
     const parsed = JSON.parse(body);
     expect(parsed.hints).toEqual({ anthropic: null, openai: "sk-proj-…7Q2x", gemini: null });
-    expect(parsed.keys.openai).toEqual({ configured: true, source: "store", env_var: "OPENAI_API_KEY", stored: true });
+    expect(parsed.keys.openai).toEqual({ configured: true, source: "store", env_var: "OPENAI_API_KEY", stored: true, env_available: false });
   });
 
   test("a connection check answers from one models-list call even when clicked twice", async () => {
