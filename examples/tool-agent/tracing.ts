@@ -1,6 +1,5 @@
 import { randomBytes } from "node:crypto";
-
-const DEFAULT_OTLP_ENDPOINT = "http://localhost:5947/v1/traces";
+import { runOrigin, tracesEndpoint } from "../shared/runphantom";
 
 export type AttributeValue = string | number | boolean | string[];
 
@@ -36,17 +35,9 @@ function otlpAttributes(attributes: Record<string, AttributeValue>) {
   return Object.entries(attributes).map(([key, value]) => ({ key, value: otlpValue(value) }));
 }
 
-export function tracesEndpoint(): string {
-  return process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT || DEFAULT_OTLP_ENDPOINT;
-}
-
 /** The Run Phantom page for a trace, assuming the collector is the Run Phantom daemon. */
 export function runUrl(traceId: string): string {
-  try {
-    return `${new URL(tracesEndpoint()).origin}/runs/${traceId}`;
-  } catch {
-    return `http://localhost:5947/runs/${traceId}`;
-  }
+  return `${runOrigin()}/runs/${traceId}`;
 }
 
 export class Span {

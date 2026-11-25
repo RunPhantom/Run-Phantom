@@ -9,5 +9,5 @@
     "types": ["bun"],
     "typeRoots": ["../../node_modules/@types"]
   },
-  "files": ["agent.ts", "scenarios.ts", "providers.ts", "tools.ts", "tracing.ts", "../loadEnv.ts"]
+  "files": ["agent.ts", "scenarios.ts", "providers.ts", "tools.ts", "tracing.ts", "../loadEnv.ts", "../shared/runphantom.ts"]
 }

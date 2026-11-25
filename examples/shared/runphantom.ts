@@ -71,13 +71,13 @@ function attribute(key: string, value: AttributeValue) {
   return { key, value: { stringValue: value } };
 }
 
-function endpoint(): string {
+export function tracesEndpoint(): string {
   return process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT || DEFAULT_OTLP_ENDPOINT;
 }
 
-function runOrigin(): string {
+export function runOrigin(): string {
   try {
-    return new URL(endpoint()).origin;
+    return new URL(tracesEndpoint()).origin;
   } catch {
     return "http://localhost:5947";
   }
@@ -163,7 +163,7 @@ export class ExampleTrace {
       }],
     };
 
-    const response = await fetch(endpoint(), {
+    const response = await fetch(tracesEndpoint(), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
