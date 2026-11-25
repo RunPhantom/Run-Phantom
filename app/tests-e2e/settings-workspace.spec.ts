@@ -7,8 +7,9 @@ import path from "node:path";
 import { once } from "node:events";
 
 const root = path.resolve(import.meta.dirname, "../..");
-const test = base.extend<{ local: { url: string } }>({
-  local: async ({}, use, testInfo) => {
+const test = base.extend<{ local: { url: string }; localEnv: Record<string, string> }>({
+  localEnv: [{}, { option: true }],
+  local: async ({ localEnv }, use, testInfo) => {
     const profile = mkdtempSync(path.join(realpathSync(tmpdir()), "runphantom-settings-ui-"));
     const socket = createServer();
     await new Promise<void>(resolve => socket.listen(0, "127.0.0.1", resolve));
@@ -16,7 +17,7 @@ const test = base.extend<{ local: { url: string } }>({
     await new Promise<void>(resolve => socket.close(() => resolve()));
     const url = `http://127.0.0.1:${port}`;
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("RUNPHANTOM_") && !/API_KEY|TOKEN|SECRET|PASSWORD|NODE_OPTIONS/.test(key)));
-    const child: ChildProcess = spawn("bun", ["--no-env-file", path.join(root, "src/index.ts"), "serve"], { cwd: profile, env: { ...env, HOME: profile, USERPROFILE: profile, RUNPHANTOM_PORT: String(port), RUNPHANTOM_BIND_HOST: "127.0.0.1", RUNPHANTOM_CLAUDE_CLI_CHAT: "0" }, stdio: ["ignore", "pipe", "pipe"] });
+    const child: ChildProcess = spawn("bun", ["--no-env-file", path.join(root, "src/index.ts"), "serve"], { cwd: profile, env: { ...env, ...localEnv, HOME: profile, USERPROFILE: profile, RUNPHANTOM_PORT: String(port), RUNPHANTOM_BIND_HOST: "127.0.0.1", RUNPHANTOM_CLAUDE_CLI_CHAT: "0" }, stdio: ["ignore", "pipe", "pipe"] });
     let logs = "";
     child.stdout?.on("data", data => { logs = (logs + data).slice(-16000); });
     child.stderr?.on("data", data => { logs = (logs + data).slice(-16000); });
@@ -200,7 +201,52 @@ test("settings saves and clears a write-only Google Gemini key", async ({ page, 
   await expect(input).toHaveValue(""); await expect(input).toHaveAttribute("placeholder", "********");
   const body = await (await page.request.get(`${local.url}/api/secrets`)).text();
   expect(body).not.toContain(synthetic);
-  expect(JSON.parse(body).keys.gemini).toEqual({ configured: true, source: "store", env_var: "GEMINI_API_KEY", stored: true });
+  expect(JSON.parse(body).keys.gemini).toEqual({ configured: true, source: "store", env_var: "GEMINI_API_KEY", stored: true, env_available: false });
   await panel.getByRole("button", { name: "Clear saved Google Gemini key" }).click();
   await expect.poll(async () => (await (await page.request.get(`${local.url}/api/secrets`)).json()).keys.gemini.stored).toBe(false);
+});
+
+test.describe("provider keys set in the daemon's environment", () => {
+  const openaiValue = "fixture-env-openai-value-never-shown";
+  const anthropicValue = "fixture-env-anthropic-value-never-shown";
+  test.use({ localEnv: { OPENAI_API_KEY: openaiValue, ANTHROPIC_API_KEY: anthropicValue } });
+
+  test("settings names the variable, never its value, and a saved key takes precedence", async ({ page, local }) => {
+    await page.goto(`${local.url}/settings`);
+    const panel = page.getByRole("tabpanel", { name: "API keys" });
+    await expect(panel.getByText("Checking saved key status…", { exact: true })).toHaveCount(0);
+    await expect(panel.getByText("Using OPENAI_API_KEY from the environment. Save a key here to use it instead.", { exact: true })).toBeVisible();
+    await expect(panel.getByText("Using ANTHROPIC_API_KEY from the environment. Save a key here to use it instead.", { exact: true })).toBeVisible();
+
+    await panel.getByLabel("OpenAI", { exact: true }).fill("fixture-saved-openai-key");
+    await panel.getByRole("button", { name: "Save OpenAI key" }).click();
+    await expect(panel.getByText("Using the saved key. OPENAI_API_KEY is also set; clear the saved key to use it.", { exact: true })).toBeVisible();
+    const status = await (await page.request.get(`${local.url}/api/secrets`)).text();
+    expect(JSON.parse(status).keys.openai).toMatchObject({ configured: true, source: "store", stored: true, env_available: true });
+    expect(status).not.toContain(openaiValue);
+    expect(status).not.toContain(anthropicValue);
+    expect(await page.content()).not.toContain(openaiValue);
+    expect(await page.content()).not.toContain(anthropicValue);
+
+    await panel.getByRole("button", { name: "Clear saved OpenAI key" }).click();
+    await expect(panel.getByText("Using OPENAI_API_KEY from the environment. Save a key here to use it instead.", { exact: true })).toBeVisible();
+  });
+
+  test("the summary consent names the environment variable it will use", async ({ page, local }) => {
+    const summaryCalls: string[] = [];
+    page.on("request", sent => { if (new URL(sent.url()).pathname === "/api/summarize") summaryCalls.push(sent.url()); });
+    expect((await page.request.put(`${local.url}/api/saved-runs/events/env-key-summary`, { data: {
+      event_name: "support-agent", timestamp: new Date().toISOString(), user_input: "Where is my order?", assistant_output: "It ships tomorrow.",
+      summary: "Asked “Where is my order?”.", properties: { summary_source: "local", local_summary: "Asked “Where is my order?”." },
+    } })).ok()).toBe(true);
+    await page.goto(`${local.url}/saved/env-key-summary`);
+    const summary = page.getByRole("region", { name: "Saved run summary", exact: true });
+    await summary.getByRole("button", { name: "Summarize with Anthropic…", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Send this run to Anthropic?", exact: true });
+    await expect(dialog).toContainText("using the key in ANTHROPIC_API_KEY.");
+    expect(await page.content()).not.toContain(anthropicValue);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(summaryCalls).toEqual([]);
+  });
 });
