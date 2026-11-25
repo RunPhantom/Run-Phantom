@@ -33,7 +33,7 @@ export function SavePopover({ onSave, onClose, anchorRef, currentFolder, onUnsav
   onSave: (folder?: string) => void;
   onClose: () => void;
   anchorRef: React.RefObject<HTMLElement | null>;
-  /** When provided, the popover highlights the run's current folder (null/undefined = Unfiled) and switches its header to "Move to folder". */
+  /** When provided, the popover highlights the run's current folder (null = Unfiled, "" = none, for runs in different folders) and switches its header to "Move to folder". */
   currentFolder?: string | null;
   /** When provided, renders a destructive "Remove from saved" row at the bottom. */
   onUnsave?: () => void;

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { ArrowUpRight, Eye, EyeOff, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,9 @@ export function SecretInput({
   saving,
   getKeyUrl,
   getKeyLabel,
+  hint,
+  envVar,
+  footer,
 }: {
   label: string;
   description?: string;
@@ -34,6 +37,12 @@ export function SecretInput({
   getKeyUrl?: string;
   /** Override link label. Defaults to "Get a key". */
   getKeyLabel?: string;
+  /** Masked form of the configured key, e.g. "sk-proj-…7Q2x". */
+  hint?: string | null;
+  /** Environment variable the daemon read the key from, shown beside "from env". */
+  envVar?: string;
+  /** Rendered under the field, e.g. a connection check. */
+  footer?: ReactNode;
 }) {
   const inputId = useId();
   const descriptionId = `${inputId}-description`;
@@ -65,7 +74,7 @@ export function SecretInput({
   };
   const describedBy = [
     description || getKeyUrl || showSave ? descriptionId : null,
-    saved ? statusId : null,
+    statusId,
   ]
     .filter(Boolean)
     .join(" ") || undefined;
@@ -75,15 +84,21 @@ export function SecretInput({
         <label className="text-[13px] font-medium text-rp-ink" htmlFor={inputId}>
           {label}
         </label>
-        {saved && (
-          // "saved" used to mean "configured", which is also true for a key the
-          // daemon read from the environment — so the pane claimed the user had
-          // saved a key they never entered, and the Clear button beside it did
-          // nothing. Name the actual source.
-          <Badge id={statusId} aria-live="polite" mono tone={sourceIsEnv ? "neutral" : "success"}>
-            {sourceIsEnv ? "from env" : "saved"}
-          </Badge>
-        )}
+        <span id={statusId} aria-live="polite" className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
+          {saved ? (
+            // "saved" used to mean "configured", which is also true for a key the
+            // daemon read from the environment — so the pane claimed the user had
+            // saved a key they never entered, and the Clear button beside it did
+            // nothing. Name the actual source.
+            <Badge mono tone={sourceIsEnv ? "neutral" : "success"}>
+              {sourceIsEnv ? "from env" : "saved"}
+            </Badge>
+          ) : (
+            <Badge mono tone="outline">Not set</Badge>
+          )}
+          {saved && sourceIsEnv && envVar && <span className="font-mono text-12 text-rp-ink-muted">{envVar}</span>}
+          {saved && hint && <span className="font-mono text-12 text-rp-ink-soft" title="First and last characters of the key in use">{hint}</span>}
+        </span>
       </div>
       <div className="flex flex-col gap-2 sm:flex-row">
         <input
@@ -129,15 +144,15 @@ export function SecretInput({
           <Button
             type="button"
             variant="destructive-outline"
-            size="icon"
             aria-label={`Clear saved ${label} key`}
-            className="h-10 w-full sm:w-10 sm:flex-shrink-0"
+            className="h-10 w-full sm:w-auto sm:flex-shrink-0"
             onMouseDown={e => e.preventDefault()}
             onClick={clearSavedKey}
             disabled={saving}
-            title="Clear saved key"
+            title="Remove the saved key from this machine"
           >
             <Trash2 aria-hidden="true" className="!size-3.5" />
+            Clear
           </Button>
         )}
       </div>
@@ -175,6 +190,7 @@ export function SecretInput({
           </div>
         </div>
       )}
+      {footer}
     </div>
   );
 }

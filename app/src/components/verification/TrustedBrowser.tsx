@@ -39,7 +39,7 @@ export function TrustedBrowser({ runId, onReport }: { runId?: string; onReport: 
     try { await operation(current); } catch (cause) { if (current()) setError(cause instanceof Error ? cause.message : "Browser operation unavailable."); }
     finally { if (current()) setBusy(""); await refresh(); }
   };
-  const choose = (item: BrowserSummary, fence = true) => { if (fence) { epoch.current++; setBusy(""); setNotice("Explicit connection selected. The retained draft applies to this generation."); } setImageId(""); setSelected(item.id); setDraftScope(scope(item)); setLastAction(undefined); setRawConsent(false); };
+  const choose = (item: BrowserSummary, fence = true) => { if (fence) { epoch.current++; setBusy(""); setNotice("Switched to this browser. Your draft now applies to it."); } setImageId(""); setSelected(item.id); setDraftScope(scope(item)); setLastAction(undefined); setRawConsent(false); };
   const clearSelection = () => {
     epoch.current++; setSelected(""); setDraftScope(""); setBusy(""); setError(""); setNotice("");
     setImageId(""); setLastAction(undefined); setListing(undefined); setPageId("");
@@ -63,7 +63,7 @@ export function TrustedBrowser({ runId, onReport }: { runId?: string; onReport: 
     finally { setClosing(false); await refresh(); }
   };
   return <section aria-labelledby="trusted-browser-heading" className={cn(panel, "space-y-5")}>
-    <header className="space-y-3"><SectionHead eyebrow="Optional / Real browser input" title="Trusted browser" id="trusted-browser-heading" aside={<Badge tone={status.isSuccess && status.data.available ? "success" : status.isError ? "danger" : "neutral"}>{status.isLoading ? "Checking optional runtime…" : status.isError ? "Runtime status unavailable" : status.data?.available ? "Optional runtime configured" : "Optional runtime unavailable"}</Badge>} /><p className={lede}>Use real browser input with a declared outcome. Dispatch, capture, and business results are shown separately.</p></header>
+    <header className="space-y-3"><SectionHead eyebrow="Optional / Real browser input" title="Trusted browser" id="trusted-browser-heading" aside={<Badge tone={status.isSuccess && status.data.available ? "success" : status.isError ? "danger" : "neutral"}>{status.isLoading ? "Checking browser runtime…" : status.isError ? "Browser status unavailable" : status.data?.available ? "Browser runtime ready" : "Browser runtime not set up"}</Badge>} /><p className={lede}>Drive a real browser and check what happened. What was sent, what was captured and what your app reported are shown separately. Needs the optional browser runtime.</p></header>
     <div role="status" aria-live="polite" className="flex min-w-0 items-start gap-3 break-words rounded-md border border-rp-line-muted bg-rp-canvas-blue px-3 py-2.5 text-[13px] leading-5 text-rp-ink"><span aria-hidden="true" className="mt-1.5 size-1.5 shrink-0 bg-rp-mark" /><span className="min-w-0">{busy || (closing ? "Closing browser authority…" : notice) || status.data?.reason || "Each engine is checked when it launches. No page SDK is required."}</span></div>
     <p className={fine}>Initial network support covers bounded requests to the target origin. Redirects, downloads, compressed responses, and streaming connections are unavailable. Cross-site support depends on the current browser connection.</p>
     {(error || status.error || sessions.error || artifacts.error) && <p role="alert" className={dangerNote}>{error || status.error?.message || sessions.error?.message || artifacts.error?.message}</p>}

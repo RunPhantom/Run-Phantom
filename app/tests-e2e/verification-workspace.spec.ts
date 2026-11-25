@@ -20,6 +20,8 @@ test("verification workspace: deep links retain real outcomes, filters and respo
     const navigation = page.getByRole("navigation", { name: "Verification workspace", exact: true });
     await expect(navigation.getByRole("link", { name: "Check outcomes", exact: true })).toHaveAttribute("aria-current", "location");
     await expect(page.locator("#verification-checks")).toBeFocused();
+    for (const unlocked of ["Inspect", "Performance"]) await expect(navigation.getByRole("link", { name: unlocked, exact: true })).toBeVisible();
+    await expect(navigation).not.toContainText("after you pair an app");
     await page.getByRole("combobox", { name: "Action", exact: true }).selectOption("click");
     await page.getByLabel(/^Action selector/).fill("#checkout");
     await page.getByRole("combobox", { name: "Check type", exact: true }).selectOption("network");
@@ -49,6 +51,9 @@ test("verification workspace: deep links retain real outcomes, filters and respo
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(new RegExp(`runId=${FIXTURE_PRIMARY_RUN_ID}.*section=reports`));
     await expect(page.locator("#verification-reports")).toBeFocused();
+    const summary = page.getByRole("list", { name: "Verification summary", exact: true });
+    await expect(summary).toContainText("1 pass · 1 fail · 1 inconclusive");
+    await expect(summary.getByRole("link", { name: /Latest result\s*Inconclusive/ })).toBeVisible();
     await page.getByRole("combobox", { name: "Report status", exact: true }).selectOption("fail");
     await expect(page.getByText("Showing 1 of 3 loaded reports.", { exact: true })).toBeVisible();
     await expect(page.getByRole("article", { name: "Workspace checkout outcome: fail", exact: true })).toBeVisible();
@@ -92,9 +97,16 @@ test("verification workspace: empty deep links preserve optional tools and never
   await page.goto(`${runPhantom.url}/verification?section=inspect`);
   await expect(page.getByRole("heading", { name: "Connect your first app", exact: true })).toBeVisible();
   await expect(page.locator("#verification-connect-first")).toBeFocused();
+  const steps = page.getByRole("navigation", { name: "Verification workspace", exact: true });
+  for (const hidden of ["Inspect", "Check outcomes", "Performance"]) await expect(steps.getByRole("link", { name: hidden, exact: true })).toHaveCount(0);
+  await expect(steps).toContainText("3 more after you pair an app");
+  await expect(page.getByRole("list", { name: "Pairing progress", exact: true }).locator("[aria-current=step]")).toContainText("Enter your app's address");
+  const summary = page.getByRole("list", { name: "Verification summary", exact: true });
+  await expect(summary).toContainText("0 connected");
+  await expect(summary).toContainText("No checks run yet");
   await expect(page.getByRole("button", { name: "Run action", exact: true })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Trusted browser", exact: true })).toBeVisible();
-  await expect(page.getByText("Optional runtime unavailable", { exact: true })).toBeVisible();
+  await expect(page.getByText("Browser runtime not set up", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open browser", exact: true })).toBeDisabled();
   await page.getByRole("navigation", { name: "Verification workspace", exact: true }).getByRole("link", { name: "Snapshots", exact: true }).click();
   await expect(page.locator("#verification-snapshots")).toBeFocused();
@@ -109,6 +121,7 @@ test("verification workspace: empty deep links preserve optional tools and never
     await page.getByRole("heading", { name: "Verification", exact: true }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(screenshotDir, `empty-${width}.png`) });
   }
+  await expect(steps.locator("p", { hasText: "3 more after you pair an app" })).toBeVisible();
 });
 
 test("verification workspace: a held real command cannot publish inspection into a different run scope", async ({ page, context, request, runPhantom, targetApp }) => {

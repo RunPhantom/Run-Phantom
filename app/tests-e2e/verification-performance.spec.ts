@@ -47,7 +47,7 @@ const test = base.extend<{ lab: string; daemon: Daemon }>({
 });
 test("actual user opt-in, trusted slow/healthy interactions, numeric identity, six widths and restart", async ({ page, context, request, lab, daemon }) => {
   await page.goto(daemon.url + "/verification"); await page.getByLabel(/^App origin/).fill(lab);
-  await page.getByLabel("Include native performance capture in setup (no location metadata)").check(); await page.getByRole("button", { name: "Pair app", exact: true }).click();
+  await page.getByLabel("Also record page performance (no location data)").check(); await page.getByRole("button", { name: "Pair app", exact: true }).click();
   const snippet = await page.getByLabel("Application connection snippet", { exact: true }).innerText(); expect(snippet).toContain('performanceEvidence: { enabled: true, metadata: "none" }');
   const sessionId = /sessionId:\s*"([^"]+)"/.exec(snippet)![1]!, token = /token:\s*"([^"]+)"/.exec(snippet)![1]!;
   const app = await context.newPage();

@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
-import { Copy, Play, Unplug, ArrowUpRight } from "lucide-react";
+import { Check, Copy, Play, Unplug, ArrowUpRight } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Badge, StatusPill } from "../components/ui/badge";
@@ -21,7 +21,7 @@ import { PerformanceEvidence } from "../components/verification/PerformanceEvide
 import { buildPredicate, describePredicate, emptyCheck, Field, PredicateEditor, Select, type CheckDraft } from "../components/verification/PredicateEditor";
 import { verificationApi, type AppCommand, type CommandResult, type CreatedSession, type FlowStep, type Predicate, type RuntimeEvent, type VerificationReport, type VerificationStatus } from "../api/verification";
 import { useRuns } from "../hooks/use-runs";
-import { runDisplayName } from "../utils/helpers";
+import { ago, plural, runDisplayName } from "../utils/helpers";
 import { relativeTargets } from "../../../src/verification/protocol";
 
 function stateSummary(value: unknown, depth = 0): string {
@@ -84,6 +84,31 @@ function snippet(session: CreatedSession, performance = false, businessResponses
   const daemon = new URL(session.wsUrl, window.location.origin);
   daemon.protocol = daemon.protocol === "wss:" || daemon.protocol === "https:" ? "https:" : "http:";
   return `import { connect } from ${JSON.stringify(sdkUrl)};\n\nconst verification = connect({\n  url: ${JSON.stringify(daemon.origin)},\n  sessionId: ${JSON.stringify(session.id)},\n  token: ${JSON.stringify(session.token)},\n${businessResponses ? "  businessResponses: true,\n" : ""}${performance ? '  performanceEvidence: { enabled: true, metadata: "none" },\n' : ""}});\n\n// Optional application outcomes:\n// verification.signal("checkout.complete");\n// verification.registerStore("cart", () => cartState);\n// verification.disconnect();`;
+}
+
+function SummaryTile({ label, value, detail, to, tone }: { label: string; value: string; detail: ReactNode; to: string; tone?: "danger" | "success" | "warning" }) {
+  return <li className="min-w-0">
+    <Link to={to} preventScrollReset className="flex h-full min-w-0 flex-col bg-rp-surface px-4 py-3 transition-colors duration-fast hover:bg-rp-row-hover focus-visible:relative focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--rp-focus)]">
+      <span className="rp-type-eyebrow text-rp-ink-subtle">{label}</span>
+      <span className={cn("mt-1.5 truncate text-[22px] font-semibold leading-7 tabular-nums", tone === "danger" ? "text-rp-danger" : tone === "success" ? "text-rp-success" : tone === "warning" ? "text-rp-warning" : "text-rp-ink")}>{value}</span>
+      <span className="mt-0.5 truncate text-12 text-rp-ink-muted">{detail}</span>
+    </Link>
+  </li>;
+}
+
+type PairStep = { label: string; state: "done" | "current" | "todo" };
+
+function PairProgress({ steps }: { steps: PairStep[] }) {
+  return <ol aria-label="Pairing progress" className="grid gap-px overflow-hidden rounded-md border border-rp-line bg-rp-line sm:grid-cols-3">
+    {steps.map((step, index) => <li key={step.label} aria-current={step.state === "current" ? "step" : undefined} className={cn("flex min-w-0 items-center gap-2.5 px-3 py-2.5 text-[13px]", step.state === "current" ? "bg-rp-wash" : "bg-rp-surface")}>
+      <span aria-hidden="true" className={cn("grid size-5 shrink-0 place-items-center rounded-full border text-[11px] font-semibold tabular-nums",
+        step.state === "done" ? "border-transparent bg-rp-success-soft text-rp-success" : step.state === "current" ? "border-rp-blue text-rp-blue" : "border-rp-line text-rp-ink-muted")}>
+        {step.state === "done" ? <Check className="size-3" /> : index + 1}
+      </span>
+      <span className={cn("min-w-0 truncate", step.state === "todo" ? "text-rp-ink-muted" : "font-medium text-rp-ink")}>{step.label}</span>
+      <span className="sr-only">{step.state === "done" ? " (done)" : step.state === "current" ? " (current step)" : " (not started)"}</span>
+    </li>)}
+  </ol>;
 }
 
 export function VerificationPage() {
@@ -237,45 +262,69 @@ export function VerificationPage() {
   const verdictCount = (status: VerificationStatus) => loadedReports.filter(report => report.status === status).length;
   const connectedApps = sessions.data?.filter(item => item.connected).length ?? 0;
   const capabilities = observation.data?.session.capabilities ?? session?.capabilities;
+  const latestReport = loadedReports.reduce<VerificationReport | null>((latest, report) => !latest || report.createdAt > latest.createdAt ? report : latest, null);
+  const sectionLink = (section: string) => { const next = new URLSearchParams(searchParams); next.set("section", section); return `?${next}`; };
+  const pairSteps: PairStep[] = [
+    { label: "Enter your app's address", state: setup || session ? "done" : "current" },
+    { label: "Add the snippet to your app", state: connected ? "done" : setup || session ? "current" : "todo" },
+    { label: connected ? "Connected" : "Wait for it to connect", state: connected ? "done" : "todo" },
+  ];
   return <div className="mx-auto flex min-h-full w-full max-w-[1440px] min-w-0 flex-col gap-6 rp-page text-rp-ink">
     <PageHeader
-      eyebrow="Verification / Application checks"
+      eyebrow="Ship / App checks"
       title="Verification"
-      description="Exercise your app. Check the outcome. Keep the observed evidence with the agent run."
-      actions={<div className="flex min-h-9 items-center gap-2 rounded-sm border border-rp-line bg-rp-surface px-3 text-[12px] text-rp-ink-muted"><span aria-hidden="true" className={cn("size-1.5 rounded-full", sessions.isSuccess && connectedApps > 0 ? "bg-rp-success" : "bg-rp-ink-faint")} /><span className="rp-num">{sessions.isLoading ? "Reading connections…" : sessions.isError ? "Connections unavailable" : `${connectedApps} connected ${connectedApps === 1 ? "app" : "apps"}`}</span></div>}
+      description="Drive your running app, check what actually happened, and keep the evidence next to the agent run."
     />
-    <WorkspaceNavigation ready={!sessions.isLoading} sessionId={session?.id} reports={reports.isSuccess ? reports.data.length : undefined} />
+    <ul aria-label="Verification summary" className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-rp-line bg-rp-line lg:grid-cols-4">
+      <SummaryTile label="Apps" to={sectionLink("pair")}
+        value={sessions.isSuccess ? `${connectedApps} connected` : "—"}
+        detail={sessions.isSuccess ? sessions.data.length ? `${plural(sessions.data.length, "app")} paired` : "Pair an app to start" : sessions.isError ? "Connections unavailable" : "Reading connections…"}
+        tone={sessions.isSuccess && connectedApps > 0 ? "success" : undefined} />
+      <SummaryTile label={linkedRunId ? "Reports · this run" : "Reports"} to={sectionLink("reports")}
+        value={reports.isSuccess ? String(loadedReports.length) : "—"}
+        detail={reports.isSuccess ? loadedReports.length ? `${verdictCount("pass")} pass · ${verdictCount("fail")} fail · ${verdictCount("inconclusive")} inconclusive` : "No checks run yet" : reports.isError ? "Reports unavailable" : "Loading reports…"}
+        tone={reports.isSuccess && verdictCount("fail") > 0 ? "danger" : undefined} />
+      <SummaryTile label="Latest result" to={sectionLink("reports")}
+        value={latestReport ? latestReport.status === "pass" ? "Pass" : latestReport.status === "fail" ? "Fail" : "Inconclusive" : "—"}
+        detail={latestReport ? <span title={latestReport.reason}>{latestReport.name} · {ago(latestReport.createdAt)}</span> : "After your first check"}
+        tone={latestReport ? latestReport.status === "pass" ? "success" : latestReport.status === "fail" ? "danger" : "warning" : undefined} />
+      <SummaryTile label="Saved flows" to={sectionLink("flows")}
+        value={flows.isSuccess ? String(flows.data.length) : "—"}
+        detail={flows.isSuccess ? flows.data.length ? `${flows.data.reduce((sum, flow) => sum + flow.steps.length, 0)} steps to replay` : "Save a check to replay" : flows.isError ? "Flows unavailable" : "Loading flows…"} />
+    </ul>
+    <WorkspaceNavigation ready={!sessions.isLoading} sessionId={session?.id} connected={connected} reports={reports.isSuccess ? reports.data.length : undefined} />
 
     <div className="sr-only" role="status" aria-live="polite">{busy || notice}</div>
     {queryError && <div role="alert" className="rp-fade-rise flex flex-wrap items-center justify-between gap-3 rounded-md border border-rp-danger-border bg-rp-danger-soft px-4 py-3 text-[13px] text-rp-danger"><span className="min-w-0 break-words">{queryError.message}</span><Button variant="destructive-outline" size="sm" onClick={() => void refresh()}>Retry refresh</Button></div>}
     {notice && <p key={notice} className="rp-fade-rise flex min-w-0 items-start gap-3 break-words rounded-md border border-rp-line bg-rp-surface px-4 py-3 text-[13px] leading-5 text-rp-ink"><span aria-hidden="true" className="mt-1.5 size-1.5 shrink-0 bg-rp-mark" />{notice}</p>}
 
     <section id="verification-pair" tabIndex={-1} aria-labelledby="pair-heading" className={cn(panel, "space-y-5")}>
-      <SectionHead eyebrow="Setup / Local app" title="Pair an application" id="pair-heading" aside={<Meta>Explicit connection</Meta>} />
+      <SectionHead eyebrow="Step 1 / Connect" title="Pair an application" id="pair-heading" aside={<Meta>Local only</Meta>} />
+      <PairProgress steps={pairSteps} />
       <form onSubmit={pair} className="grid items-start gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-        <Field label="App origin" hint="Exact local origin, including the port."><Input required type="url" placeholder="http://localhost:3000" value={origin} onChange={event => setOrigin(event.target.value)} /></Field>
-        <Field label="Link to run (optional)" hint="Checks appear beside this captured run."><Select value={runId} onChange={event => setRunId(event.target.value)}><option value="">No linked run</option>{runId && !runs.data?.some(run => run.id === runId) && <option value={runId}>Run from link</option>}{runs.data?.map(run => <option key={run.id} value={run.id}>{runDisplayName(run)}</option>)}</Select></Field>
+        <Field label="App origin" hint="Where your app runs locally, including the port."><Input required type="url" placeholder="http://localhost:3000" value={origin} onChange={event => setOrigin(event.target.value)} /></Field>
+        <Field label="Link to run (optional)" hint="Results also show up on this run."><Select value={runId} onChange={event => setRunId(event.target.value)}><option value="">No linked run</option>{runId && !runs.data?.some(run => run.id === runId) && <option value={runId}>Run from link</option>}{runs.data?.map(run => <option key={run.id} value={run.id}>{runDisplayName(run)}</option>)}</Select></Field>
         <Button type="submit" disabled={!!busy || !origin.trim()} className="md:mt-6">Pair app</Button>
       </form>
       <div className="space-y-2 border-t border-rp-line-muted pt-4">
-        <label className={checkLabel}><input type="checkbox" className={checkbox} checked={captureResponses} onChange={event => setCaptureResponses(event.target.checked)} disabled={!!busy} /><span>Capture response evidence<span className="rp-field-hint mt-0.5 block max-w-xl">Read bounded, redacted copies of app responses. Off by default; reconnect with the setup after changing this choice.</span></span></label>
-        <label className={checkLabel}><input type="checkbox" className={checkbox} checked={performanceOptIn} onChange={event => setPerformanceOptIn(event.target.checked)} disabled={!!busy} />Include native performance capture in setup (no location metadata)</label>
+        <label className={checkLabel}><input type="checkbox" className={checkbox} checked={captureResponses} onChange={event => setCaptureResponses(event.target.checked)} disabled={!!busy} /><span>Capture response evidence<span className="rp-field-hint mt-0.5 block max-w-xl">Keep short, redacted copies of your app's responses so checks can read them. Off by default; copy the setup again after changing this.</span></span></label>
+        <label className={checkLabel}><input type="checkbox" className={checkbox} checked={performanceOptIn} onChange={event => setPerformanceOptIn(event.target.checked)} disabled={!!busy} />Also record page performance (no location data)</label>
       </div>
       {operationAlert("pair")}
       {runs.isError && <p className="text-[12px] text-rp-warning">Run choices could not load. You can still pair an app without a linked run.</p>}
       {setup && <div className="rp-fade-rise space-y-3 rounded-md border border-rp-wash-border bg-rp-wash p-4">
         <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="min-w-0 break-words text-[14px] font-semibold">Connect in {setup.origin}</h3><div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={() => void perform("Copying connection setup…", "pair", async current => { await navigator.clipboard.writeText(snippet(setup, performanceOptIn, setupCapture)); if (current()) setNotice("Connection setup copied."); })}><Copy aria-hidden="true" />Copy setup</Button><Button variant="ghost" size="sm" onClick={() => setSetup(null)}>Dismiss setup</Button></div></div>
-        <p className="max-w-2xl text-[12px] leading-[1.7] text-rp-ink-muted">Run this module in your app's development entry point. The connection credential is shown only here; keep it out of committed source. Reloading the app requires reconnecting.</p>
+        <p className="max-w-2xl text-[12px] leading-[1.7] text-rp-ink-muted">Paste this into your app's development entry point, then load the app. The token is shown only here, so keep it out of source control. If you reload the app, you will need to reconnect it.</p>
         <pre aria-label="Application connection snippet" className="max-h-72 overflow-auto rounded-sm border border-rp-line bg-rp-surface p-3 font-mono text-[12px] leading-[1.7] text-rp-ink">{snippet(setup, performanceOptIn, setupCapture)}</pre>
       </div>}
     </section>
 
     <section aria-label="Application session" className={cn("min-w-0", session && !sessions.isLoading && !sessions.isError && "space-y-4 rounded-lg border border-rp-wash-border bg-rp-wash p-5 sm:p-6")}>
-      {sessions.isLoading ? <div className="flex min-h-[72px] items-center gap-3 rounded-lg border border-rp-line bg-rp-surface px-5"><span aria-hidden="true" className="size-1.5 animate-pulse rounded-full bg-rp-ink-faint motion-reduce:animate-none" /><p className="text-[13px] text-rp-ink-muted" role="status">Loading app sessions…</p></div> : sessions.isError ? <p className="rounded-lg border border-rp-danger-border bg-rp-danger-soft px-5 py-4 text-[13px] text-rp-danger">App sessions could not load. Refresh the connection list before pairing or selecting an app.</p> : !session ? <div id="verification-connect-first" tabIndex={-1} className="min-w-0"><EmptyPanel compact eyebrow="Session / None paired" title="Connect your first app" description={<><p>Pair a local origin above, then connect the SDK. Inspect live elements, declare outcomes and save repeatable checks once the app connects.</p><p className="mt-2">Saved reports, snapshots and optional browser tools remain available below.</p></>} /></div> : <>
+      {sessions.isLoading ? <div className="flex min-h-[72px] items-center gap-3 rounded-lg border border-rp-line bg-rp-surface px-5"><span aria-hidden="true" className="size-1.5 animate-pulse rounded-full bg-rp-ink-faint motion-reduce:animate-none" /><p className="text-[13px] text-rp-ink-muted" role="status">Loading app sessions…</p></div> : sessions.isError ? <p className="rounded-lg border border-rp-danger-border bg-rp-danger-soft px-5 py-4 text-[13px] text-rp-danger">App sessions could not load. Refresh the connection list before pairing or selecting an app.</p> : !session ? <div id="verification-connect-first" tabIndex={-1} className="min-w-0"><EmptyPanel compact eyebrow="Not connected yet" title="Connect your first app" description={<><p>Enter your app's address above and add the snippet to it. Once it connects you can inspect elements, run actions and check what happened.</p><p className="mt-2">Saved flows, snapshots, the trusted browser and past reports are below and work without a connection.</p></>} /></div> : <>
         <div className="flex flex-wrap items-end gap-3"><div className="min-w-[180px] max-w-lg flex-1"><Field label="Active session"><Select className="bg-rp-surface" value={session.id} onChange={event => setSelectedId(event.target.value)} disabled={!!busy}>{sessions.data?.map(item => <option key={item.id} value={item.id}>{item.origin} · {item.connected ? "Connected" : "Disconnected"} · {new Date(item.createdAt).toLocaleTimeString()}</option>)}</Select></Field></div><StatusPill role="status" status={connected ? "success" : "warning"} live={connected} className="mb-2.5">{connected ? "Connected" : "Disconnected"}</StatusPill><Button variant="outline" disabled={!!busy} onClick={() => void perform("Disconnecting app…", "session", async current => { await verificationApi.disconnect(session.id); if (!current()) return; if (setup?.id === session.id) setSetup(null); setSelectedId(""); await refresh(); if (current()) setNotice("Session disconnected. Its saved reports are retained."); })}><Unplug aria-hidden="true" />Disconnect</Button></div>
         {operationAlert("session")}
         {session.runId && <Link className={cn(textLink, "min-h-9 text-[13px]")} to={`/runs/${encodeURIComponent(session.runId)}`}>Open linked run<ArrowUpRight aria-hidden="true" className="size-3" /></Link>}
-        {!connected && <p className="max-w-[70ch] text-[13px] leading-[1.7] text-rp-ink-muted">The app is not connected. Use the setup snippet in your local app, or pair again if you no longer have its credential. Checks while disconnected produce an inconclusive report.</p>}
+        {!connected && <p className="max-w-[70ch] text-[13px] leading-[1.7] text-rp-ink-muted">The app is not connected. Load it with the setup snippet, or pair again if you no longer have the snippet. A check run now is saved as Inconclusive.</p>}
         {coverage && <div className="flex flex-wrap gap-1.5" aria-label="Observer coverage">{Object.entries(coverage).map(([name, available]) => <Badge key={name} mono tone={available && connected ? "outline" : "warning"}>{name}: {available && connected ? "observing" : "unavailable"}</Badge>)}</div>}
       </>}
     </section>
@@ -286,7 +335,7 @@ export function VerificationPage() {
         <div id="verification-inspect" tabIndex={-1} className="min-w-0 scroll-mt-20"><SemanticInspector key={linkedRunId} sessionId={session.id} connected={connected} capable={capabilities?.includes("semantic-refs") ?? false} disabled={!!busy} onAction={cursor => { setSince(cursor); setInspection(null); }} /></div>
         <div id="verification-performance" tabIndex={-1} className={cn(panel, "space-y-4")}><PerformanceEvidence key={`${session.id}:${linkedRunId}`} sessionId={session.id} connected={connected} capable={capabilities?.includes("performance-evidence") ?? false} disabled={!!busy} perform={(label, operation) => perform(label, "performance", operation)} onReport={() => { void refresh(); setNotice("Native lab report saved. Review its window and coverage below."); }} />{operationAlert("performance")}</div>
         <section aria-labelledby="action-heading" className={cn(panel, "space-y-5")}>
-          <SectionHead eyebrow="Step 01 / Act" title="1. Exercise the app" id="action-heading" />
+          <SectionHead eyebrow="Step 2 / Act" title="Exercise the app" id="action-heading" />
           <fieldset disabled={!!busy || !connected} className="space-y-4">
             <Field label="Action"><Select value={action} onChange={event => { setAction(event.target.value as typeof action); setFillValue(""); setInspection(null); }}><option value="snapshot">Snapshot</option><option value="click">Click</option><option value="fill">Fill</option><option value="state">Read state</option></Select></Field>
             {action === "state" ? <Field label="Registered store"><Input value={store} onChange={event => setStore(event.target.value)} placeholder="cart" /></Field> : <Field label="Action selector" hint={action === "snapshot" ? "Optional: narrow the snapshot to matching elements." : "Use a stable CSS selector for exactly one interactive element."}><Input className="font-mono text-[13px]" value={selector} onChange={event => setSelector(event.target.value)} placeholder='[data-testid="checkout"]' /></Field>}
@@ -297,8 +346,8 @@ export function VerificationPage() {
           {inspection && <Inspection response={inspection} onSelect={value => setSelector(value)} />}
         </section>
         <section id="verification-checks" tabIndex={-1} aria-labelledby="outcome-heading" className={cn(panel, "space-y-5")}>
-          <SectionHead eyebrow="Step 02 / Verify" title="2. Check the outcome" id="outcome-heading" />
-          <p className={lede}>{since === undefined ? "Check the current app and captured interval." : "Checks use evidence captured after the last action."} Missing coverage, a disconnected app, or incomplete capture produces an inconclusive result. An absence check covers the observed quiet interval.</p>
+          <SectionHead eyebrow="Step 3 / Check" title="Check the outcome" id="outcome-heading" />
+          <p className={lede}>{since === undefined ? "Checks look at the app as it is now." : "Checks look at what happened after the last action."} If the app disconnects or something was not captured, the result is Inconclusive, never Pass. A "did not happen" check covers only the time that was observed.</p>
           <fieldset disabled={!!busy} className="space-y-4">
             <Field label="Check name (optional)"><Input value={checkName} onChange={event => setCheckName(event.target.value)} placeholder="Checkout completes" maxLength={128} /></Field>
             {checks.map((draft, index) => <PredicateEditor key={index} index={index} draft={draft} onChange={next => setChecks(previous => previous.map((item, at) => at === index ? next : item))} onRemove={checks.length > 1 ? () => setChecks(previous => previous.filter((_, at) => at !== index)) : undefined} />)}
@@ -308,8 +357,8 @@ export function VerificationPage() {
           {operationAlert("outcome")}
         </section>
         <section aria-labelledby="draft-heading" className={cn(panel, "space-y-5")}>
-          <SectionHead eyebrow="Step 03 / Repeat" title="3. Save a repeatable flow" id="draft-heading" />
-          <p className={lede}>Build a sequence of actions and checks for this origin. Saved flows exclude all fill actions to keep entered values out of storage. Fill the app live before replaying a flow that needs input.</p>
+          <SectionHead eyebrow="Step 4 / Repeat" title="Save a repeatable flow" id="draft-heading" />
+          <p className={lede}>Collect the action and check above into steps you can replay on this app. Typed values are never saved, so fill in any form yourself before replaying a flow that needs input.</p>
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2"><label className={cn(checkLabel, "items-center")}><input type="checkbox" className={cn(checkbox, "mt-0")} checked={includeAction} onChange={event => setIncludeAction(event.target.checked)} disabled={!!busy} />Include current action in step</label><Button variant="outline" onClick={addStep} disabled={!!busy || steps.length >= 20}>Add step to flow</Button></div>
           {operationAlert("flow")}
           {steps.length > 0 && <ol className="divide-y divide-rp-line-muted rounded-md border border-rp-line text-[13px]">{steps.map((step, index) => <li className="rp-fade-rise flex items-center justify-between gap-3 px-3 py-2" key={index}><span className="min-w-0 break-words"><span className="rp-num mr-3 text-[11px] text-rp-index">{String(index + 1).padStart(2, "0")}</span>{step.command ? <span className="rp-meta mr-1 text-rp-ink">{step.command.type} →</span> : null}{describePredicate(step.predicate)}</span><Button size="sm" variant="ghost" aria-label={`Remove flow step ${index + 1}`} disabled={!!busy} onClick={() => setSteps(previous => previous.filter((_, at) => at !== index))}>Remove</Button></li>)}</ol>}
@@ -319,7 +368,7 @@ export function VerificationPage() {
       </div>
       <section aria-labelledby="evidence-heading" className={cn(panel, "flex-[1_1_280px] space-y-4 lg:sticky lg:top-20")}>
         <SectionHead eyebrow="Session / Live" title="Live evidence" id="evidence-heading" aside={<Meta>Latest {events.length}</Meta>} />
-        {observation.isLoading ? <p className="text-[13px] text-rp-ink-muted" role="status">Loading captured evidence…</p> : observation.isError ? <p className="text-[13px] leading-[1.7] text-rp-warning">Live evidence is unavailable. Previously captured reports remain separate from this observation.</p> : !events.length ? <p className={emptyNote}>No events captured. Connect the app and run an action, or interact with it directly.</p> : <ul className="-mx-2 max-h-[620px] overflow-auto">{events.map((event, index) => <li key={`${event.t}-${index}`} className="space-y-1 border-b border-rp-line-muted px-2 py-2.5 last:border-b-0"><span className="rp-meta block">{event.type}</span><p className="break-words text-[13px] leading-5 text-rp-ink">{eventSummary(event)}</p>{event.truncated && <span className="text-[12px] text-rp-warning">Partial capture</span>}</li>)}</ul>}
+        {observation.isLoading ? <p className="text-[13px] text-rp-ink-muted" role="status">Loading captured evidence…</p> : observation.isError ? <p className="text-[13px] leading-[1.7] text-rp-warning">Live evidence is unavailable. Previously captured reports remain separate from this observation.</p> : !events.length ? <p className={emptyNote}>Nothing captured yet. Run an action above or use the app; requests, console messages and state changes appear here.</p> : <ul className="-mx-2 max-h-[620px] overflow-auto">{events.map((event, index) => <li key={`${event.t}-${index}`} className="space-y-1 border-b border-rp-line-muted px-2 py-2.5 last:border-b-0"><span className="rp-meta block">{event.type}</span><p className="break-words text-[13px] leading-5 text-rp-ink">{eventSummary(event)}</p>{event.truncated && <span className="text-[12px] text-rp-warning">Partial capture</span>}</li>)}</ul>}
         {(observation.data?.complete === false || (session.dropped ?? 0) > 0) && <p className={warningNote}>Some evidence is unavailable or was dropped. Checks cannot establish a pass from incomplete capture.</p>}
       </section>
     </div>}
@@ -333,7 +382,7 @@ export function VerificationPage() {
     </section>
     <section id="verification-reports" tabIndex={-1} aria-labelledby="reports-heading" className="min-w-0 scroll-mt-20 space-y-4">
       <SectionHead eyebrow="Library / Reports" title="Verification reports" id="reports-heading" aside={linkedRunId ? <Link to="/verification" className={cn(textLink, "min-h-9 text-[13px]")}>Show reports for all runs</Link> : undefined} />
-      <p className={lede}>{linkedRunId ? "Showing the latest 100 reports for the linked run." : "The latest 100 saved reports remain available after a session disconnects."} Filters apply to this loaded population.</p>
+      <p className={lede}>{linkedRunId ? "The latest 100 reports for the linked run." : "The latest 100 reports. They stay after an app disconnects."} Filters apply to these loaded reports.</p>
       <div className="flex min-w-0 flex-wrap items-end gap-3 rounded-lg border border-rp-line bg-rp-surface p-4 sm:p-5">
         <div className="min-w-0 flex-[2_1_240px]"><Field label="Search reports"><Input type="search" value={reportSearch} onChange={event => setReportSearch(event.target.value)} placeholder="Name or observed reason" /></Field></div>
         <div className="min-w-0 flex-[1_1_180px]"><Field label="Report status"><Select value={reportStatus} onChange={event => setReportStatus(event.target.value as typeof reportStatus)}><option value="all">All outcomes{reports.isSuccess ? ` (${loadedReports.length})` : ""}</option><option value="pass">Pass{reports.isSuccess ? ` (${verdictCount("pass")})` : ""}</option><option value="fail">Fail{reports.isSuccess ? ` (${verdictCount("fail")})` : ""}</option><option value="inconclusive">Inconclusive{reports.isSuccess ? ` (${verdictCount("inconclusive")})` : ""}</option></Select></Field></div>

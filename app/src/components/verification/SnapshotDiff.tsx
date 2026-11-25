@@ -73,7 +73,7 @@ export function SnapshotDiff({ sessionId, connected, capable, disabled = false, 
     setNotice("Captured observations exported. Local session, run and connection authority are excluded.");
   }
   return <section aria-labelledby="snapshot-diff-heading" className={cn(panel, "space-y-5")}>
-    <div className="space-y-3"><SectionHead eyebrow="Compare / Semantic tree" title="Semantic snapshots" id="snapshot-diff-heading" aside={snapshots.isSuccess ? <Meta>{saved.length}/100 saved</Meta> : undefined} /><p className={lede}>Save visible semantic observations and compare their represented content. Names use a partial ARIA approximation. Two captured observations; differences do not establish which action caused them.</p></div>
+    <div className="space-y-3"><SectionHead eyebrow="Compare / Semantic tree" title="Semantic snapshots" id="snapshot-diff-heading" aside={snapshots.isSuccess ? <Meta>{saved.length}/100 saved</Meta> : undefined} /><p className={lede}>Save what the page shows (roles, names and text) and compare two saves to see what changed. A difference shows what changed, not which action caused it.</p></div>
     <fieldset disabled={!!busy || disabled || !connected || !capable} className="grid items-start gap-4 sm:grid-cols-[minmax(0,1fr)_auto]">
       <div className="min-w-0"><Field label="Snapshot name"><Input value={name} maxLength={128} onChange={event => setName(event.target.value)} placeholder="Before checkout" /></Field></div>
       <Button className="sm:mt-6" disabled={!name.trim()} onClick={() => void perform("Capturing observation…", capture)}>Capture snapshot</Button>

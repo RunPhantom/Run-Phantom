@@ -293,7 +293,7 @@ test("runtime verification: a refused action is reported beside the form that ca
     await page.goto(`${runPhantom.url}/verification`);
     await expect(page.getByText("Connected", { exact: true }).first()).toBeVisible();
 
-    const exercise = page.getByRole("region", { name: "1. Exercise the app", exact: true });
+    const exercise = page.getByRole("region", { name: "Exercise the app", exact: true });
     await exercise.getByRole("combobox", { name: "Action", exact: true }).selectOption("click");
     await exercise.getByLabel(/^Action selector/).fill("button");
     await exercise.getByRole("button", { name: "Run action", exact: true }).click();
@@ -304,7 +304,7 @@ test("runtime verification: a refused action is reported beside the form that ca
     await expect(page.getByRole("button", { name: "Retry refresh", exact: true })).toHaveCount(0);
 
     await exercise.getByRole("combobox", { name: "Action", exact: true }).selectOption("fill");
-    const draft = page.getByRole("region", { name: "3. Save a repeatable flow", exact: true });
+    const draft = page.getByRole("region", { name: "Save a repeatable flow", exact: true });
     await draft.getByLabel("Include current action in step", { exact: true }).check();
     await draft.getByRole("button", { name: "Add step to flow", exact: true }).click();
     const flowRefusal = draft.getByRole("alert");

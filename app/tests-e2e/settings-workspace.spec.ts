@@ -5,6 +5,8 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
+import { FIXTURE_PRIMARY_RUN_ID, saveRunPhantomRun, seedRunPhantomFixtures } from "./helpers";
 
 const root = path.resolve(import.meta.dirname, "../..");
 const test = base.extend<{ local: { url: string }; localEnv: Record<string, string> }>({
@@ -249,4 +251,104 @@ test.describe("provider keys set in the daemon's environment", () => {
     await expect(dialog).toHaveCount(0);
     expect(summaryCalls).toEqual([]);
   });
+});
+
+test("settings shows each provider's key source, a masked hint and a connection check result", async ({ page, local }) => {
+  await page.goto(`${local.url}/settings`);
+  const panel = page.getByRole("tabpanel", { name: "API keys" });
+  await expect(panel.getByText("Checking saved key status…", { exact: true })).toHaveCount(0);
+  await expect(panel.getByRole("heading", { name: "Providers", exact: true })).toBeVisible();
+  await expect(panel.getByText("Not set", { exact: true })).toHaveCount(3);
+  await expect(panel.getByRole("button", { name: /^Test .* connection$/ })).toHaveCount(0);
+
+  const key = "sk-proj-settings-Z9y8";
+  await panel.getByLabel("OpenAI", { exact: true }).fill(key);
+  await panel.getByRole("button", { name: "Save OpenAI key" }).click();
+  await expect(panel.getByText("saved", { exact: true })).toBeVisible();
+  await expect(panel.getByText("sk-proj-…Z9y8", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Not set", { exact: true })).toHaveCount(2);
+  expect(await page.content()).not.toContain(key);
+
+  const calls: string[] = [];
+  await page.route("**/api/secrets/openai/test", async route => {
+    calls.push(route.request().method());
+    await route.fulfill({ json: { provider: "openai", ok: false, source: "store", checkedAt: Date.now() - 60_000, latencyMs: 212, modelCount: null, modelCountComplete: false, failure: "auth", message: "OpenAI rejected this key (HTTP 401). Paste a new key to replace it.", httpStatus: 401, providerMessage: "Incorrect API key provided." } });
+  });
+  const test = panel.getByRole("button", { name: "Test OpenAI connection", exact: true });
+  await test.click();
+  const result = panel.getByRole("status").filter({ hasText: "OpenAI rejected this key" });
+  await expect(result).toContainText("Paste a new key to replace it.");
+  await expect(result).toContainText("212 ms");
+  await expect(result).toContainText("OpenAI said: Incorrect API key provided.");
+  expect(calls).toEqual(["POST"]);
+
+  await page.route("**/api/secrets/openai/test", route => route.fulfill({ json: { provider: "openai", ok: true, source: "store", checkedAt: Date.now(), latencyMs: 180, modelCount: 103, modelCountComplete: true, failure: null, message: "OpenAI accepted the key and listed 103 models.", httpStatus: 200, providerMessage: null } }));
+  await test.click();
+  await expect(panel.getByRole("status").filter({ hasText: "OpenAI accepted the key and listed 103 models." })).toBeVisible();
+  await expect(test).toBeDisabled();
+  await expect(test).toHaveText(/^Test again in \d+ s$/);
+
+  await panel.getByRole("button", { name: "Clear saved OpenAI key" }).click();
+  await expect(panel.getByText("Not set", { exact: true })).toHaveCount(3);
+  await expect(panel.getByText("OpenAI accepted the key", { exact: false })).toHaveCount(0);
+  await expect(test).toHaveCount(0);
+  await screenshot(page, "settings-providers-desktop");
+});
+
+test("settings pricing deep link explains cost sources and keeps the consent checkbox", async ({ page, local }) => {
+  await page.goto(`${local.url}/settings#pricing`);
+  await expect(page.getByRole("tab", { name: "API keys" })).toHaveAttribute("aria-selected", "true");
+  const pricing = page.getByRole("region", { name: "Cost estimates", exact: true });
+  await expect(pricing).toBeInViewport();
+  await expect(pricing).toContainText("Off. Models missing from the bundled list show no cost.");
+  await pricing.getByRole("checkbox", { name: /fetch public model pricing/i }).check();
+  await expect(pricing).toContainText("On. Models missing from the bundled list are priced from OpenRouter.");
+  await pricing.getByRole("checkbox", { name: /fetch public model pricing/i }).uncheck();
+});
+
+test("settings data shows where runs live, downloads a backup and deletes runs only after confirmation", async ({ page, local }, testInfo) => {
+  await seedRunPhantomFixtures(local.url);
+  await saveRunPhantomRun(local.url, FIXTURE_PRIMARY_RUN_ID);
+  const before = await (await page.request.get(`${local.url}/api/data`)).json() as { runs: number; steps: number; savedRuns: number; dbPath: string };
+  expect(before.runs).toBeGreaterThan(0);
+  await page.goto(`${local.url}/settings#data`);
+  const debugTab = page.getByRole("tab", { name: "Debug" });
+  await expect(debugTab).toHaveAttribute("aria-selected", "true");
+  const panel = page.getByRole("tabpanel", { name: "Debug" });
+  const stored = panel.getByRole("list", { name: "Stored data", exact: true });
+  await expect(stored.getByRole("listitem").filter({ hasText: /^Runs/ })).toContainText(String(before.runs));
+  await expect(stored.getByRole("listitem").filter({ hasText: "Saved runs" })).toContainText(String(before.savedRuns));
+  await expect(panel.getByText(before.dbPath, { exact: true })).toBeVisible();
+  await expect(panel.getByText(/^http:\/\/127\.0\.0\.1:\d+\/v1\/traces$/)).toBeVisible();
+
+  const downloading = page.waitForEvent("download");
+  await panel.getByRole("link", { name: "Download backup", exact: true }).click();
+  const download = await downloading;
+  expect(download.suggestedFilename()).toMatch(/^runphantom-backup-[\d-]+\.db$/);
+  const file = testInfo.outputPath("backup.db");
+  await download.saveAs(file);
+  expect(readFileSync(file).subarray(0, 15).toString("utf8")).toBe("SQLite format 3");
+
+  const runs = (count: number) => count === 1 ? "1 run" : `${count} runs`;
+  const remove = panel.getByRole("button", { name: "Delete all runs…", exact: true });
+  await remove.click();
+  const dialog = page.getByRole("alertdialog", { name: `Delete ${runs(before.runs)}?`, exact: true });
+  await expect(dialog).toContainText(`Kept: ${before.savedRuns} saved run`);
+  await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(remove).toBeFocused();
+  expect((await (await page.request.get(`${local.url}/api/data`)).json()).runs).toBe(before.runs);
+
+  await remove.click();
+  await dialog.getByRole("button", { name: `Delete ${runs(before.runs)}`, exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const deleted = panel.getByRole("status").filter({ hasText: "Deleted all runs and their results." });
+  await expect(deleted).toBeVisible();
+  await expect(deleted).toBeFocused();
+  const after = await (await page.request.get(`${local.url}/api/data`)).json() as { runs: number; savedRuns: number };
+  expect(after).toMatchObject({ runs: 0, savedRuns: before.savedRuns });
+  await expect(stored.getByRole("listitem").filter({ hasText: /^Runs/ })).toContainText("0");
+  await expect(remove).toBeDisabled();
+  await screenshot(page, "settings-data-desktop");
 });
