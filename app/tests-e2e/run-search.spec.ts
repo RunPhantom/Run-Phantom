@@ -65,8 +65,10 @@ test("search finds payload-only evidence and persists filters through a direct l
   await expect(page.locator(row(1))).toBeVisible();
   await page.getByLabel("Provider", { exact: true }).fill("openai");
   await expect(page.getByText("No matching runs", { exact: true })).toBeVisible();
-  // A filter change does not evict the independently loaded selected trace.
-  await expect(page.getByRole("tab", { name: "Overview", exact: true })).toBeVisible();
+  // The detail pane never shows a run that is not in the current results.
+  await expect(page.getByText("No result to open", { exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Overview", exact: true })).toHaveCount(0);
+  await expect(page).toHaveURL(/\/search\?/);
   mkdirSync(evidencePath, { recursive: true });
   await page.screenshot({ path: path.join(evidencePath, "desktop-filtered-detail.png"), fullPage: true });
 });
@@ -81,11 +83,31 @@ test("search loads another server page without duplicates and opens an older dir
   await expect(page.getByRole("button", { name: "Load more runs", exact: true })).toHaveCount(0);
   const ids = await page.locator("[data-run-id]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-run-id")));
   expect(new Set(ids).size).toBe(55);
-  await page.goto(`${runPhantom.url}/search/${runId(54)}?q=cobalt-only`);
-  await expect(page.locator(row(1))).toBeVisible();
-  await expect(page.locator(row(54))).toHaveCount(0);
+  await page.goto(`${runPhantom.url}/search/${runId(54)}?q=Search+fixture+54`);
+  await expect(page.locator(row(54))).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/search/${runId(54)}\\?q=Search\\+fixture\\+54$`));
   await expect(page.getByRole("tab", { name: "Overview", exact: true })).toBeVisible();
   await expect(page.getByText("Search fixture 54", { exact: true }).first()).toBeVisible();
+  // A direct link to a run outside the results opens the first result instead.
+  await page.goto(`${runPhantom.url}/search/${runId(54)}?q=cobalt-only`);
+  await expect(page.locator(row(1))).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/search/${runId(1)}\\?q=cobalt-only$`));
+  await expect(page.getByText("Search fixture 1", { exact: true }).first()).toBeVisible();
+});
+
+test("searching error finds the failed run, explains the match and opens it", async ({ page, request, runPhantom }) => {
+  await seedSearchRuns(request, runPhantom.url);
+  await page.goto(`${runPhantom.url}/search?q=error`);
+  await expect(page.locator("[data-run-id]")).toHaveCount(1);
+  const failed = page.locator(row(1));
+  await expect(failed.locator('[data-run-match="failed_span"]')).toContainText("Failed step: Search fixture 1");
+  await expect(failed.locator('[data-run-match="failed_span"]')).toContainText("cobalt-only payload response");
+  await expect(page).toHaveURL(new RegExp(`/search/${runId(1)}\\?q=error$`));
+  await expect(page.getByRole("tab", { name: "Overview", exact: true })).toBeVisible();
+  await page.getByRole("textbox", { name: "Search captured runs", exact: true }).fill("amber");
+  const amber = page.locator(row(0)).locator('[data-run-match="input"]');
+  await expect(amber.locator("mark")).toHaveText("amber");
+  await expect(page).toHaveURL(new RegExp(`/search/${runId(0)}\\?q=amber$`));
 });
 
 test("search distinguishes loading, failures, empty workspace, and no matching results", async ({ page, request, runPhantom }) => {
@@ -149,11 +171,11 @@ test("search ignores late query responses and refreshes matching ingested traces
 test("mobile search keeps direct links and keyboard controls usable", async ({ page, request, runPhantom }) => {
   await seedSearchRuns(request, runPhantom.url);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto(`${runPhantom.url}/search/${runId(0)}?q=cobalt-only`);
+  await page.goto(`${runPhantom.url}/search/${runId(1)}?q=cobalt-only`);
   await expect(page.getByRole("tab", { name: "Overview", exact: true })).toBeVisible();
   await expect(page.getByLabel("Search captured runs", { exact: true })).toBeHidden();
   await page.getByRole("tab", { name: "Span Tree", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`/search/${runId(0)}/spans\\?q=cobalt-only`));
+  await expect(page).toHaveURL(new RegExp(`/search/${runId(1)}/spans\\?q=cobalt-only`));
   await page.locator("[data-span-row]").first().click();
   expect(new URL(page.url()).searchParams.get("q")).toBe("cobalt-only");
   await page.getByRole("button", { name: "Back to search", exact: true }).click();
@@ -175,12 +197,12 @@ test("mobile search keeps direct links and keyboard controls usable", async ({ p
   await page.screenshot({ path: path.join(evidencePath, "mobile-search-filters.png"), fullPage: true });
 });
 
-test("mobile search shows a missing deep link instead of hiding the detail view", async ({ page, runPhantom }) => {
+test("mobile search returns a deep link outside the results to the result list", async ({ page, runPhantom }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`${runPhantom.url}/search/${runId(999)}`);
-  await expect(page.getByText("Trace not found", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Back to search", exact: true }).click();
   await expect(page.getByText("No captured runs yet", { exact: true })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/search$`));
+  await expect(page.getByText("Trace not found", { exact: true })).toHaveCount(0);
 });
 
 test("search preserves filters through invalid span routes and external span navigation", async ({ page, request, runPhantom }) => {

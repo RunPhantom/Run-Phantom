@@ -1,7 +1,7 @@
 import { apiJson, apiJsonOrNull, jsonInit } from "./request";
 import type { LiveEvent, Run, Span, SubAgent } from "../utils/types";
-import type { SearchHitPage, SearchSuggestionResult } from "../../../src/search-protocol";
-export type { SearchHitPage } from "../../../src/search-protocol";
+import type { RunSearchMatch, SearchHitPage, SearchSuggestionResult } from "../../../src/search-protocol";
+export type { RunSearchMatch, SearchHitPage } from "../../../src/search-protocol";
 
 export interface RunDetailData {
   run: Run;
@@ -31,8 +31,10 @@ export interface RunSearchOptions {
   filter?: string;
 }
 
+export type RunSearchRun = Run & { match?: RunSearchMatch | null; matched_span_count?: number | null };
+
 export interface RunSearchResult {
-  runs: Run[];
+  runs: RunSearchRun[];
   nextCursor: string | null;
   hasMore: boolean;
   elapsedMs: number;

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { Bookmark, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ago, runDisplayName, runStatus, runStatusTone, uniqueRunIdPrefixes } from "../utils/helpers";
@@ -22,13 +22,15 @@ export function useShortRunIds(runs: readonly Run[] | undefined): ReadonlyMap<st
   }, [runs]);
 }
 
-export function RunListItem({ run, shortRunIds, selected, highlighted, faded, onClick }: {
+export function RunListItem({ run, shortRunIds, selected, highlighted, faded, detail, onClick }: {
   run: Run;
   /** From `useShortRunIds` over the list this row belongs to. */
   shortRunIds: ReadonlyMap<string, string>;
   selected: boolean;
   highlighted?: boolean;
   faded?: boolean;
+  /** Extra context inside the row, such as why a search result matched. */
+  detail?: ReactNode;
   onClick: () => void;
 }) {
   const status = runStatus(run);
@@ -90,6 +92,7 @@ export function RunListItem({ run, shortRunIds, selected, highlighted, faded, on
               </div>
             )}
             <span data-run-age className="col-start-2 row-start-1 shrink-0 text-[11px] leading-5 text-rp-ink-muted">{ago(run.last_updated_at)}</span>
+            {detail && <div className="col-span-2 min-w-0">{detail}</div>}
           </div>
         </div>
       </button>
