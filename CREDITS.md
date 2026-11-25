@@ -11,20 +11,27 @@ be contacted.
   projects, source files were read to understand behaviour. Every Run Phantom
   feature listed below was written from scratch in this repository's own stack:
   React, Radix primitives and hand-written SVG in the app, and Bun and SQLite in
-  the daemon. No code, markup, styles, icons or copy text were copied.
+  the daemon. No source code was copied, and no licence headers or upstream
+  references to copied material were found. Icons come from `lucide-react`,
+  which was already a dependency.
 - **Restricted licences.** Arize Phoenix and the AgentOps dashboard (`app/`) are
   under the Elastic License 2.0, and Langtrace is under AGPL-3.0. Lunary's
   canonical repository could not be checked. These projects informed ideas only.
   No feature draws on Langfuse's or Agenta's `ee/` directories, which use
   separate enterprise licences.
-- **No new dependencies.** None of the features below added a package, so
-  `THIRD_PARTY_NOTICES.md` is unchanged.
+- **No new dependencies.** None of the features below added a package, so the
+  dependency notes in `THIRD_PARTY_NOTICES.md` are unchanged.
 - **How the no-copy statement was checked.** Every source file added or changed
   between `0eb9d88` and `fee0f76` (pull requests #169 to #180) was searched for
   licence headers, copyright lines, SPDX tags, upstream project names and
-  upstream URLs. None were found. The larger new modules were also read by
-  hand: the command palette, fuzzy matcher, keyboard dispatcher, chart kit,
-  waterfall, trace model, runs table and Playground word diff.
+  upstream URLs. No licence headers, copyright lines or SPDX tags were found.
+  The only upstream name was a comment in
+  `app/src/components/playground/word-diff.ts` that describes the
+  diff-match-patch cleanup idea credited below; the code around it is Run
+  Phantom's own. The larger new modules were also read by hand: the command
+  palette, fuzzy matcher, keyboard dispatcher, chart kit, waterfall, trace
+  model, runs table and Playground word diff. Styles and interface copy were
+  not compared line by line against each upstream project.
 
 Licences are given as SPDX identifiers and were checked against each
 repository's licence file on 2026-11-25. Where the repository holds code under
@@ -201,5 +208,5 @@ offers.
 | promptfoo/promptfoo | promptfoo | https://github.com/promptfoo/promptfoo/issues |
 | Agenta-AI/agenta | Agenta | https://github.com/Agenta-AI/agenta/discussions |
 | open-telemetry/semantic-conventions | OpenTelemetry (CNCF) | https://github.com/open-telemetry/semantic-conventions/issues |
-| google/diff-match-patch | Google | Repository is archived and read-only; no open channel. |
+| google/diff-match-patch | Google; original author Neil Fraser | Repository is archived and read-only. Neil Fraser's site, linked from the repository README, is https://neil.fraser.name/. No contact channel was verified, so credit is given through this file. |
 | lunary-ai/lunary | Lunary | Repository unavailable (HTTP 404 on 2026-11-25); no public channel verified. |
