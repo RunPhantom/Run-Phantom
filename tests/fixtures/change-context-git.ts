@@ -36,11 +36,9 @@ export function compileChangeGitFixture() {
     for (const mode of ["held", "slow", "encoding", "bytes", "filter"] as const) {
       const target = path.join(directory, `${mode}-git${process.platform === "win32" ? ".exe" : ""}`);
       copyFileSync(binary, target, constants.COPYFILE_FICLONE);
-      // On a loaded macOS host the first launch of each freshly compiled copy exceeded the former
-      // 3 s bound (1 of 4 local runs, 2026-11-25), failing the whole file before any test ran.
-      const ready = spawnSync(target, ["--fixture-ready"], { encoding: "utf8", timeout: 15_000, maxBuffer: 1024 });
+      const ready = spawnSync(target, ["--fixture-ready"], { encoding: "utf8", timeout: 3000, maxBuffer: 64 * 1024 });
       if (ready.status !== 0 || ready.stdout !== "native-git-fixture-ready\n")
-        throw new Error(`Compiled native Git fixture did not become ready (status ${ready.status}, signal ${ready.signal}, ${ready.error?.message ?? "no spawn error"})`);
+        throw new Error(`Compiled native Git fixture did not become ready (status ${ready.status}, signal ${ready.signal}, ${ready.error?.message ?? "no spawn error"}, stdout ${JSON.stringify(ready.stdout?.slice(0, 200))}, stderr ${JSON.stringify(ready.stderr?.slice(-400))})`);
       executables.set(mode, target);
     }
     const unconfirmed = () => {
