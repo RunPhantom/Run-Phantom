@@ -90,8 +90,8 @@ test("a late real analysis cannot restore results after the selected preference 
 
 test("empty, keyboard, retained-ID and real compatibility errors leave no downloadable stale result",async({page,request,runPhantom},testInfo)=>{
   await page.goto(runPhantom.url+"/evaluations");const panel=page.getByRole("region",{name:"Score distribution analysis"});
-  await expect(panel.getByRole("button",{name:"Analyze distribution",exact:true})).toBeDisabled();await expect(panel).toContainText("Start an experiment to retain frozen results");
-  await panel.scrollIntoViewIfNeeded();await page.screenshot({path:testInfo.outputPath("distribution-empty.png")});
+  await expect(page.getByRole("heading",{name:"Check every change against runs you already captured.",exact:true})).toBeVisible();await expect(panel).toHaveCount(0);
+  await page.screenshot({path:testInfo.outputPath("distribution-empty.png")});
   await seedEvaluationRuns(request,runPhantom.url);
   const first=await createEvaluationDataset(request,runPhantom.url,[{kind:"json"}],"First definition"),second=await createEvaluationDataset(request,runPhantom.url,[{kind:"json"}],"Second definition");
   const a=await startEvaluation(request,runPhantom.url,first,EVALUATION_RUNS.baseline,"Compatible one"),b=await startEvaluation(request,runPhantom.url,second,EVALUATION_RUNS.rejected,"Different definition");

@@ -50,7 +50,7 @@ test("evaluation workspace: find saved experiments without changing original out
   for (const width of [390, 320, 768, 1024, 1280]) {
     await page.setViewportSize({ width, height: 900 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
-    await expect(page.getByRole("navigation", { name: "Evaluation workspaces", exact: true }).getByRole("link", { name: "Prompts", exact: true })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Evaluation workspaces", exact: true }).getByRole("button", { name: "Compare findings", exact: true })).toBeVisible();
   }
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: testInfo.outputPath("evaluation-workspace-mobile.png"), fullPage: true });
@@ -71,28 +71,35 @@ test("evaluation workspace: find saved experiments without changing original out
   await page.screenshot({ path: testInfo.outputPath("evaluation-workspace-css200.png"), fullPage: true });
 });
 
-test("evaluation workspace: navigation keeps revision links and connects real curation tools", async ({ page, request, runPhantom }) => {
+test("evaluation workspace: navigation keeps revision links and leaves review queues and prompts to the sidebar", async ({ page, request, runPhantom }) => {
   await seedEvaluationRuns(request, runPhantom.url);
   const revision = await createEvaluationDataset(request, runPhantom.url, [{ kind: "json" }], "Frozen selection");
   await page.goto(`${runPhantom.url}/evaluations?datasetId=${revision.datasetId}&version=${revision.version}`);
   const nav = page.getByRole("navigation", { name: "Evaluation workspaces", exact: true });
+  await expect(nav.getByRole("button")).toHaveText(["Datasets and experiments", "External reports", "Compare findings"]);
+  await expect(nav.getByRole("link")).toHaveCount(0);
   await nav.getByRole("button", { name: "External reports", exact: true }).click();
   await expect(page.getByRole("heading", { name: "External reports", exact: true })).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`datasetId=${revision.datasetId}&version=2&view=evidence`));
-  await nav.getByRole("button", { name: "Finding comparison", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Finding comparison", exact: true })).toBeVisible();
-  await nav.getByRole("button", { name: "Regression workbench", exact: true }).click();
+  await nav.getByRole("button", { name: "Compare findings", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Compare findings", exact: true })).toBeVisible();
+  await nav.getByRole("button", { name: "Datasets and experiments", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "Revision", exact: true })).toHaveValue("2");
-  await nav.getByRole("link", { name: "Review queues", exact: true }).click();
+  const sidebar = page.getByRole("navigation", { name: "Primary navigation" });
+  await sidebar.getByRole("link", { name: "Review queues", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Review queues", exact: true })).toBeVisible();
-  await expect(nav.getByRole("link", { name: "Review queues", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(sidebar.getByRole("link", { name: "Review queues", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(nav).toHaveCount(0);
+  await page.getByRole("button", { name: "Create a review queue", exact: true }).click();
   await page.getByRole("textbox", { name: "New queue name", exact: true }).fill("Checkout curation");
   await page.getByRole("button", { name: "Create queue", exact: true }).click();
-  await expect(page.getByRole("combobox", { name: "Review queue", exact: true })).not.toHaveValue("");
-  await nav.getByRole("link", { name: "Prompts", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Queue items", exact: true }).getByRole("heading", { name: "Checkout curation", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open queue Checkout curation", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await sidebar.getByRole("link", { name: "Prompts", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Prompts", exact: true })).toBeVisible();
-  await expect(nav.getByRole("link", { name: "Prompts", exact: true })).toHaveAttribute("aria-current", "page");
-  await nav.getByRole("link", { name: "Regression workbench", exact: true }).click();
+  await expect(sidebar.getByRole("link", { name: "Prompts", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(nav).toHaveCount(0);
+  await sidebar.getByRole("link", { name: "Evaluations", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Evaluations", exact: true })).toBeVisible();
   await page.reload();
   const queues = await request.get(`${runPhantom.url}/api/review-queues`);

@@ -49,10 +49,10 @@ test("finding workspace: existing evaluation workspaces remain available before 
     await expect(page.getByRole("heading", { name: "Evaluations", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "External reports", exact: true }).click();
     await expect(page.getByRole("heading", { name: "External reports", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Regression workbench", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Datasets and experiments", exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath(`prior-workspace-${width}.png`), fullPage: true });
   }
-  await expect(page.getByRole("button", { name: "Finding comparison", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Compare findings", exact: true })).toBeVisible();
 });
 
 test("real File imports, conditional duplicate counts, export and reload preserve a failed frozen experiment and captured output", async ({ page, request, runPhantom }, testInfo) => {

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { DisabledReason } from "./field";
 import { plural } from "../../utils/helpers";
 import { Button } from "../ui/button";
 import { evaluationsApi, type ExperimentSummary, type TrialAnalysis } from "../../api/evaluations";
@@ -6,6 +7,7 @@ import { evaluationsApi, type ExperimentSummary, type TrialAnalysis } from "../.
 const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
 
 export function RepeatedTrials({ experiments, onOpen }: { experiments: ExperimentSummary[]; onOpen: (id: string) => void }) {
+  const reasonId = useId();
   const [selected, setSelected] = useState<string[]>([]);
   const [analysis, setAnalysis] = useState<TrialAnalysis | null>(null);
   const [error, setError] = useState("");
@@ -35,14 +37,14 @@ export function RepeatedTrials({ experiments, onOpen }: { experiments: Experimen
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
   return <section aria-label="Repeated trial analysis" className="space-y-4">
-    <h2 className="text-sm font-semibold">Analyze repeated trials</h2>
-    <p className="text-xs text-[color:var(--rp-ink-soft)]">Select 2–20 finished experiments with the same dataset revision and evaluators. Each case must use a distinct captured run. The analysis describes your selection; it does not establish independent sampling.</p>
+    <h2 className="text-sm font-semibold">Repeated trials</h2>
+    <p className="text-xs text-[color:var(--rp-ink-soft)]">Check how stable results are across 2 to 20 finished experiments on the same dataset revision. Each experiment must use different runs for the same case.</p>
     <fieldset className="max-h-64 space-y-2 overflow-y-auto"><legend className="mb-2 text-xs">{selected.length} of 20 selected</legend>
-      {!experiments.length && <p className="text-xs">Finished experiments will appear here.</p>}
+      {!experiments.length && <p className="text-xs">Finished experiments appear here.</p>}
       {experiments.map(item => <label key={item.id} className="flex items-start gap-2 text-xs"><input type="checkbox" className="mt-0.5" checked={selected.includes(item.id)} disabled={["queued", "running"].includes(item.status) || (!selected.includes(item.id) && selected.length === 20)} onChange={() => select(item.id)} /><span className="break-all">{item.name} <span className="text-rp-ink-muted">· r{item.datasetVersion} · {item.status}</span></span></label>)}
       {selected.filter(id => !experiments.some(item => item.id === id)).map(id => <label key={id} className="flex gap-2 text-xs"><input type="checkbox" checked onChange={() => select(id)} /><span className="break-all">Selected experiment outside the current list: {id}</span></label>)}
     </fieldset>
-    <Button disabled={selected.length < 2 || busy} onClick={() => void analyze()}>{busy ? "Analyzing trials…" : "Analyze selected trials"}</Button>
+    <div className="space-y-2"><Button disabled={selected.length < 2 || busy} aria-describedby={selected.length < 2 ? reasonId : undefined} onClick={() => void analyze()}>{busy ? "Analyzing trials…" : "Analyze selected trials"}</Button><DisabledReason id={reasonId} reason={selected.length < 2 && `Select ${selected.length ? "one more experiment" : "at least two finished experiments"}.`} /></div>
     {error && <p role="alert" className="text-xs">{error}</p>}
     {analysis && <div aria-label="Repeated trial results" className="space-y-3 text-xs">
       <p role="status">{analysis.trials.length} selected trials · {plural(analysis.cases.length, "case")} · {analysis.summary.total} case-trial outcomes</p>

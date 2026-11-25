@@ -1,16 +1,16 @@
 import { useLayoutEffect, useRef } from "react";
-import { Link } from "react-router-dom";
 import { Button } from "../ui/button";
 import "./evaluation-workspace.css";
 
-type Workspace = "regression" | "evidence" | "findings" | "queues" | "prompts";
+export type EvaluationView = "regression" | "evidence" | "findings";
 const views = [
-  { id: "regression", label: "Regression workbench" },
+  { id: "regression", label: "Datasets and experiments" },
   { id: "evidence", label: "External reports" },
-  { id: "findings", label: "Finding comparison" },
+  { id: "findings", label: "Compare findings" },
 ] as const;
 
-export function EvaluationNavigation({ active, onView }: { active: Workspace; onView?: (view: "regression" | "evidence" | "findings") => void }) {
+/** Sub-navigation for the Evaluations page only; Review queues and Prompts live in the sidebar. */
+export function EvaluationNavigation({ active, onView }: { active: EvaluationView; onView: (view: EvaluationView) => void }) {
   const nav = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     const element = nav.current;
@@ -21,13 +21,7 @@ export function EvaluationNavigation({ active, onView }: { active: Workspace; on
   }, [active]);
   return <nav ref={nav} aria-label="Evaluation workspaces" className="evaluation-navigation">
     <div className="evaluation-navigation-primary">
-      {views.map(view => onView
-        ? <Button key={view.id} variant="ghost" aria-current={active === view.id ? "page" : undefined} onClick={() => onView(view.id)}>{view.label}</Button>
-        : <Link key={view.id} aria-current={active === view.id ? "page" : undefined} to={view.id === "regression" ? "/evaluations" : `/evaluations?view=${view.id}`}>{view.label}</Link>)}
-    </div>
-    <div className="evaluation-navigation-curation">
-      <Link to="/review-queues" aria-current={active === "queues" ? "page" : undefined}>Review queues</Link>
-      <Link to="/prompts" aria-current={active === "prompts" ? "page" : undefined}>Prompts</Link>
+      {views.map(view => <Button key={view.id} variant="ghost" aria-current={active === view.id ? "page" : undefined} onClick={() => onView(view.id)}>{view.label}</Button>)}
     </div>
   </nav>;
 }

@@ -22,7 +22,7 @@ test("Evaluate run opens Evaluations with that run preselected as the source of 
   await page.getByRole("button", { name: "Create dataset", exact: true }).click();
   await expect(linked).toContainText("preselected as the source run");
   await expect(page.getByRole("combobox", { name: "Dataset", exact: true }).locator("option", { hasText: defaultName })).toHaveCount(1);
-  await expect(name).toHaveValue("");
+  await expect(name).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: "Source run", exact: true })).toHaveValue(EVALUATION_RUNS.baseline);
   await expect(page.getByRole("region", { name: "Source snapshot", exact: true })).toBeVisible();
   await page.getByRole("textbox", { name: "Case name", exact: true }).fill("Linked run case");
