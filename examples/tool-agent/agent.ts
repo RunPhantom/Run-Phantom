@@ -3,7 +3,7 @@ import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 import { loadWorkspaceEnv } from "../loadEnv";
 import {
-  callModel, DEFAULT_MODELS, OTEL_PROVIDER_NAME, PROVIDERS, ProviderError,
+  callModel, DEFAULT_MODELS, missingKeys, OTEL_PROVIDER_NAME, PROVIDERS, ProviderError,
   type Message, type ModelTurn, type Provider, type ToolCall,
 } from "./providers";
 import { DELEGATE_TOOL, FatalToolError, LOCAL_TOOLS, TOOL_DEFINITIONS, ToolError, type ToolDefinition } from "./tools";
@@ -43,6 +43,8 @@ export interface ToolCallRecord {
   arguments: Record<string, unknown>;
   ok: boolean;
   error?: string;
+  /** Calls made by a nested agent while this call ran, such as the researcher's search_kb calls under delegate_research. */
+  nested?: ToolCallRecord[];
 }
 
 export interface TurnResult {
@@ -76,7 +78,7 @@ interface LoopContext {
   tools: ToolDefinition[];
   messages: Message[];
   maxSteps: number;
-  execute: (call: ToolCall, toolSpan: Span) => Promise<unknown>;
+  execute: (call: ToolCall, toolSpan: Span, nested: ToolCallRecord[]) => Promise<unknown>;
   toolCalls: ToolCallRecord[];
   steps: { count: number };
 }
@@ -166,12 +168,14 @@ async function toolStep(context: LoopContext, call: ToolCall): Promise<Message> 
     "gen_ai.tool.call.arguments": JSON.stringify(call.arguments),
     "gen_ai.agent.name": context.agentName,
   });
+  const nested: ToolCallRecord[] = [];
+  const nestedField = () => nested.length ? { nested } : {};
   try {
-    const result = await context.execute(call, span);
+    const result = await context.execute(call, span, nested);
     const content = JSON.stringify(result);
     span.set({ "gen_ai.tool.call.result": content });
     span.end();
-    context.toolCalls.push({ name: call.name, arguments: call.arguments, ok: true });
+    context.toolCalls.push({ name: call.name, arguments: call.arguments, ok: true, ...nestedField() });
     return { role: "tool", callId: call.id, name: call.name, content, isError: false };
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
@@ -179,7 +183,7 @@ async function toolStep(context: LoopContext, call: ToolCall): Promise<Message> 
     span.set({ "error.type": type, "gen_ai.tool.call.result": JSON.stringify({ error: type, message: failure.message }) });
     span.recordException(failure);
     span.end({ code: 2, message: failure.message });
-    context.toolCalls.push({ name: call.name, arguments: call.arguments, ok: false, error: failure.message });
+    context.toolCalls.push({ name: call.name, arguments: call.arguments, ok: false, error: failure.message, ...nestedField() });
     if (failure instanceof FatalToolError) throw new AgentFailure(failure.type, `${call.name} failed and the run was stopped: ${failure.message}`);
     return { role: "tool", callId: call.id, name: call.name, content: JSON.stringify({ error: type, message: failure.message }), isError: true };
   }
@@ -206,7 +210,7 @@ function localTool(call: ToolCall): unknown {
   return tool(call.arguments);
 }
 
-async function runResearcher(parent: LoopContext, call: ToolCall, toolSpan: Span): Promise<unknown> {
+async function runResearcher(parent: LoopContext, call: ToolCall, toolSpan: Span, toolCalls: ToolCallRecord[]): Promise<unknown> {
   const question = typeof call.arguments.question === "string" ? call.arguments.question.trim() : "";
   if (!question) throw new ToolError("invalid_arguments", "Missing required string argument \"question\".");
   const agentSpan = toolSpan.child("invoke_agent researcher").set({
@@ -221,6 +225,7 @@ async function runResearcher(parent: LoopContext, call: ToolCall, toolSpan: Span
     const answer = await agentLoop({
       ...parent, agentSpan, agentName: "researcher", system: RESEARCHER_SYSTEM_PROMPT, tools: researchTools,
       messages: [{ role: "user", text: question }], maxSteps: RESEARCHER_MAX_STEPS,
+      toolCalls, steps: { count: 0 },
       execute: async (inner) => localTool(inner),
     });
     agentSpan.set({ "runphantom.output": answer });
@@ -234,6 +239,18 @@ async function runResearcher(parent: LoopContext, call: ToolCall, toolSpan: Span
   }
 }
 
+const RUN_NAME_LIMIT = 60;
+
+/** The user's message, shortened, so runs started from the CLI can be told apart in the run list. */
+export function defaultRunName(userText: string): string {
+  const text = userText.replace(/\s+/g, " ").trim();
+  if (!text) return "Support agent";
+  if (text.length <= RUN_NAME_LIMIT) return text;
+  const cut = text.slice(0, RUN_NAME_LIMIT - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > RUN_NAME_LIMIT / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
 /** Runs one user turn as one trace: the support agent loop plus every model and tool span it produced. */
 export async function runTurn(userText: string, options: TurnOptions): Promise<TurnResult> {
   const model = options.model || DEFAULT_MODELS[options.provider];
@@ -242,7 +259,7 @@ export async function runTurn(userText: string, options: TurnOptions): Promise<T
   const root = trace.startSpan("invoke_agent support-agent").set({
     "runphantom.span.kind": "agent_root",
     "runphantom.event.id": randomUUID(),
-    "runphantom.event.name": options.eventName ?? "Support agent",
+    "runphantom.event.name": options.eventName ?? defaultRunName(userText),
     "runphantom.conversation.id": options.conversationId,
     "runphantom.input": userText,
     "gen_ai.operation.name": "invoke_agent",
@@ -259,8 +276,8 @@ export async function runTurn(userText: string, options: TurnOptions): Promise<T
     system: options.subagent ? DELEGATING_SYSTEM_PROMPT : SUPPORT_SYSTEM_PROMPT,
     tools: options.subagent ? [...TOOL_DEFINITIONS, DELEGATE_TOOL] : TOOL_DEFINITIONS,
     messages, maxSteps: options.maxSteps ?? MAX_STEPS, toolCalls, steps,
-    execute: async (call, toolSpan) => call.name === DELEGATE_TOOL.name && options.subagent
-      ? runResearcher(context, call, toolSpan)
+    execute: async (call, toolSpan, nested) => call.name === DELEGATE_TOOL.name && options.subagent
+      ? runResearcher(context, call, toolSpan, nested)
       : localTool(call),
   };
 
@@ -287,14 +304,25 @@ export async function runTurn(userText: string, options: TurnOptions): Promise<T
   }
 }
 
+/** Every tool call in the turn, nested agents' calls included, in the order they finished. */
+export function allToolCalls(calls: ToolCallRecord[]): ToolCallRecord[] {
+  return calls.flatMap((call) => [...allToolCalls(call.nested ?? []), call]);
+}
+
+function describeCalls(calls: ToolCallRecord[], indent: string, lines: string[]): void {
+  for (const call of calls) {
+    lines.push(`${indent}tool ${call.name}(${JSON.stringify(call.arguments)}) ${call.ok ? "ok" : `failed: ${call.error}`}`);
+    if (call.nested?.length) describeCalls(call.nested, `${indent}    `, lines);
+  }
+}
+
 export function describeTurn(result: TurnResult): string {
   const lines: string[] = [];
-  for (const call of result.toolCalls) {
-    lines.push(`  tool ${call.name}(${JSON.stringify(call.arguments)}) ${call.ok ? "ok" : `failed: ${call.error}`}`);
-  }
+  describeCalls(result.toolCalls, "  ", lines);
   lines.push(result.ok ? `agent: ${result.text}` : `run failed: ${result.error}`);
   if (!result.ok && /no longer available to new users/i.test(result.error ?? "")) {
-    lines.push("  hint: this Gemini model is closed to new API keys; pass --model with a model your key can use.");
+    const replacement = /use models\/([\w.-]+)/i.exec(result.error ?? "")?.[1];
+    lines.push(`  hint: this Gemini model is closed to new API keys; pass --model with ${replacement ? `${replacement} or another model` : "a model"} your key can use.`);
   }
   lines.push(result.exportError ? `trace not exported: ${result.exportError}` : `trace: ${result.runUrl}`);
   return lines.join("\n");
@@ -332,6 +360,11 @@ async function main(): Promise<number> {
     return 0;
   }
   const provider = parseProvider(values.provider);
+  const missing = missingKeys([provider]);
+  if (missing.length) {
+    console.error(`${missing.join(", ")} is not set. Export it or add it to a .env file in this repository, then run again. Nothing was sent to Run Phantom.`);
+    return 1;
+  }
   const model = values.model || DEFAULT_MODELS[provider];
   const conversationId = `conv_${randomUUID()}`;
   console.log(`provider ${provider} · model ${model} · conversation ${conversationId}${values.subagent ? " · subagent on" : ""}`);

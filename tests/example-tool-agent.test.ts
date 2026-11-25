@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { MAX_STEPS, runTurn, type TurnResult } from "../examples/tool-agent/agent";
-import { matchesExpectation, observedOutcome, SCENARIOS } from "../examples/tool-agent/scenarios";
+import { defaultRunName, describeTurn, MAX_STEPS, runTurn, type TurnResult } from "../examples/tool-agent/agent";
+import { missingKeys, redactMaskedKeys } from "../examples/tool-agent/providers";
+import { isAccessError, matchesExpectation, observedOutcome, runName, SCENARIOS } from "../examples/tool-agent/scenarios";
 import { checkInventory, FatalToolError, issueRefund, lookupOrder, searchKb, ToolError } from "../examples/tool-agent/tools";
 import { detectSubAgents } from "../src/agents";
 import { parseOtlpRequest, type ParsedSpan } from "../src/parse";
@@ -84,6 +85,11 @@ describe("tool-agent example: deterministic tools", () => {
     expect(searchKb({ query: "warranty charging" }).results[0]?.id).toBe("kb-warranty");
   });
 
+  test("search ignores words too short to rank, such as 'a' matching 'arrive'", () => {
+    expect(searchKb({ query: "a" }).results).toEqual([]);
+    expect(searchKb({ query: "is a refund ok" }).results.map((result) => result.id)).toEqual(["kb-refunds"]);
+  });
+
   test("fails deterministically for the documented inputs", () => {
     expect(() => checkInventory({ sku: "KB-200" })).toThrow(ToolError);
     expect(() => issueRefund({ order_id: "A1001", amount_usd: 500, reason: "damaged" })).toThrow(/totals \$89.00/);
@@ -107,6 +113,11 @@ describe("tool-agent example: exported traces", () => {
     expect(result.toolCalls.map((call) => [call.name, call.ok])).toEqual([["lookup_order", true], ["issue_refund", true]]);
     expect(providerRequests[0]!.url).toBe("https://api.openai.com/v1/chat/completions");
     expect(providerRequests[0]!.body).toMatchObject({ model: "gpt-5-nano", store: false });
+    for (const tool of providerRequests[0]!.body.tools as { function: { strict?: boolean; parameters: { required: string[]; properties: object; additionalProperties: boolean } } }[]) {
+      expect(tool.function.strict).toBe(true);
+      expect(tool.function.parameters.additionalProperties).toBe(false);
+      expect(tool.function.parameters.required.sort()).toEqual(Object.keys(tool.function.parameters.properties).sort());
+    }
     const secondMessages = providerRequests[1]!.body.messages as Record<string, unknown>[];
     expect(secondMessages.at(-1)).toEqual({ role: "tool", tool_call_id: "call_a", content: JSON.stringify(lookupOrder({ order_id: "A1001" })) });
 
@@ -207,6 +218,13 @@ describe("tool-agent example: exported traces", () => {
     expect(llm).toMatchObject({ status: "ERROR", inputTokens: undefined, outputTokens: undefined });
     expect(llm!.attributes["error.type"]).toBe("404");
     expect(evidence(spans).root_failed).toBe(true);
+    expect(isAccessError(result)).toBe(true);
+  });
+
+  test("a closed Gemini model prints the replacement model Google names", async () => {
+    replies = [{ status: 404, body: { error: { message: "This model models/gemini-2.5-flash-lite is no longer available to new users. Please update your code to use models/gemini-3.5-flash-lite for the latest features." } } }];
+    const result = await runTurn("Hi", { provider: "gemini", model: "gemini-2.5-flash-lite", conversationId: "conv_hint" });
+    expect(describeTurn(result)).toContain("pass --model with gemini-3.5-flash-lite or another model your key can use.");
   });
 
   test("the subagent mode nests a researcher agent under the delegating tool call", async () => {
@@ -236,6 +254,39 @@ describe("tool-agent example: exported traces", () => {
     }));
     expect(detectSubAgents(rows)).toEqual([expect.objectContaining({ root_span_id: delegate.spanId, name: "researcher", llm_count: 2, tool_count: 1 })]);
     expect(evidence(spans).root_failed).toBe(false);
+
+    expect(result.toolCalls).toEqual([{
+      name: "delegate_research", arguments: { question: "Warranty for charging faults?" }, ok: true,
+      nested: [{ name: "search_kb", arguments: { query: "warranty charging" }, ok: true }],
+    }]);
+    expect(describeTurn(result).split("\n").slice(0, 2)).toEqual([
+      '  tool delegate_research({"question":"Warranty for charging faults?"}) ok',
+      '      tool search_kb({"query":"warranty charging"}) ok',
+    ]);
+    const warranty = SCENARIOS.find((scenario) => scenario.id === "warranty-subagent")!;
+    expect(matchesExpectation(warranty, result)).toBe(true);
+  });
+
+  test("a researcher tool failure is nested under the delegation and still counts as a run tool error", async () => {
+    replies = [
+      openAiToolCall([{ id: "call_d", name: "delegate_research", args: { question: "Warranty?" } }]),
+      openAiToolCall([{ id: "call_s", name: "search_kb", args: { parameters: { query: "warranty" } } }]),
+      openAiText("Warranty is 12 months (kb-warranty)."),
+      openAiText("You are covered by the 12-month warranty."),
+    ];
+    const result = await runTurn("Headphones stopped charging.", { provider: "openai", subagent: true, conversationId: "conv_sub_err" });
+
+    expect(result.toolCalls.map((call) => call.name)).toEqual(["delegate_research"]);
+    expect(result.toolCalls[0]!.nested).toEqual([expect.objectContaining({ name: "search_kb", ok: false })]);
+    expect(observedOutcome(result)).toBe("completed_with_errors");
+    expect(evidence(exported())).toMatchObject({ tool_error_count: 1, root_failed: false });
+  });
+
+  test("a warranty run that never delegates does not count as the subagent scenario", async () => {
+    replies = [openAiText("A1004 is covered by the warranty.")];
+    const result = await runTurn("A1004 stopped charging.", { provider: "openai", subagent: true, conversationId: "conv_no_delegate" });
+    expect(observedOutcome(result)).toBe("complete");
+    expect(matchesExpectation(SCENARIOS.find((scenario) => scenario.id === "warranty-subagent")!, result)).toBe(false);
   });
 
   test("stops after the step cap instead of looping forever", async () => {
@@ -263,6 +314,31 @@ describe("tool-agent example: exported traces", () => {
     expect(byType(exported(0), "AGENT_ROOT")[0]!.convoId).toBe("conv_multi");
     expect(byType(exported(1), "AGENT_ROOT")[0]!.convoId).toBe("conv_multi");
     expect(byType(exported(0), "AGENT_ROOT")[0]!.traceId).not.toBe(byType(exported(1), "AGENT_ROOT")[0]!.traceId);
+  });
+
+  test("runs are named after the user's message unless a name is given", async () => {
+    expect(defaultRunName("  Where is   my order A1002? ")).toBe("Where is my order A1002?");
+    const long = defaultRunName("My order A1001 arrived with a cracked case and a missing cable. Can I get a refund for the whole thing?");
+    expect(long.length).toBeLessThanOrEqual(60);
+    expect(long).toBe("My order A1001 arrived with a cracked case and a missing…");
+    replies = [openAiText("It is in transit.")];
+    await runTurn("Where is my order A1002?", { provider: "openai", conversationId: "conv_name" });
+    expect(byType(exported(), "AGENT_ROOT")[0]!.eventName).toBe("Where is my order A1002?");
+    const followUp = SCENARIOS.find((scenario) => scenario.turns.length > 1)!;
+    expect(runName(followUp, 1)).toBe(`Turn 2 · ${followUp.title}`);
+  });
+
+  test("missing keys are reported before anything runs, and masked keys never reach a trace", async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    expect(missingKeys(["openai", "anthropic", "gemini"])).toEqual(["ANTHROPIC_API_KEY", "GEMINI_API_KEY"]);
+    expect(missingKeys(["openai"])).toEqual([]);
+
+    expect(redactMaskedKeys("Incorrect API key provided: sk-fake-*****abcd. You can find your API key at …")).toBe("Incorrect API key provided: [redacted key]. You can find your API key at …");
+    replies = [{ status: 401, body: { error: { message: "Incorrect API key provided: sk-proj-ab*********************wxyz." } } }];
+    const result = await runTurn("Hi", { provider: "openai", conversationId: "conv_401" });
+    expect(result.error).toBe("openai returned HTTP 401: Incorrect API key provided: [redacted key].");
+    expect(JSON.stringify(exports)).not.toContain("wxyz");
   });
 
   test("a failed turn leaves the conversation history untouched", async () => {

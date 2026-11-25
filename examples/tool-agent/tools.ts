@@ -164,7 +164,8 @@ export function issueRefund(args: Record<string, unknown>) {
 
 export function searchKb(args: Record<string, unknown>) {
   const query = stringArg(args, "query").toLowerCase();
-  const words = query.split(/[^a-z0-9]+/).filter(Boolean);
+  // Words under three letters ("a", "my", "is") prefix-match too many keywords to rank anything.
+  const words = query.split(/[^a-z0-9]+/).filter((word) => word.length >= 3);
   const scored = KB_ARTICLES
     .map((article) => ({ article, score: words.filter((word) => article.keywords.some((keyword) => keyword.startsWith(word) || word.startsWith(keyword))).length }))
     .filter((entry) => entry.score > 0)

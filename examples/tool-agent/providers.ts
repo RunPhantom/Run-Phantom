@@ -89,6 +89,16 @@ function parseArguments(raw: unknown): Record<string, unknown> {
   return { _raw: raw };
 }
 
+/** Providers whose API key variable is unset, so a caller can stop before exporting runs that cannot succeed. */
+export function missingKeys(providers: readonly Provider[]): string[] {
+  return [...new Set(providers.filter((provider) => !process.env[KEY_VARIABLE[provider]]).map((provider) => KEY_VARIABLE[provider]))];
+}
+
+/** OpenAI echoes a masked key (prefix, asterisks, last four characters) in 401 bodies; keep even that out of traces. */
+export function redactMaskedKeys(text: string): string {
+  return text.replace(/[\w-]*\*{3,}[\w-]*/g, "[redacted key]");
+}
+
 function requireKey(provider: Provider): string {
   const key = process.env[KEY_VARIABLE[provider]];
   if (!key) throw new ProviderError(provider, 0, `${KEY_VARIABLE[provider]} is not set.`);
@@ -102,7 +112,7 @@ async function postJson(provider: Provider, url: string, headers: Record<string,
   try { parsed = JSON.parse(text); } catch { parsed = undefined; }
   if (!response.ok) {
     const error = record(record(parsed)?.error);
-    const detail = str(error?.message) ?? text.slice(0, 300);
+    const detail = redactMaskedKeys(str(error?.message) ?? text.slice(0, 300));
     throw new ProviderError(provider, response.status, `${provider} returned HTTP ${response.status}: ${detail}`);
   }
   const value = record(parsed);
@@ -131,7 +141,7 @@ async function callOpenAi(request: ModelRequest): Promise<ModelTurn> {
   const data = await postJson("openai", `${process.env.OPENAI_BASE_URL || "https://api.openai.com/v1"}/chat/completions`, { authorization: `Bearer ${requireKey("openai")}` }, {
     model: request.model,
     messages: openAiMessages(request),
-    tools: request.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.parameters } })),
+    tools: request.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.parameters, strict: true } })),
     max_completion_tokens: request.maxOutputTokens,
     store: false,
   });
