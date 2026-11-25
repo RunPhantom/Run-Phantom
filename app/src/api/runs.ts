@@ -21,6 +21,42 @@ export async function listRuns(): Promise<Run[]> {
   return apiJson<Run[]>("/api/runs");
 }
 
+/** A GET /api/runs row with the per-run facts (contract: runs-api.md). Unknown values are null, never 0. */
+export interface RunListRow extends Run {
+  agent: string | null;
+  duration_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  est_cost_usd: number | null;
+  cost_source: "reported" | "estimated" | "unknown";
+  tool_count: number;
+  primary_model: string | null;
+  provider: string | null;
+  models: string[];
+  input_preview: string | null;
+  llm_calls: number;
+  known_input_tokens: number | null;
+  known_output_tokens: number | null;
+  token_unknown_calls: number;
+  known_cost_usd: number | null;
+  cost_unknown_calls: number;
+}
+
+export interface RunListPage {
+  runs: RunListRow[];
+  total: number;
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+export async function listRunsPage(query: Record<string, string>, signal?: AbortSignal): Promise<RunListPage> {
+  const params = new URLSearchParams(query);
+  params.set("envelope", "1");
+  const page = await apiJson<RunListPage>(`/api/runs?${params}`, { signal, cache: "no-store" });
+  if (!page || !Array.isArray(page.runs)) throw new Error("Run list response was not a page");
+  return page;
+}
+
 export interface RunSearchOptions {
   q?: string;
   status?: string;

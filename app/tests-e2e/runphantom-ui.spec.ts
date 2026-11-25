@@ -89,11 +89,15 @@ test("Run Phantom UI: clear button empties runs list and database", async ({ pag
   expect(before.length).toBeGreaterThanOrEqual(3);
 
   await page.goto(`${runPhantom.url}/runs`);
-  page.on("dialog", (dialog) => dialog.accept());
 
   const clearButton = page.getByRole("button", { name: /^clear all runs$/i });
   await expect(clearButton).toBeVisible({ timeout: 10_000 });
   await clearButton.click();
+  const confirm = page.getByRole("alertdialog", { name: "Clear all runs?" });
+  await expect(confirm.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await confirm.getByRole("button", { name: /^clear all runs$/i }).click();
+  await expect(confirm).toHaveCount(0);
+  await expect(page.getByText(/no runs/i).first()).toBeVisible();
 
   await expect.poll(async () => (await listRunPhantomRuns(runPhantom.url)).length, {
     timeout: 10_000,
