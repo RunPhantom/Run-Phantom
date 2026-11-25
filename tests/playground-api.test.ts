@@ -515,6 +515,69 @@ describe.serial("GET /api/playground/draft-from-span/:spanId", () => {
     expect(body.warnings).toContain("gemini-1.5-pro is not available in the Playground, so gemini-3.8-flash was selected instead.");
   });
 
+  test("keeps unmatched tool results, renames MCP-style tools and fits limits so the draft runs unchanged", async () => {
+    seed("draft-orphans", "span-o", { attributes: {
+      "ai.model.id": "claude-haiku-4-5-20251001", "ai.model.provider": "anthropic",
+      "ai.prompt.messages": JSON.stringify([
+        { role: "system", content: "Triage tickets." },
+        { role: "user", content: "Export times out at 30s" },
+        { role: "assistant", content: "I'll look up the account." },
+        { role: "tool", content: "{\"plan\":\"Pro\"}" },
+        { role: "tool", content: "{\"limit\":30}" },
+      ]),
+    } });
+    let { body } = await draft("span-o");
+    expect(body.messages).toEqual([
+      { role: "user", content: "Export times out at 30s" },
+      { role: "assistant", content: "I'll look up the account." },
+      { role: "user", content: "Tool result:\n{\"plan\":\"Pro\"}\n\nTool result:\n{\"limit\":30}" },
+    ]);
+    expect(body.warnings).toContain("2 tool results without a matching tool call were kept as user text.");
+
+    seed("draft-mcp", "span-m", { attributes: {
+      "gen_ai.provider.name": "openai", "gen_ai.request.model": "gpt-4.1-mini",
+      "gen_ai.tool.definitions": JSON.stringify([{ type: "function", name: "fs.read", parameters: { type: "object", properties: { path: { type: "string" } } } }]),
+      "gen_ai.input.messages": JSON.stringify([
+        { role: "user", parts: [{ type: "text", content: "x".repeat(100_000) }] },
+        { role: "assistant", parts: [{ type: "tool_call", id: "call.1", name: "fs.read", arguments: { path: "/a" } }] },
+        { role: "tool", parts: [{ type: "tool_call_response", id: "call.1", response: "file body" }] },
+        ...Array.from({ length: 4 }, (_, index) => [
+          { role: "user", parts: [{ type: "text", content: `${index}`.repeat(60_000) }] },
+          { role: "assistant", parts: [{ type: "text", content: "noted" }] },
+        ]).flat(),
+        { role: "user", parts: [{ type: "text", content: "Summarise" }] },
+      ]),
+    } });
+    ({ body } = await draft("span-m"));
+    expect(body.tools).toEqual([{ name: "fs_read", parameters: { type: "object", properties: { path: { type: "string" } } } }]);
+    expect(body.warnings).toEqual(expect.arrayContaining([
+      'The tool "fs.read" was renamed "fs_read" because providers accept only letters, digits, _ and - in tool names.',
+      "1 message was shortened to the Playground limit of 64000 characters.",
+      expect.stringMatching(/^The \d+ oldest messages were left out to fit the Playground limits\.$/),
+    ]));
+    expect(body.messages[body.messages.length - 1]).toEqual({ role: "user", content: "Summarise" });
+    expect(body.messages.every((item: { content: string }) => item.content.length <= 64_000)).toBe(true);
+    upstream = () => openAiText("Done");
+    const rerun = await post({ targets: [{ provider: body.provider, model: body.model }], system: body.system, messages: body.messages, params: body.params, tools: body.tools });
+    expect(rerun.status).toBe(200);
+
+    seed("draft-mcp-short", "span-ms", { attributes: {
+      "gen_ai.provider.name": "openai", "gen_ai.request.model": "gpt-4.1-mini",
+      "gen_ai.input.messages": JSON.stringify([
+        { role: "user", parts: [{ type: "text", content: "y".repeat(100_000) }] },
+        { role: "assistant", parts: [{ type: "tool_call", id: "call.1", name: "fs.read", arguments: { path: "/a" } }] },
+        { role: "tool", parts: [{ type: "tool_call_response", id: "call.1", response: "file body" }] },
+      ]),
+    } });
+    ({ body } = await draft("span-ms"));
+    expect(body.messages.slice(1)).toEqual([
+      { role: "assistant", content: "", toolCalls: [{ id: "call.1", name: "fs_read", arguments: { path: "/a" } }] },
+      { role: "tool", toolCallId: "call.1", content: "file body" },
+    ]);
+    const shortRun = await post({ targets: [{ provider: body.provider, model: body.model }], system: body.system, messages: body.messages, params: body.params, tools: body.tools });
+    expect(shortRun.status).toBe(200);
+  });
+
   test("reads legacy indexed GenAI prompts and refuses spans without a prompt", async () => {
     seed("draft-legacy", "span-l", { model: "gpt-4o-mini-2024-07-18", attributes: {
       "gen_ai.system": "openai", "gen_ai.request.model": "gpt-4o-mini", "gen_ai.request.temperature": 0,
