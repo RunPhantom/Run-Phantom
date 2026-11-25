@@ -40,6 +40,7 @@ interface Order {
   orderedOn: string;
   deliveredOn: string | null;
   daysSinceDelivery: number | null;
+  lossConfirmedOn?: string;
 }
 
 const ORDERS: Record<string, Order> = {
@@ -47,7 +48,7 @@ const ORDERS: Record<string, Order> = {
   A1002: { id: "A1002", customer: "Jonas Weber", item: "Linea desk lamp", sku: "LM-040", totalUsd: 54.5, status: "in_transit", orderedOn: "2026-11-20", deliveredOn: null, daysSinceDelivery: null },
   A1003: { id: "A1003", customer: "Priya Nair", item: "Trail running shoes", sku: "SH-325", totalUsd: 132, status: "delivered", orderedOn: "2026-09-28", deliveredOn: "2026-10-02", daysSinceDelivery: 54 },
   A1004: { id: "A1004", customer: "Sam Okafor", item: "Aero wireless headphones", sku: "HP-110", totalUsd: 89, status: "delivered", orderedOn: "2026-03-02", deliveredOn: "2026-03-06", daysSinceDelivery: 264 },
-  A1005: { id: "A1005", customer: "Lena Ortiz", item: "Studio monitor speakers", sku: "SP-900", totalUsd: 249, status: "lost_in_transit", orderedOn: "2026-11-03", deliveredOn: null, daysSinceDelivery: null },
+  A1005: { id: "A1005", customer: "Lena Ortiz", item: "Studio monitor speakers", sku: "SP-900", totalUsd: 249, status: "lost_in_transit", orderedOn: "2026-11-03", deliveredOn: null, daysSinceDelivery: null, lossConfirmedOn: "2026-11-18" },
 };
 
 const INVENTORY: Record<string, { name: string; available: number; restockDate: string | null }> = {
@@ -120,6 +121,7 @@ export function lookupOrder(args: Record<string, unknown>) {
   return {
     found: true, order_id: order.id, customer: order.customer, item: order.item, sku: order.sku, total_usd: order.totalUsd,
     status: order.status, ordered_on: order.orderedOn, delivered_on: order.deliveredOn, days_since_delivery: order.daysSinceDelivery,
+    ...(order.lossConfirmedOn ? { carrier_confirmed_loss_on: order.lossConfirmedOn } : {}),
   };
 }
 
