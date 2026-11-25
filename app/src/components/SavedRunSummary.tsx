@@ -46,7 +46,7 @@ export function SavedRunSummary({ event }: { event: SavedEvent }) {
     } finally { setBusy(false); setOpen(false); }
   };
   return (
-    <section aria-label="Saved run summary" className="flex flex-shrink-0 flex-col items-stretch gap-x-6 gap-y-2 border-b sm:flex-row sm:items-start border-rp-line bg-white px-5 py-3">
+    <section aria-label="Saved run summary" className="flex flex-shrink-0 flex-col items-stretch gap-x-6 gap-y-2 border-b sm:flex-row sm:items-start border-rp-line bg-rp-surface px-5 py-3">
       <div className="min-w-0 flex-1">
         <h2 className="rp-meta uppercase tracking-[0.12em]">Summary</h2>
         <p className="mt-1 text-[13px] leading-5 text-rp-ink">{event.summary || "No summary yet."}</p>

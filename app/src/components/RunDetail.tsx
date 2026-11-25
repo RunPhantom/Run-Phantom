@@ -950,7 +950,7 @@ function ViewHeader({
         <>
           <div data-run-header className="mb-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             <div data-run-header-title className="flex min-w-[12rem] flex-1 items-center gap-2">
-              {status.status === "live" && <span aria-hidden="true" className="pulse-dot size-2 flex-shrink-0 rounded-full bg-rp-success" />}
+              {status.status === "live" && <span aria-hidden="true" className="pulse-dot size-2 flex-shrink-0 rounded-full bg-rp-mark-success" />}
               {onFork && !active ? (
                 <InlineEdit value={displayTitle}
                   onConfirm={handleRename}
