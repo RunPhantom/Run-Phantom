@@ -7,6 +7,9 @@ property of their respective owners.
 This file is informational only. It does not change the repository license or
 grant rights to any third-party mark.
 
+Open-source projects whose ideas informed Run Phantom features, with their
+licences, are credited in [CREDITS.md](./CREDITS.md).
+
 ## Referenced Names
 
 | Name | Typical reference in this repo |

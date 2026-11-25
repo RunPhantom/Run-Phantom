@@ -6,6 +6,7 @@
 # AGENTS.md is the shipped coding-agent guide.
 !AGENTS.md
 !THIRD_PARTY_NOTICES.md
+!CREDITS.md
 # Named ahead of time so the standard OSS documents are not silently swallowed
 # by the default-deny above if they are ever added.
 !CONTRIBUTING.md
