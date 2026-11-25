@@ -17,6 +17,7 @@ import { useRuns } from "../hooks/use-runs";
 import { RunsTableView } from "../runs/RunsTableView";
 import { RunRail, useRailRows } from "../runs/RunRail";
 import { runsTablePath } from "../runs/last-search";
+import { isSampleRun } from "../runs/table-model";
 import { hasActiveFilters } from "../../../src/saved-views-protocol";
 
 const FIRST_TIME_SETUP_DISMISSED_KEY = "runphantom:firstTimeSetupDismissed";
@@ -35,24 +36,13 @@ function saveFirstTimeSetupDismissed(): void {
   } catch {}
 }
 
-function isDefaultDemoRun(run: Run): boolean {
-  if (run.id.startsWith("demo_")) return true;
-  if (!run.metadata) return false;
-  try {
-    const metadata = JSON.parse(run.metadata);
-    return metadata?.demo === true && metadata?.default === true;
-  } catch {
-    return false;
-  }
-}
-
 export function RunsPage() {
   const navigate = useNavigate();
   const { runId: routeRunId } = useParams<{ runId?: string }>();
   const selectedId = routeRunId ? safeDecodeParam(routeRunId) : null;
   const allRuns = useRuns();
   const [firstTimeSetupDismissed, setFirstTimeSetupDismissed] = useState(loadFirstTimeSetupDismissed);
-  const hasUserTraces = useMemo(() => (allRuns.data ?? []).some((run) => !isDefaultDemoRun(run)), [allRuns.data]);
+  const hasUserTraces = useMemo(() => (allRuns.data ?? []).some((run) => !isSampleRun(run)), [allRuns.data]);
 
   useEffect(() => {
     if (modelPricingConsentEnabled()) void fetchPrices();
