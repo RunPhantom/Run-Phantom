@@ -26,17 +26,17 @@ export interface ColumnMeta {
 }
 
 export const COLUMN_META: Record<RunsTableColumn, ColumnMeta> = {
-  status: { id: "status", label: "Status", align: "left", track: "minmax(164px, 0.6fr)" },
-  run: { id: "run", label: "Run", align: "left", track: "minmax(168px, 2fr)" },
-  agent: { id: "agent", label: "Agent", align: "left", track: "minmax(104px, 1fr)" },
-  input: { id: "input", label: "Input", align: "left", track: "minmax(72px, 1.3fr)" },
-  model: { id: "model", label: "Model", align: "left", track: "minmax(112px, 0.8fr)" },
+  status: { id: "status", label: "Status", align: "left", track: "minmax(172px, 0.6fr)" },
+  run: { id: "run", label: "Run", align: "left", track: "minmax(150px, 2fr)" },
+  agent: { id: "agent", label: "Agent", align: "left", track: "minmax(100px, 1fr)" },
+  input: { id: "input", label: "Input", align: "left", track: "minmax(64px, 1.3fr)" },
+  model: { id: "model", label: "Model", align: "left", track: "minmax(104px, 0.8fr)" },
   steps: { id: "steps", label: "Steps", align: "right", track: "60px" },
-  duration: { id: "duration", label: "Duration", sort: "duration", align: "right", track: "minmax(64px, 88px)" },
-  tokens: { id: "tokens", label: "Tokens in / out", header: "Tokens", sort: "tokens", align: "right", track: "minmax(88px, 96px)" },
-  cost: { id: "cost", label: "Cost", sort: "cost", align: "right", track: "minmax(92px, 100px)" },
-  errors: { id: "errors", label: "Errors", sort: "errors", align: "right", track: "60px" },
-  started: { id: "started", label: "Started", sort: "started_at", align: "right", track: "76px" },
+  duration: { id: "duration", label: "Duration", sort: "duration", align: "right", track: "minmax(76px, 88px)" },
+  tokens: { id: "tokens", label: "Tokens in / out", header: "Tokens", sort: "tokens", align: "right", track: "96px" },
+  cost: { id: "cost", label: "Cost", sort: "cost", align: "right", track: "minmax(100px, 104px)" },
+  errors: { id: "errors", label: "Errors", sort: "errors", align: "right", track: "64px" },
+  started: { id: "started", label: "Started", sort: "started_at", align: "right", track: "72px" },
 };
 
 export const CHECKBOX_TRACK_PX = 36;

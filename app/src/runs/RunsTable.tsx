@@ -290,7 +290,7 @@ function RunsTableRow({ row, index, columns, rowHeight, shortId, selected, activ
                 <Link to={runPath(row.id)} tabIndex={-1} data-run-name className="min-w-0 truncate font-medium text-rp-ink hover:text-rp-blue hover:underline" onClick={event => event.stopPropagation()}>
                   {name}
                 </Link>
-                <span className="rp-run-short-id shrink-0 font-mono text-[11px] text-rp-ink-subtle" title={row.id}>{shortId}</span>
+                <span className="rp-run-short-id min-w-0 max-w-[9ch] shrink-0 truncate font-mono text-[11px] text-rp-ink-subtle" title={row.id}>{shortId}</span>
                 {sample && <span className="shrink-0 rounded-sm border border-rp-line px-1 font-mono text-[11px] uppercase leading-4 tracking-[0.06em] text-rp-ink-subtle">Sample</span>}
               </div>
             );

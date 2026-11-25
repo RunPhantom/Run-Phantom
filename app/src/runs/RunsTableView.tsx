@@ -494,7 +494,7 @@ function RunCards({ rows, shortIds, flashIds, hasMore, loadingMore, onLoadMore, 
                 </span>
                 {row.input_preview && <span className="mt-1 block truncate text-[13px] text-rp-ink-muted">{row.input_preview}</span>}
                 <span className="mt-1 flex flex-wrap gap-x-3 font-mono text-[12px] tabular-nums text-rp-ink-muted">
-                  {row.agent && <span className="font-sans">{row.agent}</span>}
+                  {row.agent && row.agent !== runDisplayName(row) && <span className="font-sans">{row.agent}</span>}
                   {row.llm_calls === 0 ? <span className="font-sans">No model calls</span> : (
                     <>
                       <span title={model.title}>{model.unknown ? <span className="font-sans">Model unknown</span> : model.text}</span>
