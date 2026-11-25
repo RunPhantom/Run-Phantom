@@ -61,6 +61,7 @@ import {
   queryTracesBounded,
 } from "./db";
 import { StatsRequestError } from "./stats/common";
+import { computeOverview } from "./stats/overview";
 import { listRuns } from "./stats/runs-list";
 import { sliceSpanPayload } from "./payload-slice";
 import { startCodingHookOwner } from "./coding-hooks/owner";
@@ -1492,6 +1493,16 @@ export async function createServer(port: number, options: { comparisons?: Compar
       if (error instanceof StatsRequestError) { res.status(error.status).json({ error: error.message }); return; }
       console.error("[runphantom] Run list failed:", error);
       res.status(500).json({ error: "Run list unavailable" });
+    }
+  });
+  app.get("/api/overview", (req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(computeOverview(getDrizzleDb().$client, getDbPath(), req.query as Record<string, unknown>));
+    } catch (error) {
+      if (error instanceof StatsRequestError) { res.status(error.status).json({ error: error.message }); return; }
+      console.error("[runphantom] Overview failed:", error);
+      res.status(500).json({ error: "Overview unavailable" });
     }
   });
   for (const [resource, read] of [["search-hits", searchSpanHits], ["search-suggestions", searchSuggestions]] as const) app.get(`/api/runs/${resource}`, async (req, res) => {
