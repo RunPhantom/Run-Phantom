@@ -38,7 +38,7 @@ export function RepeatedTrials({ experiments, onOpen }: { experiments: Experimen
   }
   return <section aria-label="Repeated trial analysis" className="space-y-4">
     <h2 className="text-sm font-semibold">Repeated trials</h2>
-    <p className="text-xs text-[color:var(--rp-ink-soft)]">Check how stable results are across 2 to 20 finished experiments on the same dataset revision. Each experiment must use different runs for the same case.</p>
+    <p className="text-xs text-[color:var(--rp-ink-soft)]">Check how stable results are across 2 to 20 finished experiments. They must use the same dataset revision and the same rule versions, and each experiment must use different runs for the same case. The experiments are treated as repeated attempts; this does not show the attempts were independent of each other.</p>
     <fieldset className="max-h-64 space-y-2 overflow-y-auto"><legend className="mb-2 text-xs">{selected.length} of 20 selected</legend>
       {!experiments.length && <p className="text-xs">Finished experiments appear here.</p>}
       {experiments.map(item => <label key={item.id} className="flex items-start gap-2 text-xs"><input type="checkbox" className="mt-0.5" checked={selected.includes(item.id)} disabled={["queued", "running"].includes(item.status) || (!selected.includes(item.id) && selected.length === 20)} onChange={() => select(item.id)} /><span className="break-all">{item.name} <span className="text-rp-ink-muted">· r{item.datasetVersion} · {item.status}</span></span></label>)}
