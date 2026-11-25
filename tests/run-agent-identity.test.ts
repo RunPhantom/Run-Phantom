@@ -75,6 +75,18 @@ async function seed() {
     { id: "root", name: "lead_scorer.workflow", startMs: NOW - 80_000, endMs: NOW - 79_000, attributes: {
       "traceloop.span.kind": "workflow", "traceloop.entity.name": "lead_scorer", "traceloop.association.properties.event_name": "lead_scorer" } },
   ]));
+  // An HTTP root wraps the agent span; the event name is still a per-run title and the deeper researcher must not win.
+  await ingest(otlp(8, { "service.name": "concierge-api" }, [
+    { id: "root", name: "POST /chat", startMs: NOW - 90_000, endMs: NOW - 89_000, attributes: { "http.request.method": "POST", "runphantom.event.name": "Rebook a cancelled flight" } },
+    { id: "agent", parent: "root", name: "invoke_agent concierge-agent", startMs: NOW - 89_990, endMs: NOW - 89_010, attributes: { "gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "concierge-agent" } },
+    { id: "tool", parent: "agent", name: "execute_tool delegate_research", startMs: NOW - 89_900, endMs: NOW - 89_100, attributes: { "gen_ai.operation.name": "execute_tool" } },
+    { id: "sub", parent: "tool", name: "invoke_agent researcher", startMs: NOW - 89_890, endMs: NOW - 89_110, attributes: { "gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "researcher" } },
+  ]));
+  await ingest(otlp(9, { "service.name": "intake-api" }, [
+    { id: "root", name: "POST /intake", startMs: NOW - 100_000, endMs: NOW - 99_000, attributes: { "http.request.method": "POST", "runphantom.event.name": "New patient intake" } },
+    { id: "agent", parent: "root", name: "invoke_agent intake-agent", startMs: NOW - 99_990, endMs: NOW - 99_010, attributes: { "gen_ai.operation.name": "invoke_agent" } },
+    { id: "sub", parent: "agent", name: "invoke_agent researcher", startMs: NOW - 99_980, endMs: NOW - 99_020, attributes: { "gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "researcher" } },
+  ]));
 }
 
 const EXPECTED: Record<string, { agent: string; title: string }> = {
@@ -85,6 +97,8 @@ const EXPECTED: Record<string, { agent: string; title: string }> = {
   [traceId(5)]: { agent: "checkout-bot", title: "POST /chat" },
   [traceId(6)]: { agent: "triage_agent", title: "triage_agent" },
   [traceId(7)]: { agent: "lead_scorer", title: "lead_scorer" },
+  [traceId(8)]: { agent: "concierge-agent", title: "Rebook a cancelled flight" },
+  [traceId(9)]: { agent: "intake-agent", title: "New patient intake" },
 };
 
 beforeAll(async () => {
@@ -128,9 +142,9 @@ describe("one agent identity across the API", () => {
     type Overview = { byAgent: Array<{ agent: string | null; runs: number }>; recentFailures: Array<{ runId: string; name: string; agent: string | null }>; kpis: { activeAgents: { value: number } } };
     const overview = await json<Overview>("/api/overview?window=24h");
     expect(overview.byAgent.map(row => [row.agent, row.runs])).toEqual([
-      ["support-agent", 2], ["TriageAgent", 1], ["billing-agent", 1], ["checkout-bot", 1], ["lead_scorer", 1], ["triage_agent", 1],
+      ["support-agent", 2], ["TriageAgent", 1], ["billing-agent", 1], ["checkout-bot", 1], ["concierge-agent", 1], ["intake-agent", 1], ["lead_scorer", 1], ["triage_agent", 1],
     ]);
-    expect(overview.kpis.activeAgents.value).toBe(6);
+    expect(overview.kpis.activeAgents.value).toBe(8);
     expect(overview.recentFailures).toMatchObject([{ runId: traceId(2), name: "Refund a damaged order", agent: "support-agent" }]);
     const filtered = await json<Overview>("/api/overview?window=24h&agent=support-agent");
     expect(filtered.byAgent.map(row => [row.agent, row.runs])).toEqual([["support-agent", 2]]);
@@ -154,5 +168,18 @@ describe("one agent identity across the API", () => {
     } finally {
       await client.close(); await mcp.close();
     }
+  });
+
+  test("an agent name over the hint limit is cut the same way by the run list and search", async () => {
+    const long = `${"agent-".repeat(200)}😀${"x".repeat(400)}`;
+    await ingest(otlp(10, { "service.name": "long-names" }, [
+      { id: "root", name: "invoke_agent", startMs: NOW - 5_000, endMs: NOW - 4_000, attributes: { "gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": long } },
+    ]));
+    const listed = (await json<Array<{ id: string; agent: string | null }>>("/api/runs")).find(row => row.id === traceId(10))!.agent!;
+    const searched = (await json<{ runs: Array<{ id: string; agent: string | null }> }>("/api/runs/search")).runs.find(row => row.id === traceId(10))!.agent;
+    expect([...listed]).toHaveLength(1024);
+    expect(long.startsWith(listed)).toBe(true);
+    expect(searched).toBe(listed);
+    expect((await json<Array<{ id: string }>>(`/api/runs?agent=${encodeURIComponent(searched!)}`)).map(row => row.id)).toEqual([traceId(10)]);
   });
 });

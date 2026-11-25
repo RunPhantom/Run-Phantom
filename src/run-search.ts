@@ -217,6 +217,7 @@ const unavailableSnippet = (): SearchSnippet => ({ state: "unavailable", text: "
 const asciiLower = (value: string) => value.replace(/[A-Z]/g, character => character.toLowerCase());
 /** Byte budget reserved per ranked row for the public match object. */
 export const RUN_MATCH_BYTES = 1536;
+const AGENT_IDS_MARKER = "/*run ids*/";
 
 function windowSnippet(window: string, cutLeft: boolean, cutRight: boolean, q: string, maxChars: number): SearchSnippet {
   // A window that starts with "{" or "[" but was cut is not JSON. The prefix
@@ -275,7 +276,7 @@ export async function searchRuns(value: unknown = {}, options: ExecutionOptions 
   const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(1, Math.min(RUN_SEARCH_LIMITS.timeoutMs, options.timeoutMs!)) : RUN_SEARCH_LIMITS.timeoutMs;
   const maxBytes = Number.isFinite(options.maxBytes) ? Math.max(1024, Math.min(RUN_SEARCH_LIMITS.responseBytes, options.maxBytes!)) : RUN_SEARCH_LIMITS.responseBytes;
   const cancellation = new SharedArrayBuffer(4);
-  const workerData: RunSearchWork = { ...buildQuery(input), matchBytes: RUN_MATCH_BYTES, agentSql: rootAgentHintsSql("?"), dbPath, cursorKey: input.cursorKey, limit: input.limit, maxBytes, started, deadline: started + timeoutMs, cancellation };
+  const workerData: RunSearchWork = { ...buildQuery(input), matchBytes: RUN_MATCH_BYTES, agentSql: rootAgentHintsSql(AGENT_IDS_MARKER), agentIdsMarker: AGENT_IDS_MARKER, dbPath, cursorKey: input.cursorKey, limit: input.limit, maxBytes, started, deadline: started + timeoutMs, cancellation };
   let worker: Worker;
   try { worker = new Worker(`(${runSearchWorker.toString()})()`, { eval: true, workerData }); }
   catch (error) { release(); throw error; }

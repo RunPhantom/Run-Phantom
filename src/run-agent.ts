@@ -16,7 +16,12 @@ export const SERVICE_NAME_KEY = "service.name";
 export const AGENT_HINT_ATTRIBUTE_BYTES = 3 * 64 * 1024;
 
 export interface RootAgentHints {
-  /** First non-empty explicit agent attribute among the run's root spans, in start order. */
+  /**
+   * First non-empty explicit agent attribute among the run's root spans, in
+   * start order; failing that, among agent-typed direct children of a root
+   * (an HTTP or workflow root wrapping "invoke_agent X"), whose attribute or
+   * "invoke_agent X" span name counts. Deeper sub-agents never count.
+   */
   readonly agentName: string | null;
   readonly serviceName: string | null;
   readonly agentRootName: string | null;
@@ -28,9 +33,16 @@ export interface RootSpanForAgent {
   readonly name: string | null;
   readonly span_type: string | null;
   readonly attributes: Readonly<Record<string, unknown>> | null;
+  /** An AGENT_ROOT span whose parent is a root span, rather than a root itself. */
+  readonly child?: boolean;
 }
 
-const text = (value: unknown): string | null => typeof value === "string" && value.trim() ? value.trim() : null;
+/** Hint values are cut to this many characters, as rootAgentHintsSql cuts them, so every caller sees the same agent. */
+export const AGENT_HINT_CHARS = 1024;
+/** The longest derived agent in UTF-16 units, which agent filters must accept. */
+export const AGENT_FILTER_CHARS = 2 * AGENT_HINT_CHARS;
+
+const text = (value: unknown): string | null => typeof value === "string" && value.trim() ? [...value.trim()].slice(0, AGENT_HINT_CHARS).join("").trim() || null : null;
 
 /** OpenTelemetry GenAI names agent spans "invoke_agent {gen_ai.agent.name}"; a bare "invoke_agent" names no agent. */
 function agentSpanName(name: string | null): string | null {
@@ -40,16 +52,23 @@ function agentSpanName(name: string | null): string | null {
   return match ? text(match[1]) : trimmed;
 }
 
-/** Roots must be in start order (start time, then id), as the run list reads them. */
-export function rootAgentHints(roots: readonly RootSpanForAgent[]): RootAgentHints {
+const explicitAgent = (attributes: Readonly<Record<string, unknown>> | null) => AGENT_NAME_KEYS.map(key => text(attributes?.[key])).find(Boolean) ?? null;
+
+/** Spans must be in start order (start time, then id), as the run list reads them. */
+export function rootAgentHints(spans: readonly RootSpanForAgent[]): RootAgentHints {
+  const roots = spans.filter(span => !span.child);
   let agentName: string | null = null;
   let serviceName: string | null = null;
   for (const root of roots) {
-    const attributes = root.attributes ?? {};
-    agentName ??= AGENT_NAME_KEYS.map(key => text(attributes[key])).find(Boolean) ?? null;
-    const service = text(attributes[SERVICE_NAME_KEY]);
+    agentName ??= explicitAgent(root.attributes);
+    const service = text(root.attributes?.[SERVICE_NAME_KEY]);
     // OpenTelemetry SDKs fall back to "unknown_service[:process]" when no service is configured.
     if (service && !service.startsWith("unknown_service")) serviceName ??= service;
+  }
+  for (const child of spans) {
+    if (agentName) break;
+    if (!child.child || child.span_type !== "AGENT_ROOT") continue;
+    agentName = explicitAgent(child.attributes) ?? (/^invoke_agent\s/.test(child.name?.trim() ?? "") ? agentSpanName(child.name) : null);
   }
   const first = roots[0];
   return { agentName, serviceName, agentRootName: first?.span_type === "AGENT_ROOT" ? agentSpanName(first.name) : null };
@@ -65,7 +84,8 @@ export interface RunAgentEvidence {
 
 /**
  * Priority:
- * 1. an explicit agent attribute on a root span (`gen_ai.agent.name`, `agent.name`);
+ * 1. an explicit agent attribute on a root span (`gen_ai.agent.name`, `agent.name`),
+ *    else on an agent span directly under a root (see RootAgentHints.agentName);
  * 2. `runphantom.event.name` without a `replay:` prefix;
  * 3. once the run has finished, the name of an agent-typed root span;
  * 4. `service.name`, unless it is an SDK default;
@@ -87,26 +107,28 @@ export function deriveRunAgent(run: RunAgentEvidence): string | null {
 const jsonPath = (key: string) => `'$."${key}"'`;
 
 /**
- * Root spans with the attributes deriveRunAgent reads, extracted in SQL so
- * callers need not load whole attribute blobs. Only text values count, as in
- * rootAgentHints; each is cut to 1024 characters to bound responses.
+ * Root spans, and AGENT_ROOT spans directly under a root, with the attributes
+ * deriveRunAgent reads, extracted in SQL so callers need not load whole
+ * attribute blobs. Only text values count, as in rootAgentHints.
  */
 export function rootAgentHintsSql(runIdsPlaceholder: string): string {
-  const guard = `octet_length(attributes) <= ${AGENT_HINT_ATTRIBUTE_BYTES} AND json_valid(attributes)`;
-  const extract = (key: string, alias: string) => `CASE WHEN ${guard} AND json_type(attributes, ${jsonPath(key)}) = 'text' THEN substr(json_extract(attributes, ${jsonPath(key)}), 1, 1024) END AS ${alias}`;
-  return `SELECT run_id, substr(name, 1, 1024) AS name, span_type, ${AGENT_NAME_KEYS.map((key, index) => extract(key, `agent_${index}`)).join(", ")}, ${extract(SERVICE_NAME_KEY, "service_name")}
-    FROM spans WHERE parent_span_id IS NULL AND run_id IN (${runIdsPlaceholder})
-    ORDER BY run_id, start_time_ms IS NULL, start_time_ms, id`;
+  const guard = `octet_length(s.attributes) <= ${AGENT_HINT_ATTRIBUTE_BYTES} AND json_valid(s.attributes)`;
+  const extract = (key: string, alias: string) => `CASE WHEN ${guard} AND json_type(s.attributes, ${jsonPath(key)}) = 'text' THEN substr(json_extract(s.attributes, ${jsonPath(key)}), 1, ${AGENT_HINT_CHARS}) END AS ${alias}`;
+  return `SELECT s.run_id, substr(s.name, 1, ${AGENT_HINT_CHARS}) AS name, s.span_type, s.parent_span_id IS NOT NULL AS child,
+      ${AGENT_NAME_KEYS.map((key, index) => extract(key, `agent_${index}`)).join(", ")}, ${extract(SERVICE_NAME_KEY, "service_name")}
+    FROM spans s WHERE s.run_id IN (${runIdsPlaceholder}) AND (s.parent_span_id IS NULL OR (s.span_type = 'AGENT_ROOT'
+      AND EXISTS (SELECT 1 FROM spans p WHERE p.run_id = s.run_id AND p.id = s.parent_span_id AND p.parent_span_id IS NULL)))
+    ORDER BY s.run_id, s.start_time_ms IS NULL, s.start_time_ms, s.id`;
 }
 
-export interface RootAgentHintRow { run_id: string; name: string | null; span_type: string | null; service_name: unknown; [key: string]: unknown }
+export interface RootAgentHintRow { run_id: string; name: string | null; span_type: string | null; child: number | boolean; service_name: unknown; [key: string]: unknown }
 
 /** Rows of rootAgentHintsSql for one run, in the order the query returns them. */
 export function hintsFromRows(rows: readonly RootAgentHintRow[]): RootAgentHints {
   return rootAgentHints(rows.map(row => {
     const attributes: Record<string, unknown> = { [SERVICE_NAME_KEY]: row.service_name };
     AGENT_NAME_KEYS.forEach((key, index) => { attributes[key] = row[`agent_${index}`]; });
-    return { name: row.name, span_type: row.span_type, attributes };
+    return { name: row.name, span_type: row.span_type, attributes, child: Boolean(row.child) };
   }));
 }
 

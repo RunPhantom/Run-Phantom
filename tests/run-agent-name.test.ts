@@ -40,3 +40,22 @@ test("a run whose root was never captured has no agent yet", () => {
   expect(agent(null, null, 1)).toBeNull();
   expect(agent(null, "support-agent", 0, [root("support-agent")])).toBeNull();
 });
+
+test("an agent span directly under an HTTP or workflow root names the agent", () => {
+  const http = root("POST /chat", { "service.name": "concierge-api" }, "INTERNAL");
+  const child = (name: string, attributes: Record<string, unknown> = {}, span_type = "AGENT_ROOT"): RootSpanForAgent => ({ name, span_type, attributes, child: true });
+  expect(agent("Rebook a cancelled flight", "POST /chat", 1, [http, child("invoke_agent concierge-agent", { "gen_ai.agent.name": "concierge-agent" })])).toBe("concierge-agent");
+  expect(agent("Rebook a cancelled flight", "POST /chat", 1, [http, child("Concierge", { "agent.name": "concierge-agent" })])).toBe("concierge-agent");
+  expect(agent("New patient intake", "POST /intake", 1, [http, child("invoke_agent intake-agent")])).toBe("intake-agent");
+  expect(agent("New patient intake", "POST /intake", 1, [http, child("Intake")])).toBe("New patient intake");
+  expect(agent("Title", "POST /chat", 1, [http, child("invoke_agent", { "gen_ai.agent.name": "x" }, "TOOL_CALL")])).toBe("Title");
+  expect(agent(null, "POST /chat", 1, [root("POST /chat", { "gen_ai.agent.name": "root-agent" }, "INTERNAL"), child("invoke_agent other", { "gen_ai.agent.name": "other" })])).toBe("root-agent");
+  expect(agent(null, "POST /chat", 1, [http, child("invoke_agent first"), child("invoke_agent second", { "gen_ai.agent.name": "second" })])).toBe("first");
+  expect(rootAgentHints([http, child("invoke_agent concierge-agent", { "service.name": "agent-service" })]).serviceName).toBe("concierge-api");
+});
+
+test("hint values are cut to 1024 characters without splitting a character", () => {
+  const long = `${"a".repeat(1023)}😀tail`;
+  expect(agent(null, "x", 1, [root("x", { "gen_ai.agent.name": long })])).toBe(`${"a".repeat(1023)}😀`);
+  expect(agent(long, "x", 0)).toBe(`${"a".repeat(1023)}😀`);
+});
