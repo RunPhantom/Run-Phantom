@@ -11,9 +11,8 @@ test("Evaluate run opens Evaluations with that run preselected as the source of 
   await expect(page.getByRole("link", { name: "Reported completion evidence" })).toHaveCount(0);
   await page.getByRole("button", { name: "More actions", exact: true }).click();
   await expect(page.getByRole("menuitem", { name: "Attach test report", exact: true })).toBeVisible();
-  await page.keyboard.press("Escape");
-
-  await page.getByRole("link", { name: "Evaluate run", exact: true }).click();
+  await expect(page.getByRole("menuitem", { name: "Evaluate run", exact: true })).toBeVisible();
+  await page.getByRole("menuitem", { name: "Evaluate run", exact: true }).click();
   const linked = page.getByRole("region", { name: "Run to evaluate", exact: true });
   await expect(linked).toContainText("as a regression case");
   await expect(linked).toContainText("Create a dataset first");

@@ -4,7 +4,9 @@ import { seedRunPhantomFixtures } from "./helpers";
 const RUN = "00000000000000000000000000000003";
 const LAST = "consider backoff.";
 
-for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+// The fixture conversation has to overflow its panel; at 1440x900 the compact
+// run header leaves it enough room to fit, so the desktop case uses a shorter window.
+for (const viewport of [{ width: 1440, height: 640 }, { width: 390, height: 844 }]) {
   test(`run detail scroll-to-bottom button never covers the last message at ${viewport.width}px`, async ({ page, runPhantom }) => {
     await seedRunPhantomFixtures(runPhantom.url);
     await page.setViewportSize(viewport);

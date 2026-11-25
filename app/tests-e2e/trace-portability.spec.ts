@@ -1,6 +1,12 @@
 import { readFileSync } from "node:fs";
+import type { Page } from "@playwright/test";
 import { test, expect, REPO_ROOT_PATH } from "./fixtures";
 import { withPortableDestination } from "./portable-destination";
+
+async function openRunMenuItem(page: Page, name: string) {
+  await page.getByRole("button", { name: "More actions", exact: true }).click();
+  await page.getByRole("menuitem", { name, exact: true }).click();
+}
 
 test("portable trace: download annotated failure, import in another local store, inspect and download it again", async ({ page, request, runPhantom }, testInfo) => {
   await withPortableDestination(REPO_ROOT_PATH, async target => {
@@ -20,7 +26,7 @@ test("portable trace: download annotated failure, import in another local store,
     await page.goto(`${runPhantom.url}/runs/${runId}`);
     await expect(page.getByText("Portable reviewer note", { exact: true })).toBeVisible();
     const downloadPromise = page.waitForEvent("download");
-    await page.getByRole("button", { name: "Download", exact: true }).click();
+    await openRunMenuItem(page, "Download");
     const downloaded = await downloadPromise;
     const file = await downloaded.path();
     if (!file) throw new Error("Trace download has no file");
@@ -49,7 +55,7 @@ test("portable trace: download annotated failure, import in another local store,
     await expect(page.getByRole("img", { name: "issue annotation from You: Inspect captured payment input", exact: true })).toBeVisible();
 
     const secondDownload = page.waitForEvent("download");
-    await page.getByRole("button", { name: "Download", exact: true }).click();
+    await openRunMenuItem(page, "Download");
     const secondFile = await (await secondDownload).path();
     if (!secondFile) throw new Error("Imported trace download has no file");
     expect(JSON.parse(readFileSync(secondFile, "utf8"))).toEqual(sourceExport);
@@ -76,13 +82,13 @@ test("portable trace: saved cached evidence remains downloadable after clearing 
   await expect(page.getByRole("button", { name: "Saved", exact: true })).toBeVisible();
   // Opening Saved persists the detail cache used when the live store is cleared.
   await page.goto(`${runPhantom.url}/saved/${runId}`);
-  await expect(page.getByRole("button", { name: "Download", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "More actions", exact: true })).toBeVisible();
   await expect.poll(async () => (await request.get(`${runPhantom.url}/api/saved-runs/cache/${runId}`)).status()).toBe(200);
   expect((await request.post(`${runPhantom.url}/api/clear`)).ok()).toBe(true);
   await page.goto(`${runPhantom.url}/saved/${runId}`);
-  await expect(page.getByRole("button", { name: "Download", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "More actions", exact: true })).toBeVisible();
   const pending = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Download", exact: true }).click();
+  await openRunMenuItem(page, "Download");
   const file = await (await pending).path();
   if (!file) throw new Error("Saved trace download has no file");
   const evidence = JSON.parse(readFileSync(file, "utf8"));

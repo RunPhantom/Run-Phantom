@@ -1,20 +1,41 @@
 import { isActive } from "../utils/helpers";
 import { messagesFromSpan } from "../utils/messageParsing";
-import type { Run, Span } from "../utils/types";
+import type { Run, Span, SubAgent } from "../utils/types";
+
+/** `owner` maps each of the agent's spans to its root, for the card's focus requests. */
+export type ConvoToolItem = { kind: "tool"; span: Span } | { kind: "sub_agent"; agent: SubAgent; owner: Map<string, string> };
 
 /** A single event in the conversation stream */
 export type ConvoEvent =
   | { type: "turn_start"; turnIndex: number; run: Run; time: number }
   | { type: "user_msg"; content: string; time: number; turnIndex: number }
-  | { type: "tool_group"; spans: Span[]; time: number; turnIndex: number }
+  | { type: "tool_group"; spans: Span[]; items: ConvoToolItem[]; turnSpans: Span[]; time: number; turnIndex: number }
   | { type: "llm_out"; content: string; time: number; turnIndex: number }
   | { type: "active"; time: number; turnIndex: number };
 
-export function buildConvoEvents(turns: { run: Run; spans: Span[] }[]): ConvoEvent[] {
+/**
+ * A sub-agent's own steps belong under its card, not in the parent's
+ * transcript. Only outermost agents get a card; a nested agent is part of its
+ * parent's work.
+ */
+function outermostAgents(subAgents: readonly SubAgent[]): { agents: SubAgent[]; members: Set<string> } {
+  const inner = new Set<string>();
+  for (const agent of subAgents) for (const id of agent.span_ids) if (id !== agent.root_span_id) inner.add(id);
+  const agents = subAgents.filter(agent => !inner.has(agent.root_span_id));
+  const members = new Set<string>();
+  for (const agent of agents) for (const id of agent.span_ids) if (id !== agent.root_span_id) members.add(id);
+  return { agents, members };
+}
+
+export function buildConvoEvents(turns: { run: Run; spans: Span[]; subAgents?: readonly SubAgent[] }[]): ConvoEvent[] {
   const events: ConvoEvent[] = [];
 
   for (let i = 0; i < turns.length; i++) {
-    const { run, spans } = turns[i];
+    const { run, spans: turnSpans, subAgents = [] } = turns[i];
+    const { agents, members } = outermostAgents(subAgents);
+    const agentRoots = new Map(agents.map(agent => [agent.root_span_id, agent]));
+    const subAgentItem = (agent: SubAgent): ConvoToolItem => ({ kind: "sub_agent", agent, owner: new Map(agent.span_ids.map(id => [id, agent.root_span_id])) });
+    const spans = members.size ? turnSpans.filter(span => !members.has(span.id)) : turnSpans;
 
     events.push({ type: "turn_start", turnIndex: i, run, time: run.started_at });
 
@@ -56,8 +77,17 @@ export function buildConvoEvents(turns: { run: Run; spans: Span[] }[]): ConvoEve
       events.push({ type: "user_msg", content: userMsg, time: run.started_at + 1, turnIndex: i });
     }
 
-    if (toolSpans.length > 0) {
-      events.push({ type: "tool_group", spans: toolSpans, time: toolSpans[0].start_time_ms, turnIndex: i });
+    const items: ConvoToolItem[] = toolSpans.map(span => {
+      const agent = agentRoots.get(span.id);
+      return agent ? subAgentItem(agent) : { kind: "tool", span };
+    });
+    for (const agent of agents) {
+      if (!toolSpans.some(span => span.id === agent.root_span_id)) items.push(subAgentItem(agent));
+    }
+    if (items.length > 0) {
+      const start = (item: ConvoToolItem) => item.kind === "tool" ? item.span.start_time_ms : item.agent.start_time_ms;
+      items.sort((a, b) => start(a) - start(b));
+      events.push({ type: "tool_group", spans: toolSpans, items, turnSpans, time: start(items[0]!), turnIndex: i });
     }
 
     // Mirror image: the LAST LLM call is the one that produced the answer. `.find`

@@ -1,0 +1,88 @@
+/* Span-kind palette from design-direction.md section 9, checked with the dataviz
+   palette validator in light and dark: worst colour-vision-deficiency delta-E
+   11.4 / 12.3, every hue at least 59 degrees from --rp-danger, 3:1 on the surface. */
+:root {
+  --rp-trace-llm: #2747E8;
+  --rp-trace-tool: #0F8C7C;
+  --rp-trace-agent: #8A5CE6;
+  --rp-trace-other: #B7C0D4;
+  --rp-trace-search-hit: #FFF1C2;
+}
+:root[data-theme="dark"] {
+  --rp-trace-llm: #5B74F5;
+  --rp-trace-tool: #169C8A;
+  --rp-trace-agent: #9271EE;
+  --rp-trace-other: #3A4252;
+  --rp-trace-search-hit: #4A3A0A;
+}
+
+[data-trace-root] [data-span-row] {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 28px;
+}
+
+[data-trace-root] [data-span-row]:focus-visible {
+  outline: 2px solid var(--rp-blue);
+  outline-offset: -2px;
+}
+
+.rp-trace-bar-error {
+  background-color: var(--rp-span-error-fill);
+  background-image: var(--rp-span-error-hatch);
+  box-shadow: inset 0 0 0 1px var(--rp-danger);
+}
+
+.rp-trace-mark {
+  background: var(--rp-trace-search-hit);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.rp-trace-brush {
+  background: color-mix(in srgb, var(--rp-blue) 14%, transparent);
+  box-shadow: inset 1px 0 0 var(--rp-blue), inset -1px 0 0 var(--rp-blue);
+}
+
+.rp-drawer-handle {
+  touch-action: none;
+}
+.rp-drawer-handle::after {
+  content: "";
+  position: absolute;
+  inset: 0 1px;
+  background: transparent;
+  transition: background-color var(--rp-motion-fast, 120ms) ease-out;
+}
+.rp-drawer-handle:hover::after,
+.rp-drawer-handle:focus-visible::after,
+.rp-drawer-handle[data-dragging]::after {
+  background: var(--rp-blue);
+}
+.rp-drawer-handle:focus-visible {
+  outline: none;
+}
+
+@keyframes rp-sheet-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+.rp-sheet-in {
+  animation: rp-sheet-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .rp-sheet-in { animation: none; }
+}
+html[data-nav="key"] .rp-sheet-in { animation: none; }
+
+/* The title row is measured as a container so Save and Debug drop their
+   labels (keeping their accessible names) before the run title has to
+   truncate: at 1280 wide the row is about 740px. */
+.rp-run-header {
+  container-type: inline-size;
+}
+@container (max-width: 860px) {
+  .rp-run-header [data-action-label] {
+    display: none;
+  }
+}

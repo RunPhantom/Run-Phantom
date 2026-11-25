@@ -2,7 +2,7 @@ import { CaptureVisibilityDetails } from "./CaptureVisibilityDetails";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Pencil } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { argsPreview, displayPayload, fmt, MAX_INLINE_PAYLOAD, plural, spanErrorReason, trunc, tryJson } from "../utils/helpers";
+import { argsPreview, compactTokens, displayPayload, fmt, MAX_INLINE_PAYLOAD, plural, spanErrorReason, trunc, tryJson } from "../utils/helpers";
 import { parseSpanAttributes, spanFinishReasons, spanReasoningTokens, stoppedEarlyReason } from "../utils/span-evidence";
 import type { LiveEvent, Span, SubAgent } from "../utils/types";
 import { Button } from "./Button";
@@ -14,6 +14,10 @@ import { ToolCallPill } from "./ToolCallPill";
 import { extractLiveToolArgs } from "./chat-flow-live";
 import { useSmoothText } from "../hooks/use-smooth-text";
 import { canEditReplayMessage } from "../utils/messageParsing";
+import { spanCost } from "../../../src/pricing/span-cost";
+import { fmtCost } from "../utils/costs";
+import { countedLlmSpans } from "./run-detail/trace-model";
+import { looksLikeMarkdown, markdownPreview } from "./run-detail/span-details";
 
 type ToolGroupItem = { type: "tool"; span: Span } | { type: "sub_agent"; agent: SubAgent };
 type LiveToolItem =
@@ -71,7 +75,7 @@ function PreviousMessages({ messages }: { messages: { role: string; content: str
   );
 }
 
-function SubAgentBlock({ agent, spans, subAgentBySpan, onDiveIn }: { agent: SubAgent; spans: Span[]; subAgentBySpan: Map<string, string>; onDiveIn?: (id: string) => void }) {
+export function SubAgentBlock({ agent, spans, subAgentBySpan, onDiveIn }: { agent: SubAgent; spans: Span[]; subAgentBySpan: Map<string, string>; onDiveIn?: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -83,8 +87,24 @@ function SubAgentBlock({ agent, spans, subAgentBySpan, onDiveIn }: { agent: SubA
   const agentToolSpans = spans.filter(s => agentSpanSet.has(s.id) && s.span_type === "TOOL_CALL" && s.id !== a.root_span_id);
   // Find sub-agent LLM spans for input/output (agent.subagent or nested generateText)
   const agentLLMs = spans.filter(s => agentSpanSet.has(s.id) && s.span_type?.includes("LLM") && s.id !== a.root_span_id);
-  const agentInput = agentLLMs.find(s => s.input_payload)?.input_payload ?? rootSpan?.input_payload;
-  const agentOutput = agentLLMs.find(s => s.output_payload);
+  const agentInput = agentLLMs.find(s => s.normalized?.kind === "llm" && s.normalized.userMessage)?.normalized
+    ?? null;
+  const inputText = agentInput?.kind === "llm" ? agentInput.userMessage : (agentLLMs.find(s => s.input_payload)?.input_payload ?? rootSpan?.input_payload);
+  const agentOutput = [...agentLLMs].reverse().find(s => s.output_payload);
+  const usage = useMemo(() => {
+    const members = new Set(a.span_ids);
+    const calls = countedLlmSpans(spans.filter(s => members.has(s.id) && s.id !== a.root_span_id));
+    let known = 0, unknown = 0, estimated = false;
+    for (const call of calls) {
+      const cost = spanCost(call);
+      if (cost.usd == null) unknown++;
+      else { known += cost.usd; if (cost.source === "list-price") estimated = true; }
+    }
+    return { calls: calls.length, known, unknown, estimated };
+  }, [spans, a.root_span_id, a.span_ids]);
+  const tokens = a.total_input_tokens + a.total_output_tokens;
+  const costText = usage.calls === 0 || usage.unknown === usage.calls ? null
+    : `${fmtCost(usage.known)}${usage.unknown ? "+" : ""}${usage.estimated ? " est." : ""}`;
 
   useEffect(() => {
     if (open && btnRef.current) {
@@ -139,7 +159,7 @@ function SubAgentBlock({ agent, spans, subAgentBySpan, onDiveIn }: { agent: SubA
       >
         <span className="rounded-sm bg-rp-wash px-1 py-0.5 font-mono text-[10px] font-medium uppercase leading-none tracking-[0.08em] text-rp-blue">agent</span>
         <span className="text-rp-ink">{a.name}</span>
-        <span className="rp-num text-[11px] text-rp-ink-muted">{plural(a.tool_count, "tool")} &middot; {fmt(a.duration_ms)}</span>
+        <span className="rp-num text-[11px] text-rp-ink-muted">{plural(a.tool_count, "tool")} &middot; {fmt(a.duration_ms)}{tokens > 0 && <> &middot; {compactTokens(tokens)} tok</>}{costText && <> &middot; {costText}</>}</span>
         <Chevron open={open} size={10} />
       </button>
 
@@ -153,10 +173,10 @@ function SubAgentBlock({ agent, spans, subAgentBySpan, onDiveIn }: { agent: SubA
           >
             <div className="p-3 space-y-2 overflow-auto sb flex-1 min-h-0">
               {/* Input — shown as a user-message bubble */}
-              {agentInput && (
+              {inputText && (
                 <div className="flex justify-end">
                   <div className="max-w-[90%] rounded-md border border-rp-line bg-rp-canvas-blue px-2.5 py-1.5">
-                    <pre className="whitespace-pre-wrap font-sans text-[12px] leading-snug text-rp-ink">{trunc(agentInput, 150)}</pre>
+                    <pre className="whitespace-pre-wrap font-sans text-[12px] leading-snug text-rp-ink">{trunc(inputText, 150)}</pre>
                   </div>
                 </div>
               )}
@@ -176,7 +196,9 @@ function SubAgentBlock({ agent, spans, subAgentBySpan, onDiveIn }: { agent: SubA
               {agentOutput?.output_payload && (
                 <div>
                   <div className="mb-1 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted">Output</div>
-                  <pre className="whitespace-pre-wrap font-sans text-[12px] leading-relaxed text-rp-ink">{trunc(agentOutput.output_payload, 150)}</pre>
+                  {looksLikeMarkdown(agentOutput.output_payload)
+                    ? <div className="text-[12px] leading-relaxed text-rp-ink [&_p]:my-1"><Markdown>{markdownPreview(agentOutput.output_payload)}</Markdown></div>
+                    : <pre className="whitespace-pre-wrap font-sans text-[12px] leading-relaxed text-rp-ink">{trunc(agentOutput.output_payload, 150)}</pre>}
                 </div>
               )}
 
@@ -194,6 +216,7 @@ function SubAgentBlock({ agent, spans, subAgentBySpan, onDiveIn }: { agent: SubA
                 {a.llm_count} LLM &middot; {plural(a.tool_count, "tool")} &middot; {fmt(a.duration_ms)}
                 {a.total_input_tokens > 0 && <> &middot; {a.total_input_tokens.toLocaleString()} in</>}
                 {a.total_output_tokens > 0 && <> &middot; {a.total_output_tokens.toLocaleString()} out</>}
+                {costText && <> &middot; {costText}</>}
               </div>
             </div>
           </div>

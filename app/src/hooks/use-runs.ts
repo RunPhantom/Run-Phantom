@@ -80,6 +80,7 @@ export function useConversationDetail(convoId: string | null | undefined) {
     turns: runs.map((run, index) => ({
       run,
       spans: detailQueries[index]?.data?.spans ?? [],
+      subAgents: detailQueries[index]?.data?.subAgents ?? [],
     })),
     runIds: runs.map(run => run.id),
     isLoading: runsQuery.isLoading || detailQueries.some(query => query.isLoading),

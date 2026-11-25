@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { flushSync } from "react-dom";
-import { isRunDeleting, setRunDeleting, subscribeRunDeletions, setRunDeletionError, useRunDeletionError, useRunDeletions } from "../hooks/use-runs";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { isRunDeleting, subscribeRunDeletions } from "../hooks/use-runs";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   runPath,
   runViewFromPathname,
@@ -11,7 +10,6 @@ import {
   traceSpansPath,
   type TraceRouteBase,
 } from "../utils/navigation";
-import NumberFlow from "@number-flow/react";
 import { StickToBottom, useStickToBottomContext, type StickToBottomContext } from "use-stick-to-bottom";
 import { Dots } from "./Icons";
 import { Button } from "./Button";
@@ -19,22 +17,21 @@ import { ChatFlow } from "./ChatFlow";
 import { SpanTree } from "./SpanTree";
 import { ConvoDetail } from "./ConvoDetail";
 import { SavePopover } from "./SavePopover";
-import { RotateCcw, Bookmark, Download, Pencil, ChevronDown, ArrowDown, ChevronRight, MessageCircle, SearchX, ArrowUpRight } from "lucide-react";
+import { RotateCcw, Bookmark, Pencil, ChevronDown, ArrowDown, MessageCircle, AlertTriangle } from "lucide-react";
 import { LocalAgentSetupCTA, SetupReplayModal } from "./LocalAgentSetupCTA";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
 import { Badge as UiBadge, badgeVariants } from "@/components/ui/badge";
 import { fieldClassName } from "@/components/ui/input";
-import { fmt, plural, runDisplayName, runStatusTone, isoTimestamp, safeDecodeParam, spanErrorReason } from "../utils/helpers";
+import { runDisplayName, runStatusTone, isoTimestamp, safeDecodeParam } from "../utils/helpers";
 import { deriveRunStatus, runErrorEvidenceFromSpans, runInProgress, RUN_QUIET_AFTER_MS, type RunStatusEvidence, type RunStatusSummary } from "../../../src/run-status";
 import { useRunStatus } from "../hooks/use-run-status";
 import { localRunSummary } from "../utils/run-summary";
 import { buildReplayModelOptions } from "../utils/replay-models";
 import { captureCompletion, observationReplayUnavailable } from "../../../src/spans/normalized";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { evidenceApi } from "../api/evaluations";
+import { useQueryClient } from "@tanstack/react-query";
 import { parseReplayMetadata } from "../utils/types";
-import { deleteRun, renameRun } from "../api/runs";
+import { renameRun } from "../api/runs";
 import type { Run, Span, LiveEvent, SubAgent } from "../utils/types";
 import {
   getSavedAnnotationPreview,
@@ -53,15 +50,12 @@ import { useAnnotations } from "../hooks/use-annotations";
 import type { Annotation, AnnotationKind } from "../hooks/use-annotations";
 import { useAgentForEvent } from "../hooks/use-agents";
 import { useRunPhantomConnectionStatus, useRunPhantomEvent } from "../hooks/use-runphantom-ws";
-import { getPricingSnapshot, getRunCostRows, subscribePricing, summarizeRunCost, fmtCost, fmtRate, type ModelCostRow } from "../utils/costs";
-import { PRICE_TABLE_AS_OF } from "../../../src/pricing/list-prices";
 import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
 import { useDialogFocus } from "../hooks/use-dialog-focus";
-
-const TOKEN_NUMBER_FLOW_TIMING = {
-  spinTiming: { duration: 450, easing: "ease-out" },
-  transformTiming: { duration: 250, easing: "ease-out" },
-} as const;
+import { Badge, StatsLine, runStatsFor, type RunStats } from "./run-detail/RunStats";
+import { AttachedReportsLink, HEADER_ACTION, MoreMenu } from "./run-detail/RunActionsMenu";
+import { countedToolSpans, failureSentence, type FailureSentence } from "./run-detail/trace-model";
+import "./run-detail/run-detail.css";
 
 type SpansBroadcast = {
   runIds?: string[];
@@ -181,483 +175,10 @@ function getTokensByModel(spans: Span[]): Map<string, { inTok: number; outTok: n
   return byModel;
 }
 
-function ErrorMessage({ span }: { span: Span }) {
-  const msg = spanErrorReason(span);
-  if (!msg) return null;
-  return (
-    <div className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] leading-[18px] text-rp-danger">
-      {String(msg).length > 200 ? String(msg).slice(0, 200) + "\u2026" : String(msg)}
-    </div>
-  );
-}
-
-const ERRORS_TOOLTIP_VIEWPORT_GAP = 12;
-const ERRORS_TOOLTIP_MIN_HEIGHT = 96;
-
-function ErrorsTooltip({ spans }: { spans: Span[] }) {
-  const [show, setShow] = useState(false);
-  const [maxHeight, setMaxHeight] = useState<number>();
-  const [scrollable, setScrollable] = useState(false);
-  const [moreBelow, setMoreBelow] = useState(false);
-  const triggerRef = useRef<HTMLSpanElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  // Escape returns focus to the trigger, whose focus handler would otherwise
-  // reopen the tooltip that was just dismissed.
-  const dismissedRef = useRef(false);
-  const errorSpans = useMemo(() => spans.filter(s => s.status === "ERROR"), [spans]);
-
-  // A fixed 300px list cut its last line through the glyphs, and overlay
-  // scrollbars gave no sign the rest existed. Size to the viewport instead,
-  // and only scroll (with a visible hint) when the viewport is genuinely short.
-  useLayoutEffect(() => {
-    if (!show) return;
-    const place = () => {
-      const bottom = triggerRef.current?.getBoundingClientRect().bottom ?? 0;
-      setMaxHeight(Math.max(ERRORS_TOOLTIP_MIN_HEIGHT, window.innerHeight - bottom - ERRORS_TOOLTIP_VIEWPORT_GAP));
-    };
-    place();
-    window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
-  }, [show]);
-
-  const measure = useCallback(() => {
-    const list = listRef.current;
-    if (!list) return;
-    setScrollable(list.scrollHeight > list.clientHeight + 1);
-    setMoreBelow(list.scrollTop + list.clientHeight < list.scrollHeight - 1);
-  }, []);
-
-  useLayoutEffect(() => {
-    if (show) measure();
-  }, [show, maxHeight, errorSpans, measure]);
-
-  if (errorSpans.length === 0) return null;
-
-  return (
-    <span ref={triggerRef} className="relative cursor-help" tabIndex={0} aria-label={`${plural(errorSpans.length, "run error")}. Focus for details.`}
-      onMouseEnter={() => setShow(true)}
-      onMouseLeave={(event) => {
-        if (!event.currentTarget.contains(document.activeElement)) setShow(false);
-      }}
-      onFocus={() => {
-        if (dismissedRef.current) dismissedRef.current = false;
-        else setShow(true);
-      }}
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setShow(false);
-      }}
-      onKeyDown={(event) => {
-        if (event.key !== "Escape" || !show) return;
-        event.stopPropagation();
-        setShow(false);
-        if (document.activeElement !== triggerRef.current) {
-          dismissedRef.current = true;
-          triggerRef.current?.focus();
-        }
-      }}>
-      <span className="font-medium text-rp-danger underline decoration-rp-danger-border decoration-dotted underline-offset-4"><NumberFlow value={errorSpans.length} /> error{errorSpans.length !== 1 ? "s" : ""}</span>
-      {show && (
-        // Padding rather than margin bridges the gap, so moving the pointer
-        // onto the tooltip to scroll it does not fire mouseleave on the way.
-        <div className="absolute left-0 top-full z-50 pt-1">
-          <div className="flex flex-col overflow-hidden rounded-md border border-rp-danger-border bg-rp-surface shadow-e3"
-            style={{
-              width: "min(380px, calc(100vw - 32px))", maxHeight,
-            }}>
-            <div className="flex flex-shrink-0 items-center gap-2 border-b border-rp-danger-border bg-rp-danger-soft px-3 py-2">
-              <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--rp-danger)" strokeWidth={2.5} strokeLinecap="round">
-                <circle cx={12} cy={12} r={10} /><line x1={12} y1={8} x2={12} y2={12} /><line x1={12} y1={16} x2={12.01} y2={16} />
-              </svg>
-              <span className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-rp-danger">
-                {errorSpans.length} Error{errorSpans.length !== 1 ? "s" : ""}
-              </span>
-            </div>
-            <div className="relative flex min-h-0 flex-col">
-              <div ref={listRef} role="region" aria-label="Error details" tabIndex={scrollable ? 0 : undefined}
-                className="min-h-0 overflow-auto" onScroll={measure}>
-                {errorSpans.map((s, idx) => (
-                  <div key={s.id} className={cn("px-3 py-2.5", idx < errorSpans.length - 1 && "border-b border-rp-line-muted")}>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className={cn("rounded-sm px-1 py-0.5 font-mono text-[10px] font-medium tracking-[0.08em]", s.span_type?.includes("LLM") ? "bg-rp-wash text-rp-blue" : "bg-[color:var(--rp-n4)] text-rp-ink-muted")}>
-                        {s.span_type === "TOOL_CALL" ? "TOOL" : s.span_type?.includes("LLM") ? "LLM" : "SPAN"}
-                      </span>
-                      <span className="truncate font-mono text-[12px] text-rp-ink">{s.name}</span>
-                      <span className="rp-meta ml-auto flex-shrink-0">{fmt(s.duration_ms)}</span>
-                    </div>
-                    <ErrorMessage span={s} />
-                  </div>
-                ))}
-              </div>
-              {moreBelow && (
-                <div data-errors-overflow-hint aria-hidden="true"
-                  className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-center pb-1.5"
-                  style={{ height: 44, background: "linear-gradient(to bottom, color-mix(in srgb, var(--rp-surface) 0%, transparent), var(--rp-surface) 72%)" }}>
-                  <span className="flex items-center gap-1 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink">
-                    <ArrowDown size={10} strokeWidth={2.5} />Scroll for more
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </span>
-  );
-}
-
-const Dot = () => <span data-separator aria-hidden="true" className="text-rp-ink-faint">&middot;</span>;
-
-// A stat wraps together with the separator after it, so a wrap can only leave
-// a separator at the end of a line, never at the start of the next one.
-function Stat({ children, last }: { children: React.ReactNode; last?: boolean }) {
-  return <span className="inline-flex items-center gap-1.5">{children}{!last && <Dot />}</span>;
-}
-
-function Badge({ label, copyValue }: { label: string; copyValue?: string }) {
-  const [copied, setCopied] = useState(false);
-  const resetRef = useRef<number | null>(null);
-
-  useEffect(() => () => {
-    if (resetRef.current) window.clearTimeout(resetRef.current);
-  }, []);
-
-  if (!copyValue) {
-    return (
-      <span className="rp-meta-label font-mono text-[10px] font-medium uppercase leading-4 tracking-[0.1em]">
-        {label}
-      </span>
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      className={cn("rp-meta-label rp-meta-copy rounded-sm font-mono text-[10px] font-medium uppercase leading-4 tracking-[0.1em] transition-[color,background-color] duration-250 ease-standard", copied && "!bg-rp-success-soft !text-rp-success")}
-      title={`Copy ${label}`}
-      aria-label={`Copy ${label}`}
-      onClick={(event) => {
-        event.stopPropagation();
-        void navigator.clipboard.writeText(copyValue).then(() => {
-          setCopied(true);
-          if (resetRef.current) window.clearTimeout(resetRef.current);
-          resetRef.current = window.setTimeout(() => setCopied(false), 1200);
-        }).catch(() => {});
-      }}
-    >
-      {label}
-    </button>
-  );
-}
-
-function StatsLine({ stats, model, spans, active, startedAt, completionUnavailable }: {
-  stats: { spans: number; tools: number; llms: number; errors: number; dur: number; agents?: number; inTokens?: number; outTokens?: number };
-  model?: string | null;
-  spans?: Span[];
-  active?: boolean;
-  startedAt?: number;
-  completionUnavailable?: boolean;
-}) {
-  const [showCost, setShowCost] = useState(false);
-  const costRef = useRef<HTMLSpanElement>(null);
-  const costButtonRef = useRef<HTMLButtonElement>(null);
-  const costPanelRef = useRef<HTMLDivElement>(null);
-  const costPanelId = useId();
-  const pricing = useSyncExternalStore(subscribePricing, getPricingSnapshot, getPricingSnapshot);
-  const [costPosition, setCostPosition] = useState<{ left: number; top: number; width: number } | null>(null);
-  const inTok = stats.inTokens ?? 0;
-  const outTok = stats.outTokens ?? 0;
-
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (!active || completionUnavailable) return;
-    const i = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(i);
-  }, [active, completionUnavailable]);
-
-  const breakdown = useMemo(() => spans ? getRunCostRows(spans, pricing) : [], [spans, pricing]);
-
-  useLayoutEffect(() => {
-    if (!showCost) return;
-    const position = () => {
-      const rect = costButtonRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const width = Math.min(352, window.innerWidth - 32);
-      const height = Math.min(costPanelRef.current?.scrollHeight ?? 400, 400, window.innerHeight - 32);
-      setCostPosition({ left: Math.max(16, Math.min(rect.left, window.innerWidth - width - 16)), top: rect.bottom + height + 8 <= window.innerHeight - 16 ? rect.bottom + 8 : Math.max(16, rect.top - height - 8), width });
-    };
-    position();
-    // The first measurement runs before the panel width is constrained, so a
-    // wrapped multi-model panel grows taller afterwards and must be re-placed.
-    const observer = new ResizeObserver(position);
-    if (costPanelRef.current) observer.observe(costPanelRef.current);
-    window.addEventListener("resize", position);
-    window.addEventListener("scroll", position, true);
-    return () => { observer.disconnect(); window.removeEventListener("resize", position); window.removeEventListener("scroll", position, true); };
-  }, [showCost, breakdown]);
-
-  useEffect(() => {
-    if (!showCost) return;
-    const dismiss = (event: PointerEvent) => { if (event.target instanceof Node && !costRef.current?.contains(event.target)) setShowCost(false); };
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { setShowCost(false); costButtonRef.current?.focus(); } };
-    document.addEventListener("pointerdown", dismiss);
-    document.addEventListener("keydown", escape);
-    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", escape); };
-  }, [showCost]);
-
-  const ticking = !!(active && startedAt);
-  const liveDur = active && startedAt ? now - startedAt : stats.dur;
-  const durValid = Number.isFinite(liveDur) && liveDur >= 0;
-  const durSec = Math.round(liveDur / 1000);
-  const durMin = Math.floor(durSec / 60);
-  const durRemSec = durSec % 60;
-  const hasTokens = inTok > 0 || outTok > 0;
-  const hasCost = breakdown.length > 0;
-  const { knownUsd: totalCost, pricedCalls, unavailableCalls, allReported } = summarizeRunCost(breakdown);
-  const availableTotal = pricedCalls > 0 && Number.isFinite(totalCost);
-  const costLabel = !availableTotal ? "Estimate unavailable"
-    : unavailableCalls ? `${allReported ? "Known reported cost" : "Known estimates"} ${fmtCost(totalCost)} · ${unavailableCalls} ${unavailableCalls === 1 ? "call" : "calls"} unavailable`
-    : `${allReported ? "Reported cost" : "Estimated cost"} ${fmtCost(totalCost)}`;
-
-  // Where the stats wrap, the separator after the last stat on a line has
-  // nothing to separate; index.css hides it on the stat marked here.
-  const rowRef = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const row = rowRef.current;
-    if (!row) return;
-    const markLineEnds = () => {
-      const items = [...row.children];
-      const boxes = items.map(item => item.getBoundingClientRect());
-      items.forEach((item, index) => {
-        const next = boxes[index + 1];
-        item.toggleAttribute("data-line-end", !next || next.top >= boxes[index].bottom);
-      });
-    };
-    markLineEnds();
-    const observer = new ResizeObserver(markLineEnds);
-    observer.observe(row);
-    for (const item of row.children) observer.observe(item);
-    return () => observer.disconnect();
-  });
-
-  return (
-    <div ref={rowRef} className="rp-meta-metrics flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-rp-ink">
-      {model && <Stat><Badge label="model" copyValue={model} /><span>{model}</span></Stat>}
-      {stats.tools > 0 && <Stat><span><NumberFlow value={stats.tools} /> tool{stats.tools !== 1 ? "s" : ""}</span></Stat>}
-      {(stats.agents ?? 0) > 0 && <Stat><span><NumberFlow value={stats.agents!} /> sub-agent{stats.agents !== 1 ? "s" : ""}</span></Stat>}
-      {stats.errors > 0 && spans && <Stat><ErrorsTooltip spans={spans} /></Stat>}
-      {stats.errors > 0 && !spans && <Stat><span className="font-medium text-rp-danger"><NumberFlow value={stats.errors} /> error{stats.errors !== 1 ? "s" : ""}</span></Stat>}
-      {/* NumberFlow animates whole seconds, which reads well for a clock ticking
-          on a run in flight. A settled duration is a measurement, though: rounded
-          to whole seconds it read "6s" beside a span tree root of "6.2s", "0s"
-          beside "420ms", and "205m" for a 3h run. Only the live tick animates;
-          everything else goes through fmt(), exactly like the span tree. */}
-      <Stat last={!hasTokens && !hasCost}><Badge label="duration" /><span data-run-duration>{
-        completionUnavailable
-          ? "Unavailable"
-          : !durValid
-          ? "—"
-          : !ticking || liveDur < 1000 || liveDur >= 3_600_000
-            ? fmt(liveDur)
-            : durMin > 0
-              ? <><NumberFlow value={durMin} />m <NumberFlow value={durRemSec} />s</>
-              : <><NumberFlow value={durSec} />s</>
-      }</span></Stat>
-      {hasTokens && <Stat last={!hasCost}><Badge label="tokens" /><span><NumberFlow value={inTok} {...TOKEN_NUMBER_FLOW_TIMING} /> in / <NumberFlow value={outTok} {...TOKEN_NUMBER_FLOW_TIMING} /> out</span></Stat>}
-      {hasCost && (
-        <Stat last>
-          <span ref={costRef} className="relative">
-            <button ref={costButtonRef} type="button" className="-my-3 min-h-11 min-w-11 rounded-control px-2 text-left text-rp-ink-muted underline decoration-rp-line-dashed decoration-dotted underline-offset-4 transition-colors duration-250 ease-standard hover:text-rp-blue" aria-expanded={showCost} aria-controls={costPanelId} onClick={() => setShowCost(open => !open)}>
-              <span aria-live="polite">{costLabel}</span>
-            </button>
-            {showCost && (
-              <div ref={costPanelRef} id={costPanelId} role="region" aria-label="Cost breakdown" className="fixed z-50 overflow-y-auto rounded-md border border-rp-line bg-rp-surface p-4 text-[12px] shadow-e3"
-                style={{ ...costPosition, maxHeight: "min(400px, calc(100vh - 32px))", visibility: costPosition ? "visible" : "hidden" }}>
-                <div className="rp-eyebrow mb-2">Cost by model</div>
-                <p className="mb-3 whitespace-normal leading-5 text-rp-ink-muted">Reported costs are used as is. Estimates price input, output and cached input at list prices as of {PRICE_TABLE_AS_OF}, or input and output at OpenRouter catalogue quotes; fees excluded.</p>
-                {breakdown.map(b => (
-                  <div key={b.model === null ? "missing-model" : `model:${b.model}`} className="mb-3 last:mb-0 whitespace-normal break-words">
-                    <div className="mb-1 font-mono text-[12px] font-medium text-rp-ink">{b.model ?? "Model unavailable"}</div>
-                    <CostRowDetail row={b} />
-                  </div>
-                ))}
-              </div>
-            )}
-          </span>
-        </Stat>
-      )}
-    </div>
-  );
-}
-
-function CostLine({ label, amount, strong = false }: { label: ReactNode; amount: number; strong?: boolean }) {
-  return (
-    <div className={cn("flex justify-between gap-4", strong && "border-t border-rp-line pt-1")}>
-      <span className={cn(strong && "text-rp-ink")}>{label}</span>
-      <span className={cn("rp-num text-rp-ink", strong && "font-medium")}>{fmtCost(amount)}</span>
-    </div>
-  );
-}
-
-function CostRowDetail({ row }: { row: ModelCostRow }) {
-  const { sources } = row;
-  const used = [sources.reported, sources.listPrice, sources.catalogue].filter(count => count > 0).length;
-  // Per-token lines only when one source priced every call; calls in different price bands would make one rate untrue.
-  const tokens = used === 1 && row.totalUsd !== null && row.inTok !== null && row.outTok !== null;
-  return (
-    <div className="space-y-1 text-rp-ink-muted">
-      {sources.reported > 0 && <CostLine label="Reported on the span" amount={row.reportedUsd} />}
-      {row.listPrice && <>
-        {tokens && Math.abs(row.inTok! * row.listPrice.inRate / 1_000_000 + row.outTok! * row.listPrice.outRate / 1_000_000 + row.listPriceCacheUsd - row.listPriceUsd) <= 1e-9 * Math.max(1, row.listPriceUsd) && <>
-          <CostLine label={`${row.inTok!.toLocaleString()} input @ ${fmtRate(row.listPrice.inRate)}/M`} amount={row.inTok! * row.listPrice.inRate / 1_000_000} />
-          <CostLine label={`${row.outTok!.toLocaleString()} output @ ${fmtRate(row.listPrice.outRate)}/M`} amount={row.outTok! * row.listPrice.outRate / 1_000_000} />
-        </>}
-        {row.listPriceCacheTokens > 0 && <CostLine label={`${row.listPriceCacheTokens.toLocaleString()} cached input tokens`} amount={row.listPriceCacheUsd} />}
-        <CostLine label="Estimated at list price" amount={row.listPriceUsd} strong={tokens || row.listPriceCacheTokens > 0} />
-        <p>Price for {row.listPrice.priceModel} from <a className="text-rp-blue underline underline-offset-4 hover:text-rp-blue-hover" href={row.listPrice.sourceUrl} target="_blank" rel="noreferrer">{row.listPrice.sourceName}</a>, as of {row.listPrice.asOf}.</p>
-      </>}
-      {row.catalogue && <>
-        {tokens && <>
-          <CostLine label={`${row.inTok!.toLocaleString()} input @ ${fmtRate(row.catalogue.inRate)}/M`} amount={row.catalogue.inCost} />
-          <CostLine label={`${row.outTok!.toLocaleString()} output @ ${fmtRate(row.catalogue.outRate)}/M`} amount={row.catalogue.outCost} />
-        </>}
-        <CostLine label="Estimated from the OpenRouter catalogue" amount={row.catalogueUsd} strong={tokens} />
-        <div>Catalogue ID: {row.catalogue.catalogueId}</div>
-        <div>Revision: <span className="font-mono">{row.catalogue.rateRevision}</span></div>
-        <div>Fetched: {row.catalogue.source.observedAt}</div>
-      </>}
-      {used > 1 && row.totalUsd !== null && <CostLine label="total" amount={row.totalUsd} strong />}
-      {row.unavailableReason && <p>{used > 0 ? `${row.unavailableCalls} of ${row.generations} calls ${row.unavailableCalls === 1 ? "is" : "are"} unpriced. ` : ""}{row.unavailableReason}</p>}
-    </div>
-  );
-}
-
-function MoreMenu({ runId }: { runId?: string }) {
-  const [open, setOpen] = useState(false);
-  const navigate = useNavigate();
-  const ref = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const deleteRef = useRef<HTMLButtonElement>(null);
-  const menuId = useId();
-  const queryClient = useQueryClient();
-  const deletingRuns = useRunDeletions();
-  const deleteError = useRunDeletionError(runId);
-  const deleting = !!runId && deletingRuns.has(runId);
-
-  useEffect(() => {
-    if (!open) return;
-    deleteRef.current?.focus();
-    const handlePointer = (event: MouseEvent) => {
-      if (!ref.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const handleKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      setOpen(false);
-      triggerRef.current?.focus();
-    };
-    document.addEventListener("mousedown", handlePointer);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("mousedown", handlePointer);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [open]);
-
-  const handleDelete = async () => {
-    if (!runId || isRunDeleting(runId) || !confirm("Delete this run and all its spans?")) return;
-    setRunDeletionError(runId, null);
-    setRunDeleting(runId, true);
-    let deleted = false;
-    try {
-      await Promise.all([
-        queryClient.cancelQueries({ queryKey: ["run-detail", runId], exact: true }),
-        queryClient.cancelQueries({ queryKey: ["conversation-runs"] }),
-      ]);
-      await deleteRun(runId);
-      deleted = true;
-      // A conversation list response may still contain the removed run. Cancel
-      // it before pruning, and never invalidate the deleted detail itself.
-      await queryClient.cancelQueries({ queryKey: ["conversation-runs"] });
-      queryClient.setQueriesData<Run[]>({ queryKey: ["conversation-runs"] },
-        runs => runs?.filter(run => run.id !== runId));
-      queryClient.setQueriesData<Run[]>({ queryKey: ["runs"], exact: true },
-        runs => runs?.filter(run => run.id !== runId));
-      flushSync(() => {
-        window.dispatchEvent(new CustomEvent("runphantom:run-removed", { detail: { runId } }));
-      });
-      queryClient.removeQueries({ queryKey: ["run-detail", runId], exact: true });
-    } catch (error) {
-      setRunDeletionError(runId, error instanceof Error ? error.message : "Could not delete run");
-    } finally {
-      setRunDeleting(runId, false);
-      // A canceled conversation may now belong to another selected run. Restart
-      // active lists for either outcome, but never refetch a deleted detail.
-      const resumed = [queryClient.invalidateQueries({ queryKey: ["conversation-runs"] })];
-      if (!deleted) resumed.push(queryClient.invalidateQueries({ queryKey: ["run-detail", runId], exact: true }));
-      await Promise.all(resumed);
-    }
-  };
-
-  return (
-    <div ref={ref} className="relative">
-      {deleteError && <p role="alert" className="text-xs text-rp-danger">{deleteError}</p>}
-      <button
-        ref={triggerRef}
-        type="button"
-        aria-label="More actions"
-        aria-expanded={open}
-        aria-haspopup="menu"
-        aria-controls={open ? menuId : undefined}
-        title="More actions"
-        className="flex size-8 items-center justify-center rounded-control border border-transparent text-rp-ink-muted transition-[background-color,border-color,color] duration-250 ease-standard hover:border-rp-line hover:bg-rp-surface hover:text-rp-ink"
-        onClick={() => setOpen(!open)}
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
-      </button>
-      {open && (
-        <div id={menuId} role="menu" aria-label="Run actions" className="rp-pop absolute right-0 top-full z-50 mt-1 min-w-[160px] overflow-hidden rounded-md border border-rp-line bg-rp-surface p-1 shadow-e3">
-          {runId && <button
-            type="button"
-            role="menuitem"
-            className="w-full rounded-sm px-3 py-2 text-left text-[13px] text-rp-ink transition-colors duration-250 ease-standard hover:bg-rp-row-hover"
-            onClick={() => { setOpen(false); navigate(runEvidencePath(runId)); }}
-          >
-            Attach test report
-          </button>}
-          <button
-            ref={deleteRef}
-            type="button"
-            role="menuitem"
-            className="w-full rounded-sm px-3 py-2 text-left text-[13px] text-rp-danger transition-colors duration-250 ease-standard hover:bg-rp-danger-soft disabled:opacity-60"
-            onClick={handleDelete}
-            disabled={deleting}
-          >
-            {deleting ? "Deleting…" : "Delete run"}
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-const runEvidencePath = (runId: string) => `/evaluations?view=evidence&anchorKind=run&anchorId=${encodeURIComponent(runId)}`;
-
-/** Links to imported test reports only when at least one is attached to this run. */
-function AttachedReportsLink({ runId }: { runId: string }) {
-  // No abort signal: switching runs must not cancel this small read (the
-  // refresh-ownership specs require that only superseded detail reads fail).
-  const reports = useQuery({ queryKey: ["evidence", "run-reports", runId], retry: false, staleTime: 30_000,
-    queryFn: () => evidenceApi.sets({ kind: "run", id: runId }) });
-  const count = reports.data?.items.length ?? 0;
-  if (!count) return null;
-  return <div className="flex flex-shrink-0 bg-rp-surface px-4 pb-1 sm:px-5"><Link className="inline-flex min-h-7 items-center gap-1 text-[12px] font-medium text-rp-blue underline-offset-4 transition-colors duration-250 ease-standard hover:text-rp-blue-hover hover:underline" to={runEvidencePath(runId)}>Attached test reports ({count}{reports.data?.truncated ? "+" : ""})<ArrowUpRight aria-hidden="true" className="size-3" /></Link></div>;
-}
-
-const HEADER_ACTION = cn(buttonVariants({ variant: "secondary", size: "sm" }), "gap-1.5 px-2.5 [&_svg]:size-3.5");
 
 function runTabClass(selected: boolean) {
   return cn(
-    "rp-tab -mb-px inline-flex h-10 shrink-0 cursor-pointer items-center border-b-2 px-3 text-[13px] font-medium transition-[color,border-color,background-color] duration-250 ease-standard",
+    "rp-tab -mb-px inline-flex h-8 shrink-0 cursor-pointer items-center border-b-2 px-3 text-[13px] font-medium transition-[color,border-color,background-color] duration-250 ease-standard",
     selected ? "border-rp-blue text-rp-ink" : "border-transparent text-rp-ink-muted",
   );
 }
@@ -782,12 +303,14 @@ function subAgentStatus(runStatus: RunStatusSummary | null, spans: readonly Span
 
 function ViewHeader({
   title, model, status, stats, allSpans, startedAt, anthropicModels,
-  run, isReplay, breadcrumb, fork, onAnnotateRun, annotationError, onDownload,
+  run, isReplay, breadcrumb, fork, onAnnotateRun, annotationError, onDownload, failure, onOpenStep,
 }: {
+  failure?: FailureSentence | null;
+  onOpenStep?: (spanId: string) => void;
   title: string;
   model?: string | null;
   status: RunStatusSummary;
-  stats: { spans: number; tools: number; llms: number; errors: number; dur: number; agents?: number; inTokens?: number; outTokens?: number };
+  stats: RunStats;
   allSpans?: Span[];
   startedAt?: number;
   anthropicModels?: string[];
@@ -830,7 +353,7 @@ function ViewHeader({
   const [savePopoverOpen, setSavePopoverOpen] = useState(false);
   const saveBtnRef = useRef<HTMLButtonElement>(null);
   const [annotationPopoverOpen, setAnnotationPopoverOpen] = useState(false);
-  const annotationBtnRef = useRef<HTMLButtonElement>(null);
+  const moreBtnRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const refresh = () => {
       setIsSaved(run ? isEventSaved(run.id) : false);
@@ -912,7 +435,7 @@ function ViewHeader({
   const statusLabel = status.label;
   const statusPillClass = cn(badgeVariants({ tone: runStatusTone(status.status) }), "shrink-0");
   return (
-    <div className={cn("flex-shrink-0 bg-rp-surface", isReplay ? "px-4 py-2.5" : "px-4 pb-3 pt-4 sm:px-5")}>
+    <div className={cn("flex-shrink-0 bg-rp-surface", isReplay ? "px-4 py-2.5" : "px-4 pb-1.5 pt-2 sm:px-5")}>
       {parentName && onBack ? (
         <>
           <div><Button onClick={onBack}>&larr; Show Parent Agent</Button></div>
@@ -948,17 +471,19 @@ function ViewHeader({
         </div>
       ) : (
         <>
-          <div data-run-header className="mb-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+          <div data-run-header className="rp-run-header flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
             <div data-run-header-title className="flex min-w-[12rem] flex-1 items-center gap-2">
               {status.status === "live" && <span aria-hidden="true" className="pulse-dot size-2 flex-shrink-0 rounded-full bg-rp-mark-success" />}
-              {onFork && !active ? (
-                <InlineEdit value={displayTitle}
-                  onConfirm={handleRename}
-                  className="truncate font-display text-[20px] font-semibold leading-7 tracking-[-0.02em] text-rp-ink"
-                  inputStyle={{ fontSize: 20, fontWeight: 600 }} />
-              ) : (
-                <h2 title={displayTitle} className="min-w-0 truncate font-display text-[20px] font-semibold leading-7 tracking-[-0.02em] text-rp-ink">{displayTitle}</h2>
-              )}
+              <span className="flex min-w-[3rem]">
+                {onFork && !active ? (
+                  <InlineEdit value={displayTitle}
+                    onConfirm={handleRename}
+                    className="truncate font-display text-22 font-semibold leading-7 tracking-[-0.02em] text-rp-ink"
+                    inputStyle={{ fontSize: 22, fontWeight: 600 }} />
+                ) : (
+                  <h2 title={displayTitle} className="min-w-0 truncate font-display text-22 font-semibold leading-7 tracking-[-0.02em] text-rp-ink">{displayTitle}</h2>
+                )}
+              </span>
               <span
                 data-run-status
                 data-status={status.status}
@@ -970,62 +495,6 @@ function ViewHeader({
             </div>
             {run && (
               <div ref={optionsRef} data-run-actions className="relative flex min-w-0 flex-wrap items-center gap-1.5">
-                {onAnnotateRun && (
-                  <>
-                    <button
-                      ref={annotationBtnRef}
-                      className={HEADER_ACTION}
-                      onClick={() => {
-                        setSavePopoverOpen(false);
-                        setOptionsOpen(false);
-                        setAnnotationPopoverOpen((open) => !open);
-                      }}
-                      title="Annotate run"
-                    >
-                      <Pencil aria-hidden="true" />
-                      Annotate
-                    </button>
-                    {annotationPopoverOpen && (
-                      <AnnotationCreatePopover
-                        anchorRef={annotationBtnRef}
-                        onClose={() => setAnnotationPopoverOpen(false)}
-                        onSubmit={onAnnotateRun}
-                        error={annotationError}
-                      />
-                    )}
-                  </>
-                )}
-                <button
-                  className={HEADER_ACTION}
-                  onClick={() => {
-                    setSavePopoverOpen(false);
-                    setAnnotationPopoverOpen(false);
-                    setOptionsOpen(false);
-                    window.dispatchEvent(new CustomEvent("runphantom:open-message-pane", { detail: { runId: run?.id } }));
-                  }}
-                  title="Debug with local agent"
-                >
-                  <MessageCircle aria-hidden="true" />
-                  Debug
-                </button>
-                {run && <Link
-                  className={HEADER_ACTION}
-                  to={`/verification?runId=${encodeURIComponent(run.id)}`}
-                >Verify app</Link>}
-                {run && <Link
-                  className={HEADER_ACTION}
-                  to={`/evaluations?runId=${encodeURIComponent(run.id)}`}
-                >Evaluate run</Link>}
-                {onDownload && (
-                  <button
-                    className={HEADER_ACTION}
-                    onClick={onDownload}
-                    title="Download trace as JSON"
-                  >
-                    <Download aria-hidden="true" />
-                    Download
-                  </button>
-                )}
                 <button
                   ref={saveBtnRef}
                   className={cn(HEADER_ACTION, isSaved && "border-rp-wash-border bg-rp-wash text-rp-blue hover:bg-rp-wash")}
@@ -1035,9 +504,10 @@ function ViewHeader({
                     setSavePopoverOpen(true);
                   }}
                   title={isSaved ? "Move folder or unsave" : "Save run"}
+                  aria-label={isSaved ? "Saved" : "Save"}
                 >
                   <Bookmark aria-hidden="true" className={cn(isSaved && "fill-current")} />
-                  {isSaved ? "Saved" : "Save"}
+                  <span data-action-label>{isSaved ? "Saved" : "Save"}</span>
                 </button>
                 {savePopoverOpen && (
                   <SavePopover
@@ -1048,9 +518,23 @@ function ViewHeader({
                     onClose={() => setSavePopoverOpen(false)}
                   />
                 )}
+                <button
+                  className={HEADER_ACTION}
+                  onClick={() => {
+                    setSavePopoverOpen(false);
+                    setAnnotationPopoverOpen(false);
+                    setOptionsOpen(false);
+                    window.dispatchEvent(new CustomEvent("runphantom:open-message-pane", { detail: { runId: run?.id } }));
+                  }}
+                  title="Ask your coding agent about this run"
+                  aria-label="Debug"
+                >
+                  <MessageCircle aria-hidden="true" />
+                  <span data-action-label>Debug</span>
+                </button>
                 {onFork && (() => {
                   return <>
-                  <div className="rp-clipped-ring flex h-8 items-stretch overflow-hidden rounded-control">
+                  <div className="rp-clipped-ring flex h-8 items-stretch overflow-hidden rounded-control md:h-7">
                     <button
                       disabled={active || replayUnavailable || agentRegistryStatus !== "success"}
                       title={active ? "Replay is available once the run finishes" : undefined}
@@ -1179,17 +663,46 @@ function ViewHeader({
                   )}
                 </>;
                 })()}
-                <MoreMenu runId={run?.id} />
+                <MoreMenu
+                  runId={run?.id}
+                  triggerRef={moreBtnRef}
+                  onAnnotate={onAnnotateRun ? () => { setSavePopoverOpen(false); setOptionsOpen(false); setAnnotationPopoverOpen(true); } : undefined}
+                  onDownload={onDownload}
+                />
+                {annotationPopoverOpen && onAnnotateRun && (
+                  <AnnotationCreatePopover
+                    anchorRef={moreBtnRef}
+                    onClose={() => setAnnotationPopoverOpen(false)}
+                    onSubmit={onAnnotateRun}
+                    error={annotationError}
+                  />
+                )}
               </div>
             )}
           </div>
+          {failure && (
+            <button
+              type="button"
+              data-run-failure={failure.tone}
+              title={failure.fullText}
+              aria-description={onOpenStep ? "Opens this step" : undefined}
+              onClick={onOpenStep ? () => onOpenStep(failure.spanId) : undefined}
+              disabled={!onOpenStep}
+              className={cn("mt-0.5 flex max-w-full items-center gap-1.5 rounded-control text-left text-13 font-medium leading-5 underline-offset-4 enabled:hover:underline disabled:cursor-default",
+                failure.tone === "danger" ? "text-rp-danger" : "text-rp-ink")}
+            >
+              <AlertTriangle aria-hidden="true" className={cn("size-3.5 shrink-0", failure.tone === "danger" ? "text-rp-danger" : "text-rp-warning")} />
+              <span className="min-w-0 truncate">{failure.text}</span>
+            </button>
+          )}
           {!active && onFork && replayUnavailable && <div role="status" className="mb-1 basis-full text-[12px] text-rp-ink-muted">Replay unavailable for partial, unverified observations.</div>}
           {/* Not on the stats row after a separator: at laptop widths the ids
               wrapped and left the separator dangling at the end of the stats. */}
-          <div className="mt-2 flex flex-col gap-1.5 text-[12px]">
+          <div className="mt-1 flex flex-col gap-0.5 text-12">
             <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
             {run && (run.id || run.user_id || run.convo_id) && (
-              <span className="rp-meta-ids flex min-w-0 max-w-full flex-wrap items-center gap-x-3 gap-y-1 text-rp-ink-muted">
+              // Ids are one tap away in the step details; on a phone this row cost the trace two lines.
+              <span className="rp-meta-ids hidden min-w-0 max-w-full flex-wrap items-center gap-x-3 gap-y-1 text-rp-ink-muted md:flex">
                 {run.user_id && <span className="inline-flex items-center gap-1" title={run.user_id}><Badge label="user" copyValue={run.user_id} />{run.user_id.length > 12 ? run.user_id.slice(0, 12) + "…" : run.user_id}</span>}
                 {run.convo_id && <span className="inline-flex items-center gap-1" title={run.convo_id}><Badge label="conversation" copyValue={run.convo_id} />{run.convo_id.length > 12 ? run.convo_id.slice(0, 12) + "…" : run.convo_id}</span>}
                 <span className="inline-flex min-w-0 items-center gap-1"><Badge label="trace" copyValue={run.id} /><span className="min-w-0 truncate" title={run.id}>{run.id}</span></span>
@@ -1818,6 +1331,29 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   }, [runId, savedForRun, annotationsApi.loaded, annotationsApi.annotations]);
 
   const runStatusSummary = useRunStatus(data?.run ? runStatusEvidence(data.run, data.spans) : null);
+  const subAgentList = data?.subAgents;
+  const agentRootIds = useMemo(() => new Set((subAgentList ?? []).map(agent => agent.root_span_id)), [subAgentList]);
+  // Live runs re-render on every websocket merge; the header facts only change with the spans.
+  const headerStatus = data?.run ? (runStatusSummary ?? deriveRunStatus(runStatusEvidence(data.run, data.spans))) : null;
+  const failureOutcome = !headerStatus ? "other" : headerStatus.status === "failed" ? "failed" : runInProgress(headerStatus.status) ? "running" : "other";
+  const headerSpans = data?.spans;
+  const failure = useMemo(() => headerSpans ? failureSentence(headerSpans, failureOutcome) : null, [headerSpans, failureOutcome]);
+  const headerRun = data?.run;
+  const subAgentCount = subAgentList?.length ?? 0;
+  const headerStats = useMemo(() => {
+    if (!headerSpans || !headerRun) return null;
+    const tokens = [...getTokensByModel(headerSpans).values()];
+    return runStatsFor(headerSpans, {
+      spans: headerSpans.length,
+      tools: countedToolSpans(headerSpans, agentRootIds).length,
+      llms: headerSpans.filter(s => s.span_type?.includes("LLM")).length,
+      errors: headerSpans.filter(s => s.status === "ERROR").length,
+      dur: headerRun.last_updated_at - headerRun.started_at,
+      agents: subAgentCount,
+      inTokens: tokens.reduce((sum, value) => sum + value.inTok, 0),
+      outTokens: tokens.reduce((sum, value) => sum + value.outTok, 0),
+    });
+  }, [headerSpans, headerRun, agentRootIds, subAgentCount]);
 
   if (loading) return <div role="status" className="flex h-full items-center justify-center gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-rp-ink-muted">Loading run <Dots /></div>;
   if (notFound || !data?.run) return <TraceNotFound runId={runId} backPath={routeBase ?? "/runs"} />;
@@ -1835,7 +1371,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
     const agentSpanSet = new Set(agent.span_ids);
     // Exclude the root tool call span — it's the parent invocation, not part of the sub-agent's work
     const agentSpans = paneSpans.filter(s => agentSpanSet.has(s.id) && s.id !== agent.root_span_id);
-    const agentTools = agentSpans.filter(s => s.span_type === "TOOL_CALL");
+    const agentTools = countedToolSpans(agentSpans, agentRootIds);
     const agentLLMs = agentSpans.filter(s => s.span_type?.includes("LLM"));
     const agentErrs = agentSpans.filter(s => s.status === "ERROR");
 
@@ -1849,10 +1385,10 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
           status={subAgentStatus(runStatusSummary, agentSpans)}
           startedAt={agent.start_time_ms}
           anthropicModels={anthropicModels}
-          stats={{
+          stats={runStatsFor(agentSpans, {
             spans: agentSpans.length, tools: agentTools.length, llms: agentLLMs.length, errors: agentErrs.length, dur: agent.duration_ms,
             inTokens: agent.total_input_tokens, outTokens: agent.total_output_tokens,
-          }}
+          })}
           allSpans={agentSpans}
           breadcrumb={{
             onBack: () => setFocusedAgent(null),
@@ -1864,7 +1400,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
           <button type="button" id={agentSpansTabId} className={tabStyle("tree")} role="tab" aria-selected={agentTab === "tree"} aria-controls={agentPanelId} tabIndex={agentTab === "tree" ? 0 : -1} onClick={() => setAgentTab("tree")}>Span Tree</button>
         </div>
         {agentTab === "tree" ? (
-          <div id={agentPanelId} role="tabpanel" aria-labelledby={agentSpansTabId} className="flex-1 relative min-h-0 overflow-auto sb p-3 sm:p-4">
+          <div id={agentPanelId} role="tabpanel" aria-labelledby={agentSpansTabId} className="relative min-h-0 flex-1">
             <SpanTree spans={agentSpans} />
           </div>
         ) : (
@@ -1881,12 +1417,8 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
 
   // Normal run view
   const replayUnavailable = spans.some(span => observationReplayUnavailable(span.normalized?.capture));
-  const status = runStatusSummary ?? deriveRunStatus(runStatusEvidence(run, spans));
+  const status = headerStatus ?? deriveRunStatus(runStatusEvidence(run, spans));
   const active = runInProgress(status.status);
-  const tools = spans.filter(s => s.span_type === "TOOL_CALL");
-  const llms = spans.filter(s => s.span_type?.includes("LLM"));
-  const errs = spans.filter(s => s.status === "ERROR");
-  const dur = run.last_updated_at - run.started_at;
   const model = spans.find(s => s.model)?.model;
   const downloadTrace = async () => {
     try {
@@ -1919,12 +1451,10 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
         // for a 6.2s run). Once finished, the header shows the recorded span.
         startedAt={run.finished ? undefined : run.started_at}
         anthropicModels={anthropicModels}
-        stats={{
-          spans: spans.length, tools: tools.length, llms: llms.length, errors: errs.length, dur,
-          agents: subAgents.length,
-          inTokens: [...getTokensByModel(spans).values()].reduce((s, v) => s + v.inTok, 0),
-          outTokens: [...getTokensByModel(spans).values()].reduce((s, v) => s + v.outTok, 0),
-        }}
+        stats={headerStats!}
+        // The status pill already says "Completed · 1 tool error", so the sentence only says where.
+        failure={failure}
+        onOpenStep={selectSpan}
         allSpans={spans}
         run={run}
         isReplay={isReplay}
@@ -1951,9 +1481,10 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
         )}
       </div>
       {activeTab === "tree" ? (
-        <div id={runPanelId} role="tabpanel" aria-labelledby={runSpansTabId} className="flex-1 relative min-h-0 overflow-auto sb p-3 sm:p-4">
+        <div id={runPanelId} role="tabpanel" aria-labelledby={runSpansTabId} className="relative min-h-0 flex-1">
           <SpanTree
             spans={paneSpans}
+            agentRootIds={agentRootIds}
             selectedSpanId={selectedSpanId}
             onSelectSpan={selectSpan}
             annotations={annotationsApi.annotations}

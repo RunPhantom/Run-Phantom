@@ -259,7 +259,7 @@ test("Run Phantom UI: run header actions never cover the run title or status", a
     const status = header.locator("[data-run-status]");
     await expect(status).toHaveText(/^Run (?:live|failed|complete)$/, { timeout: 10_000 });
     const actions = header.locator("[data-run-actions]");
-    await expect(actions.getByRole("button", { name: "Annotate" })).toBeVisible();
+    await expect(actions.getByRole("button", { name: "Save", exact: true })).toBeVisible();
 
     const title = status.locator("xpath=preceding-sibling::*[1]");
     const titleWidth = await title.evaluate((element) => element.getBoundingClientRect().width);
@@ -432,8 +432,9 @@ test("Run Phantom UI: download exports the selected trace as JSON", async ({ pag
   }
 
   await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
-  const downloadButton = page.getByRole("button", { name: /^download$/i });
-  await expect(downloadButton).toBeVisible({ timeout: 10_000 });
+  await page.getByRole("button", { name: "More actions", exact: true }).click({ timeout: 10_000 });
+  const downloadButton = page.getByRole("menuitem", { name: /^download$/i });
+  await expect(downloadButton).toBeVisible();
 
   const downloadPromise = page.waitForEvent("download");
   await downloadButton.click();
@@ -584,7 +585,7 @@ test("Run Phantom UI: the header duration agrees with the span tree root", async
   // the tree root read "6.2s" for the same trace.
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto(`${runPhantom.url}/runs/demo_review/spans`);
-  const rootDuration = page.locator('[data-span-row="demo_review_root"] .font-mono').last();
+  const rootDuration = page.locator('[data-span-row="demo_review_root"] [data-span-duration]');
   await expect(rootDuration).toHaveText("6.2s");
   const headerDuration = page.locator(".rp-meta-metrics").getByText("duration", { exact: true }).locator("xpath=following-sibling::span[1]");
   await expect(headerDuration).toHaveText("6.2s", { timeout: 10_000 });
