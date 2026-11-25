@@ -6,7 +6,7 @@ test("source-runtime unavailable runtime UI preserves the paired workflow", asyn
   await expect(page.getByRole("heading", { name: "Verification", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Pair an application", exact: true })).toBeVisible();
   const panel = page.getByRole("region", { name: "Trusted browser", exact: true });
-  await expect(panel).toContainText("Optional runtime unavailable");
+  await expect(panel).toContainText("Browser runtime not set up");
   await expect(panel).toContainText("Initial network support covers bounded requests to the target origin.");
   await expect(panel.getByRole("button", { name: "Open browser", exact: true })).toBeDisabled();
   await panel.getByLabel(/^Browser target URL/).fill("http://localhost:8765/draft");
@@ -25,7 +25,7 @@ browserTest("actual source UI sends trusted input, preserves a refusal draft and
   browserTest.skip(!process.env.RUNPHANTOM_TEST_BROWSER_MODULE, "Optional host runtime qualification requires the explicitly selected installed closure.");
   await page.goto(`${browserApp.url}/verification`);
   const panel = page.getByRole("region", { name: "Trusted browser", exact: true });
-  await expect(panel).toContainText("Optional runtime configured");
+  await expect(panel).toContainText("Browser runtime ready");
   await panel.getByLabel(/^Browser target URL/).fill(browserTarget.origin);
   await panel.getByRole("button", { name: "Open browser", exact: true }).click();
   await expect(panel.getByRole("combobox", { name: "Browser connection", exact: true })).toContainText("ready");

@@ -106,7 +106,7 @@ test("verification workspace: empty deep links preserve optional tools and never
   await expect(summary).toContainText("No checks run yet");
   await expect(page.getByRole("button", { name: "Run action", exact: true })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Trusted browser", exact: true })).toBeVisible();
-  await expect(page.getByText("Optional runtime unavailable", { exact: true })).toBeVisible();
+  await expect(page.getByText("Browser runtime not set up", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open browser", exact: true })).toBeDisabled();
   await page.getByRole("navigation", { name: "Verification workspace", exact: true }).getByRole("link", { name: "Snapshots", exact: true }).click();
   await expect(page.locator("#verification-snapshots")).toBeFocused();
@@ -121,6 +121,7 @@ test("verification workspace: empty deep links preserve optional tools and never
     await page.getByRole("heading", { name: "Verification", exact: true }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(screenshotDir, `empty-${width}.png`) });
   }
+  await expect(steps.locator("p", { hasText: "3 more after you pair an app" })).toBeVisible();
 });
 
 test("verification workspace: a held real command cannot publish inspection into a different run scope", async ({ page, context, request, runPhantom, targetApp }) => {

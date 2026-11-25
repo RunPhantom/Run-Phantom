@@ -98,7 +98,7 @@ export function SemanticInspector({ sessionId, connected, capable, disabled = fa
     <div role="status" aria-live="polite" className="text-[13px] text-rp-ink-muted">{busy ? "Reading the connected app…" : notice}</div>
     {error && <p role="alert" className={dangerText}>{error}</p>}
     {result && <div aria-label="Semantic discovery" className={cn(inset, "rp-fade-rise space-y-3 text-[13px]")}>
-      <p className="font-medium text-rp-ink">{result.countExact ? "Observed" : "At least"} {result.count} matches · {result.source} · partial ARIA names</p>
+      <p className="font-medium text-rp-ink">{result.countExact ? "Observed" : "At least"} {result.count} matches · {result.source} · element names may be incomplete</p>
       <p className={result.coverage.complete ? "text-[12px] leading-[1.7] text-rp-ink-muted" : warningText}>{result.coverage.complete ? "Complete within the visible observable scope." : `Partial coverage: ${result.coverage.reasons.join(", ")}. No unique selection is established.`} Closed shadow roots are unobservable. Open shadow roots: {result.coverage.openShadowRoots}; same-origin frames: {result.coverage.sameOriginFrames}; inaccessible frames: {result.coverage.inaccessibleFrames}.</p>
       {result.query && <p aria-label="Normalized semantic query" className="rp-meta break-all">Normalized query: {JSON.stringify(result.query)}</p>}
       <ul className="max-h-64 divide-y divide-rp-line-muted overflow-auto border-t border-rp-line-muted">{result.elements.slice(0, 100).map((item, index) => <li key={item.ref ?? index} className={cn("flex min-h-10 items-center justify-between gap-3 px-1 py-1.5 transition-colors duration-250 ease-standard hover:bg-rp-row-hover", item.ref && item.ref === selected && "bg-rp-wash")}>

@@ -292,7 +292,7 @@ export function VerificationPage() {
         value={flows.isSuccess ? String(flows.data.length) : "—"}
         detail={flows.isSuccess ? flows.data.length ? `${flows.data.reduce((sum, flow) => sum + flow.steps.length, 0)} steps to replay` : "Save a check to replay" : flows.isError ? "Flows unavailable" : "Loading flows…"} />
     </ul>
-    <WorkspaceNavigation ready={!sessions.isLoading} sessionId={session?.id} reports={reports.isSuccess ? reports.data.length : undefined} />
+    <WorkspaceNavigation ready={!sessions.isLoading} sessionId={session?.id} connected={connected} reports={reports.isSuccess ? reports.data.length : undefined} />
 
     <div className="sr-only" role="status" aria-live="polite">{busy || notice}</div>
     {queryError && <div role="alert" className="rp-fade-rise flex flex-wrap items-center justify-between gap-3 rounded-md border border-rp-danger-border bg-rp-danger-soft px-4 py-3 text-[13px] text-rp-danger"><span className="min-w-0 break-words">{queryError.message}</span><Button variant="destructive-outline" size="sm" onClick={() => void refresh()}>Retry refresh</Button></div>}
@@ -335,7 +335,7 @@ export function VerificationPage() {
         <div id="verification-inspect" tabIndex={-1} className="min-w-0 scroll-mt-20"><SemanticInspector key={linkedRunId} sessionId={session.id} connected={connected} capable={capabilities?.includes("semantic-refs") ?? false} disabled={!!busy} onAction={cursor => { setSince(cursor); setInspection(null); }} /></div>
         <div id="verification-performance" tabIndex={-1} className={cn(panel, "space-y-4")}><PerformanceEvidence key={`${session.id}:${linkedRunId}`} sessionId={session.id} connected={connected} capable={capabilities?.includes("performance-evidence") ?? false} disabled={!!busy} perform={(label, operation) => perform(label, "performance", operation)} onReport={() => { void refresh(); setNotice("Native lab report saved. Review its window and coverage below."); }} />{operationAlert("performance")}</div>
         <section aria-labelledby="action-heading" className={cn(panel, "space-y-5")}>
-          <SectionHead eyebrow="Step 01 / Act" title="1. Exercise the app" id="action-heading" />
+          <SectionHead eyebrow="Step 2 / Act" title="Exercise the app" id="action-heading" />
           <fieldset disabled={!!busy || !connected} className="space-y-4">
             <Field label="Action"><Select value={action} onChange={event => { setAction(event.target.value as typeof action); setFillValue(""); setInspection(null); }}><option value="snapshot">Snapshot</option><option value="click">Click</option><option value="fill">Fill</option><option value="state">Read state</option></Select></Field>
             {action === "state" ? <Field label="Registered store"><Input value={store} onChange={event => setStore(event.target.value)} placeholder="cart" /></Field> : <Field label="Action selector" hint={action === "snapshot" ? "Optional: narrow the snapshot to matching elements." : "Use a stable CSS selector for exactly one interactive element."}><Input className="font-mono text-[13px]" value={selector} onChange={event => setSelector(event.target.value)} placeholder='[data-testid="checkout"]' /></Field>}
@@ -346,7 +346,7 @@ export function VerificationPage() {
           {inspection && <Inspection response={inspection} onSelect={value => setSelector(value)} />}
         </section>
         <section id="verification-checks" tabIndex={-1} aria-labelledby="outcome-heading" className={cn(panel, "space-y-5")}>
-          <SectionHead eyebrow="Step 02 / Verify" title="2. Check the outcome" id="outcome-heading" />
+          <SectionHead eyebrow="Step 3 / Check" title="Check the outcome" id="outcome-heading" />
           <p className={lede}>{since === undefined ? "Checks look at the app as it is now." : "Checks look at what happened after the last action."} If the app disconnects or something was not captured, the result is Inconclusive, never Pass. A "did not happen" check covers only the time that was observed.</p>
           <fieldset disabled={!!busy} className="space-y-4">
             <Field label="Check name (optional)"><Input value={checkName} onChange={event => setCheckName(event.target.value)} placeholder="Checkout completes" maxLength={128} /></Field>
@@ -357,7 +357,7 @@ export function VerificationPage() {
           {operationAlert("outcome")}
         </section>
         <section aria-labelledby="draft-heading" className={cn(panel, "space-y-5")}>
-          <SectionHead eyebrow="Step 03 / Repeat" title="3. Save a repeatable flow" id="draft-heading" />
+          <SectionHead eyebrow="Step 4 / Repeat" title="Save a repeatable flow" id="draft-heading" />
           <p className={lede}>Collect the action and check above into steps you can replay on this app. Typed values are never saved, so fill in any form yourself before replaying a flow that needs input.</p>
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2"><label className={cn(checkLabel, "items-center")}><input type="checkbox" className={cn(checkbox, "mt-0")} checked={includeAction} onChange={event => setIncludeAction(event.target.checked)} disabled={!!busy} />Include current action in step</label><Button variant="outline" onClick={addStep} disabled={!!busy || steps.length >= 20}>Add step to flow</Button></div>
           {operationAlert("flow")}

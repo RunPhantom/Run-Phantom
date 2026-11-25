@@ -19,14 +19,20 @@ type SectionId = typeof VERIFICATION_SECTIONS[number]["id"];
 /**
  * Steps that need a paired app are hidden until one exists, because each of them would only land on the
  * "Connect your first app" panel. A deep link to a hidden step still resolves and focuses that panel.
+ * Once a session exists its panels render even while disconnected, so the steps show and the hint says
+ * what they still need.
  */
-export function WorkspaceNavigation({ sessionId, reports, ready }: { sessionId?: string; reports?: number; ready: boolean }) {
+export function WorkspaceNavigation({ sessionId, connected, reports, ready }: { sessionId?: string; connected: boolean; reports?: number; ready: boolean }) {
   const [params] = useSearchParams();
   const requested = params.get("section");
   const selected: SectionId = VERIFICATION_SECTIONS.find(section => section.id === requested)?.id ?? "pair";
   const scroller = useRef<HTMLDivElement>(null);
   const visible = VERIFICATION_SECTIONS.filter(section => !section.needsSession || sessionId);
   const locked = VERIFICATION_SECTIONS.length - visible.length;
+  const hint = !ready ? null
+    : locked > 0 ? `${locked} more after you pair an app`
+    : sessionId && !connected ? "Inspect, Check outcomes and Performance need the app connected"
+    : null;
 
   useEffect(() => {
     if (!ready || !VERIFICATION_SECTIONS.some(section => section.id === requested)) return;
@@ -59,9 +65,12 @@ export function WorkspaceNavigation({ sessionId, reports, ready }: { sessionId?:
           {id === "reports" && reports !== undefined && <span className={cn("rp-num rounded-sm border px-1.5 text-[11px] font-medium leading-4", current ? "border-rp-wash-border bg-rp-surface" : "border-rp-line text-rp-ink-muted")}>{reports}</span>}
         </Link>;
       })}
-      {locked > 0 && ready && <span className="ml-auto inline-flex min-h-11 shrink-0 items-center gap-1.5 pl-3 pr-2 text-12 text-rp-ink-muted" title="Inspect, Check outcomes and Performance need a connected app">
-        <Lock aria-hidden="true" className="size-3" />{locked} more after you pair an app
+      {hint && <span className="ml-auto hidden min-h-11 shrink-0 items-center gap-1.5 pl-3 pr-2 text-12 text-rp-ink-muted sm:inline-flex" title="Inspect, Check outcomes and Performance need a connected app">
+        <Lock aria-hidden="true" className="size-3" />{hint}
       </span>}
     </div>
+    {hint && <p className="flex items-center gap-1.5 border-t border-rp-line-muted px-[var(--rp-page-px)] py-2 text-12 text-rp-ink-muted sm:hidden">
+      <Lock aria-hidden="true" className="size-3 shrink-0" />{hint}
+    </p>}
   </nav>;
 }
