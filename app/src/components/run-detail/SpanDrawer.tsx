@@ -249,8 +249,8 @@ export function SpanDrawer({ span, spans, agentRootIds, traceStart, mode, onClos
           )}
         </div>
       </div>
-      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-12 text-rp-ink-subtle">
-        {metaParts.map((part, index) => <span key={index} className="inline-flex min-w-0 items-center gap-2">{index > 0 && <span aria-hidden="true">·</span>}{part}</span>)}
+      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-12 text-rp-ink-subtle">
+        {metaParts.map((part, index) => <span key={index} className="inline-flex min-w-0 items-center">{part}</span>)}
       </div>
     </div>
   );

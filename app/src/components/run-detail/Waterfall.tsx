@@ -395,10 +395,10 @@ export function Waterfall({
               {allCollapsed ? "Expand all" : "Collapse all"}
             </button>
           )}
-          <button type="button" aria-label="Fit timeline" title="Show the whole run (Cmd or Ctrl + scroll zooms, drag the time axis to zoom in)" disabled={!viewport} onClick={() => setViewport(null)}
+          {showTrack && <button type="button" aria-label="Fit timeline" title="Show the whole run (Cmd or Ctrl + scroll zooms, drag the time axis to zoom in)" disabled={!viewport} onClick={() => setViewport(null)}
             className="inline-flex h-8 items-center gap-1 rounded-control border border-rp-line px-2.5 text-12 text-rp-ink hover:bg-rp-row-hover disabled:border-transparent disabled:text-rp-ink-subtle">
             Fit{viewport && <span className="font-mono tabular-nums text-rp-ink-subtle">{zoom >= 10 ? Math.round(zoom) : zoom.toFixed(1)}×</span>}
-          </button>
+          </button>}
         </div>
       </div>
 

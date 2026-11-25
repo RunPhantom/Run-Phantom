@@ -212,9 +212,11 @@ test("mobile: the trace fills the screen and a step opens as a full-screen sheet
   await row(page, failedRunId, "plan").click();
   const sheet = page.getByRole("dialog", { name: "Step details" });
   await expect(sheet).toBeVisible();
+  // The sheet rises 12px as it enters, so measure once it has settled.
+  await expect.poll(async () => (await sheet.boundingBox())!.y).toBeCloseTo(0, 0);
   const box = (await sheet.boundingBox())!;
-  expect(box.width).toBe(390);
-  expect(box.height).toBe(844);
+  expect(box.width).toBeCloseTo(390, 0);
+  expect(box.height).toBeCloseTo(844, 0);
   await expect(sheet.getByRole("button", { name: "Back to span list" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(sheet).toHaveCount(0);
