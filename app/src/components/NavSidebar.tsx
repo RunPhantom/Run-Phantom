@@ -13,7 +13,9 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { Settings } from "lucide-react";
-import { NavLink, useLocation } from "react-router-dom";
+import { Link, NavLink, useLocation, useSearchParams } from "react-router-dom";
+import { useSavedViews } from "../api/saved-views";
+import { savedViewPath } from "../../../src/saved-views-protocol";
 import { RunPhantomMark } from "./RunPhantomMark";
 import { NAV_GROUPS, NAV_ITEMS, SETTINGS_NAV, isNavPathActive } from "../shell/navigation";
 import { useNavCounts } from "../shell/use-nav-counts";
@@ -25,6 +27,9 @@ export function NavSidebar() {
   const onSettings = isNavPathActive(location.pathname, SETTINGS_NAV.path);
   const { isMobile, setOpenMobile } = useSidebar();
   const counts = useNavCounts();
+  const savedViews = useSavedViews();
+  const [searchParams] = useSearchParams();
+  const activeViewId = location.pathname === "/runs" ? searchParams.get("view") : null;
   const closeMobile = () => {
     if (isMobile) setOpenMobile(false);
   };
@@ -95,6 +100,30 @@ export function NavSidebar() {
                       );
                     })}
                   </SidebarMenu>
+                  {group.id === "debug" && !!savedViews.data?.length && (
+                    <SidebarMenu aria-label="Saved views" className="mt-1 group-data-[collapsible=icon]:hidden">
+                      {savedViews.data.map(view => {
+                        const active = view.id === activeViewId;
+                        const countText = view.count === null ? null : view.count >= 10_000 ? `${Math.floor(view.count / 1000)}k` : String(view.count);
+                        return (
+                          <SidebarMenuItem key={view.id}>
+                            <SidebarMenuButton asChild isActive={active} className="h-11 gap-2 pl-9 pr-2.5 lg:[@media(pointer:fine)]:h-7">
+                              <Link to={savedViewPath(view)} aria-current={active ? "page" : undefined} onClick={closeMobile}
+                                aria-describedby={countText !== null ? `rp-view-count-${view.id}` : undefined} title={view.name}>
+                                <span className={`truncate text-[13px] ${countText !== null ? "pr-8" : ""} ${active ? "" : "text-rp-ink-soft"}`}>{view.name}</span>
+                              </Link>
+                            </SidebarMenuButton>
+                            {countText !== null && (
+                              <SidebarMenuBadge id={`rp-view-count-${view.id}`} className="top-1/2 -translate-y-1/2 font-mono text-[11px] font-medium text-rp-ink-subtle">
+                                <span aria-hidden="true">{countText}</span>
+                                <span className="sr-only">{view.count} matching {view.count === 1 ? "run" : "runs"}</span>
+                              </SidebarMenuBadge>
+                            )}
+                          </SidebarMenuItem>
+                        );
+                      })}
+                    </SidebarMenu>
+                  )}
                 </SidebarGroupContent>
               </SidebarGroup>
             );

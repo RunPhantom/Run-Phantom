@@ -233,9 +233,9 @@ export function parseSavedViewUpdate(value: unknown): Partial<SavedViewInput> {
   if (!isRecord(value)) throw new RunsViewError("Saved view update must be an object");
   onlyKeys(value, ["name", "filters", "columns"], "Saved view update");
   const update: Partial<SavedViewInput> = {};
-  if (Object.hasOwn(value, "name")) update.name = viewName(value.name);
-  if (Object.hasOwn(value, "filters")) update.filters = parseRunsViewFilters(value.filters);
-  if (Object.hasOwn(value, "columns")) update.columns = parseRunsTableColumns(value.columns);
+  if ("name" in value) update.name = viewName(value.name);
+  if ("filters" in value) update.filters = parseRunsViewFilters(value.filters);
+  if ("columns" in value) update.columns = parseRunsTableColumns(value.columns);
   if (Object.keys(update).length === 0) throw new RunsViewError("Saved view update has no fields");
   return update;
 }
