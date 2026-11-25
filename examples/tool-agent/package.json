@@ -1,0 +1,10 @@
+{
+  "name": "runphantom-example-tool-agent",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun agent.ts",
+    "scenarios": "bun scenarios.ts",
+    "check": "tsc --noEmit -p tsconfig.json"
+  }
+}

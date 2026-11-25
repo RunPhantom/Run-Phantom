@@ -114,7 +114,9 @@ prompts and responses, and flush the exporter before a short-lived process exits
 
 The [example applications](./examples/README.md) show complete integrations in
 TypeScript/Bun, Python, Go, and Rust. They export OTLP/HTTP JSON without a Run
-Phantom SDK. Provider-backed examples require their own API keys.
+Phantom SDK. Provider-backed examples require their own API keys. To see tool
+calls, failures, multi-turn conversations and a sub-agent from OpenAI,
+Anthropic or Gemini, run the [tool-calling agent](./examples/tool-agent/README.md).
 
 To write the exporter target into your agent project's `.env` from this checkout:
 
