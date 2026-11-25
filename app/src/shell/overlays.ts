@@ -5,6 +5,7 @@ export type ShellOverlay = "palette" | "shortcuts" | null;
 const listeners = new Set<() => void>();
 let current: ShellOverlay = null;
 let returnFocus: HTMLElement | null = null;
+let focusOverride: (() => boolean) | null = null;
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
@@ -39,8 +40,21 @@ export function restoreOverlayFocus(event: Event): void {
   event.preventDefault();
   if (current !== null) return;
   const target = returnFocus;
+  const override = focusOverride;
   returnFocus = null;
+  focusOverride = null;
+  if (override?.()) return;
   if (target?.isConnected) target.focus();
+}
+
+/**
+ * For a command that moves the user somewhere new (the Ask composer): the next overlay
+ * close calls `focus` instead of returning to the opener. Radix restores focus in a
+ * timeout after unmount, so focusing directly from a command would be overwritten.
+ * Return false (target not rendered) to fall back to the opener.
+ */
+export function focusAfterOverlayClose(focus: () => boolean): void {
+  focusOverride = focus;
 }
 
 export function useShellOverlay(): ShellOverlay {

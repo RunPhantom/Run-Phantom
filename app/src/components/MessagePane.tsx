@@ -15,7 +15,8 @@ import { Markdown } from "./Markdown";
 import { RunPhantomMark } from "./RunPhantomMark";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useRegisterCommands, useRegisterShortcuts } from "../shell/commands";
-import { formatKeys } from "../shell/keyboard";
+import { ariaKeyShortcuts, formatKeys } from "../shell/keyboard";
+import { focusAfterOverlayClose } from "../shell/overlays";
 
 type Role = "user" | "assistant";
 
@@ -188,6 +189,7 @@ export function MessagePane({ activeRunId, launcherSlot }: MessagePaneProps) {
   const [closing, setClosing] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const paneRef = useRef<HTMLElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const resizeRef = useRef<{ x: number; width: number; shouldCollapse: boolean } | null>(null);
   const activeClientMessageIdRef = useRef<string | null>(null);
@@ -246,6 +248,7 @@ export function MessagePane({ activeRunId, launcherSlot }: MessagePaneProps) {
     scope: "Global",
     description: `Open or hide ${providerLabel(provider)}`,
     allowInInputs: true,
+    allowInDialogs: true,
     handler: toggleFromShortcut,
   }], [provider]);
   useRegisterCommands([{
@@ -256,7 +259,15 @@ export function MessagePane({ activeRunId, launcherSlot }: MessagePaneProps) {
     icon: Terminal,
     shortcut: "mod+j",
     order: 6,
-    run: () => { if (collapsed) openFromLauncher(); },
+    run: () => {
+      focusAfterOverlayClose(() => {
+        const composer = composerRef.current;
+        if (!composer?.isConnected) return false;
+        composer.focus();
+        return document.activeElement === composer;
+      });
+      if (collapsed) openFromLauncher();
+    },
   }], [provider]);
   useDialogFocus(isOverlay && !collapsed && !closing, paneRef, closeOverlay);
 
@@ -747,6 +758,7 @@ export function MessagePane({ activeRunId, launcherSlot }: MessagePaneProps) {
       ref={paneRef}
       role={isOverlay ? "dialog" : undefined}
       aria-modal={isOverlay ? true : undefined}
+      data-shortcut-passthrough={isOverlay ? "" : undefined}
       aria-label="Coding-agent debug chat"
       className={`${isOverlay
         ? "fixed inset-y-3 right-3 z-40 rounded-lg border border-rp-line bg-rp-surface shadow-e4"
@@ -960,6 +972,7 @@ export function MessagePane({ activeRunId, launcherSlot }: MessagePaneProps) {
             )}
             <div className="relative overflow-hidden rounded-md border border-rp-line bg-rp-surface transition-[border-color] duration-250 ease-standard hover:border-[color:var(--rp-n10)] focus-within:border-rp-blue">
               <textarea
+                ref={composerRef}
                 role="combobox"
                 aria-autocomplete="list"
                 aria-label={activeRunId ? "Ask about this trace" : `Ask ${providerLabel(provider)}`}
@@ -1053,7 +1066,7 @@ function HeaderAskButton({ provider, expanded, onOpen }: { provider: AgentProvid
         type="button"
         onClick={onOpen}
         aria-expanded={expanded}
-        aria-keyshortcuts="Meta+J Control+J"
+        aria-keyshortcuts={ariaKeyShortcuts("mod+j")}
         className="flex size-11 items-center justify-center gap-2 rounded-control border border-rp-line bg-rp-surface text-[13px] font-medium text-rp-ink transition-[background-color,border-color] duration-fast ease-out hover:border-rp-wash-border hover:bg-rp-wash lg:h-9 lg:w-auto lg:px-3"
         title={`Open the ${providerLabel(provider)} debug chat (${formatKeys("mod+j")})`}
       >

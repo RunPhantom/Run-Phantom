@@ -189,3 +189,53 @@ test("runs page prompts for a run instead of showing onboarding when only sample
   await expect(page).toHaveURL(/\/runs\/demo_/);
   await expect(page.getByRole("tab", { name: "Span Tree", exact: true })).toBeVisible();
 });
+
+test("the shortcut sheet opened from the palette hands focus back to the palette's opener on Esc", async ({ page, runPhantom }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${runPhantom.url}/settings`);
+  const trigger = page.getByRole("button", { name: "Search runs, steps, commands", exact: true });
+  await expect(trigger).toHaveAttribute("aria-keyshortcuts", `${await modKey(page)}+K`);
+  await trigger.focus();
+  await page.keyboard.press(`${await modKey(page)}+k`);
+  const palette = page.getByRole("dialog", { name: "Command palette", exact: true });
+  await palette.getByRole("combobox").fill("keyboard shortcuts");
+  await page.keyboard.press("Enter");
+  const sheet = page.getByRole("dialog", { name: "Keyboard shortcuts", exact: true });
+  await expect(sheet).toBeVisible();
+  await expect(palette).toBeHidden();
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  await expect(trigger).toBeFocused();
+});
+
+test("Cmd/Ctrl+J opens and closes the compact Ask pane, and Ask focuses the composer of an open pane", async ({ page, runPhantom }) => {
+  await seedRunPhantomFixtures(runPhantom.url);
+  await page.setViewportSize({ width: 1024, height: 800 });
+  await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
+  const mod = await modKey(page);
+  await expect(page.locator("[data-connection-status]")).toHaveAttribute("data-connection-status", "connected");
+  const launcher = page.locator("[data-workspace-header]").getByRole("button", { name: /^Ask (Claude Code|Codex)$/ });
+  await expect(launcher).toHaveAttribute("aria-keyshortcuts", `${mod}+J`);
+  await page.locator("body").press(`${mod}+j`);
+  const pane = page.getByRole("dialog", { name: "Coding-agent debug chat", exact: true });
+  await expect(pane).toBeVisible();
+  await expect.poll(() => pane.evaluate(element => element.contains(document.activeElement))).toBe(true);
+  await page.keyboard.press(`${mod}+j`);
+  await expect(pane).toBeHidden();
+  await expect(launcher).toBeVisible();
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole("button", { name: "Debug", exact: true }).click();
+  const aside = page.locator('aside[aria-label="Coding-agent debug chat"]');
+  const composer = aside.getByRole("combobox", { name: "Ask about this trace", exact: true });
+  await expect(composer).toBeVisible();
+  const trigger = page.getByRole("button", { name: "Search runs, steps, commands", exact: true });
+  await trigger.focus();
+  await page.keyboard.press(`${mod}+k`);
+  const palette = page.getByRole("dialog", { name: "Command palette", exact: true });
+  await palette.getByRole("combobox").fill("ask");
+  await expect(palette.getByRole("option").first()).toHaveAccessibleName(/^Ask (Claude Code|Codex)$/);
+  await page.keyboard.press("Enter");
+  await expect(palette).toBeHidden();
+  await expect(composer).toBeFocused();
+});

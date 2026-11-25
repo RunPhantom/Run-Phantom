@@ -38,6 +38,7 @@ export function useDialogFocus(
     const focusable = () => Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
       .filter((element) => element.getClientRects().length > 0 && element.getAttribute("aria-hidden") !== "true");
     const frame = window.requestAnimationFrame(() => {
+      if (dialog.contains(document.activeElement)) return;
       const target = dialog.querySelector<HTMLElement>("[autofocus]") ?? focusable()[0] ?? dialog;
       if (!dialog.hasAttribute("tabindex")) dialog.tabIndex = -1;
       target.focus();
