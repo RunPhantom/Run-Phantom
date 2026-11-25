@@ -4,7 +4,7 @@ import { ListTree, Search } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
-import { commandDetail, useCommands, type CommandContext, type PaletteCommand } from "./commands";
+import { commandDetail, commandStatus, useCommands, type CommandContext, type PaletteCommand, type PaletteStatus } from "./commands";
 import { buildSections } from "./palette-model";
 import { closeOverlay, restoreOverlayFocus, useShellOverlay } from "./overlays";
 import { formatKeys, isMacPlatform } from "./keyboard";
@@ -32,12 +32,13 @@ function Highlighted({ text, indices }: { text: string; indices: number[] }): Re
 
 const DETAIL_REFRESH_MS = 30_000;
 
-const STATUS_STYLES: Record<NonNullable<PaletteCommand["status"]>, { dot: string; label: string }> = {
-  ok: { dot: "bg-rp-ink-faint", label: "Completed" },
-  error: { dot: "bg-rp-danger", label: "Failed" },
-  live: { dot: "bg-rp-success pulse-dot", label: "Running" },
-  cancelled: { dot: "border border-rp-ink-subtle bg-transparent", label: "Cancelled" },
-  unknown: { dot: "border border-rp-ink-faint bg-transparent", label: "Status unknown" },
+const STATUS_DOTS: Record<PaletteStatus["tone"], string> = {
+  ok: "bg-rp-ink-faint",
+  warning: "bg-rp-mark-warning",
+  error: "bg-rp-mark-danger",
+  live: "bg-rp-mark-success pulse-dot",
+  cancelled: "border border-rp-ink-subtle bg-transparent",
+  unknown: "border border-rp-ink-faint bg-transparent",
 };
 
 /** Free-text search hands off to the Search page, which runs the query server-side. */
@@ -181,7 +182,7 @@ function PaletteBody() {
                   const { command } = row;
                   const selected = active?.command.id === command.id;
                   const Icon = command.icon;
-                  const status = command.status ? STATUS_STYLES[command.status] : null;
+                  const status = commandStatus(command);
                   const detail = commandDetail(command);
                   return (
                     <div
@@ -197,7 +198,7 @@ function PaletteBody() {
                       )}
                     >
                       {status ? (
-                        <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", status.dot)} />
+                        <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", STATUS_DOTS[status.tone])} />
                       ) : Icon ? (
                         <Icon aria-hidden="true" className="size-4 shrink-0 text-rp-ink-subtle" />
                       ) : (

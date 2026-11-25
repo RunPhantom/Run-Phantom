@@ -4,11 +4,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Contrast, Keyboard, Link2, PanelLeft, PlayCircle, Settings, type LucideIcon } from "lucide-react";
 import { useSidebar } from "@/components/ui/sidebar";
 import { useRuns } from "../hooks/use-runs";
-import { ago, runAgentName, runDisplayName, runStatus } from "../utils/helpers";
+import { ago, runAgentName, runDisplayName, runStatus, type RunStatus } from "../utils/helpers";
 import { runPath } from "../utils/navigation";
 import type { Run } from "../utils/types";
 import { NAV_ITEMS, SETTINGS_NAV } from "./navigation";
-import { useRegisterCommands, useRegisterShortcuts, type PaletteCommand, type ShortcutDefinition } from "./commands";
+import { useRegisterCommands, useRegisterShortcuts, type PaletteCommand, type PaletteStatus, type ShortcutDefinition } from "./commands";
 import { openCommandPalette, openShortcutSheet } from "./overlays";
 import { setThemePreference, toggleTheme } from "./theme";
 import { readOtlpEndpoint } from "./otlp";
@@ -28,10 +28,20 @@ function recentRuns(runs: readonly Run[] | undefined): Run[] {
   return [...(runs ?? [])].sort((a, b) => b.last_updated_at - a.last_updated_at).slice(0, RECENT_RUN_LIMIT);
 }
 
-function statusOf(run: Run): PaletteCommand["status"] {
-  if (run.capture_completion === "unavailable") return "unknown";
-  const status = runStatus(run, run.error_count ?? 0);
-  return status === "live" ? "live" : status === "failed" ? "error" : status === "cancelled" ? "cancelled" : "ok";
+const PALETTE_TONE: Record<RunStatus, PaletteStatus["tone"]> = {
+  live: "live",
+  quiet: "unknown",
+  complete: "ok",
+  completed_with_errors: "warning",
+  interrupted: "warning",
+  failed: "error",
+  cancelled: "cancelled",
+  unknown: "unknown",
+};
+
+function statusOf(run: Run): PaletteStatus {
+  const summary = runStatus(run);
+  return { tone: PALETTE_TONE[summary.status], label: summary.label };
 }
 
 /** Registers the shell's own palette commands and global shortcuts. Render inside SidebarProvider. */
@@ -65,7 +75,7 @@ export function ShellCommands() {
       label: name,
       detail: () => [agent && agent !== name ? agent : null, ago(run.last_updated_at)].filter(Boolean).join(" · "),
       keywords: [run.id, ...(agent ? [agent] : []), ...(run.model ? [run.model] : [])],
-      status: statusOf(run),
+      status: () => statusOf(run),
       order: index,
       run: ({ navigate: go }) => go(runPath(run.id)),
     };

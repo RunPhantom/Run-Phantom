@@ -18,6 +18,11 @@ export interface CommandContext {
   announce: (message: string) => void;
 }
 
+export interface PaletteStatus {
+  tone: "ok" | "warning" | "error" | "live" | "cancelled" | "unknown";
+  label: string;
+}
+
 export interface PaletteCommand {
   id: string;
   label: string;
@@ -32,8 +37,11 @@ export interface PaletteCommand {
   /** Shortcut chip text, e.g. "G R" or "⌘K". Display only. */
   shortcut?: string;
   icon?: LucideIcon;
-  /** Status dot shown before the label (recent runs). */
-  status?: "ok" | "error" | "live" | "cancelled" | "unknown";
+  /**
+   * Status dot shown before the label (recent runs); the label is read to screen readers.
+   * Pass a function when the status depends on the clock, as run status does.
+   */
+  status?: PaletteStatus | (() => PaletteStatus);
   /** Lower numbers sort first within a group when there is no query. Defaults to 0. */
   order?: number;
   /** Return false to hide the command right now (for example, when there is no open run). */
@@ -110,6 +118,10 @@ export function registerShortcuts(shortcuts: readonly ShortcutDefinition[]): () 
 
 export function commandDetail(command: PaletteCommand): string {
   return typeof command.detail === "function" ? command.detail() : command.detail ?? "";
+}
+
+export function commandStatus(command: PaletteCommand): PaletteStatus | null {
+  return typeof command.status === "function" ? command.status() : command.status ?? null;
 }
 
 export function listCommands(): readonly PaletteCommand[] {

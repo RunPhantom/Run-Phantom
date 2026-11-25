@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fuzzyMatchEntry, fuzzyScore } from "../app/src/shell/fuzzy";
 import { chordMatches, formatKeys, matchShortcut, parseKeys, type KeyLike } from "../app/src/shell/keyboard";
-import { commandDetail, listCommands, listShortcuts, registerCommands, registerShortcuts, type PaletteCommand, type ShortcutDefinition } from "../app/src/shell/commands";
+import { commandDetail, commandStatus, listCommands, listShortcuts, registerCommands, registerShortcuts, type PaletteCommand, type ShortcutDefinition } from "../app/src/shell/commands";
 import { buildSections } from "../app/src/shell/palette-model";
 import { readOtlpEndpoint } from "../app/src/shell/otlp";
 import { resolveTheme } from "../app/src/shell/theme";
@@ -68,6 +68,15 @@ describe("palette sections", () => {
     expect(buildSections(aging, "2m")).toHaveLength(0);
     expect(buildSections(aging, "1h")).toHaveLength(1);
     expect(commandDetail(command("go:x", "X"))).toBe("");
+  });
+
+  test("a status function is read on every call so a run can leave live without re-registering", () => {
+    let live = true;
+    const run = command("run:3", "planner", "Recent runs", { status: () => live ? { tone: "live", label: "Live" } : { tone: "unknown", label: "Quiet" } });
+    expect(commandStatus(run)).toEqual({ tone: "live", label: "Live" });
+    live = false;
+    expect(commandStatus(run)?.label).toBe("Quiet");
+    expect(commandStatus(command("go:x", "X"))).toBeNull();
   });
 });
 
