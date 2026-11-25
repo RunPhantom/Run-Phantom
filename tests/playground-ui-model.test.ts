@@ -99,7 +99,7 @@ describe("drafts", () => {
 
   test("a span draft fills the editor and remembers where it came from", () => {
     const source: PlaygroundDraft = {
-      provider: "anthropic", model: "claude-haiku-4-5-20251001", capturedProvider: "anthropic", capturedModel: "claude-sonnet-4-5", modelSubstituted: true,
+      provider: "openai", model: "gpt-5-nano", capturedProvider: "openai", capturedModel: "gpt-4-0613", modelSubstituted: true,
       system: "Triage tickets.", params: { temperature: 0.2, maxOutputTokens: 200 },
       messages: [
         { role: "user", content: "Weather?" },
@@ -107,15 +107,15 @@ describe("drafts", () => {
         { role: "tool", toolCallId: "c1", name: "get_weather", content: "{\"temp\":11}" },
       ],
       tools: [{ name: "get_weather", parameters: { type: "object" } }],
-      source: { runId: "demo_triage", spanId: "demo_triage_llm-2", runName: "Customer support triage", spanName: "ai.generateText", format: "ai-sdk" },
-      warnings: ["claude-sonnet-4-5 is not available in the Playground, so claude-haiku-4-5-20251001 was selected instead."],
+      source: { runId: "support_triage_0613", spanId: "support_triage_0613_llm-2", runName: "Customer support triage", spanName: "ai.generateText", format: "ai-sdk" },
+      warnings: ["gpt-4-0613 is not available in the Playground, so gpt-5-nano was selected instead."],
     };
     const state = stateFromDraft(source, defaultDraft(), { openedFrom: true });
-    expect(state).toMatchObject({ system: "Triage tickets.", temperature: "0.2", maxOutputTokens: "200", toolsEnabled: true, targets: [{ provider: "anthropic", model: "claude-haiku-4-5-20251001" }] });
-    expect(state.openedFrom).toEqual({ runId: "demo_triage", spanId: "demo_triage_llm-2", runName: "Customer support triage", spanName: "ai.generateText", capturedModel: "claude-sonnet-4-5", warnings: source.warnings });
+    expect(state).toMatchObject({ system: "Triage tickets.", temperature: "0.2", maxOutputTokens: "200", toolsEnabled: true, targets: [{ provider: "openai", model: "gpt-5-nano" }] });
+    expect(state.openedFrom).toEqual({ runId: "support_triage_0613", spanId: "support_triage_0613_llm-2", runName: "Customer support triage", spanName: "ai.generateText", capturedModel: "gpt-4-0613", warnings: source.warnings });
     const built = buildRunBody(state);
     expect(built.ok && built.body.messages).toEqual(source.messages);
-    expect(built.ok && built.body.source).toEqual({ runId: "demo_triage", spanId: "demo_triage_llm-2" });
+    expect(built.ok && built.body.source).toEqual({ runId: "support_triage_0613", spanId: "support_triage_0613_llm-2" });
     const reloaded = stateFromDraft(source, defaultDraft(), { openedFrom: false, targets: [{ provider: "openai", model: "gpt-5-nano" }, { provider: "anthropic", model: "claude-haiku-4-5-20251001" }] });
     expect(reloaded.openedFrom).toBeNull();
     expect(reloaded.targets).toHaveLength(2);
