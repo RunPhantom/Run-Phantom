@@ -249,13 +249,12 @@ export function getRunCostRows(spans: Span[], pricing: PricingSnapshot = getPric
 }
 
 // Cheap calls cost fractions of a hundredth of a cent; two significant digits keep them comparable.
-const subCentFormat = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 2, maximumFractionDigits: 20 });
+const subCentFormat = new Intl.NumberFormat("en-US", { minimumSignificantDigits: 2, maximumSignificantDigits: 2 });
 export function fmtCost(cost: number): string {
   if (!Number.isFinite(cost) || cost < 0) return "Unavailable";
   if (cost === 0) return "$0.00";
   if (cost < 0.000000001) return "<$0.000000001";
-  if (cost < 0.0001) return "$" + subCentFormat.format(cost);
-  if (cost < 0.01) return "$" + cost.toFixed(4);
+  if (cost < 0.01) return "$" + subCentFormat.format(cost);
   if (cost < 1) return "$" + cost.toFixed(3);
   return "$" + cost.toFixed(2);
 }
