@@ -3,6 +3,8 @@ import { parseJsonEvidence } from "../../../src/evaluations/json-evidence";
 import { calculateCost } from "../../../src/pricing/calculator";
 import { NOMINAL_CATALOGUE_PROVIDER, NOMINAL_CATALOGUE_TIER, NOMINAL_CATALOGUE_URL, parseNominalCatalogue, type NominalCatalogue } from "../../../src/pricing/rates";
 import { normalizeUsage, validTokenCount } from "../../../src/pricing/usage";
+import { PRICE_SOURCES, PRICE_TABLE_AS_OF, resolveModelIdentity } from "../../../src/pricing/list-prices";
+import { spanCost } from "../../../src/pricing/span-cost";
 import type { FrozenRateRevision } from "../../../src/pricing/protocol";
 import type { Span } from "./types";
 
@@ -169,14 +171,76 @@ export function getPricingUsageByModel(spans: Span[]): Map<string | null, Pricin
 
 export function getCostBreakdown(model: string | null | undefined, inTokens: number | null, outTokens: number | null): CostBreakdown | null {
   if (!model || !modelPricingConsentEnabled() || !validTokenCount(inTokens) || !validTokenCount(outTokens)) return null;
-  const rate = rateCache.get(model);
+  const rate = resolveModelIdentity(model, identity => rateCache.has(identity) ? [rateCache.get(identity)!] : []);
   if (!rate) return null;
-  const usage = normalizeUsage({ "gen_ai.response.model": model, "runphantom.usage.tier": NOMINAL_CATALOGUE_TIER, "gen_ai.usage.input_tokens": inTokens, "gen_ai.usage.output_tokens": outTokens }, NOMINAL_CATALOGUE_PROVIDER);
+  const usage = normalizeUsage({ "gen_ai.response.model": rate.model, "runphantom.usage.tier": NOMINAL_CATALOGUE_TIER, "gen_ai.usage.input_tokens": inTokens, "gen_ai.usage.output_tokens": outTokens }, NOMINAL_CATALOGUE_PROVIDER);
   const estimate = calculateCost(usage, rate);
   if (estimate.totalUsd === null) return null;
   const input = estimate.categories.find(category => category.category === "input")!;
   const output = estimate.categories.find(category => category.category === "output")!;
   return { inRate: input.rateUsdPerMillionTokens!, outRate: output.rateUsdPerMillionTokens!, inCost: input.costUsd!, outCost: output.costUsd!, totalCost: estimate.totalUsd, catalogueId: rate.model, rateRevision: rate.revision, source: rate.source };
+}
+
+export interface ListPriceDetail { inRate: number; outRate: number; sourceName: string; sourceUrl: string; asOf: string; priceModel: string }
+
+export interface ModelCostRow {
+  model: string | null;
+  inTok: number | null;
+  outTok: number | null;
+  generations: number;
+  /** Generations priced by each source; they sum to `generations` minus the unpriced ones. */
+  sources: { reported: number; listPrice: number; catalogue: number };
+  reportedUsd: number;
+  listPriceUsd: number;
+  catalogueUsd: number;
+  /** Null when any generation of this model has no reported cost and no estimate. */
+  totalUsd: number | null;
+  listPrice: ListPriceDetail | null;
+  catalogue: CostBreakdown | null;
+  unavailableReason: string | null;
+}
+
+function unavailableReason(span: Span, invalidReported: boolean, pricing: PricingSnapshot): string {
+  if (invalidReported) return "The captured reported cost is invalid or conflicting.";
+  if (!span.model) return "Model identity was not captured.";
+  if (!validTokenCount(span.input_tokens) || !validTokenCount(span.output_tokens)) return "Input or output token capture is unavailable.";
+  if (pricing.status === "disabled") return "No list price. Enable public pricing in Settings.";
+  if (pricing.status === "loading" || pricing.status === "idle") return "No list price. Public pricing is loading.";
+  if (pricing.status === "error") return pricing.error ?? "Public pricing is unavailable.";
+  return "No list price or unambiguous catalogue price.";
+}
+
+/**
+ * Per-model cost of a run's top-level generations. A captured reported cost
+ * always wins; otherwise the bundled list price; otherwise, with consent, the
+ * OpenRouter catalogue. Nested generations are skipped like token totals.
+ */
+export function getRunCostRows(spans: Span[], pricing: PricingSnapshot = getPricingSnapshot()): ModelCostRow[] {
+  const usage = getPricingUsageByModel(spans);
+  const rows = new Map<string | null, ModelCostRow>();
+  const llmIds = new Set(spans.filter(span => span.span_type?.includes("LLM")).map(span => span.id));
+  for (const span of spans) {
+    if (!span.span_type?.includes("LLM") || (span.parent_span_id && llmIds.has(span.parent_span_id))) continue;
+    const key = span.model || null;
+    const tokens = usage.get(key) ?? { inTok: null, outTok: null };
+    const row = rows.get(key) ?? { model: key, inTok: tokens.inTok, outTok: tokens.outTok, generations: 0, sources: { reported: 0, listPrice: 0, catalogue: 0 }, reportedUsd: 0, listPriceUsd: 0, catalogueUsd: 0, totalUsd: 0, listPrice: null, catalogue: null, unavailableReason: null };
+    rows.set(key, row);
+    row.generations++;
+    const cost = spanCost(span);
+    let amount: number | null = null;
+    if (cost.source === "reported") { amount = cost.usd; row.reportedUsd += cost.usd; row.sources.reported++; }
+    else if (cost.source === "list-price") {
+      amount = cost.usd; row.listPriceUsd += cost.usd; row.sources.listPrice++;
+      const family = cost.estimate.family;
+      row.listPrice ??= { inRate: cost.estimate.inputUsdPerMillion, outRate: cost.estimate.outputUsdPerMillion, sourceName: PRICE_SOURCES[family].name, sourceUrl: PRICE_SOURCES[family].url, asOf: PRICE_TABLE_AS_OF, priceModel: cost.estimate.model };
+    } else if (cost.reason !== "reported_cost_invalid" && pricing.catalogue) {
+      const quote = getCostBreakdown(span.model, span.input_tokens, span.output_tokens);
+      if (quote) { amount = quote.totalCost; row.catalogueUsd += quote.totalCost; row.catalogue ??= quote; row.sources.catalogue++; }
+    }
+    if (amount === null) { row.totalUsd = null; row.unavailableReason ??= unavailableReason(span, cost.source === null && cost.reason === "reported_cost_invalid", pricing); }
+    else if (row.totalUsd !== null) row.totalUsd = Number.isFinite(row.totalUsd + amount) ? row.totalUsd + amount : null;
+  }
+  return [...rows.values()];
 }
 
 export function fmtCost(cost: number): string {

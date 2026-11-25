@@ -17,7 +17,7 @@ const catalogueRevision = `sha256:${createHash("sha256").update(catalogue).diges
 
 test.use({ hasTouch: true });
 
-async function seed(url: string, mode: "mixed" | "zero" | "missing") {
+async function seed(url: string, mode: "mixed" | "zero" | "missing", reported = false) {
   const now = Date.now() - 1000;
   const rows = mode === "mixed" ? [{ model: "known", input: 200, output: 300 }, { model: "fixture/missing-price", input: 100, output: 50 }]
     : mode === "zero" ? [{ model: "fixture/free", input: 0, output: 0 }] : [{ model: "fixture/known", input: 200, output: null }];
@@ -31,7 +31,7 @@ async function seed(url: string, mode: "mixed" | "zero" | "missing") {
       { key: "ai.telemetry.metadata.runphantom.eventName", value: { stringValue: "Controlled pricing capture" } },
       { key: "ai.usage.inputTokens", value: { intValue: String(row.input) } },
       ...(row.output === null ? [] : [{ key: "ai.usage.outputTokens", value: { intValue: String(row.output) } }]),
-      { key: "gen_ai.usage.cost_usd", value: { doubleValue: 0.123 } },
+      ...(reported ? [{ key: "gen_ai.usage.cost_usd", value: { doubleValue: 0.123 } }] : []),
     ],
   }));
   const response = await fetch(`${url}/v1/traces`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ resourceSpans: [{ scopeSpans: [{ spans }] }] }) });
@@ -57,7 +57,6 @@ test("pricing: real Settings consent refreshes an open run with exact source and
     return await response.json() as Snapshot;
   };
   const reportedSnapshot = await readReportedSnapshot();
-  expect(reportedSnapshot.metrics.costUsd).toBe(0.246);
   let requests = 0;
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
@@ -67,7 +66,7 @@ test("pricing: real Settings consent refreshes an open run with exact source and
   await expect(unavailable).toBeVisible();
   expect(requests).toBe(0);
   await unavailable.click();
-  await expect(page.getByRole("region", { name: "Nominal cost estimates" })).toContainText("Public pricing is disabled");
+  await expect(page.getByRole("region", { name: "Cost breakdown" })).toContainText("No list price. Enable public pricing in Settings.");
   await page.screenshot({ path: testInfo.outputPath("pricing-desktop-before-consent.png"), fullPage: true });
   await page.keyboard.press("Escape");
   await expect(unavailable).toBeFocused();
@@ -84,14 +83,14 @@ test("pricing: real Settings consent refreshes an open run with exact source and
   await expect(summary).toBeVisible();
   await summary.focus();
   await page.keyboard.press("Enter");
-  const details = page.getByRole("region", { name: "Nominal cost estimates" });
+  const details = page.getByRole("region", { name: "Cost breakdown" });
   await expect(details).toContainText("200 input @ $3/M");
   await expect(details).toContainText("300 output @ $15/M");
   await expect(details).toContainText("Catalogue ID: fixture/known");
   await expect(details).toContainText(catalogueRevision);
   await expect(details).toContainText("fixture/missing-price");
-  await expect(details).toContainText("No unambiguous exact catalogue price");
-  await expect(details).toContainText("Reported cost stays separate");
+  await expect(details).toContainText("No list price or unambiguous catalogue price.");
+  await expect(details).toContainText("Reported costs are used as is.");
   await page.screenshot({ path: testInfo.outputPath("pricing-desktop-controlled-catalogue.png"), fullPage: true });
   await testInfo.attach("Controlled catalogue and output contract", { body: JSON.stringify({ kind: "controlled-catalogue", catalogueRevision, expectedKnownEstimateUsd: 0.0051, unavailableModels: 1, providerSpendUsd: 0 }), contentType: "application/json" });
 
@@ -113,6 +112,20 @@ test("pricing: real Settings consent refreshes an open run with exact source and
   expect(requests).toBe(1);
 });
 
+test("pricing: a reported cost wins over every estimate and needs no consent", async ({ page, runPhantom }) => {
+  await seed(runPhantom.url, "mixed", true);
+  let requests = 0;
+  await page.route(CATALOGUE_URL, route => { requests++; return route.fulfill({ contentType: "application/json", body: catalogue }); });
+  await page.goto(`${runPhantom.url}/runs/${RUN_ID}`);
+  const button = page.getByRole("button", { name: "Reported cost $0.246", exact: true });
+  await expect(button).toBeVisible();
+  await button.click();
+  const details = page.getByRole("region", { name: "Cost breakdown" });
+  await expect(details.getByText("Reported on the span", { exact: true })).toHaveCount(2);
+  await expect(details).not.toContainText("Estimated");
+  expect(requests).toBe(0);
+});
+
 test("pricing: mobile free zero is visible and cost disclosure fits the viewport", async ({ page, runPhantom }, testInfo) => {
   await seed(runPhantom.url, "zero");
   await page.setViewportSize({ width: 390, height: 844 });
@@ -124,7 +137,7 @@ test("pricing: mobile free zero is visible and cost disclosure fits the viewport
   const trigger = await button.boundingBox();
   expect(trigger!.height).toBeGreaterThanOrEqual(44);
   await button.tap();
-  const details = page.getByRole("region", { name: "Nominal cost estimates" });
+  const details = page.getByRole("region", { name: "Cost breakdown" });
   await expect(details).toContainText("0 input @ $0/M");
   await expect(details).toContainText("0 output @ $0/M");
   const bounds = await details.boundingBox();
@@ -147,7 +160,7 @@ test("pricing: incomplete backend token capture never becomes a complete estimat
   const button = page.getByRole("button", { name: "Estimate unavailable", exact: true });
   await expect(button).toBeVisible();
   await button.click();
-  await expect(page.getByRole("region", { name: "Nominal cost estimates" })).toContainText("Input or output token capture is unavailable");
+  await expect(page.getByRole("region", { name: "Cost breakdown" })).toContainText("Input or output token capture is unavailable");
   await expect(page.getByRole("button", { name: /^Estimated cost \$/ })).toHaveCount(0);
 });
 
@@ -161,7 +174,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 800
     const button = page.getByRole("button", { name: "Known estimates $0.0051 · 1 unavailable", exact: true });
     await expect(button).toBeVisible();
     await button.tap();
-    const region = page.getByRole("region", { name: "Nominal cost estimates" });
+    const region = page.getByRole("region", { name: "Cost breakdown" });
     await expect(region).toBeVisible();
     const bounds = await region.boundingBox();
     expect(bounds!.x).toBeGreaterThanOrEqual(16);

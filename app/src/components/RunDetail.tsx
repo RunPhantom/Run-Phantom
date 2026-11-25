@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { isRunDeleting, setRunDeleting, subscribeRunDeletions, setRunDeletionError, useRunDeletionError, useRunDeletions } from "../hooks/use-runs";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
@@ -51,7 +51,8 @@ import { useAnnotations } from "../hooks/use-annotations";
 import type { Annotation, AnnotationKind } from "../hooks/use-annotations";
 import { useAgentForEvent } from "../hooks/use-agents";
 import { useRunPhantomConnectionStatus, useRunPhantomEvent } from "../hooks/use-runphantom-ws";
-import { getCostBreakdown, getPricingSnapshot, getPricingUsageByModel, subscribePricing, fmtCost, fmtRate } from "../utils/costs";
+import { getPricingSnapshot, getRunCostRows, subscribePricing, fmtCost, fmtRate, type ModelCostRow } from "../utils/costs";
+import { PRICE_TABLE_AS_OF } from "../../../src/pricing/list-prices";
 import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
 import { useDialogFocus } from "../hooks/use-dialog-focus";
 
@@ -371,14 +372,7 @@ function StatsLine({ stats, model, spans, active, startedAt, completionUnavailab
     return () => clearInterval(i);
   }, [active, completionUnavailable]);
 
-  const breakdown = useMemo(() => {
-    if (!spans) return [];
-    const byModel = getPricingUsageByModel(spans);
-    return [...byModel.entries()].map(([m, { inTok, outTok }]) => ({
-      model: m, inTok, outTok,
-      breakdown: pricing.catalogue ? getCostBreakdown(m, inTok, outTok) : null,
-    }));
-  }, [spans, pricing.catalogue]);
+  const breakdown = useMemo(() => spans ? getRunCostRows(spans, pricing) : [], [spans, pricing]);
 
   useLayoutEffect(() => {
     if (!showCost) return;
@@ -416,11 +410,14 @@ function StatsLine({ stats, model, spans, active, startedAt, completionUnavailab
   const durRemSec = durSec % 60;
   const hasTokens = inTok > 0 || outTok > 0;
   const hasCost = breakdown.length > 0;
-  const known = breakdown.filter(row => row.breakdown !== null);
+  const known = breakdown.filter(row => row.totalUsd !== null);
   const unavailableCount = breakdown.length - known.length;
-  const totalCost = known.reduce((sum, row) => sum + row.breakdown!.totalCost, 0);
+  const totalCost = known.reduce((sum, row) => sum + row.totalUsd!, 0);
   const availableTotal = known.length > 0 && Number.isFinite(totalCost);
-  const costLabel = availableTotal ? `${unavailableCount ? "Known estimates" : "Estimated cost"} ${fmtCost(totalCost)}${unavailableCount ? ` · ${unavailableCount} unavailable` : ""}` : "Estimate unavailable";
+  const allReported = known.every(row => row.sources.listPrice === 0 && row.sources.catalogue === 0);
+  const costLabel = !availableTotal ? "Estimate unavailable"
+    : unavailableCount ? `${allReported ? "Known reported cost" : "Known estimates"} ${fmtCost(totalCost)} · ${unavailableCount} unavailable`
+    : `${allReported ? "Reported cost" : "Estimated cost"} ${fmtCost(totalCost)}`;
 
   // Where the stats wrap, the separator after the last stat on a line has
   // nothing to separate; index.css hides it on the stat marked here.
@@ -474,32 +471,14 @@ function StatsLine({ stats, model, spans, active, startedAt, completionUnavailab
               <span aria-live="polite">{costLabel}</span>
             </button>
             {showCost && (
-              <div ref={costPanelRef} id={costPanelId} role="region" aria-label="Nominal cost estimates" className="fixed z-50 overflow-y-auto rounded-md border border-rp-line bg-rp-surface p-4 text-[12px] shadow-e3"
+              <div ref={costPanelRef} id={costPanelId} role="region" aria-label="Cost breakdown" className="fixed z-50 overflow-y-auto rounded-md border border-rp-line bg-rp-surface p-4 text-[12px] shadow-e3"
                 style={{ ...costPosition, maxHeight: "min(400px, calc(100vh - 32px))", visibility: costPosition ? "visible" : "hidden" }}>
-                <div className="rp-eyebrow mb-2">Nominal input/output estimates</div>
-                <p className="mb-3 whitespace-normal leading-5 text-rp-ink-muted">OpenRouter catalogue quotes; actual provider and tier billing may differ. Cache, audio, discounts, and other fees are excluded. Reported cost stays separate.</p>
+                <div className="rp-eyebrow mb-2">Cost by model</div>
+                <p className="mb-3 whitespace-normal leading-5 text-rp-ink-muted">Reported costs are used as is. Estimates price input and output at list prices as of {PRICE_TABLE_AS_OF}, or OpenRouter catalogue quotes; cache and fees excluded.</p>
                 {breakdown.map(b => (
                   <div key={b.model === null ? "missing-model" : `model:${b.model}`} className="mb-3 last:mb-0 whitespace-normal break-words">
                     <div className="mb-1 font-mono text-[12px] font-medium text-rp-ink">{b.model ?? "Model unavailable"}</div>
-                    {b.breakdown ? (
-                      <div className="space-y-1 text-rp-ink-muted">
-                        <div className="flex justify-between gap-4">
-                          <span>{b.inTok!.toLocaleString()} input @ {fmtRate(b.breakdown.inRate)}/M</span>
-                          <span className="rp-num text-rp-ink">{fmtCost(b.breakdown.inCost)}</span>
-                        </div>
-                        <div className="flex justify-between gap-4">
-                          <span>{b.outTok!.toLocaleString()} output @ {fmtRate(b.breakdown.outRate)}/M</span>
-                          <span className="rp-num text-rp-ink">{fmtCost(b.breakdown.outCost)}</span>
-                        </div>
-                        <div className="flex justify-between gap-4 border-t border-rp-line pt-1">
-                          <span className="text-rp-ink">total</span>
-                          <span className="rp-num font-medium text-rp-ink">{fmtCost(b.breakdown.totalCost)}</span>
-                        </div>
-                        <div>Catalogue ID: {b.breakdown.catalogueId}</div>
-                        <div>Revision: <span className="font-mono">{b.breakdown.rateRevision}</span></div>
-                        <div>Fetched: {b.breakdown.source.observedAt}</div>
-                      </div>
-                    ) : <p className="text-rp-ink-muted">{b.model === null ? "Model identity was not captured." : b.inTok === null || b.outTok === null ? "Input or output token capture is unavailable." : pricing.status === "disabled" ? "Public pricing is disabled. Enable it in Settings." : pricing.status === "loading" || pricing.status === "idle" ? "Public pricing is loading." : pricing.status === "error" ? pricing.error : "No unambiguous exact catalogue price is available."}</p>}
+                    <CostRowDetail row={b} />
                   </div>
                 ))}
               </div>
@@ -507,6 +486,47 @@ function StatsLine({ stats, model, spans, active, startedAt, completionUnavailab
           </span>
         </Stat>
       )}
+    </div>
+  );
+}
+
+function CostLine({ label, amount, strong = false }: { label: ReactNode; amount: number; strong?: boolean }) {
+  return (
+    <div className={cn("flex justify-between gap-4", strong && "border-t border-rp-line pt-1")}>
+      <span className={cn(strong && "text-rp-ink")}>{label}</span>
+      <span className={cn("rp-num text-rp-ink", strong && "font-medium")}>{fmtCost(amount)}</span>
+    </div>
+  );
+}
+
+function CostRowDetail({ row }: { row: ModelCostRow }) {
+  const { sources } = row;
+  const used = [sources.reported, sources.listPrice, sources.catalogue].filter(count => count > 0).length;
+  // Per-token lines only when one source priced every call; calls in different price bands would make one rate untrue.
+  const tokens = used === 1 && row.totalUsd !== null && row.inTok !== null && row.outTok !== null;
+  return (
+    <div className="space-y-1 text-rp-ink-muted">
+      {sources.reported > 0 && <CostLine label="Reported on the span" amount={row.reportedUsd} />}
+      {row.listPrice && <>
+        {tokens && Math.abs(row.inTok! * row.listPrice.inRate / 1_000_000 + row.outTok! * row.listPrice.outRate / 1_000_000 - row.listPriceUsd) <= 1e-9 * Math.max(1, row.listPriceUsd) && <>
+          <CostLine label={`${row.inTok!.toLocaleString()} input @ ${fmtRate(row.listPrice.inRate)}/M`} amount={row.inTok! * row.listPrice.inRate / 1_000_000} />
+          <CostLine label={`${row.outTok!.toLocaleString()} output @ ${fmtRate(row.listPrice.outRate)}/M`} amount={row.outTok! * row.listPrice.outRate / 1_000_000} />
+        </>}
+        <CostLine label="Estimated at list price" amount={row.listPriceUsd} strong={tokens} />
+        <p>Price for {row.listPrice.priceModel} from <a className="text-rp-blue underline underline-offset-4 hover:text-rp-blue-hover" href={row.listPrice.sourceUrl} target="_blank" rel="noreferrer">{row.listPrice.sourceName}</a>, as of {row.listPrice.asOf}.</p>
+      </>}
+      {row.catalogue && <>
+        {tokens && <>
+          <CostLine label={`${row.inTok!.toLocaleString()} input @ ${fmtRate(row.catalogue.inRate)}/M`} amount={row.catalogue.inCost} />
+          <CostLine label={`${row.outTok!.toLocaleString()} output @ ${fmtRate(row.catalogue.outRate)}/M`} amount={row.catalogue.outCost} />
+        </>}
+        <CostLine label="Estimated from the OpenRouter catalogue" amount={row.catalogueUsd} strong={tokens} />
+        <div>Catalogue ID: {row.catalogue.catalogueId}</div>
+        <div>Revision: <span className="font-mono">{row.catalogue.rateRevision}</span></div>
+        <div>Fetched: {row.catalogue.source.observedAt}</div>
+      </>}
+      {used > 1 && row.totalUsd !== null && <CostLine label="total" amount={row.totalUsd} strong />}
+      {row.unavailableReason && <p>{used > 0 ? "Some calls are unpriced. " : ""}{row.unavailableReason}</p>}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { fetchPrices, fmtCost, fmtRate, getCostBreakdown, getPricingSnapshot, getPricingUsageByModel, setModelPricingConsent, subscribePricing } from "../app/src/utils/costs";
+import { fetchPrices, fmtCost, fmtRate, getCostBreakdown, getPricingSnapshot, getPricingUsageByModel, getRunCostRows, setModelPricingConsent, subscribePricing } from "../app/src/utils/costs";
 import type { Span } from "../app/src/utils/types";
 
 const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
@@ -176,5 +176,32 @@ describe("pricing capture populations", () => {
 
   test("model totals refuse unsafe accumulation rather than rounding", () => {
     expect(getPricingUsageByModel([span("one", "fixture/known", Number.MAX_SAFE_INTEGER, 1), span("two", "fixture/known", 1, 1)]).get("fixture/known")).toEqual({ inTok: null, outTok: 2 });
+  });
+});
+
+describe("run cost rows", () => {
+  test("bundled list prices estimate real dated ids with no consent and no network", () => {
+    const [row] = getRunCostRows([span("nano", "gpt-5-nano-2025-08-07", 1_000, 500)]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(row).toMatchObject({ model: "gpt-5-nano-2025-08-07", sources: { reported: 0, listPrice: 1, catalogue: 0 }, unavailableReason: null });
+    expect(row.totalUsd).toBeCloseTo((1_000 * 0.05 + 500 * 0.4) / 1e6, 15);
+    expect(row.listPrice).toMatchObject({ inRate: 0.05, outRate: 0.4, asOf: "2026-11-25", priceModel: "gpt-5-nano" });
+  });
+
+  test("a reported cost wins over the list price, and unpriced models stay unavailable", () => {
+    const reported = { ...span("reported", "gpt-5-nano", 1_000, 500), attributes: JSON.stringify({ "gen_ai.usage.cost_usd": 0.25 }) };
+    const rows = getRunCostRows([reported, span("estimated", "gpt-5-nano", 1_000, 500), span("unknown", "fixture/missing-price", 10, 10)]);
+    const nano = rows.find(row => row.model === "gpt-5-nano")!;
+    expect(nano).toMatchObject({ generations: 2, sources: { reported: 1, listPrice: 1, catalogue: 0 }, reportedUsd: 0.25 });
+    expect(nano.totalUsd).toBeCloseTo(0.25 + (1_000 * 0.05 + 500 * 0.4) / 1e6, 15);
+    expect(rows.find(row => row.model === "fixture/missing-price")).toMatchObject({ totalUsd: null, unavailableReason: expect.stringContaining("No list price") });
+  });
+
+  test("consented catalogue quotes match dated ids and price models the bundled table lacks", async () => {
+    setModelPricingConsent(true);
+    await fetchPrices();
+    expect(getCostBreakdown("known-2025-01-01", 100, 100)?.catalogueId).toBe("fixture/known");
+    const [row] = getRunCostRows([span("catalogue", "known", 100, 100)], getPricingSnapshot());
+    expect(row).toMatchObject({ sources: { reported: 0, listPrice: 0, catalogue: 1 }, unavailableReason: null });
   });
 });
