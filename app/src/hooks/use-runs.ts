@@ -72,11 +72,14 @@ export function useRecentRuns() {
   });
 }
 
-/** Agent and model filter choices, and whether any run is the user's own, without the full run list. */
+/**
+ * Agent and model filter choices, and whether any run is the user's own, without the full run list. This read and
+ * `useRunRows` are a few hundred bytes and are not cancelled on unmount, so leaving a page still fills the cache.
+ */
 export function useRunFacets() {
   return useQuery({
     queryKey: RUN_FACETS_KEY,
-    queryFn: ({ signal }) => getRunFacets(signal),
+    queryFn: () => getRunFacets(),
   });
 }
 
@@ -85,7 +88,7 @@ export function useRunRows(ids: readonly (string | null | undefined)[]) {
   const wanted = [...new Set(ids.filter((id): id is string => !!id))].sort();
   return useQuery({
     queryKey: ["runs", "by-id", wanted],
-    queryFn: ({ signal }) => lookupRunFacts(wanted, signal),
+    queryFn: () => lookupRunFacts(wanted),
     enabled: wanted.length > 0,
     placeholderData: previous => previous,
   });
