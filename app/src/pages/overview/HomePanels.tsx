@@ -36,7 +36,7 @@ export const RUN_SERIES: readonly StackSeries[] = [
   { id: "ok", label: "No errors", color: "var(--rp-chart-ok)" },
   { id: "errors", label: "With errors", color: "var(--rp-chart-warn)" },
   { id: "failed", label: "Failed", color: "var(--rp-chart-fail)" },
-  { id: "open", label: "No recorded end", color: "var(--rp-chart-history)" },
+  { id: "open", label: "Running, stopped or unknown", color: "var(--rp-chart-history)" },
 ];
 
 export function RunsOverTimePanel({ overview, interactive = true }: { overview: Overview; interactive?: boolean }) {
@@ -69,7 +69,7 @@ export function RunsOverTimePanel({ overview, interactive = true }: { overview: 
         legend={series.map(item => ({ label: item.label, color: item.color }))}
         table={{
           caption: `Runs per ${BUCKET_NOUN[window]}`,
-          columns: ["Time", "Runs", "With errors", "Failed", ...(anyOpen ? ["No recorded end"] : []), "Tokens", "Cost"],
+          columns: ["Time", "Runs", "With errors", "Failed", ...(anyOpen ? ["Running, stopped or unknown"] : []), "Tokens", "Cost"],
           rows: buckets.filter(bucket => bucket.runs > 0).map(bucket => [
             `${bucketTitle(bucket, window)}${bucket.partial ? " (partial)" : ""}`,
             bucket.runs,

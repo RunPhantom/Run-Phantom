@@ -27,6 +27,8 @@ export function headlineParts(overview: Overview, timeZone?: string): HeadlinePa
   const withErrors = overview.kpis.completedWithErrors.value ?? 0;
   const running = overview.kpis.running.value ?? 0;
   const interrupted = overview.kpis.interrupted.value ?? 0;
+  const cancelled = overview.kpis.cancelled.value ?? 0;
+  const unknown = overview.kpis.unknown.value ?? 0;
   const phrase = WINDOW_COPY[window].phrase;
   if (runs === 0) return [{ text: `No runs ${phrase}.` }];
 
@@ -48,6 +50,8 @@ export function headlineParts(overview: Overview, timeZone?: string): HeadlinePa
   }
   if (running > 0) parts.push({ text: " " }, { text: String(running), digits: true }, { text: " still running." });
   if (interrupted > 0) parts.push({ text: " " }, { text: String(interrupted), digits: true }, { text: ` ${plural(interrupted, "was", "were")} interrupted.` });
+  if (cancelled > 0) parts.push({ text: " " }, { text: String(cancelled), digits: true }, { text: ` ${plural(cancelled, "was", "were")} cancelled.` });
+  if (unknown > 0) parts.push({ text: " " }, { text: String(unknown), digits: true }, { text: ` ${plural(unknown, "has", "have")} no recorded end.` });
   return parts;
 }
 

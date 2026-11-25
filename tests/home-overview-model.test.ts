@@ -17,7 +17,7 @@ function bucket(index: number, runs: number, failed = 0, completedWithErrors = 0
   return { start, end: start + HOUR, partial: false, runs, finished, failed, completedWithErrors, inputTokens: runs * 10, outputTokens: runs, tokenUnknownCalls: 0, costUsd: runs ? runs * 0.01 : 0, costUnknownCalls: 0, durationP95Ms: runs ? 1000 : null };
 }
 
-function overview(patch: { runs: number; failed?: number; withErrors?: number; running?: number; interrupted?: number; buckets?: OverviewBucket[]; window?: Overview["window"]["selection"] }): Overview {
+function overview(patch: { runs: number; failed?: number; withErrors?: number; running?: number; interrupted?: number; cancelled?: number; unknown?: number; buckets?: OverviewBucket[]; window?: Overview["window"]["selection"] }): Overview {
   const base = sampleOverview(NOW);
   return {
     ...base,
@@ -29,7 +29,9 @@ function overview(patch: { runs: number; failed?: number; withErrors?: number; r
       completedWithErrors: { value: patch.withErrors ?? 0, previous: 0 },
       running: { value: patch.running ?? 0, previous: 0 },
       interrupted: { value: patch.interrupted ?? 0, previous: 0 },
-      completed: { value: patch.runs - (patch.failed ?? 0) - (patch.withErrors ?? 0) - (patch.running ?? 0) - (patch.interrupted ?? 0), previous: 0 },
+      cancelled: { value: patch.cancelled ?? 0, previous: 0 },
+      unknown: { value: patch.unknown ?? 0, previous: 0 },
+      completed: { value: patch.runs - (patch.failed ?? 0) - (patch.withErrors ?? 0) - (patch.running ?? 0) - (patch.interrupted ?? 0) - (patch.cancelled ?? 0) - (patch.unknown ?? 0), previous: 0 },
     },
     timeseries: patch.buckets ?? [bucket(0, patch.runs, patch.failed, patch.withErrors)],
   };
@@ -59,6 +61,13 @@ describe("Home headline", () => {
   test("names interrupted runs instead of calling them running or finished", () => {
     expect(headlineText(headlineParts(overview({ runs: 3, interrupted: 3 })))).toBe("3 runs in the last 24 hours. 3 were interrupted.");
     expect(headlineText(headlineParts(overview({ runs: 4, failed: 1, running: 1, interrupted: 1 })))).toBe("4 runs in the last 24 hours. 1 failed. 1 still running. 1 was interrupted.");
+  });
+
+  test("accounts for every run, cancelled and unknown included", () => {
+    expect(headlineText(headlineParts(overview({ runs: 3, cancelled: 3 })))).toBe("3 runs in the last 24 hours. 3 were cancelled.");
+    expect(headlineText(headlineParts(overview({ runs: 19, failed: 4, withErrors: 3, running: 1, interrupted: 2, cancelled: 1, unknown: 1 }))))
+      .toBe("19 runs in the last 24 hours. 4 failed. 3 more finished with errors. 1 still running. 2 were interrupted. 1 was cancelled. 1 has no recorded end.");
+    expect(headlineText(headlineParts(overview({ runs: 2, unknown: 2 })))).toBe("2 runs in the last 24 hours. 2 have no recorded end.");
   });
 
   test("failure timing needs two or more late failures after earlier healthy runs", () => {
