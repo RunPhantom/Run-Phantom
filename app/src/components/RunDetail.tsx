@@ -31,7 +31,8 @@ import { useRunStatus } from "../hooks/use-run-status";
 import { localRunSummary } from "../utils/run-summary";
 import { buildReplayModelOptions } from "../utils/replay-models";
 import { captureCompletion, observationReplayUnavailable } from "../../../src/spans/normalized";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { evidenceApi } from "../api/evaluations";
 import { parseReplayMetadata } from "../utils/types";
 import { deleteRun, renameRun } from "../api/runs";
 import type { Run, Span, LiveEvent, SubAgent } from "../utils/types";
@@ -535,6 +536,7 @@ function CostRowDetail({ row }: { row: ModelCostRow }) {
 
 function MoreMenu({ runId }: { runId?: string }) {
   const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const deleteRef = useRef<HTMLButtonElement>(null);
@@ -617,6 +619,14 @@ function MoreMenu({ runId }: { runId?: string }) {
       </button>
       {open && (
         <div id={menuId} role="menu" aria-label="Run actions" className="rp-pop absolute right-0 top-full z-50 mt-1 min-w-[160px] overflow-hidden rounded-md border border-rp-line bg-rp-surface p-1 shadow-e3">
+          {runId && <button
+            type="button"
+            role="menuitem"
+            className="w-full rounded-sm px-3 py-2 text-left text-[13px] text-rp-ink transition-colors duration-250 ease-standard hover:bg-rp-row-hover"
+            onClick={() => { setOpen(false); navigate(runEvidencePath(runId)); }}
+          >
+            Attach test report
+          </button>}
           <button
             ref={deleteRef}
             type="button"
@@ -631,6 +641,17 @@ function MoreMenu({ runId }: { runId?: string }) {
       )}
     </div>
   );
+}
+
+const runEvidencePath = (runId: string) => `/evaluations?view=evidence&anchorKind=run&anchorId=${encodeURIComponent(runId)}`;
+
+/** Links to imported test reports only when at least one is attached to this run. */
+function AttachedReportsLink({ runId }: { runId: string }) {
+  const reports = useQuery({ queryKey: ["evidence", "run-reports", runId], retry: false, staleTime: 30_000,
+    queryFn: ({ signal }) => evidenceApi.sets({ kind: "run", id: runId }, signal) });
+  const count = reports.data?.items.length ?? 0;
+  if (!count) return null;
+  return <div className="flex flex-shrink-0 bg-rp-surface px-4 pb-1 sm:px-5"><Link className="inline-flex min-h-7 items-center gap-1 text-[12px] font-medium text-rp-blue underline-offset-4 transition-colors duration-250 ease-standard hover:text-rp-blue-hover hover:underline" to={runEvidencePath(runId)}>Attached test reports ({count}{reports.data?.truncated ? "+" : ""})<ArrowUpRight aria-hidden="true" className="size-3" /></Link></div>;
 }
 
 const HEADER_ACTION = cn(buttonVariants({ variant: "secondary", size: "sm" }), "gap-1.5 px-2.5 [&_svg]:size-3.5");
@@ -1915,7 +1936,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
           userMessage: lastUserMessage,
         } : undefined}
       />
-      {routeBase && <div className="flex flex-shrink-0 bg-rp-surface px-4 pb-1 sm:px-5"><Link className="inline-flex min-h-7 items-center gap-1 text-[12px] font-medium text-rp-blue underline-offset-4 transition-colors duration-250 ease-standard hover:text-rp-blue-hover hover:underline" to={`/evaluations?view=evidence&anchorKind=run&anchorId=${encodeURIComponent(runId)}`}>Reported completion evidence<ArrowUpRight aria-hidden="true" className="size-3" /></Link></div>}
+      {routeBase && <AttachedReportsLink runId={runId} />}
       <TraceAnnotations
         annotations={annotationsApi.annotations}
         freshIds={annotationsApi.freshIds}

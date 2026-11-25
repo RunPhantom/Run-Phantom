@@ -48,7 +48,9 @@ export function createEvidenceRouter(service: EvidenceImportService, owner: Evid
   router.get("/inventories", route((req, res) => {
     evidenceObject(req.query, ["anchor", "revision"], "inventory query");
     const anchor = strictEvidenceJson(evidenceText(req.query.anchor, "inventory anchor", 1_024), readerLimits({ maxDepth: 4 }));
-    res.json(inventories.get(anchor, revision(req.query.revision)));
+    const selected = revision(req.query.revision);
+    // An anchor without a declared inventory is a normal empty state, not a missing resource.
+    res.json(selected === undefined ? inventories.current(anchor) : inventories.get(anchor, selected));
   }));
   router.get("/imports/:id", route((req, res) => {
     const id = evidenceText(req.params.id, "job ID");

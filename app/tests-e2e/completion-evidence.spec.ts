@@ -48,7 +48,7 @@ test("default disabled repeats perform no observer request or storage and RunDet
   for (const width of [1440, 390, 320]) { await page.setViewportSize({ width, height: 950 }); await region.scrollIntoViewIfNeeded(); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); await page.screenshot({ path: testInfo.outputPath(`disabled-${width}.png`), fullPage: true }); }
   await page.reload(); await expect(region).toBeVisible(); expect(claims).toEqual([]);
   const history = await request.get(`${runPhantom.url}${endpoint}?${new URLSearchParams({ attachment: JSON.stringify({ kind: "run", id: EVALUATION_RUNS.baseline }), offset: "0" })}`); expect(history.status()).toBe(200); expect((await history.json()).items).toEqual([]);
-  await page.goto(`${runPhantom.url}/runs/${EVALUATION_RUNS.baseline}`); await page.getByRole("link", { name: "Reported completion evidence", exact: true }).click(); await expect(page.getByRole("combobox", { name: "Evidence attachment", exact: true })).toHaveValue(EVALUATION_RUNS.baseline); expect(claims).toEqual([]); expect(observed.errors).toEqual([]); expect(observed.remote).toEqual([]);
+  await page.goto(`${runPhantom.url}/runs/${EVALUATION_RUNS.baseline}`); await page.getByRole("link", { name: "Attached test reports (1)", exact: true }).click(); await expect(page.getByRole("combobox", { name: "Evidence attachment", exact: true })).toHaveValue(EVALUATION_RUNS.baseline); expect(claims).toEqual([]); expect(observed.errors).toEqual([]); expect(observed.remote).toEqual([]);
 });
 
 test("enabled R20/R21 retain exact neutral history while failed frozen evaluations and captured output remain identical", async ({ page, request, runPhantom }, testInfo) => {

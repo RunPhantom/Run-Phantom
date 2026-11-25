@@ -59,7 +59,9 @@ async function terminal(id: string): Promise<EvidenceJob> {
 describe("persisted workspace API projections", () => {
   test("authorized history and current inventory survive reopen without exposing source bodies", async () => {
     const anchor = { kind: "run", id: "actual-run" }, query = new URLSearchParams({ anchor: JSON.stringify(anchor) });
-    expect((await json(`/inventories?${query}`)).status).toBe(404);
+    const none = await json(`/inventories?${query}`);
+    expect(none.status).toBe(200); expect(none.value).toBeNull();
+    expect((await json(`/inventories?${query}&revision=1`)).status).toBe(404);
     const first = await json("/inventories", "POST", { anchor, expectedRevision: 0, expected });
     const second = await json("/inventories", "PUT", { anchor, expectedRevision: 1, expected: [...expected, { ...expected[0], shardId: "integration" }] });
     expect((await json(`/inventories?${query}`)).value).toEqual(second.value);
