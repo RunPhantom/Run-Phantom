@@ -161,9 +161,8 @@ function compare(a: { value: number | null; id: string }, b: { value: number | n
   return a.id === b.id ? 0 : (a.id < b.id ? -1 : 1) * direction;
 }
 
-export function toRunListRow(row: RunRow, now: number = Date.now()): RunListRow {
+export function toRunListRow(row: RunRow, now: number = Date.now(), runStatus: RunStatus = runRowStatus(row, now).status): RunListRow {
   const facts = row.facts;
-  const runStatus = runRowStatus(row, now).status;
   return {
     id: row.id, event_id: row.event_id, name: row.name, event_name: row.event_name, display_name: row.display_name, user_id: row.user_id, convo_id: row.convo_id,
     started_at: row.started_at, last_updated_at: row.last_updated_at, metadata: row.metadata, model: row.legacy_model, finished: facts.finished,
@@ -181,16 +180,26 @@ function statusMatches(status: RunStatus, filters: readonly string[]): boolean {
   return filters.some(filter => runStatusFilterMembers(filter).includes(status));
 }
 
-/** The filter half of GET /api/runs: everything except sort, cursor and limit. */
-export function runMatchesQuery(row: RunRow, query: Pick<RunListQuery, "statuses" | "agent" | "model" | "q" | "since" | "until"> & { ids?: readonly string[] }, now: number): boolean {
+/** Each row's derived status, computed at most once per request with one `now`. */
+function statusCache(now: number): (row: RunRow) => RunStatus {
+  const statuses = new Map<RunRow, RunStatus>();
+  return row => {
+    let status = statuses.get(row);
+    if (status === undefined) statuses.set(row, status = runRowStatus(row, now).status);
+    return status;
+  };
+}
+
+/** The filter half of GET /api/runs: everything except sort, cursor and limit. Status is checked last because deriving it parses metadata. */
+export function runMatchesQuery(row: RunRow, query: Pick<RunListQuery, "statuses" | "agent" | "model" | "q" | "since" | "until"> & { ids?: readonly string[] }, statusOf: (row: RunRow) => RunStatus): boolean {
   const needle = query.q?.toLowerCase();
   return (!query.ids || query.ids.includes(row.id))
     && (query.since === undefined || row.started_at >= query.since)
     && (query.until === undefined || row.started_at < query.until)
-    && (!query.statuses || statusMatches(runRowStatus(row, now).status, query.statuses))
     && (!query.agent || runAgent(row) === query.agent)
     && (!query.model || runUsesModel(row, query.model))
-    && (!needle || [row.id, row.display_name, row.name, row.event_name, runAgent(row), row.facts.inputPreview].some(field => field?.toLowerCase().includes(needle)));
+    && (!needle || [row.id, row.display_name, row.name, row.event_name, runAgent(row), row.facts.inputPreview].some(field => field?.toLowerCase().includes(needle)))
+    && (!query.statuses || statusMatches(statusOf(row), query.statuses));
 }
 
 /**
@@ -206,13 +215,14 @@ export function countRuns(db: Database, dbPath: string, rawQueries: readonly Rec
   if (queries.every(query => query.since !== undefined)) { where.push("r.started_at >= ?"); params.push(Math.min(...queries.map(query => query.since!))); }
   if (queries.every(query => query.until !== undefined)) { where.push("r.started_at < ?"); params.push(Math.max(...queries.map(query => query.until!))); }
   const rows = loadRunRows(db, dbPath, selectRunAggregates(db, where.join(" AND "), params));
-  const now = Date.now();
-  return queries.map(query => rows.reduce((count, row) => count + (runMatchesQuery(row, query, now) ? 1 : 0), 0));
+  const statusOf = statusCache(Date.now());
+  return queries.map(query => rows.reduce((count, row) => count + (runMatchesQuery(row, query, statusOf) ? 1 : 0), 0));
 }
 
 export function listRuns(db: Database, dbPath: string, rawQuery: Record<string, unknown>): RunListPage & { envelope: boolean } {
   const query = parseRunListQuery(rawQuery);
   const now = Date.now();
+  const statusOf = statusCache(now);
   const where: string[] = ["1 = 1"];
   const params: (string | number)[] = [];
   if (query.ids) {
@@ -221,7 +231,7 @@ export function listRuns(db: Database, dbPath: string, rawQuery: Record<string, 
   }
   if (query.since !== undefined) { where.push("r.started_at >= ?"); params.push(query.since); }
   if (query.until !== undefined) { where.push("r.started_at < ?"); params.push(query.until); }
-  const matching = loadRunRows(db, dbPath, selectRunAggregates(db, where.join(" AND "), params)).filter(row => runMatchesQuery(row, query, now));
+  const matching = loadRunRows(db, dbPath, selectRunAggregates(db, where.join(" AND "), params)).filter(row => runMatchesQuery(row, query, statusOf));
   const keyed = matching.map(row => ({ row, value: sortValue(row, query.sort), id: row.id }));
   keyed.sort((a, b) => compare(a, b, query.order));
   const start = query.cursor ? keyed.findIndex(item => compare(item, query.cursor!, query.order) > 0) : 0;
@@ -230,7 +240,7 @@ export function listRuns(db: Database, dbPath: string, rawQuery: Record<string, 
   const hasMore = remaining.length > page.length;
   const last = page[page.length - 1];
   return {
-    runs: page.map(item => toRunListRow(item.row, now)),
+    runs: page.map(item => toRunListRow(item.row, now, statusOf(item.row))),
     total: matching.length,
     hasMore,
     nextCursor: hasMore && last ? Buffer.from(JSON.stringify([1, query.filterKey, last.value, last.id])).toString("base64url") : null,
