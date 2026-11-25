@@ -150,9 +150,9 @@ test("compare runs stream into side-by-side columns with metrics, run links and 
 
   await page.getByRole("button", { name: "Show differences" }).click();
   const diff = other.locator("[data-playground-diff]");
-  await expect(diff.locator("del")).toHaveText(["shows", "step."]);
-  await expect(diff.locator("ins")).toHaveText(["records", "tool call."]);
-  await expect(other).toContainText("+3 −2 words vs. column 1");
+  await expect(diff.locator("del")).toHaveText(["shows each step."]);
+  await expect(diff.locator("ins")).toHaveText(["records each tool call."]);
+  await expect(other).toContainText("+4 −3 words vs. column 1");
   await expect(first.locator("[data-playground-diff]")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Raw", exact: true }).click();

@@ -151,11 +151,30 @@ describe("result facts", () => {
 describe("wordDiff", () => {
   test("marks only the words that changed", () => {
     expect(wordDiff("the cat sat on the mat", "the dog sat on the mat")).toEqual([
-      { kind: "same", text: "the " }, { kind: "removed", text: "cat" }, { kind: "added", text: "dog" }, { kind: "same", text: " sat on the mat" },
+      { kind: "same", text: "the " }, { kind: "removed", text: "cat " }, { kind: "added", text: "dog " }, { kind: "same", text: "sat on the mat" },
     ]);
     expect(diffStats(wordDiff("a b c", "a x y c"))).toEqual({ added: 2, removed: 1 });
     expect(wordDiff("same", "same")).toEqual([{ kind: "same", text: "same" }]);
     expect(wordDiff("", "new text")).toEqual([{ kind: "added", text: "new text" }]);
+  });
+
+  test("paraphrases read as a few whole changes, not alternating word pairs", () => {
+    const base = "An inference trace is a record of an inference session, typically listing the steps, inputs and outputs the model produced.";
+    const other = "An inference trace is a detailed log that records all the steps, inputs and outputs a model produced.";
+    const parts = wordDiff(base, other);
+    expect(parts).toEqual([
+      { kind: "same", text: "An inference trace is a " },
+      { kind: "removed", text: "record of an inference session, typically listing " },
+      { kind: "added", text: "detailed log that records all " },
+      { kind: "same", text: "the steps, inputs and outputs " },
+      { kind: "removed", text: "the " },
+      { kind: "added", text: "a " },
+      { kind: "same", text: "model produced." },
+    ]);
+    expect(wordDiff("Tracing shows each step.", "Tracing records each tool call.")).toEqual([
+      { kind: "same", text: "Tracing " }, { kind: "removed", text: "shows each step." }, { kind: "added", text: "records each tool call." },
+    ]);
+    for (const [index, part] of parts.entries()) if (part.kind === "removed") expect(parts[index + 1]?.kind).toBe("added");
   });
 
   test("rebuilds both texts exactly", () => {
