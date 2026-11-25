@@ -24,7 +24,10 @@ export OPENAI_API_KEY=...        # or ANTHROPIC_API_KEY / GEMINI_API_KEY
 bun agent.ts --provider openai
 ```
 
-Each turn prints the tool calls, the reply and a link to the run.
+Each turn prints the tool calls, the reply and a link to the run. Calls made by
+the researcher sub-agent are indented under `delegate_research`. If the key for
+the chosen provider is not set, the agent stops before sending anything to Run
+Phantom. Runs are named after the first 60 characters of the user's message.
 
 | Option | Meaning |
 | --- | --- |
@@ -42,9 +45,18 @@ bun agent.ts --provider gemini --subagent --prompt "My headphones from order A10
 bun agent.ts --provider openai --interactive
 ```
 
-Google no longer serves `gemini-2.5-flash` to newly created API keys and
-returns HTTP 404. If that happens, pass a model your key can use with
-`--model`. The failed call is still recorded as a failed run.
+Google closes older Gemini models to newly created API keys. As of November
+2026 both `gemini-2.5-flash` and `gemini-2.5-flash-lite` return HTTP 404 ("no
+longer available to new users") for new keys; the error names the current
+replacement, and the agent prints it as a hint. Pass that model, or any model
+your key lists at `https://generativelanguage.googleapis.com/v1beta/models`:
+
+```bash
+bun agent.ts --provider gemini --model <model-id>
+bun scenarios.ts --provider gemini --gemini-model <model-id>
+```
+
+A call that fails this way is still recorded as a failed run.
 
 ## Scenario batch
 
@@ -56,8 +68,8 @@ can see a realistic mix of runs:
 | `refund-damaged` | Looks up order A1001 and refunds it. | Run complete |
 | `inventory-outage` | `check_inventory` times out for KB-200; the agent explains and carries on. | Completed · 1 tool error |
 | `ledger-conflict` | `issue_refund` for A1005 hits a ledger conflict; the agent stops. | Run failed |
-| `warranty-subagent` | Delegates a warranty question to the researcher sub-agent. | Run complete |
-| `follow-up` | Two turns about order A1002 in one conversation. | Run complete |
+| `warranty-subagent` | Delegates a warranty question to the researcher sub-agent. Only counts as expected if `delegate_research` was called. | Run complete |
+| `follow-up` | Two turns about order A1002 in one conversation, named `Turn 1 · Order follow-up` and `Turn 2 · Order follow-up`. | Run complete |
 
 ```bash
 bun scenarios.ts                                   # every scenario, every provider
@@ -66,10 +78,12 @@ bun scenarios.ts --gemini-model <model-id>         # per-provider model override
 bun scenarios.ts --list
 ```
 
-Every scenario uses a provider key, so skip providers you have no key for. The
-whole batch with the default models costs well under $0.10. Models still choose
-their own steps, so a run can differ from the expected status; the summary
-reports any difference.
+Every scenario uses a provider key, so pick the providers you have keys for
+with `--provider`; the runner stops before running anything if a selected
+provider's key is missing. The whole batch with the default models costs well
+under $0.10. Models still choose their own steps, so a run can differ from the
+expected status. The summary reports any difference, and the runner exits with
+status 1 when a scenario did not end as expected or a trace failed to export.
 
 ## The tools
 
@@ -108,6 +122,9 @@ Spans follow the OpenTelemetry GenAI semantic conventions:
 Run Phantom also reads the `runphantom.event.name` and
 `runphantom.conversation.id` attributes on the root span, which name the run
 and group the turns.
+
+`tracing.ts` takes the endpoint and run link from `examples/shared/runphantom.ts`
+and adds nested spans, which the shared single-span helper does not model.
 
 Send traces somewhere else with the standard
 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` variable (default
