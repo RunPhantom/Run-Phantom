@@ -113,11 +113,13 @@ Run Phantom has no tagged releases yet, so everything below is unreleased.
   bookmarked URLs and MCP clients that relied on the old meaning should add
   `completed_with_errors`. Failed or cancelled replays, interrupted runs and
   runs with no recorded end no longer count as running anywhere.
+  ([#188](https://github.com/RunPhantom/Run-Phantom/pull/188))
 - **Error counts no longer count a failed run twice.** When a run's root step
   fails because a step inside it failed, the run reads "Run failed" with the
   inner errors counted once, so a rejected Playground call shows 1 error.
   Search treats a partial coding-hook capture by its span evidence, while the
   Runs page shows it as "Completion unavailable".
+  ([#188](https://github.com/RunPhantom/Run-Phantom/pull/188))
 - **Cost estimates on by default.** Runs, the overview, the run list and Cost
   & usage all price a model call by the same rule. Costs under a cent keep two
   significant digits.
@@ -206,7 +208,23 @@ Run Phantom has no tagged releases yet, so everything below is unreleased.
   ([#184](https://github.com/RunPhantom/Run-Phantom/pull/184))
 - Provider names that start with a vowel read "an OpenAI key", not "a OpenAI
   key". ([#185](https://github.com/RunPhantom/Run-Phantom/pull/185))
-<!-- Integrator: add this wave's fix pull requests here, above this line. -->
+- Runs, Search, Home and the Playground now derive a run's status the same
+  way, and Home's buckets start on local hour and day boundaries, including on
+  days with a skipped midnight or a half-hour clock change.
+  ([#188](https://github.com/RunPhantom/Run-Phantom/pull/188))
+- The Conversation tab follows the same causal order as the Overview, so a
+  failed run ends on its failure; nested sub-agents appear as cards that agree
+  with the sub-agent view; and a zoomed Span Tree no longer draws later steps
+  at its edge. ([#189](https://github.com/RunPhantom/Run-Phantom/pull/189))
+- Open in Playground replays Gemini function calls with the signature Gemini
+  requires, unwraps AI SDK v5 tool output, and says when it swaps the captured
+  model, including "-latest" ids. The command palette finds runs by any of
+  their names, in any word order.
+  ([#190](https://github.com/RunPhantom/Run-Phantom/pull/190))
+- Pages no longer download the full run list on every visit or while runs
+  stream in. The runs table sizes its columns to their content, and the span
+  drawer keeps the time track visible at laptop widths.
+  ([#191](https://github.com/RunPhantom/Run-Phantom/pull/191))
 
 ### Internal
 
