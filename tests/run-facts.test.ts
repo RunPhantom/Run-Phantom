@@ -5,7 +5,7 @@ import path from "node:path";
 import { clearAll, closeDb, getDbPath, getDrizzleDb } from "../src/db";
 import { aggregateCostAnalytics, type AnalyticsSpan } from "../src/pricing/analytics";
 import { clearRunFactsCache, clip, firstSentence, loadRunRows, RUN_FACT_LIMITS, selectRunAggregates } from "../src/stats/run-facts";
-import { deriveRunStatus } from "../src/stats/run-status";
+import { RUN_STATUSES, runOutcome } from "../src/run-status";
 import { seedMetricsRuns } from "./fixtures/metrics-seed";
 import { getRunCostRows, summarizeRunCost } from "../app/src/utils/costs";
 import type { Span } from "../app/src/utils/types";
@@ -38,17 +38,12 @@ function span(runId: string, id: string, options: { parent?: string; type?: stri
 }
 const run = (id: string) => db().query("INSERT INTO runs(id,name,started_at,last_updated_at) VALUES(?,?,1,1)").run(id, id);
 
-describe("deriveRunStatus", () => {
-  test("separates failed runs from runs that finished with step errors", () => {
-    const ok = { rootErrorCount: 0, rootFailed: false };
-    expect(deriveRunStatus({ rootCount: 0, endedRootCount: 0, ...ok, errorCount: 0 })).toBe("running");
-    expect(deriveRunStatus({ rootCount: 1, endedRootCount: 0, ...ok, errorCount: 1 })).toBe("running");
-    expect(deriveRunStatus({ rootCount: 1, endedRootCount: 1, ...ok, errorCount: 0 })).toBe("completed");
-    expect(deriveRunStatus({ rootCount: 1, endedRootCount: 1, ...ok, errorCount: 2 })).toBe("completed_with_errors");
-    expect(deriveRunStatus({ rootCount: 1, endedRootCount: 1, rootErrorCount: 1, rootFailed: true, errorCount: 1 })).toBe("failed");
-    expect(deriveRunStatus({ rootCount: 2, endedRootCount: 1, rootErrorCount: 1, rootFailed: true, errorCount: 1 })).toBe("failed");
-    // Legacy SDKs emit every span as a sibling root: one errored tool root is a step error, not a failed run (rootFailed in src/run-status.ts).
-    expect(deriveRunStatus({ rootCount: 2, endedRootCount: 2, rootErrorCount: 1, rootFailed: false, errorCount: 1 })).toBe("completed_with_errors");
+describe("run list status", () => {
+  test("projects the shared deriveRunStatus onto the run-list buckets", () => {
+    expect(RUN_STATUSES.map(status => [status, runOutcome(status)])).toEqual([
+      ["live", "running"], ["quiet", "running"], ["complete", "completed"], ["completed_with_errors", "completed_with_errors"],
+      ["failed", "failed"], ["cancelled", "cancelled"], ["interrupted", "interrupted"], ["unknown", "unknown"],
+    ]);
   });
 });
 
@@ -182,11 +177,11 @@ describe("run facts cache", () => {
   test("recomputes when a run's spans change", () => {
     run("cached"); span("cached", "root", { type: "AGENT_ROOT" });
     span("cached", "llm", { parent: "root", attributes: JSON.stringify({ "gen_ai.response.model": "gemini-2.5-flash", "gen_ai.usage.input_tokens": 10, "gen_ai.usage.output_tokens": 2, "gen_ai.usage.cost_usd": 0.5 }) });
-    expect(facts("cached")).toMatchObject({ costUsd: 0.5, costSource: "reported", status: "completed" });
+    expect(facts("cached")).toMatchObject({ costUsd: 0.5, costSource: "reported", finished: 1, errorCount: 0 });
     db().query("UPDATE spans SET attributes = ? WHERE run_id = 'cached' AND id = 'llm'").run(JSON.stringify({ "gen_ai.response.model": "gemini-2.5-flash", "gen_ai.usage.input_tokens": 10, "gen_ai.usage.output_tokens": 2, "gen_ai.usage.cost_usd": 0.25 }));
     expect(facts("cached").costUsd).toBe(0.25);
     db().query("UPDATE spans SET status = 'ERROR' WHERE run_id = 'cached' AND id = 'llm'").run();
-    expect(facts("cached")).toMatchObject({ status: "completed_with_errors", errorCount: 1 });
+    expect(facts("cached")).toMatchObject({ finished: 1, errorCount: 1 });
     db().query("UPDATE spans SET attributes = ? WHERE run_id = 'cached' AND id = 'llm'").run(JSON.stringify({ "gen_ai.response.model": "gemini-2.5-flash", "gen_ai.usage.input_tokens": 10, "gen_ai.usage.output_tokens": 2 }));
     expect(facts("cached")).toMatchObject({ costSource: "estimated" });
     expect(facts("cached").costUsd).toBeCloseTo(10 * 0.3 / 1e6 + 2 * 2.5 / 1e6, 15);

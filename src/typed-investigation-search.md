@@ -6,7 +6,7 @@ Every model, provider, duration, captured cost and tag condition must match the 
 
 | Field | Values | Operators |
 | --- | --- | --- |
-| `status` | `live`, `quiet`, `complete`, `completed_with_errors`, `failed`, `cancelled`, `interrupted`, `unknown`, or the groups `running` (live or quiet) and `completed` (with or without errors). Team traces keep `running`, `completed`, `failed`. | `eq`, `ne` |
+| `status` | `live`, `quiet`, `complete`, `completed_with_errors`, `failed`, `cancelled`, `interrupted`, `unknown`, or the Runs page buckets `running` (live or quiet) and `completed` (complete, no errors). Team traces keep `running`, `completed`, `failed`. | `eq`, `ne` |
 | `model`, `provider`, `tag` | Exact captured string | `eq`, `ne` |
 | `duration_ms`, `captured_cost_usd` | Finite nonnegative number | `eq`, `ne`, `lt`, `lte`, `gt`, `gte` |
 

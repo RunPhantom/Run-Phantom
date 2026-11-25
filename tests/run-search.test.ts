@@ -161,7 +161,8 @@ describe("full-store run search", () => {
     run("running"); span("running", { status: "UNSET" });
     getDrizzleDb().$client.query("UPDATE runs SET last_updated_at=? WHERE id='running'").run(Date.now());
     run("child-failure"); span("child-failure"); span("child-failure", { id: "child", parent: "root", status: "ERROR" });
-    expect((await searchRuns({ status: "completed" })).runs.map(r => r.id)).toEqual(["completed", "child-failure"]);
+    expect((await searchRuns({ status: "completed" })).runs.map(r => r.id)).toEqual(["completed"]);
+    expect((await searchRuns({ status: "completed_with_errors" })).runs.map(r => r.id)).toEqual(["child-failure"]);
     expect((await searchRuns({ status: "failed" })).runs.map(r => r.id)).toEqual(["failed"]);
     expect((await searchRuns({ status: "running" })).runs.map(r => r.id)).toEqual(["running"]);
     expect((await searchRuns({ model: "model-a", provider: "provider-a", status: "completed" })).runs.map(r => r.id)).toEqual(["completed"]);
@@ -187,13 +188,13 @@ describe("full-store run search", () => {
     for (const row of all.values()) expect(deriveRunStatus(row).status).toBe(row.status);
     const ids = async (status: string) => (await searchRuns({ status })).runs.map(r => r.id);
     expect(await ids("failed")).toEqual(["root-error", "replay-failed"]);
-    expect(await ids("completed")).toEqual(["tool-error"]);
+    expect(await ids("completed")).toEqual([]);
     expect(await ids("completed_with_errors")).toEqual(["tool-error"]);
     expect(await ids("interrupted")).toEqual(["stalled"]);
     expect(await ids("running")).toEqual([]);
     const typedFilter = (value: string, op = "eq") => searchRuns({ filter: { version: 1, all: [{ field: "status", op, value }] } }).then(result => result.runs.map(r => r.id));
     expect(await typedFilter("failed")).toEqual(["root-error", "replay-failed"]);
-    expect(await typedFilter("completed", "ne")).toEqual(["root-error", "stalled", "replay-failed"]);
+    expect(await typedFilter("completed", "ne")).toEqual(["tool-error", "root-error", "stalled", "replay-failed"]);
   });
 
   test("keyset pages preserve timestamp ties without duplication and report exhaustion", async () => {

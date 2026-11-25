@@ -7,7 +7,7 @@ import { clearAll, closeDb, getDbPath, getDrizzleDb } from "../src/db";
 import { createServer } from "../src/server";
 import { clearRunFactsCache } from "../src/stats/run-facts";
 import { RUN_LIST_SORTS, countRuns, listRuns } from "../src/stats/runs-list";
-import { RUN_STATUSES } from "../src/stats/run-status";
+import { RUN_OUTCOMES } from "../src/run-status";
 import {
   RUNS_TABLE_COLUMNS,
   RUNS_VIEW_SORTS,
@@ -51,7 +51,7 @@ afterAll(() => {
 
 describe("runs view filters", () => {
   test("mirror the GET /api/runs statuses and sorts", () => {
-    expect([...RUNS_VIEW_STATUSES]).toEqual([...RUN_STATUSES]);
+    expect([...RUNS_VIEW_STATUSES]).toEqual([...RUN_OUTCOMES]);
     expect([...RUNS_VIEW_SORTS]).toEqual([...RUN_LIST_SORTS]);
   });
 

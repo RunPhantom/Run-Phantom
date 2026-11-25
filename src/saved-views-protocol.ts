@@ -4,8 +4,10 @@
  * `since` at request time, so a saved "last 24 hours" view keeps meaning the last 24 hours.
  */
 
-export const RUNS_VIEW_STATUSES = ["running", "completed", "completed_with_errors", "failed"] as const;
-export type RunsViewStatus = typeof RUNS_VIEW_STATUSES[number];
+import { RUN_OUTCOMES, type RunOutcome } from "./run-status";
+
+export const RUNS_VIEW_STATUSES = RUN_OUTCOMES;
+export type RunsViewStatus = RunOutcome;
 
 export const RUNS_VIEW_SORTS = ["last_updated_at", "started_at", "duration", "cost", "tokens", "errors"] as const;
 export type RunsViewSort = typeof RUNS_VIEW_SORTS[number];

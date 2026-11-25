@@ -11,12 +11,12 @@ import { sampleOverview } from "../app/src/pages/overview/sample-overview";
 const HOUR = 3_600_000;
 const NOW = Date.UTC(2026, 10, 25, 18, 0, 0);
 
-function bucket(index: number, runs: number, failed = 0, completedWithErrors = 0): OverviewBucket {
+function bucket(index: number, runs: number, failed = 0, completedWithErrors = 0, finished = runs): OverviewBucket {
   const start = NOW - 24 * HOUR + index * HOUR;
-  return { start, end: start + HOUR, partial: false, runs, failed, completedWithErrors, inputTokens: runs * 10, outputTokens: runs, tokenUnknownCalls: 0, costUsd: runs ? runs * 0.01 : 0, costUnknownCalls: 0, durationP95Ms: runs ? 1000 : null };
+  return { start, end: start + HOUR, partial: false, runs, finished, failed, completedWithErrors, inputTokens: runs * 10, outputTokens: runs, tokenUnknownCalls: 0, costUsd: runs ? runs * 0.01 : 0, costUnknownCalls: 0, durationP95Ms: runs ? 1000 : null };
 }
 
-function overview(patch: { runs: number; failed?: number; withErrors?: number; running?: number; buckets?: OverviewBucket[]; window?: Overview["window"]["selection"] }): Overview {
+function overview(patch: { runs: number; failed?: number; withErrors?: number; running?: number; interrupted?: number; buckets?: OverviewBucket[]; window?: Overview["window"]["selection"] }): Overview {
   const base = sampleOverview(NOW);
   return {
     ...base,
@@ -27,6 +27,8 @@ function overview(patch: { runs: number; failed?: number; withErrors?: number; r
       failed: { value: patch.failed ?? 0, previous: 0 },
       completedWithErrors: { value: patch.withErrors ?? 0, previous: 0 },
       running: { value: patch.running ?? 0, previous: 0 },
+      interrupted: { value: patch.interrupted ?? 0, previous: 0 },
+      completed: { value: patch.runs - (patch.failed ?? 0) - (patch.withErrors ?? 0) - (patch.running ?? 0) - (patch.interrupted ?? 0), previous: 0 },
     },
     timeseries: patch.buckets ?? [bucket(0, patch.runs, patch.failed, patch.withErrors)],
   };
@@ -51,6 +53,11 @@ describe("Home headline", () => {
     expect(headlineText(headlineParts(overview({ runs: 1 })))).toBe("1 run in the last 24 hours. None failed.");
     expect(headlineText(headlineParts(overview({ runs: 2, running: 2 })))).toBe("2 runs in the last 24 hours. 2 still running.");
     expect(headlineText(headlineParts(overview({ runs: 6, withErrors: 2, window: "1h" })))).toBe("6 runs in the last hour. None failed; 2 finished with errors.");
+  });
+
+  test("names interrupted runs instead of calling them running or finished", () => {
+    expect(headlineText(headlineParts(overview({ runs: 3, interrupted: 3 })))).toBe("3 runs in the last 24 hours. 3 were interrupted.");
+    expect(headlineText(headlineParts(overview({ runs: 4, failed: 1, running: 1, interrupted: 1 })))).toBe("4 runs in the last 24 hours. 1 failed. 1 still running. 1 was interrupted.");
   });
 
   test("failure timing needs two or more late failures after earlier healthy runs", () => {
@@ -96,6 +103,11 @@ describe("KPI deltas", () => {
     expect(series.errorRate).toEqual([null, 0.5]);
     expect(series.cost).toEqual([0, null]);
     expect(series.p95).toEqual([null, 1000]);
+  });
+
+  test("the error-rate series divides by finished runs, like the KPI", () => {
+    const series = kpiSeries([bucket(0, 4, 1, 0, 2), bucket(1, 3, 0, 0, 0)]);
+    expect(series.errorRate).toEqual([0.5, null]);
   });
 });
 

@@ -1,4 +1,4 @@
-import { RUN_INTERRUPTED_AFTER_MS, RUN_QUIET_AFTER_MS, RUN_STATUSES, type RunStatus } from "./run-status";
+import { RUN_INTERRUPTED_AFTER_MS, RUN_QUIET_AFTER_MS, RUN_STATUS_FILTER_GROUPS, RUN_STATUS_FILTER_VALUES, runStatusFilterMembers } from "./run-status";
 
 /**
  * SQL mirror of `deriveRunStatus` for a local `runs` row, so search filters
@@ -28,15 +28,10 @@ export function runStatusSql(run: string) {
   return { status, replay, rootFailed, finished };
 }
 
-/** `running` and `completed` predate the shared status and stay accepted as groups. */
-export const RUN_STATUS_FILTER_GROUPS: Readonly<Record<string, readonly RunStatus[]>> = Object.freeze({
-  running: ["live", "quiet"],
-  completed: ["complete", "completed_with_errors"],
-  ...Object.fromEntries(RUN_STATUSES.map(status => [status, [status]])),
-});
-export const RUN_STATUS_FILTER_VALUES = Object.freeze(Object.keys(RUN_STATUS_FILTER_GROUPS));
+export { RUN_STATUS_FILTER_GROUPS, RUN_STATUS_FILTER_VALUES };
 
 export function runStatusFilterSql(status: string, value: string, op: "eq" | "ne"): { sql: string; params: string[] } {
-  const members = RUN_STATUS_FILTER_GROUPS[value] ?? [value];
+  const members = runStatusFilterMembers(value);
+  if (!members.length) return { sql: op === "ne" ? "1=1" : "0=1", params: [] };
   return { sql: `${status} ${op === "ne" ? "NOT IN" : "IN"} (${members.map(() => "?").join(",")})`, params: [...members] };
 }

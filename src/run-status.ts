@@ -127,6 +127,39 @@ export function runInProgress(status: RunStatus): boolean {
   return status === "live" || status === "quiet";
 }
 
+/**
+ * The coarse status run lists, saved views and the overview count by. It is a
+ * projection of `RunStatus`, never derived separately: live and quiet runs share
+ * `running`, `complete` keeps its older list name `completed`, and every other
+ * status is its own bucket.
+ */
+export const RUN_OUTCOMES = ["running", "completed", "completed_with_errors", "failed", "interrupted", "cancelled", "unknown"] as const;
+export type RunOutcome = typeof RUN_OUTCOMES[number];
+
+export function runOutcome(status: RunStatus): RunOutcome {
+  if (status === "live" || status === "quiet") return "running";
+  if (status === "complete") return "completed";
+  return status;
+}
+
+/** Outcomes that recorded how the run ended, the denominator of failure and error rates. */
+export const FINISHED_RUN_OUTCOMES: readonly RunOutcome[] = Object.freeze(["completed", "completed_with_errors", "failed"]);
+
+/**
+ * Status filter values accepted by GET /api/runs, run search, typed search
+ * filters and MCP: every RunStatus, plus each RunOutcome as the group of
+ * statuses that project onto it.
+ */
+export const RUN_STATUS_FILTER_GROUPS: Readonly<Record<string, readonly RunStatus[]>> = Object.freeze({
+  ...Object.fromEntries(RUN_OUTCOMES.map(outcome => [outcome, Object.freeze(RUN_STATUSES.filter(status => runOutcome(status) === outcome))])),
+  ...Object.fromEntries(RUN_STATUSES.map(status => [status, Object.freeze([status])])),
+});
+export const RUN_STATUS_FILTER_VALUES: readonly string[] = Object.freeze(Object.keys(RUN_STATUS_FILTER_GROUPS));
+
+export function runStatusFilterMembers(value: string): readonly RunStatus[] {
+  return Object.prototype.hasOwnProperty.call(RUN_STATUS_FILTER_GROUPS, value) ? RUN_STATUS_FILTER_GROUPS[value] : [];
+}
+
 export function runStatusTone(status: RunStatus): "success" | "warning" | "danger" | "neutral" {
   if (status === "live") return "success";
   if (status === "failed") return "danger";

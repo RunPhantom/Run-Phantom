@@ -42,6 +42,9 @@ describe("GET /api/overview computation", () => {
       completed: { value: 2, previous: 1 },
       completedWithErrors: { value: 1, previous: 0 },
       failed: { value: 1, previous: 1 },
+      interrupted: { value: 0, previous: 0 },
+      cancelled: { value: 0, previous: 0 },
+      unknown: { value: 0, previous: 0 },
       failureRate: { value: 0.25, previous: 0.5 },
       errorRate: { value: 0.5, previous: 0.5 },
       durationP50Ms: { value: 10_000, previous: 4_000, knownRuns: 4 },
@@ -86,7 +89,7 @@ describe("GET /api/overview computation", () => {
     expect(timeseries.reduce((sum, bucket) => sum + bucket.runs, 0)).toBe(5);
     const at = (hour: number) => timeseries.find(bucket => bucket.start === Date.UTC(2027, 0, 15, hour))!;
     expect(timeseries.map(bucket => bucket.partial)).toEqual([true, ...Array(23).fill(false), true]);
-    expect(at(11)).toEqual({ start: Date.UTC(2027, 0, 15, 11), end: Date.UTC(2027, 0, 15, 12), partial: false, runs: 1, failed: 0, completedWithErrors: 0, inputTokens: 100, outputTokens: 20, tokenUnknownCalls: 0, costUsd: 0.002, costUnknownCalls: 0, durationP95Ms: 10_000 });
+    expect(at(11)).toEqual({ start: Date.UTC(2027, 0, 15, 11), end: Date.UTC(2027, 0, 15, 12), partial: false, runs: 1, finished: 1, failed: 0, completedWithErrors: 0, inputTokens: 100, outputTokens: 20, tokenUnknownCalls: 0, costUsd: 0.002, costUnknownCalls: 0, durationP95Ms: 10_000 });
     expect(at(9)).toMatchObject({ runs: 1, failed: 1, inputTokens: 200, costUsd: 0.004, durationP95Ms: 30_000 });
     expect(at(10)).toMatchObject({ runs: 1, completedWithErrors: 1, costUsd: 0.00055, costUnknownCalls: 0 });
     expect(at(12)).toMatchObject({ runs: 1, inputTokens: 50, outputTokens: 0, tokenUnknownCalls: 1, durationP95Ms: null, costUsd: null, costUnknownCalls: 1 });

@@ -15,10 +15,13 @@ import {
 import { COLUMN_META, type RunsDensity } from "./table-model";
 
 export const STATUS_FILTER_LABELS: Record<RunsViewStatus, { label: string; title: string }> = {
-  running: { label: "Running", title: "Not finished yet, including quiet and interrupted runs" },
+  running: { label: "Running", title: "Not finished yet: spans arrived in the last 10 minutes" },
   completed: { label: "Completed", title: "Finished with no errors" },
   completed_with_errors: { label: "With errors", title: "Finished, but at least one step ended in an error" },
-  failed: { label: "Failed", title: "The run itself ended in an error" },
+  failed: { label: "Failed", title: "The run itself ended in an error, or its replay failed" },
+  interrupted: { label: "Interrupted", title: "No spans for 10 minutes and the run never recorded its end" },
+  cancelled: { label: "Cancelled", title: "The replay was cancelled before it finished" },
+  unknown: { label: "Unknown", title: "No spans were recorded, or the capture cannot show whether the run finished" },
 };
 
 export const WINDOW_LABELS: Record<RunsViewWindow | "all", string> = { "1h": "Last hour", "24h": "Last 24 hours", "7d": "Last 7 days", "30d": "Last 30 days", all: "All time" };

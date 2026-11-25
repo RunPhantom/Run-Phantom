@@ -1,4 +1,4 @@
-import type { RunStatus } from "./run-status";
+import type { RunOutcome } from "../run-status";
 
 /**
  * The runphantom-overview/1 contract. Kept free of runtime imports so the browser
@@ -23,6 +23,8 @@ export interface OverviewBucket {
   start: number;
   end: number;
   runs: number;
+  /** Runs that recorded how they ended (completed, completed with errors or failed): the error-rate denominator. */
+  finished: number;
   failed: number;
   completedWithErrors: number;
   /** True for the first and last buckets when they extend past the window: the first holds only runs from window.from on, the last only up to window.to. */
@@ -54,7 +56,7 @@ export interface OverviewAgentRow extends OverviewGroupStats { agent: string | n
 /** durationP50Ms/P95Ms are run durations of the runs that called the model; callP50Ms/P95Ms are per-call latencies. */
 export interface OverviewModelRow extends OverviewGroupStats { model: string | null; provider: string | null; calls: number; callP50Ms: number | null; callP95Ms: number | null; durationP50Ms: number | null; durationP95Ms: number | null }
 export interface OverviewFailingTool { tool: string; failures: number; calls: number; failedRuns: number; lastError: { message: string | null; runId: string; spanId: string; at: number | null } }
-export interface OverviewFailure { runId: string; name: string; agent: string | null; status: Extract<RunStatus, "failed" | "completed_with_errors">; startedAt: number; errorCount: number; error: { spanId: string; step: string; message: string | null } | null }
+export interface OverviewFailure { runId: string; name: string; agent: string | null; status: Extract<RunOutcome, "failed" | "completed_with_errors">; startedAt: number; errorCount: number; error: { spanId: string; step: string; message: string | null } | null }
 export interface OverviewLiveRun { runId: string; name: string; agent: string | null; startedAt: number; lastUpdatedAt: number; spanCount: number; model: string | null }
 
 export interface Overview {
@@ -70,6 +72,10 @@ export interface Overview {
     completed: Kpi;
     completedWithErrors: Kpi;
     failed: Kpi;
+    interrupted: Kpi;
+    cancelled: Kpi;
+    unknown: Kpi;
+    /** Shares of finished runs (completed, completed with errors, failed); null when none finished. */
     failureRate: Kpi;
     errorRate: Kpi;
     durationP50Ms: DurationKpi;
