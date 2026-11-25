@@ -160,6 +160,7 @@ export function stateFromDraft(draft: PlaygroundDraft, current: PlaygroundDraftS
     messages: draft.messages.length ? editorMessages(draft.messages) : defaultDraft().messages,
     temperature: draft.params.temperature === undefined ? "" : String(draft.params.temperature),
     maxOutputTokens: String(draft.params.maxOutputTokens),
+    reasoningEffort: "",
     toolsEnabled: draft.tools.length > 0,
     toolsText: draft.tools.length ? JSON.stringify(draft.tools, null, 2) : current.toolsText,
     targets: options.targets?.length ? options.targets.slice(0, MAX_COMPARE_COLUMNS) : [{ provider: draft.provider, model: draft.model }],
@@ -199,34 +200,40 @@ export function parseToolsText(text: string): ToolsParse {
   return { ok: true, tools };
 }
 
-export type BuildResult = { ok: true; body: PlaygroundRunBody } | { ok: false; error: string; field: "messages" | "temperature" | "maxOutputTokens" | "tools" | "targets" };
+export type BuildResult =
+  | { ok: true; body: PlaygroundRunBody }
+  | { ok: false; error: string; field: "messages" | "temperature" | "maxOutputTokens" | "tools" | "targets"; /** The message at fault, for message errors. */ index?: number };
 
-export function buildRunBody(state: PlaygroundDraftState): BuildResult {
+/** `maxTemperature` is the lowest limit among the selected models, as the editor hint shows it. */
+export function buildRunBody(state: PlaygroundDraftState, options: { maxTemperature?: number } = {}): BuildResult {
+  const maxTemperature = options.maxTemperature ?? 2;
   if (!state.targets.length) return { ok: false, error: "Choose a model to run.", field: "targets" };
   const messages: PlaygroundMessage[] = [];
   for (const [index, message] of state.messages.entries()) {
     const position = `Message ${index + 1}`;
     if (message.role === "tool") {
-      if (!message.toolCallId) return { ok: false, error: `${position} is a tool result without the call it answers. Remove it or open the run again.`, field: "messages" };
+      if (!message.toolCallId) return { ok: false, error: `${position} is a tool result without the call it answers. Remove it or open the run again.`, field: "messages", index };
       messages.push({ role: "tool", toolCallId: message.toolCallId, ...(message.name ? { name: message.name } : {}), content: message.content });
       continue;
     }
     if (message.role === "assistant") {
-      if (!message.content.trim() && !message.toolCalls?.length) return { ok: false, error: `${position} is empty. Write the assistant reply or remove the message.`, field: "messages" };
+      if (!message.content.trim() && !message.toolCalls?.length) return { ok: false, error: `${position} is empty. Write the assistant reply or remove the message.`, field: "messages", index };
       messages.push({ role: "assistant", content: message.content, ...(message.toolCalls?.length ? { toolCalls: message.toolCalls } : {}) });
       continue;
     }
-    if (!message.content.trim()) return { ok: false, error: `${position} is empty. Write a user message or remove it.`, field: "messages" };
+    if (!message.content.trim()) return { ok: false, error: `${position} is empty. Write a user message or remove it.`, field: "messages", index };
     messages.push({ role: "user", content: message.content });
   }
   if (!messages.length) return { ok: false, error: "Add a user message to run.", field: "messages" };
-  if (messages[0]!.role !== "user") return { ok: false, error: "The first message must come from the user.", field: "messages" };
-  if (messages[messages.length - 1]!.role === "assistant") return { ok: false, error: "The last message must come from the user or a tool so the model has something to answer.", field: "messages" };
+  if (messages[0]!.role !== "user") return { ok: false, error: "The first message must come from the user.", field: "messages", index: 0 };
+  if (messages[messages.length - 1]!.role === "assistant") return { ok: false, error: "The last message must come from the user or a tool so the model has something to answer.", field: "messages", index: state.messages.length - 1 };
 
   const params: NonNullable<PlaygroundRunBody["params"]> = {};
   if (state.temperature.trim()) {
     const temperature = Number(state.temperature);
-    if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) return { ok: false, error: "Temperature must be a number from 0 to 2, or empty for the model default.", field: "temperature" };
+    if (!Number.isFinite(temperature) || temperature < 0 || temperature > maxTemperature) {
+      return { ok: false, error: `Temperature must be a number from 0 to ${maxTemperature} for the selected ${state.targets.length === 1 ? "model" : "models"}, or empty for the model default.`, field: "temperature" };
+    }
     params.temperature = temperature;
   }
   const maxText = state.maxOutputTokens.trim();
@@ -367,3 +374,4 @@ export function groupHistory(runs: readonly PlaygroundHistoryRun[]): HistoryGrou
   for (const group of groups.values()) group.runs.sort((a, b) => a.started_at - b.started_at || a.id.localeCompare(b.id));
   return [...groups.values()].sort((a, b) => b.startedAt - a.startedAt);
 }
+

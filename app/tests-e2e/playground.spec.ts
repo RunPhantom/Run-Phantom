@@ -275,3 +275,16 @@ test("History lists compare runs in column order and loads them back into the ed
   await expect(page.getByLabel("Max output tokens")).toHaveValue("300");
   await expect(page.locator("[data-playground-opened-from]")).toHaveCount(0);
 });
+
+test("a failed check moves focus to the field at fault", async ({ page, runPhantom }) => {
+  await openPlayground(page, runPhantom.url, { ...baseDraft, messages: [{ id: "a", role: "user", content: "Hi" }], toolsEnabled: true, toolsText: "[{\"name\": \"bad name\"}]", targets: [{ provider: "anthropic", model: "claude-haiku-4-5-20251001" }] });
+  await page.getByRole("button", { name: "Run", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "Tool definitions (JSON)" })).toBeFocused();
+  await expect(page.getByRole("textbox", { name: "Tool definitions (JSON)" })).toBeInViewport();
+
+  await page.getByRole("textbox", { name: "Tool definitions (JSON)" }).fill("[]");
+  await page.getByLabel("Temperature").fill("1.5");
+  await page.getByRole("button", { name: "Run", exact: true }).click();
+  await expect(page.locator("[data-playground-problem]")).toHaveText("Temperature must be a number from 0 to 1 for the selected model, or empty for the model default.");
+  await expect(page.getByLabel("Temperature")).toBeFocused();
+});

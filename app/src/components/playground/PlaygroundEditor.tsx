@@ -19,13 +19,22 @@ export function modelLabel(providers: readonly PlaygroundProviderInfo[] | undefi
   return modelInfo(providers, target).model?.label ?? target.model;
 }
 
+/** The tightest temperature limit among the selected models; models that ignore temperature do not constrain it. */
+export function effectiveMaxTemperature(providers: readonly PlaygroundProviderInfo[] | undefined, targets: readonly PlaygroundTarget[]): number {
+  return Math.min(2, ...targets.map(target => {
+    const { model } = modelInfo(providers, target);
+    return model?.temperature ? model.maxTemperature : 2;
+  }));
+}
+
 const sectionLabel = "rp-eyebrow";
 
-export function ModelPicker({ id, label, target, providers, onChange, onRemove }: {
+export function ModelPicker({ id, label, target, providers, disabled, onChange, onRemove }: {
   id: string;
   label: string;
   target: PlaygroundTarget;
   providers: readonly PlaygroundProviderInfo[] | undefined;
+  disabled?: boolean;
   onChange: (target: PlaygroundTarget) => void;
   onRemove?: () => void;
 }) {
@@ -47,6 +56,7 @@ export function ModelPicker({ id, label, target, providers, onChange, onRemove }
         <Select
           id={id}
           value={`${target.provider}/${target.model}`}
+          disabled={disabled}
           aria-describedby={missingKey ? hintId : undefined}
           onChange={event => {
             const [nextProvider, ...rest] = event.target.value.split("/");
@@ -156,7 +166,7 @@ export function PlaygroundEditor({ draft, update, providers, invalidField }: {
   const selected = draft.targets.map(target => ({ target, ...modelInfo(providers, target) }));
   const ignoresTemperature = selected.filter(item => item.model && !item.model.temperature).map(item => item.model!.label);
   const supportsEffort = selected.some(item => item.model?.reasoningEffort);
-  const maxTemperature = Math.min(2, ...selected.map(item => item.model?.temperature ? item.model.maxTemperature : 2));
+  const maxTemperature = effectiveMaxTemperature(providers, draft.targets);
 
   const setMessages = (change: (messages: EditorMessage[]) => EditorMessage[]) => update(current => ({ ...current, messages: change(current.messages) }));
   const addMessage = () => setMessages(messages => {
@@ -221,6 +231,7 @@ export function PlaygroundEditor({ draft, update, providers, invalidField }: {
               inputMode="decimal"
               value={draft.temperature}
               placeholder="Default"
+              data-playground-field="temperature"
               aria-invalid={invalidField === "temperature" || undefined}
               aria-describedby={`${base}-temperature-hint`}
               onChange={event => update(current => ({ ...current, temperature: event.target.value }))}
@@ -233,6 +244,7 @@ export function PlaygroundEditor({ draft, update, providers, invalidField }: {
               id={`${base}-max-tokens`}
               inputMode="numeric"
               value={draft.maxOutputTokens}
+              data-playground-field="maxOutputTokens"
               aria-invalid={invalidField === "maxOutputTokens" || undefined}
               onChange={event => update(current => ({ ...current, maxOutputTokens: event.target.value }))}
               className="mt-1.5 font-mono text-[13px]"
@@ -284,6 +296,7 @@ export function PlaygroundEditor({ draft, update, providers, invalidField }: {
               id={`${base}-tools-input`}
               value={draft.toolsText}
               spellCheck={false}
+              data-playground-field="tools"
               aria-invalid={(toolsCheck && !toolsCheck.ok) || invalidField === "tools" || undefined}
               aria-describedby={`${base}-tools-status`}
               onChange={event => update(current => ({ ...current, toolsText: event.target.value }))}

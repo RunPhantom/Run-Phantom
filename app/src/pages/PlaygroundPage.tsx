@@ -9,7 +9,7 @@ import {
   getDraftFromSpan, getPlaygroundModels, recordedColumn, streamPlaygroundRun, type PlaygroundProviderInfo,
 } from "../api/playground";
 import type { RunSearchRun } from "../api/runs";
-import { ModelPicker, modelLabel, PlaygroundEditor } from "../components/playground/PlaygroundEditor";
+import { effectiveMaxTemperature, ModelPicker, modelLabel, PlaygroundEditor } from "../components/playground/PlaygroundEditor";
 import { ResultColumn, type ColumnState } from "../components/playground/PlaygroundOutput";
 import { PLAYGROUND_HISTORY_KEY, PlaygroundHistory } from "../components/playground/PlaygroundHistory";
 import {
@@ -34,6 +34,26 @@ function nextTarget(existing: readonly PlaygroundTarget[], providers: readonly P
   return existing[0] ?? { provider: "openai", model: "gpt-5-nano" };
 }
 
+const BUILD_FIELD_SELECTOR: Record<Exclude<BuildResult, { ok: true }>["field"], string> = {
+  messages: "[data-playground-message] textarea",
+  temperature: "[data-playground-field='temperature']",
+  maxOutputTokens: "[data-playground-field='maxOutputTokens']",
+  tools: "[data-playground-field='tools']",
+  targets: "#playground-model-0",
+};
+
+function focusProblem(built: Exclude<BuildResult, { ok: true }>) {
+  window.requestAnimationFrame(() => {
+    const selector = built.field === "messages" && built.index !== undefined
+      ? `[data-playground-message='${built.index}'] textarea`
+      : BUILD_FIELD_SELECTOR[built.field];
+    const element = document.querySelector<HTMLElement>(selector);
+    if (!element) return;
+    element.scrollIntoView({ block: "center" });
+    element.focus({ preventScroll: true });
+  });
+}
+
 function resize<T>(items: readonly T[], length: number, make: (index: number) => T): T[] {
   return Array.from({ length }, (_, index) => items[index] ?? make(index));
 }
@@ -44,6 +64,8 @@ export function PlaygroundPage() {
   const [searchParams] = useSearchParams();
   const models = useQuery({ queryKey: ["playground", "models"], queryFn: ({ signal }) => getPlaygroundModels(signal), staleTime: 30_000 });
   const providers = models.data?.providers;
+  const providersRef = useRef(providers);
+  providersRef.current = providers;
 
   const [draft, setDraft] = useState<PlaygroundDraftState>(() => loadDraft());
   const draftRef = useRef(draft);
@@ -115,10 +137,11 @@ export function PlaygroundPage() {
 
   const run = useCallback(async () => {
     if (abortRef.current) return;
-    const built: BuildResult = buildRunBody(draftRef.current);
+    const built: BuildResult = buildRunBody(draftRef.current, { maxTemperature: effectiveMaxTemperature(providersRef.current, draftRef.current.targets) });
     if (!built.ok) {
       setProblem({ message: built.error, field: built.field });
       setAnnouncement(built.error);
+      focusProblem(built);
       return;
     }
     setProblem(null);
@@ -270,6 +293,7 @@ export function PlaygroundPage() {
                   label={draft.targets.length === 1 ? "Model" : `Model ${index + 1}`}
                   target={target}
                   providers={providers}
+                  disabled={running}
                   onChange={next => setTargets(draft.targets.map((item, position) => position === index ? next : item))}
                   onRemove={draft.targets.length > 1 && !running ? () => setTargets(draft.targets.filter((_, position) => position !== index)) : undefined}
                 />
@@ -292,7 +316,7 @@ export function PlaygroundPage() {
             ) : (
               <Button onClick={() => void run()} aria-keyshortcuts={ariaKeyShortcuts(RUN_KEYS)}>
                 <Play aria-hidden="true" /> {draft.targets.length > 1 ? `Run ${draft.targets.length} models` : "Run"}
-                <kbd aria-hidden="true" className="ml-1 rounded-[2px] border border-white/40 px-1 font-mono text-[11px] font-normal leading-4 text-rp-on-solid">{formatKeys(RUN_KEYS, isMacPlatform())}</kbd>
+                <kbd aria-hidden="true" className="ml-1 hidden rounded-[2px] sm:inline [@media(pointer:coarse)]:hidden border border-white/40 px-1 font-mono text-[11px] font-normal leading-4 text-rp-on-solid">{formatKeys(RUN_KEYS, isMacPlatform())}</kbd>
               </Button>
             )}
           </div>

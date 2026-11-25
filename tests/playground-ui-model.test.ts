@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createSseParser, toStreamEvent, type PlaygroundCallResult, type PlaygroundDraft } from "../app/src/api/playground";
 import {
-  appendToolRound, buildRunBody, defaultDraft, errorHelp, estimateResultCost, groupHistory, orderByColumn, parseStoredDraft, parseToolsText,
-  recordedCostUsd, stateFromDraft, targetIndexOf, type PlaygroundDraftState,
+  appendToolRound, buildRunBody, defaultDraft, errorHelp, estimateResultCost, groupHistory, orderByColumn,
+  parseStoredDraft, parseToolsText, recordedCostUsd, stateFromDraft, targetIndexOf, type PlaygroundDraftState,
 } from "../app/src/components/playground/playground-model";
 import { diffStats, wordDiff } from "../app/src/components/playground/word-diff";
 import { playgroundPathForSpan } from "../app/src/components/playground/open-in-playground";
@@ -47,7 +47,7 @@ describe("buildRunBody", () => {
   });
 
   test("names the field and the fix for each invalid input", () => {
-    expect(buildRunBody(draft({ messages: [{ id: "a", role: "user", content: "  " }] }))).toEqual({ ok: false, field: "messages", error: "Message 1 is empty. Write a user message or remove it." });
+    expect(buildRunBody(draft({ messages: [{ id: "a", role: "user", content: "  " }] }))).toEqual({ ok: false, field: "messages", index: 0, error: "Message 1 is empty. Write a user message or remove it." });
     expect(buildRunBody(draft({ messages: [{ id: "a", role: "assistant", content: "Hi" }] }))).toMatchObject({ ok: false, field: "messages", error: "The first message must come from the user." });
     expect(buildRunBody(draft({ messages: [{ id: "a", role: "user", content: "Hi" }, { id: "b", role: "assistant", content: "Hello" }] }))).toMatchObject({ ok: false, field: "messages", error: expect.stringContaining("last message") });
     expect(buildRunBody(draft({ temperature: "3" }))).toMatchObject({ ok: false, field: "temperature" });
@@ -57,6 +57,13 @@ describe("buildRunBody", () => {
     expect(buildRunBody(draft({ maxOutputTokens: "1.5" }))).toMatchObject({ ok: false, field: "maxOutputTokens" });
     expect(buildRunBody(draft({ toolsEnabled: true, toolsText: "{" }))).toMatchObject({ ok: false, field: "tools" });
     expect(buildRunBody(draft({ targets: [] }))).toMatchObject({ ok: false, field: "targets" });
+  });
+
+  test("temperature is checked against the tightest limit among the selected models", () => {
+    const claude = draft({ temperature: "1.5", targets: [{ provider: "anthropic", model: "claude-haiku-4-5-20251001" }] });
+    expect(buildRunBody(claude, { maxTemperature: 1 })).toEqual({ ok: false, field: "temperature", error: "Temperature must be a number from 0 to 1 for the selected model, or empty for the model default." });
+    expect(buildRunBody(claude, { maxTemperature: 2 }).ok).toBe(true);
+    expect(buildRunBody(draft({ temperature: "1" }), { maxTemperature: 1 }).ok).toBe(true);
   });
 });
 
@@ -112,6 +119,7 @@ describe("drafts", () => {
     const reloaded = stateFromDraft(source, defaultDraft(), { openedFrom: false, targets: [{ provider: "openai", model: "gpt-5-nano" }, { provider: "anthropic", model: "claude-haiku-4-5-20251001" }] });
     expect(reloaded.openedFrom).toBeNull();
     expect(reloaded.targets).toHaveLength(2);
+    expect(stateFromDraft(source, draft({ reasoningEffort: "high" }), { openedFrom: false }).reasoningEffort).toBe("");
   });
 
   test("continuing a tool round appends the calls and one result per call", () => {
