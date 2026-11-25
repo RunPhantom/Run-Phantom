@@ -181,15 +181,20 @@ function SpanTooltip({
   );
 }
 
-export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { spans: Span[]; subAgents?: SubAgent[]; onDiveIn?: (rootSpanId: string) => void }) {
+export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn, knownRootSpanId }: {
+  spans: Span[]; subAgents?: SubAgent[]; onDiveIn?: (rootSpanId: string) => void;
+  /** A parent left out of `spans` on purpose (a focused sub-agent's own span), so links to it are not missing coverage. */
+  knownRootSpanId?: string;
+}) {
   const vizSpans = useMemo(() => linkToVisibleAncestors(spans, s => s.span_type === "TRACE" || s.span_type === "TOOL_CALL" || !!s.span_type?.includes("LLM")), [spans]);
   const subAgentSpanIds = useMemo(() => new Set(subAgents.flatMap(a => a.span_ids)), [subAgents]);
   const undrawnParentIds = useMemo(() => {
     const drawn = new Set(vizSpans);
     const ids = new Set<string>();
     for (const span of spans) if (!drawn.has(span)) ids.add(span.id);
+    if (knownRootSpanId) ids.add(knownRootSpanId);
     return ids;
-  }, [spans, vizSpans]);
+  }, [spans, vizSpans, knownRootSpanId]);
   // Invocation grouping needs a drawn root. An agent -> agent hand-off is rooted
   // at its undrawn agent span; it still opens from its bars via the
   // conversation's focus request.

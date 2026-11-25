@@ -54,6 +54,8 @@ type AgentDisclosure = {
   expanded: ReadonlySet<string>;
   toggle: (rootSpanId: string) => void;
   focus: { rootSpanId: string; request: number } | null;
+  /** Called once the card has taken the focus, so a later remount does not take it again. */
+  clearFocus: () => void;
   md: boolean;
 };
 const AgentDisclosureContext = createContext<AgentDisclosure | null>(null);
@@ -89,6 +91,7 @@ export function SubAgentBlock({ agent, spans, subAgents, onDiveIn }: { agent: Su
   const tokens = agent.total_input_tokens + agent.total_output_tokens;
   const failed = agent.status === "ERROR";
   const focusRequest = disclosure?.focus?.rootSpanId === agent.root_span_id ? disclosure.focus.request : 0;
+  const clearFocus = disclosure?.clearFocus;
 
   // The Trajectory asks for a span inside this agent: the provider has
   // already expanded this card and its ancestors, so the header is mounted.
@@ -96,27 +99,30 @@ export function SubAgentBlock({ agent, spans, subAgents, onDiveIn }: { agent: Su
     if (!focusRequest || !headerRef.current) return;
     headerRef.current.scrollIntoView({ behavior: "instant", block: "center" });
     headerRef.current.focus({ preventScroll: true });
-  }, [focusRequest]);
+    clearFocus?.();
+  }, [focusRequest, clearFocus]);
 
   return (
     <section
       data-sub-agent={agent.root_span_id}
       className={cn("min-w-0 basis-full rounded-md border bg-rp-surface", failed ? "border-rp-danger-border" : "border-rp-line")}
     >
-      <div className="flex min-w-0 items-center gap-1 p-1">
+      {/* The action wraps under the header before the header's name gives way. */}
+      <div className="flex min-w-0 flex-wrap items-center gap-1 p-1">
         <button
           ref={headerRef}
           type="button"
           aria-expanded={open}
           aria-controls={bodyId}
-          className="flex min-h-9 min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5 rounded-sm px-2 py-1 text-left text-xs transition-colors duration-250 ease-standard hover:bg-rp-row-hover"
+          className="flex min-h-9 min-w-0 flex-1 basis-48 flex-wrap items-center gap-x-2 gap-y-0.5 rounded-sm px-2 py-1 text-left text-xs transition-colors duration-250 ease-standard hover:bg-rp-row-hover"
           onClick={() => disclosure ? disclosure.toggle(agent.root_span_id) : setLocalOpen(!localOpen)}
         >
-          <span className="flex min-w-0 items-center gap-2">
+          <span className="flex min-w-0 max-w-full items-center gap-2">
             <span className="shrink-0 text-rp-ink-muted"><Chevron open={open} size={10} /></span>
             <span className="shrink-0 rounded-sm bg-rp-wash px-1 py-0.5 font-mono text-[10px] font-medium uppercase leading-none tracking-[0.08em] text-rp-blue">agent</span>
-            <span className="min-w-0 truncate font-medium text-rp-ink">{agent.name}</span>
-            {failed && <span className="inline-flex shrink-0 items-center gap-1 font-medium text-rp-danger"><AlertCircle /> failed</span>}
+            {/* Names win: the failed label shrinks to its icon before the name truncates. */}
+            <span title={agent.name} className="min-w-0 truncate font-medium text-rp-ink">{agent.name}</span>
+            {failed && <span className="inline-flex min-w-3 shrink-[100] items-center gap-1 overflow-hidden whitespace-nowrap font-medium text-rp-danger"><span className="inline-flex size-3 shrink-0"><AlertCircle /></span>failed</span>}
           </span>
           <span className="rp-num min-w-0 text-[11px] text-rp-ink-muted">
             {plural(agent.tool_count, "tool")} &middot; {fmt(agent.duration_ms)}{tokens > 0 && <> &middot; {compactTokens(tokens)} tok</>}{costText && <> &middot; {costText}</>}
@@ -142,11 +148,17 @@ export function SubAgentBlock({ agent, spans, subAgents, onDiveIn }: { agent: Su
 }
 
 function SubAgentBody({ agent, spans, subAgents, onDiveIn, costText, md }: { agent: SubAgent; spans: Span[]; subAgents: readonly SubAgent[]; onDiveIn?: (id: string) => void; costText: string | null; md: boolean }) {
-  const items = useMemo(() => {
+  const { items, models, nestedCount } = useMemo(() => {
     const members = new Set(agent.span_ids);
     const own = spans.filter(s => members.has(s.id) && s.id !== agent.root_span_id);
     const root = spans.find(s => s.id === agent.root_span_id);
-    return buildChatItems({ spans: own, liveEvents: [], subAgents: subAgentsWithin(agent, subAgents), fallbackInput: root?.input_payload ?? null });
+    const nested = subAgentsWithin(agent, subAgents);
+    const models = [...new Set(own.flatMap(s => s.span_type?.includes("LLM") && s.model ? [s.model] : []))];
+    return {
+      items: buildChatItems({ spans: own, liveEvents: [], subAgents: nested, fallbackInput: root?.input_payload ?? null }),
+      models,
+      nestedCount: nested.length,
+    };
   }, [agent, spans, subAgents]);
 
   return (
@@ -155,11 +167,12 @@ function SubAgentBody({ agent, spans, subAgents, onDiveIn, costText, md }: { age
         ? <p className="px-4 py-2 text-[13px] text-rp-ink-muted">No messages or tool calls were recorded for this agent.</p>
         : <ChatItemList items={items} spans={spans} subAgents={subAgents} onDiveIn={onDiveIn} md={md} asSubAgent />}
       <p className="rp-meta break-words px-4 pt-1 text-[10px]">
-        {agent.model && <>{agent.model} &middot; </>}
+        {models.length > 0 && <span title={models.join(", ")}>{models[0]}{models.length > 1 && <> +{models.length - 1} more</>} &middot; </span>}
         {plural(agent.llm_count, "LLM call")} &middot; {plural(agent.tool_count, "tool")} &middot; {fmt(agent.duration_ms)}
         {agent.total_input_tokens > 0 && <> &middot; {agent.total_input_tokens.toLocaleString()} in</>}
         {agent.total_output_tokens > 0 && <> &middot; {agent.total_output_tokens.toLocaleString()} out</>}
         {costText && <> &middot; {costText}</>}
+        {nestedCount > 0 && <> &middot; includes {plural(nestedCount, "nested agent")}</>}
       </p>
     </div>
   );
@@ -504,10 +517,12 @@ function ChatItemList({ items, spans, subAgents, onDiveIn, md, onMdChange, onEdi
   });
 }
 
-export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDiveIn, isActive, lastUpdatedAt, onEditMessage, replayError, asSubAgent = false }: {
+export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDiveIn, isActive, lastUpdatedAt, onEditMessage, replayError, asSubAgent = false, agentRootSpanId }: {
   spans: Span[]; liveEvents: LiveEvent[]; subAgents?: SubAgent[]; onDiveIn?: (rootSpanId: string) => void; isActive?: boolean; lastUpdatedAt?: number; onEditMessage?: (content: string) => void; replayError?: { code: string; message: string } | null;
   /** The transcript is a focused sub-agent's: its input came from the parent agent, not the user. */
   asSubAgent?: boolean;
+  /** The focused sub-agent's own span, left out of `spans`; its children's parent link points at it. */
+  agentRootSpanId?: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   // An outer agent's span_ids include every inner agent's spans, so the
@@ -554,7 +569,8 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
     document.addEventListener("runphantom:focus-tool", handler);
     return () => document.removeEventListener("runphantom:focus-tool", handler);
   }, [subAgentBySpan, subAgents]);
-  const disclosure = useMemo<AgentDisclosure>(() => ({ expanded, toggle, focus, md }), [expanded, toggle, focus, md]);
+  const clearFocus = useCallback(() => setFocus(null), []);
+  const disclosure = useMemo<AgentDisclosure>(() => ({ expanded, toggle, focus, clearFocus, md }), [expanded, toggle, focus, clearFocus, md]);
 
   const items = useMemo(() => buildChatItems({ spans, liveEvents, subAgents }), [spans, liveEvents, subAgents]);
 
@@ -606,7 +622,7 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
     <AgentDisclosureContext.Provider value={disclosure}>
       <div ref={scrollRef} className="space-y-1.5 py-2 pb-24">
         {spans.some(span => span.normalized?.capture) && <div role="status" className="rp-meta px-4">Producer-reported observations · Partial capture · Runtime unverified</div>}
-        <div className="min-w-0 px-3 pt-1 sm:px-4"><FlameTimeline spans={spans} subAgents={subAgents} onDiveIn={onDiveIn} /></div>
+        <div className="min-w-0 px-3 pt-1 sm:px-4"><FlameTimeline spans={spans} subAgents={subAgents} onDiveIn={onDiveIn} knownRootSpanId={agentRootSpanId} /></div>
         <ChatItemList items={items} spans={spans} subAgents={subAgents} onDiveIn={onDiveIn} md={md} onMdChange={handleMdChange} onEditMessage={onEditMessage} asSubAgent={asSubAgent} />
         <ActiveSpinner isActive={isActive} lastUpdatedAt={lastUpdatedAt} liveEvents={liveEvents} spans={spans} />
       </div>

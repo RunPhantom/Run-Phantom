@@ -24,7 +24,7 @@ import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
 import { Badge as UiBadge, badgeVariants } from "@/components/ui/badge";
 import { fieldClassName } from "@/components/ui/input";
-import { runDisplayName, runStatusTone, isoTimestamp, safeDecodeParam } from "../utils/helpers";
+import { plural, runDisplayName, runStatusTone, isoTimestamp, safeDecodeParam } from "../utils/helpers";
 import { deriveRunStatus, runErrorEvidenceFromSpans, runInProgress, RUN_QUIET_AFTER_MS, type RunStatusEvidence, type RunStatusSummary } from "../../../src/run-status";
 import { useRunStatus } from "../hooks/use-run-status";
 import { localRunSummary } from "../utils/run-summary";
@@ -293,13 +293,43 @@ function runStatusEvidence(run: Run, spans: readonly Span[]): RunStatusEvidence 
   return { ...run, ...runErrorEvidenceFromSpans(spans), span_count: spans.length, capture_completion: unavailable ? "unavailable" : null };
 }
 
-/** A sub-agent has no root of its own here, so its errors are child errors of a run that is either still live or finished. */
-function subAgentStatus(runStatus: RunStatusSummary | null, spans: readonly Span[]): RunStatusSummary {
+/**
+ * A sub-agent's own span is left out of its view, so its errors are child errors
+ * of a run that is either still live or finished, unless that span itself
+ * errored: then the agent failed, as its card in the parent transcript says.
+ */
+function subAgentStatus(runStatus: RunStatusSummary | null, spans: readonly Span[], agentFailed: boolean): RunStatusSummary {
   const inProgress = runStatus ? runInProgress(runStatus.status) : false;
   const unavailable = spans.some(span => captureCompletion(span.normalized?.capture) === "unavailable");
   const { error_count, tool_error_count } = runErrorEvidenceFromSpans(spans);
   const lastUpdatedAt = runStatus?.status === "live" ? Date.now() : runStatus?.status === "quiet" ? Date.now() - RUN_QUIET_AFTER_MS : null;
-  return deriveRunStatus({ last_updated_at: lastUpdatedAt, finished: !inProgress, error_count, tool_error_count, root_failed: false, capture_completion: unavailable ? "unavailable" : null });
+  const status = deriveRunStatus({ last_updated_at: lastUpdatedAt, finished: !inProgress, error_count, tool_error_count, root_failed: agentFailed, capture_completion: unavailable ? "unavailable" : null });
+  return status.status === "failed" && agentFailed
+    ? { ...status, label: "Agent failed", detail: error_count > 0 ? `The agent's own span errored, with ${plural(error_count, "error")} inside it.` : "The agent's own span errored." }
+    : status;
+}
+
+type FocusedAgentView = { spans: Span[]; within: SubAgent[]; ancestors: SubAgent[] };
+// The focused view re-renders with every RunDetail render; derive its arrays
+// once per detail payload so ChatFlow's transcript memo can hold.
+const focusedAgentCache = new WeakMap<readonly Span[], WeakMap<readonly SubAgent[], Map<string, FocusedAgentView>>>();
+function focusedAgentView(agent: SubAgent, spans: readonly Span[], subAgents: readonly SubAgent[]): FocusedAgentView {
+  let bySubAgents = focusedAgentCache.get(spans);
+  if (!bySubAgents) focusedAgentCache.set(spans, bySubAgents = new WeakMap());
+  let byRoot = bySubAgents.get(subAgents);
+  if (!byRoot) bySubAgents.set(subAgents, byRoot = new Map());
+  const cached = byRoot.get(agent.root_span_id);
+  if (cached) return cached;
+  const members = new Set(agent.span_ids);
+  const view: FocusedAgentView = {
+    spans: spans.filter(s => members.has(s.id) && s.id !== agent.root_span_id),
+    within: subAgentsWithin(agent, subAgents),
+    ancestors: subAgents
+      .filter(other => other.root_span_id !== agent.root_span_id && other.span_ids.includes(agent.root_span_id))
+      .sort((a, b) => b.span_ids.length - a.span_ids.length),
+  };
+  byRoot.set(agent.root_span_id, view);
+  return view;
 }
 
 function ViewHeader({
@@ -317,7 +347,7 @@ function ViewHeader({
   anthropicModels?: string[];
   run?: Run;
   isReplay?: boolean;
-  breadcrumb?: { onBack: () => void; parentName: string };
+  breadcrumb?: { onBack: () => void; parentName: string; onRoot?: () => void; trail?: { name: string; onOpen: () => void }[] };
   fork?: {
     onFork: (userMessage?: string, mode?: "local", modelOverride?: string, contextOverrides?: Record<string, any>) => void;
     userMessage?: string;
@@ -329,6 +359,7 @@ function ViewHeader({
   const active = runInProgress(status.status);
   const onBack = breadcrumb?.onBack;
   const parentName = breadcrumb?.parentName;
+  const trail = breadcrumb?.trail ?? [];
   const onFork = fork?.onFork;
   const userMessage = fork?.userMessage;
   const replayUnavailable = allSpans?.some(span => observationReplayUnavailable(span.normalized?.capture)) === true;
@@ -440,7 +471,16 @@ function ViewHeader({
       {parentName && onBack ? (
         <>
           <div><Button onClick={onBack}>&larr; Show Parent Agent</Button></div>
-          <div className="mt-3 mb-1"><button className="cursor-pointer text-[13px] font-medium text-rp-ink-muted transition-colors duration-250 ease-standard hover:text-rp-blue" onClick={onBack}>{parentName}</button></div>
+          <nav aria-label="Agent path" className="mt-3 mb-1">
+            <ol className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[13px] font-medium text-rp-ink-muted">
+              {[{ name: parentName, onOpen: breadcrumb?.onRoot ?? onBack }, ...trail].map((step, index) => (
+                <li key={index} className="flex min-w-0 items-center gap-1.5">
+                  {index > 0 && <span aria-hidden="true" className="text-rp-ink-faint">/</span>}
+                  <button type="button" className="min-w-0 cursor-pointer truncate rounded-sm transition-colors duration-250 ease-standard hover:text-rp-blue" onClick={step.onOpen}>{step.name}</button>
+                </li>
+              ))}
+            </ol>
+          </nav>
           <div className="flex items-start ml-1">
             <svg className="flex-shrink-0" width="12" height="24" viewBox="0 0 12 24" style={{ marginRight: 6, marginTop: 2 }}>
               <path d="M 1 0 L 1 16 L 12 16" fill="none" stroke="var(--rp-line-strong)" strokeWidth="1" />
@@ -1369,9 +1409,9 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   const agent = focusedAgent ? paneData.subAgents.find(a => a.root_span_id === focusedAgent) : null;
 
   if (agent) {
-    const agentSpanSet = new Set(agent.span_ids);
-    // Exclude the root tool call span — it's the parent invocation, not part of the sub-agent's work
-    const agentSpans = paneSpans.filter(s => agentSpanSet.has(s.id) && s.id !== agent.root_span_id);
+    // The root span (tool call or agent span) is the parent's invocation, not part of the sub-agent's work.
+    const { spans: agentSpans, within: agentSubAgents, ancestors } = focusedAgentView(agent, paneSpans, paneData.subAgents);
+    const parentAgent = ancestors[ancestors.length - 1];
     const agentTools = countedToolSpans(agentSpans, agentRootIds);
     const agentLLMs = agentSpans.filter(s => s.span_type?.includes("LLM"));
     const agentErrs = agentSpans.filter(s => s.status === "ERROR");
@@ -1383,7 +1423,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
         <ViewHeader
           title={agent.name}
           model={agent.model}
-          status={subAgentStatus(runStatusSummary, agentSpans)}
+          status={subAgentStatus(runStatusSummary, agentSpans, agent.status === "ERROR")}
           startedAt={agent.start_time_ms}
           anthropicModels={anthropicModels}
           stats={runStatsFor(agentSpans, {
@@ -1392,8 +1432,10 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
           })}
           allSpans={agentSpans}
           breadcrumb={{
-            onBack: () => setFocusedAgent(null),
+            onBack: () => setFocusedAgent(parentAgent?.root_span_id ?? null),
+            onRoot: () => setFocusedAgent(null),
             parentName: runDisplayName(run),
+            trail: ancestors.map(ancestor => ({ name: ancestor.name, onOpen: () => setFocusedAgent(ancestor.root_span_id) })),
           }}
         />
         <div role="tablist" aria-label="Sub-agent views" aria-orientation="horizontal" onKeyDown={handleHorizontalTabKeys} className="flex flex-shrink-0 gap-1 overflow-x-auto border-b border-rp-line bg-rp-surface px-3 sm:px-4">
@@ -1407,7 +1449,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
         ) : (
           <StickToBottom id={agentPanelId} role="tabpanel" aria-labelledby={agentOverviewTabId} className={STICK_LAYOUT} resize={prefersReducedMotion ? "instant" : "smooth"} initial={false} contextRef={stickToBottomContextRef}>
             <StickToBottom.Content className="sb">
-              {agentTab === "chat" && <ChatFlow spans={agentSpans} liveEvents={[]} subAgents={subAgentsWithin(agent, paneData.subAgents)} onDiveIn={setFocusedAgent} asSubAgent />}
+              {agentTab === "chat" && <ChatFlow spans={agentSpans} liveEvents={[]} subAgents={agentSubAgents} onDiveIn={setFocusedAgent} asSubAgent agentRootSpanId={agent.root_span_id} />}
             </StickToBottom.Content>
             <ScrollToBottomButton />
           </StickToBottom>
