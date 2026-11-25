@@ -1,6 +1,7 @@
 import type { Page, Route } from "@playwright/test";
 import { expect, test } from "./fixtures";
-import type { PlaygroundCallResult } from "../../src/playground/protocol";
+import type { PlaygroundCallResult, PlaygroundRunRequest } from "../../src/playground/protocol";
+import { buildPlaygroundOtlp } from "../../src/playground/trace";
 
 const DRAFT_KEY = "runphantom:playground:draft";
 
@@ -235,4 +236,42 @@ test("Open in Playground fills the editor from a captured model call", async ({ 
 
   await page.goto(`${runPhantom.url}/playground?span=demo_triage_tool-1&run=demo_triage`);
   await expect(page.getByRole("alert").filter({ hasText: "Could not open that step: Only model call spans can be opened in the Playground." })).toBeVisible();
+});
+
+function recordedPlaygroundRun(comparisonId: string, index: number, target: { provider: "openai" | "anthropic"; model: string }, ids: { traceId: string; rootSpanId: string; llmSpanId: string }) {
+  const request: PlaygroundRunRequest = {
+    targets: [{ provider: "openai", model: "gpt-5-nano" }, { provider: "anthropic", model: "claude-haiku-4-5-20251001" }],
+    system: "Answer in one line.", messages: [{ role: "user", content: "Which order is late?" }],
+    params: { maxOutputTokens: 300 }, tools: [], stream: true, source: null,
+  };
+  const startedAt = Date.now() - 60_000;
+  return buildPlaygroundOtlp({
+    request, target, comparisonId, ids,
+    call: {
+      result: callResult({ index, ...target, output: { text: `Answer from ${target.model}`, toolCalls: [] } }),
+      startedAt, endedAt: startedAt + 900, sent: { temperature: null, maxOutputTokens: 300, reasoningEffort: null },
+    },
+  });
+}
+
+test("History lists compare runs in column order and loads them back into the editor", async ({ page, runPhantom }) => {
+  for (const body of [
+    recordedPlaygroundRun("cmp-history", 1, { provider: "anthropic", model: "claude-haiku-4-5-20251001" }, { traceId: "b1".repeat(16), rootSpanId: "b2".repeat(8), llmSpanId: "b3".repeat(8) }),
+    recordedPlaygroundRun("cmp-history", 0, { provider: "openai", model: "gpt-5-nano" }, { traceId: "a1".repeat(16), rootSpanId: "a2".repeat(8), llmSpanId: "a3".repeat(8) }),
+  ]) expect((await page.request.post(`${runPhantom.url}/v1/traces`, { data: body })).status()).toBe(200);
+
+  await openPlayground(page, runPhantom.url, { ...baseDraft, reasoningEffort: "high", messages: [{ id: "a", role: "user", content: "Something else" }], targets: [{ provider: "gemini", model: "gemini-3.8-flash" }] });
+  await page.getByRole("button", { name: "History" }).click();
+  const row = page.locator("[data-playground-history='cmp-history']");
+  await expect(row.locator("[data-playground-history-models]")).toHaveText("gpt-5-nano · claude-haiku-4-5-20251001");
+  await expect(row).toContainText("2 models compared");
+  await row.getByRole("button", { name: "Load" }).click();
+
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "Model 1", exact: true })).toHaveValue("openai/gpt-5-nano");
+  await expect(page.getByRole("combobox", { name: "Model 2", exact: true })).toHaveValue("anthropic/claude-haiku-4-5-20251001");
+  await expect(page.getByLabel("System")).toHaveValue("Answer in one line.");
+  await expect(page.getByRole("textbox", { name: "Content of message 1" })).toHaveValue("Which order is late?");
+  await expect(page.getByLabel("Max output tokens")).toHaveValue("300");
+  await expect(page.locator("[data-playground-opened-from]")).toHaveCount(0);
 });

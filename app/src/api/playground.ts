@@ -1,5 +1,6 @@
 import { apiJson, jsonInit } from "./request";
-import { searchRuns, type RunSearchRun } from "./runs";
+import { getRunDetail, searchRuns, type RunSearchRun } from "./runs";
+import { targetIndexOf } from "../components/playground/playground-model";
 import type {
   PlaygroundCallResult, PlaygroundMessage, PlaygroundProvider, PlaygroundRunResponse, PlaygroundTool, ReasoningEffort,
 } from "../../../src/playground/protocol";
@@ -208,4 +209,23 @@ export async function listPlaygroundHistory(limit = 40, signal?: AbortSignal): P
     const extra = byId.get(run.id);
     return extra ? { ...run, input_preview: extra.input_preview ?? null, est_cost_usd: extra.est_cost_usd ?? null, cost_source: extra.cost_source ?? null } : run;
   });
+}
+
+export interface RecordedColumn {
+  runId: string;
+  /** The model-call span, the one Open in Playground and the Runs link point at. */
+  spanId: string | null;
+  /** The compare column the run filled, or null for runs recorded before columns were tagged. */
+  index: number | null;
+}
+
+export async function recordedColumn(runId: string, signal?: AbortSignal): Promise<RecordedColumn> {
+  const detail = await getRunDetail(runId, signal);
+  return { runId, spanId: detail.spans.find(span => span.span_type?.includes("LLM"))?.id ?? null, index: targetIndexOf(detail.spans) };
+}
+
+/** The runs one Playground request recorded, found by its comparison id (each run's conversation id). */
+export async function findComparisonRuns(comparisonId: string, signal?: AbortSignal): Promise<RecordedColumn[]> {
+  const page = await searchRuns({ filter: PLAYGROUND_TAG_FILTER, limit: 20 }, signal);
+  return Promise.all(page.runs.filter(run => run.convo_id === comparisonId).map(run => recordedColumn(run.id, signal)));
 }

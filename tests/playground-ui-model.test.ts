@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createSseParser, toStreamEvent, type PlaygroundCallResult, type PlaygroundDraft } from "../app/src/api/playground";
 import {
-  appendToolRound, buildRunBody, defaultDraft, errorHelp, estimateResultCost, groupHistory, parseStoredDraft, parseToolsText,
-  stateFromDraft, type PlaygroundDraftState,
+  appendToolRound, buildRunBody, defaultDraft, errorHelp, estimateResultCost, groupHistory, orderByColumn, parseStoredDraft, parseToolsText,
+  recordedCostUsd, stateFromDraft, targetIndexOf, type PlaygroundDraftState,
 } from "../app/src/components/playground/playground-model";
 import { diffStats, wordDiff } from "../app/src/components/playground/word-diff";
 import { playgroundPathForSpan } from "../app/src/components/playground/open-in-playground";
@@ -133,6 +133,11 @@ describe("result facts", () => {
     expect(gemini.kind === "estimated" && gemini.totalUsd).toBeCloseTo(0.0007455, 10);
   });
 
+  test("the column prints the same cost digits as the recorded run", () => {
+    const estimate = estimateResultCost(result({ provider: "anthropic", model: "claude-haiku-4-5-20251001", responseModel: "claude-haiku-4-5-20251001", usage: { inputTokens: 650, outputTokens: 61, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningTokens: null, totalTokens: 711 } }), Date.parse("2026-11-25T12:00:00Z"));
+    expect(estimate.kind === "estimated" && recordedCostUsd(estimate.totalUsd)).toBe(0.000955);
+  });
+
   test("unknown token counts give no cost rather than zero", () => {
     expect(estimateResultCost(result({ usage: { inputTokens: null, outputTokens: null, cachedInputTokens: null, cacheWriteInputTokens: null, reasoningTokens: null, totalTokens: null } }))).toEqual({ kind: "unavailable", reason: "usage_unavailable" });
   });
@@ -214,6 +219,13 @@ describe("history and links", () => {
     const row = (id: string, convo: string | null, started: number) => ({ id, convo_id: convo, started_at: started, last_updated_at: started, name: null, event_name: null, display_name: null, user_id: null, metadata: null });
     const groups = groupHistory([row("b", "cmp", 20), row("a", "cmp", 10), row("solo", null, 30), row("c", "cmp", 15)]);
     expect(groups.map(group => [group.key, group.runs.map(run => run.id)])).toEqual([["solo", ["solo"]], ["cmp", ["a", "c", "b"]]]);
+  });
+
+  test("compare runs are ordered by the column they filled", () => {
+    expect(targetIndexOf([{ attributes: "{\"gen_ai.agent.name\":\"playground\"}" }, { attributes: "{\"runphantom.playground.target_index\":2}" }])).toBe(2);
+    expect(targetIndexOf([{ attributes: "not json" }, { attributes: null }])).toBeNull();
+    const runs = [{ id: "gemini" }, { id: "nano" }, { id: "old" }, { id: "haiku" }];
+    expect(orderByColumn(runs, new Map([["gemini", 2], ["nano", 0], ["old", null], ["haiku", 1]])).map(run => run.id)).toEqual(["nano", "haiku", "gemini", "old"]);
   });
 
   test("Open in Playground links carry the span and its run", () => {

@@ -6,9 +6,9 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/typography";
 import {
-  getDraftFromSpan, getPlaygroundModels, streamPlaygroundRun, type PlaygroundProviderInfo,
+  getDraftFromSpan, getPlaygroundModels, recordedColumn, streamPlaygroundRun, type PlaygroundProviderInfo,
 } from "../api/playground";
-import { getRunDetail, type RunSearchRun } from "../api/runs";
+import type { RunSearchRun } from "../api/runs";
 import { ModelPicker, modelLabel, PlaygroundEditor } from "../components/playground/PlaygroundEditor";
 import { ResultColumn, type ColumnState } from "../components/playground/PlaygroundOutput";
 import { PLAYGROUND_HISTORY_KEY, PlaygroundHistory } from "../components/playground/PlaygroundHistory";
@@ -32,17 +32,6 @@ function nextTarget(existing: readonly PlaygroundTarget[], providers: readonly P
     if (!used.has(`${provider.id}/${model.id}`)) return { provider: provider.id, model: model.id };
   }
   return existing[0] ?? { provider: "openai", model: "gpt-5-nano" };
-}
-
-/** Compare runs start together, so column order comes from the recorded target index, not start time. */
-function targetIndex(spans: ReadonlyArray<{ attributes?: string | null }>): number {
-  for (const span of spans) {
-    try {
-      const value = (JSON.parse(span.attributes ?? "{}") as Record<string, unknown>)["runphantom.playground.target_index"];
-      if (typeof value === "number") return value;
-    } catch { /* unreadable attributes carry no index */ }
-  }
-  return Number.MAX_SAFE_INTEGER;
 }
 
 function resize<T>(items: readonly T[], length: number, make: (index: number) => T): T[] {
@@ -181,12 +170,11 @@ export function PlaygroundPage() {
 
   const loadFromHistory = async (runs: RunSearchRun[]) => {
     const loaded = await Promise.all(runs.map(async item => {
-      const detail = await getRunDetail(item.id);
-      const call = detail.spans.find(span => span.span_type?.includes("LLM"));
-      if (!call) throw new Error("This run has no model call to load.");
-      return { order: targetIndex(detail.spans), draft: await getDraftFromSpan(call.id, item.id) };
+      const column = await recordedColumn(item.id);
+      if (!column.spanId) throw new Error("This run has no model call to load.");
+      return { order: column.index ?? Number.MAX_SAFE_INTEGER, draft: await getDraftFromSpan(column.spanId, item.id) };
     }));
-    const drafts = loaded.sort((a, b) => a.order - b.order).map(item => item.draft);
+    const drafts = loaded.map((item, position) => ({ ...item, position })).sort((a, b) => a.order - b.order || a.position - b.position).map(item => item.draft);
     const first = drafts[0];
     if (!first) return;
     const targets = drafts.map(item => ({ provider: item.provider, model: item.model }));

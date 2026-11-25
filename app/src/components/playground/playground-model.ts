@@ -289,6 +289,11 @@ export function estimateResultCost(result: Pick<PlaygroundCallResult, "provider"
 
 export const PRICE_LIST_DATE = PRICE_TABLE_AS_OF;
 
+/** Rounds like the daemon's est_cost_usd (src/stats/common.ts roundUsd), so the column, History and Runs print the same digits. */
+export function recordedCostUsd(value: number): number {
+  return Math.round(value * 1e9) / 1e9;
+}
+
 export function costUnavailableReason(estimate: ListPriceEstimate): string {
   if (estimate.kind === "estimated") return "";
   switch (estimate.reason) {
@@ -331,6 +336,23 @@ export interface HistoryGroup {
   key: string;
   runs: PlaygroundHistoryRun[];
   startedAt: number;
+}
+
+/** The column a recorded Playground run filled: compare runs start together, so start time cannot order them. */
+export function targetIndexOf(spans: ReadonlyArray<{ attributes?: string | null }>): number | null {
+  for (const span of spans) {
+    try {
+      const value = (JSON.parse(span.attributes ?? "{}") as Record<string, unknown>)["runphantom.playground.target_index"];
+      if (typeof value === "number") return value;
+    } catch { /* unreadable attributes carry no index */ }
+  }
+  return null;
+}
+
+/** Orders a compare group's runs by column; runs without a known column keep their start order at the end. */
+export function orderByColumn<T extends { id: string }>(runs: readonly T[], columns: ReadonlyMap<string, number | null>): T[] {
+  const at = (run: T) => columns.get(run.id) ?? Number.MAX_SAFE_INTEGER;
+  return runs.map((run, position) => ({ run, position })).sort((a, b) => at(a.run) - at(b.run) || a.position - b.position).map(item => item.run);
 }
 
 /** One entry per Run (a compare run records one run per model under the same conversation id). */
