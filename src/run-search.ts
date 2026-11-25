@@ -113,6 +113,13 @@ const has = (column: string) => `COALESCE(instr(lower(${column}), n.q), 0) > 0`;
 const RUN_TEXT = ["r.id", "r.name", "r.event_id", "r.event_name", "r.display_name", "r.user_id", "r.convo_id", "r.metadata"];
 const SPAN_MATCH = `(${["s.name", "s.input_payload", "s.output_payload", "s.model", "s.provider"].map(has).join(" OR ")}
   OR (s.status = 'ERROR' AND (n.failure = 1 OR ${has(ERROR_TEXT)})))`;
+// One pass over a run's matching spans: count << 2 | failure hit << 1 | name/tool/model hit.
+// Both flags imply SPAN_MATCH, so ranking needs no second scan of the spans. The
+// candidates CTE is materialized because SQLite re-evaluates a flattened
+// correlated subquery at every reference to its column.
+const flag = (condition: string) => `COALESCE(max(CASE WHEN ${condition} THEN 1 ELSE 0 END), 0)`;
+const SPAN_FLAGS = `SELECT COUNT(*) * 4 + ${flag(`s.status = 'ERROR' AND (n.failure = 1 OR ${has(ERROR_TEXT)})`)} * 2
+  + ${flag(["s.name", "s.model", "s.provider"].map(has).join(" OR "))} FROM spans s WHERE s.run_id = r.id AND ${SPAN_MATCH}`;
 // The window keeps 320 characters either side of the snippet so a credential
 // cut at the window edge is never inside the final, re-scrubbed excerpt.
 export const RUN_MATCH_WINDOW = { before: 400, length: 1200 } as const;
@@ -184,18 +191,17 @@ function buildQuery(input: SearchInput): { sql: string; params: (string | number
   }
   tail.push(input.limit + 1);
   return { ranked: true, params: [...head, ...params, ...tail], sql: `WITH n(q, failure) AS (SELECT lower(?), ?),
+    candidates AS MATERIALIZED (
+      SELECT r.id, r.started_at, (${RUN_TEXT.map(has).join(" OR ")}) AS run_hit, (${SPAN_FLAGS}) AS packed
+      FROM runs r CROSS JOIN n WHERE ${where.join(" AND ")}
+    ),
     hits AS MATERIALIZED (
-      SELECT id, started_at, span_hits FROM (
-        SELECT r.id, r.started_at, (${RUN_TEXT.map(has).join(" OR ")}) AS run_hit,
-          (SELECT COUNT(*) FROM spans s WHERE s.run_id = r.id AND ${SPAN_MATCH}) AS span_hits
-        FROM runs r CROSS JOIN n WHERE ${where.join(" AND ")}
-      ) WHERE run_hit OR span_hits > 0
+      SELECT id, started_at, packed >> 2 AS span_hits, (packed >> 1) & 1 AS failure_hit, packed & 1 AS name_hit
+      FROM candidates WHERE run_hit OR packed > 0
     ),
     scored AS MATERIALIZED (
       SELECT h.id, h.started_at, h.span_hits,
-        (EXISTS (SELECT 1 FROM spans s WHERE s.run_id = r.id AND s.status = 'ERROR' AND (n.failure = 1 OR ${has(ERROR_TEXT)})) * 100
-          + (${["r.name", "r.event_name", "r.display_name"].map(has).join(" OR ")} OR EXISTS (SELECT 1 FROM spans s WHERE s.run_id = r.id AND (${["s.name", "s.model", "s.provider"].map(has).join(" OR ")}))) * 10
-          + min(h.span_hits, 9)) AS score
+        (h.failure_hit * 100 + (${["r.name", "r.event_name", "r.display_name"].map(has).join(" OR ")} OR h.name_hit) * 10 + min(h.span_hits, 9)) AS score
       FROM hits h JOIN runs r ON r.id = h.id CROSS JOIN n
     ),
     matching AS MATERIALIZED (SELECT id, started_at, span_hits, score FROM scored ${cursor} ORDER BY score DESC, started_at DESC, id DESC LIMIT ?)
