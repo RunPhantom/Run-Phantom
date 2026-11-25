@@ -139,6 +139,24 @@ describe("Open in Playground across providers", () => {
     expect(parallel.map(part => part.thoughtSignature)).toEqual([undefined, GEMINI_UNSIGNED_CALL_SIGNATURE, undefined]);
     expect(parallel[0].text).toBe("Checking stock for both items.");
   });
+
+  test("Gemini gets the placeholder on an unsigned first call even when a later call in the turn is signed", () => {
+    const request = parsePlaygroundRunRequest({
+      targets: [{ provider: "gemini", model: "gemini-3.8-flash" }], system: "",
+      messages: [
+        { role: "user", content: "Check both items" },
+        { role: "assistant", content: "", toolCalls: [
+          { id: "c1", name: "check_stock", arguments: { sku: "A" } },
+          { id: "c2", name: "check_stock", arguments: { sku: "B" }, signature: "bGF0ZXItc2lnbmF0dXJl" },
+        ] },
+        { role: "tool", toolCallId: "c1", content: "3" },
+        { role: "tool", toolCallId: "c2", content: "0" },
+      ],
+      tools: [{ name: "check_stock", parameters: { type: "object", properties: { sku: { type: "string" } } } }],
+    });
+    const parts = (buildProviderRequest(request, request.targets[0], "k").body.contents as Json[])[1].parts as Json[];
+    expect(parts.map(part => part.thoughtSignature)).toEqual([GEMINI_UNSIGNED_CALL_SIGNATURE, "bGF0ZXItc2lnbmF0dXJl"]);
+  });
 });
 
 describe("draft fidelity", () => {
