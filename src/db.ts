@@ -823,29 +823,27 @@ const EMPTY_ERROR_EVIDENCE = Object.freeze({ error_count: 0, tool_error_count: 0
  */
 function runErrorEvidence(ids: readonly string[]): Map<string, { error_count: number; tool_error_count: number; root_failed: boolean }> {
   const result = new Map<string, { error_count: number; tool_error_count: number; root_failed: boolean }>();
-  for (let offset = 0; offset < ids.length; offset += 500) {
-    const chunk = ids.slice(offset, offset + 500);
-    const rows = getDrizzleDb()
-      .select({
-        run_id: schema.spans.run_id,
-        errors: drizzleSql<number>`SUM(CASE WHEN ${schema.spans.status} = 'ERROR' THEN 1 ELSE 0 END)`,
-        toolErrors: drizzleSql<number>`SUM(CASE WHEN ${schema.spans.status} = 'ERROR' AND ${schema.spans.span_type} = 'TOOL_CALL' THEN 1 ELSE 0 END)`,
-        roots: drizzleSql<number>`SUM(CASE WHEN ${schema.spans.parent_span_id} IS NULL THEN 1 ELSE 0 END)`,
-        rootErrors: drizzleSql<number>`SUM(CASE WHEN ${schema.spans.parent_span_id} IS NULL AND ${schema.spans.status} = 'ERROR' THEN 1 ELSE 0 END)`,
-        agentRoots: drizzleSql<number>`SUM(CASE WHEN ${schema.spans.parent_span_id} IS NULL AND ${schema.spans.span_type} = 'AGENT_ROOT' THEN 1 ELSE 0 END)`,
-        agentRootErrors: drizzleSql<number>`SUM(CASE WHEN ${schema.spans.parent_span_id} IS NULL AND ${schema.spans.span_type} = 'AGENT_ROOT' AND ${schema.spans.status} = 'ERROR' THEN 1 ELSE 0 END)`,
-      })
-      .from(schema.spans)
-      .where(inArray(schema.spans.run_id, chunk))
-      .groupBy(schema.spans.run_id)
-      .all();
-    for (const row of rows) {
-      result.set(row.run_id, {
-        error_count: Number(row.errors) || 0,
-        tool_error_count: Number(row.toolErrors) || 0,
-        root_failed: rootFailed({ roots: Number(row.roots) || 0, rootErrors: Number(row.rootErrors) || 0, agentRoots: Number(row.agentRoots) || 0, agentRootErrors: Number(row.agentRootErrors) || 0 }),
-      });
-    }
+  if (!ids.length) return result;
+  const rows = getDrizzleDb()
+    .select({
+      run_id: schema.spans.run_id,
+      errors: drizzleSql<number>`SUM(CASE WHEN ${schema.spans.status} = 'ERROR' THEN 1 ELSE 0 END)`,
+      toolErrors: drizzleSql<number>`SUM(CASE WHEN ${schema.spans.status} = 'ERROR' AND ${schema.spans.span_type} = 'TOOL_CALL' THEN 1 ELSE 0 END)`,
+      roots: drizzleSql<number>`SUM(CASE WHEN ${schema.spans.parent_span_id} IS NULL THEN 1 ELSE 0 END)`,
+      rootErrors: drizzleSql<number>`SUM(CASE WHEN ${schema.spans.parent_span_id} IS NULL AND ${schema.spans.status} = 'ERROR' THEN 1 ELSE 0 END)`,
+      agentRoots: drizzleSql<number>`SUM(CASE WHEN ${schema.spans.parent_span_id} IS NULL AND ${schema.spans.span_type} = 'AGENT_ROOT' THEN 1 ELSE 0 END)`,
+      agentRootErrors: drizzleSql<number>`SUM(CASE WHEN ${schema.spans.parent_span_id} IS NULL AND ${schema.spans.span_type} = 'AGENT_ROOT' AND ${schema.spans.status} = 'ERROR' THEN 1 ELSE 0 END)`,
+    })
+    .from(schema.spans)
+    .where(inArray(schema.spans.run_id, [...ids]))
+    .groupBy(schema.spans.run_id)
+    .all();
+  for (const row of rows) {
+    result.set(row.run_id, {
+      error_count: Number(row.errors) || 0,
+      tool_error_count: Number(row.toolErrors) || 0,
+      root_failed: rootFailed({ roots: Number(row.roots) || 0, rootErrors: Number(row.rootErrors) || 0, agentRoots: Number(row.agentRoots) || 0, agentRootErrors: Number(row.agentRootErrors) || 0 }),
+    });
   }
   return result;
 }
