@@ -133,7 +133,7 @@ export function ConvoDetail({ convoId, onOpenTurn }: { convoId: string; onOpenTu
               <div key={`tg${i}`} className="flex flex-wrap items-center gap-1.5 px-4 py-1" style={{ opacity: dimmed ? 0.35 : 1, transition: "opacity 250ms cubic-bezier(.25,.1,.25,1)" }}>
                 {evt.items.map(item => item.kind === "tool"
                   ? <ToolCallPill key={item.span.id} span={item.span} />
-                  : <SubAgentBlock key={item.agent.root_span_id} agent={item.agent} spans={evt.turnSpans} subAgentBySpan={item.owner} />)}
+                  : <SubAgentBlock key={item.agent.root_span_id} agent={item.agent} spans={evt.turnSpans} subAgents={item.subAgents} />)}
               </div>
             );
           }

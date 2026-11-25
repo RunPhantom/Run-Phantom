@@ -1,9 +1,10 @@
 import { isActive } from "../utils/helpers";
 import { messagesFromSpan } from "../utils/messageParsing";
 import type { Run, Span, SubAgent } from "../utils/types";
+import { buildChatItems, outermostSubAgents, type ToolGroupItem } from "./chat-items";
 
-/** `owner` maps each of the agent's spans to its root, for the card's focus requests. */
-export type ConvoToolItem = { kind: "tool"; span: Span } | { kind: "sub_agent"; agent: SubAgent; owner: Map<string, string> };
+/** `subAgents` is every agent of the turn, so the card can nest the agents inside it. */
+export type ConvoToolItem = { kind: "tool"; span: Span } | { kind: "sub_agent"; agent: SubAgent; subAgents: readonly SubAgent[] };
 
 /** A single event in the conversation stream */
 export type ConvoEvent =
@@ -13,28 +14,16 @@ export type ConvoEvent =
   | { type: "llm_out"; content: string; time: number; turnIndex: number }
   | { type: "active"; time: number; turnIndex: number };
 
-/**
- * A sub-agent's own steps belong under its card, not in the parent's
- * transcript. Only outermost agents get a card; a nested agent is part of its
- * parent's work.
- */
-function outermostAgents(subAgents: readonly SubAgent[]): { agents: SubAgent[]; members: Set<string> } {
-  const inner = new Set<string>();
-  for (const agent of subAgents) for (const id of agent.span_ids) if (id !== agent.root_span_id) inner.add(id);
-  const agents = subAgents.filter(agent => !inner.has(agent.root_span_id));
-  const members = new Set<string>();
-  for (const agent of agents) for (const id of agent.span_ids) if (id !== agent.root_span_id) members.add(id);
-  return { agents, members };
-}
-
 export function buildConvoEvents(turns: { run: Run; spans: Span[]; subAgents?: readonly SubAgent[] }[]): ConvoEvent[] {
   const events: ConvoEvent[] = [];
 
   for (let i = 0; i < turns.length; i++) {
     const { run, spans: turnSpans, subAgents = [] } = turns[i];
-    const { agents, members } = outermostAgents(subAgents);
+    // A sub-agent's own steps belong under its card, not in the parent's transcript.
+    const agents = outermostSubAgents(subAgents);
+    const members = new Set(agents.flatMap(agent => agent.span_ids.filter(id => id !== agent.root_span_id)));
     const agentRoots = new Map(agents.map(agent => [agent.root_span_id, agent]));
-    const subAgentItem = (agent: SubAgent): ConvoToolItem => ({ kind: "sub_agent", agent, owner: new Map(agent.span_ids.map(id => [id, agent.root_span_id])) });
+    const subAgentItem = (agent: SubAgent): ConvoToolItem => ({ kind: "sub_agent", agent, subAgents });
     const spans = members.size ? turnSpans.filter(span => !members.has(span.id)) : turnSpans;
 
     events.push({ type: "turn_start", turnIndex: i, run, time: run.started_at });
@@ -47,9 +36,11 @@ export function buildConvoEvents(turns: { run: Run; spans: Span[]; subAgents?: r
     const traceSpans = spans
       .filter(s => s.span_type === "TRACE")
       .sort((a, b) => a.start_time_ms - b.start_time_ms);
-
-    const toolSpans = spans
-      .filter(s => s.span_type === "TOOL_CALL")
+    // An orchestrator that only delegates makes no model call of its own; its
+    // task is the input on its root agent span.
+    const spanIds = new Set(spans.map(s => s.id));
+    const rootAgentSpans = spans
+      .filter(s => s.span_type === "AGENT_ROOT" && !agentRoots.has(s.id) && (!s.parent_span_id || !spanIds.has(s.parent_span_id)))
       .sort((a, b) => a.start_time_ms - b.start_time_ms);
 
     // The FIRST LLM call of a turn is the one that carries the human's message.
@@ -60,7 +51,7 @@ export function buildConvoEvents(turns: { run: Run; spans: Span[]; subAgents?: r
     const inputSpan = llmSpans.find(s => {
       if (s.normalized?.kind === "llm" && s.normalized.userMessage) return true;
       return !!s.input_payload;
-    }) ?? traceSpans.find(s => !!s.input_payload);
+    }) ?? traceSpans.find(s => !!s.input_payload) ?? rootAgentSpans.find(s => !!s.input_payload);
     if (inputSpan?.normalized?.kind === "llm" && inputSpan.normalized.userMessage) {
       userMsg = inputSpan.normalized.userMessage;
     } else if (inputSpan?.input_payload) {
@@ -77,35 +68,40 @@ export function buildConvoEvents(turns: { run: Run; spans: Span[]; subAgents?: r
       events.push({ type: "user_msg", content: userMsg, time: run.started_at + 1, turnIndex: i });
     }
 
-    const items: ConvoToolItem[] = toolSpans.map(span => {
-      const agent = agentRoots.get(span.id);
-      return agent ? subAgentItem(agent) : { kind: "tool", span };
-    });
-    for (const agent of agents) {
-      if (!toolSpans.some(span => span.id === agent.root_span_id)) items.push(subAgentItem(agent));
-    }
-    if (items.length > 0) {
-      const start = (item: ConvoToolItem) => item.kind === "tool" ? item.span.start_time_ms : item.agent.start_time_ms;
-      items.sort((a, b) => start(a) - start(b));
-      events.push({ type: "tool_group", spans: toolSpans, items, turnSpans, time: start(items[0]!), turnIndex: i });
+    // Replies and tool calls in causal order, the same order the Overview
+    // uses: a reply sits before the tools it requested, so a failed run ends
+    // on its failure rather than on a reply written before it.
+    const toItem = (item: ToolGroupItem): ConvoToolItem => item.type === "tool"
+      ? { kind: "tool", span: item.span }
+      : subAgentItem(item.agent);
+    let replied = false;
+    for (const item of buildChatItems({ spans: turnSpans, liveEvents: [], subAgents })) {
+      if (item.type === "tool_group" && item.items.length > 0) {
+        const items = item.items.map(toItem);
+        const groupSpans = items.flatMap(entry => entry.kind === "tool" ? [entry.span] : []);
+        events.push({ type: "tool_group", spans: groupSpans, items, turnSpans, time: item.time, turnIndex: i });
+      } else if (item.type === "llm_out" && item.span.output_payload) {
+        replied = true;
+        events.push({ type: "llm_out", content: item.span.output_payload, time: item.time, turnIndex: i });
+      }
     }
 
-    // Mirror image: the LAST LLM call is the one that produced the answer. `.find`
-    // over a start-time-ascending list returned the first, so a multi-step turn
-    // (llm -> tool -> llm -> tool -> llm) showed the model's opening tool-call
-    // decision and never the reply the user actually received.
-    const lastWithOutput = <T extends { output_payload?: string | null }>(list: T[]) => {
-      for (let k = list.length - 1; k >= 0; k--) if (list[k].output_payload) return list[k];
-      return undefined;
-    };
-    const outputSpan = lastWithOutput(llmSpans)
-      ?? lastWithOutput(traceSpans)
-      ?? lastWithOutput(spans.filter(s => s.span_type === "INTERNAL"));
-    if (outputSpan?.output_payload) {
-      events.push({ type: "llm_out", content: outputSpan.output_payload, time: outputSpan.end_time_ms, turnIndex: i });
-    } else if (isActive(run)) {
-      events.push({ type: "active", time: Date.now(), turnIndex: i });
+    // A turn with no per-call reply (a raw SDK run with only a TRACE span, or
+    // an orchestrator that only delegates) answers through its outer span.
+    if (!replied) {
+      const lastWithOutput = <T extends { output_payload?: string | null }>(list: T[]) => {
+        for (let k = list.length - 1; k >= 0; k--) if (list[k].output_payload) return list[k];
+        return undefined;
+      };
+      const outputSpan = lastWithOutput(traceSpans)
+        ?? lastWithOutput(rootAgentSpans)
+        ?? lastWithOutput(spans.filter(s => s.span_type === "INTERNAL"));
+      if (outputSpan?.output_payload) {
+        events.push({ type: "llm_out", content: outputSpan.output_payload, time: outputSpan.end_time_ms, turnIndex: i });
+        continue;
+      }
     }
+    if (!replied && isActive(run)) events.push({ type: "active", time: Date.now(), turnIndex: i });
   }
 
   return events;

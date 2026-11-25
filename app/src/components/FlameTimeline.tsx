@@ -181,16 +181,28 @@ function SpanTooltip({
   );
 }
 
-export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { spans: Span[]; subAgents?: SubAgent[]; onDiveIn?: (rootSpanId: string) => void }) {
+export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn, knownRootSpanId }: {
+  spans: Span[]; subAgents?: SubAgent[]; onDiveIn?: (rootSpanId: string) => void;
+  /** A parent left out of `spans` on purpose (a focused sub-agent's own span), so links to it are not missing coverage. */
+  knownRootSpanId?: string;
+}) {
   const vizSpans = useMemo(() => linkToVisibleAncestors(spans, s => s.span_type === "TRACE" || s.span_type === "TOOL_CALL" || !!s.span_type?.includes("LLM")), [spans]);
   const subAgentSpanIds = useMemo(() => new Set(subAgents.flatMap(a => a.span_ids)), [subAgents]);
   const undrawnParentIds = useMemo(() => {
     const drawn = new Set(vizSpans);
     const ids = new Set<string>();
     for (const span of spans) if (!drawn.has(span)) ids.add(span.id);
+    if (knownRootSpanId) ids.add(knownRootSpanId);
     return ids;
-  }, [spans, vizSpans]);
-  const layout = useMemo(() => buildCondensedTimeline(vizSpans, subAgents, 0, undrawnParentIds), [vizSpans, subAgents, undrawnParentIds]);
+  }, [spans, vizSpans, knownRootSpanId]);
+  // Invocation grouping needs a drawn root. An agent -> agent hand-off is rooted
+  // at its undrawn agent span; it still opens from its bars via the
+  // conversation's focus request.
+  const groupedAgents = useMemo(() => {
+    const drawn = new Set(vizSpans.map(span => span.id));
+    return subAgents.filter(agent => drawn.has(agent.root_span_id));
+  }, [vizSpans, subAgents]);
+  const layout = useMemo(() => buildCondensedTimeline(vizSpans, groupedAgents, 0, undrawnParentIds), [vizSpans, groupedAgents, undrawnParentIds]);
   const hasVizSpans = layout.entries.length > 0;
   const [compact, setCompact] = useState(false);
   const coarsePointer = useCoarsePointer();
@@ -201,6 +213,14 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
   const [hovered, setHovered] = useState<{ entry: TimelineEntry; rect: DOMRect; trigger: HTMLElement } | null>(null);
   const dismissedFocusRef = useRef<HTMLElement | null>(null);
   const [hoveredLabelName, setHoveredLabelName] = useState<string | null>(null);
+  const rowsRef = useRef<HTMLDivElement>(null);
+  const axisRef = useRef<HTMLDivElement>(null);
+  const [overflow, setOverflow] = useState({ before: false, after: false });
+  const revealedErrorRef = useRef<string | null>(null);
+  const firstErrorId = useMemo(() => {
+    const drawn = new Set(vizSpans.map(span => span.id));
+    return [...spans].sort((a, b) => a.start_time_ms - b.start_time_ms).find(span => span.status === "ERROR" && drawn.has(span.id))?.id ?? null;
+  }, [spans, vizSpans]);
   const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const cancelTooltipDismiss = useCallback(() => {
@@ -219,6 +239,37 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
   }, [cancelTooltipDismiss]);
 
   useEffect(() => () => cancelTooltipDismiss(), [cancelTooltipDismiss]);
+
+  const measureOverflow = useCallback(() => {
+    const axis = axisRef.current;
+    if (!axis) return;
+    const max = axis.scrollWidth - axis.clientWidth;
+    setOverflow(prev => {
+      const next = { before: axis.scrollLeft > 1, after: max - axis.scrollLeft > 1 };
+      return prev.before === next.before && prev.after === next.after ? prev : next;
+    });
+  }, []);
+
+  // On a pane too narrow for the whole trace, the failure is what the reader
+  // came for: bring the first failed step into view once per failure.
+  useEffect(() => {
+    const axis = axisRef.current, rowsEl = rowsRef.current;
+    if (!axis || !rowsEl) return;
+    if (firstErrorId && revealedErrorRef.current !== firstErrorId) {
+      const marker = axis.querySelector<HTMLElement>(`[data-timeline-span-id="${CSS.escape(firstErrorId)}"]`);
+      if (marker) {
+        revealedErrorRef.current = firstErrorId;
+        if (axis.scrollWidth > axis.clientWidth) {
+          axis.scrollLeft = Math.max(0, marker.offsetLeft + marker.offsetWidth / 2 - axis.clientWidth / 2);
+        }
+        const top = marker.offsetTop, bottom = top + marker.offsetHeight;
+        if (bottom > rowsEl.scrollTop + rowsEl.clientHeight || top < rowsEl.scrollTop) {
+          rowsEl.scrollTop = Math.max(0, top - rowsEl.clientHeight / 2);
+        }
+      }
+    }
+    measureOverflow();
+  }, [containerW, compact, firstErrorId, layout, measureOverflow]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -306,8 +357,10 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
   const MIN_PX_PER_MS = 0.005;
   // Below this the chart scrolls horizontally rather than compressing every
   // short span to the same minimum-width blob, which destroys the duration
-  // signal the timeline exists to show (narrow panes, mobile, chat open).
-  const MIN_CHART_W = 480;
+  // signal the timeline exists to show (mobile). At 480 a tablet-width pane
+  // (about 467px of chart) overflowed by a few pixels, exactly where a run's
+  // final failure sits.
+  const MIN_CHART_W = 360;
   // Short spans must still read as bars, not uniform dots.
   const MIN_BAR_W = 3;
   const ERROR_MARKER_W = 14;
@@ -327,7 +380,7 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
   const scrollViewportW = Math.max((containerW || 300) - labelW, 160);
   const chartW = Math.min(12_000, Math.max(scrollViewportW, dur * MIN_PX_PER_MS, MIN_CHART_W, compact && shortestInterval !== Infinity ? (dur / shortestInterval) * minimumPaintWidth : 0));
   // Paint bounds participate in compact packing, so the minimum visible bar never covers its neighbour.
-  const packed = compact ? buildCondensedTimeline(vizSpans, subAgents, (minimumPaintWidth * dur) / chartW, undrawnParentIds) : layout;
+  const packed = compact ? buildCondensedTimeline(vizSpans, groupedAgents, (minimumPaintWidth * dur) / chartW, undrawnParentIds) : layout;
   const rowOf = (entry: TimelineEntry) => compact ? packed.entries[entry.sourceIndex].row : unknownRows.get(entry.key) ?? namedRows.get(entry.span.name)!;
   const rows = new Map<number, TimelineEntry[]>();
   for (const entry of layout.entries) {
@@ -368,7 +421,7 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
       </div>}
 
       {containerW > 0 && (
-      <div role="region" aria-label="Trace timeline" tabIndex={0} className="max-h-80 max-[360px]:max-h-32" style={{ overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain" }}>
+      <div ref={rowsRef} role="region" aria-label="Trace timeline" tabIndex={0} className="max-h-80 max-[360px]:max-h-32" style={{ overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain" }}>
       <div style={{ display: "flex", height: totalH }}>
         <div style={{ width: labelW, flexShrink: 0 }}>
           {Array.from({ length: rowCount }, (_, row) => {
@@ -411,8 +464,13 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
         </div>
 
         {/* Chart area — explicit width + horizontal scroll for long runs */}
+        <div className="relative min-w-0 flex-1">
+        {overflow.before && <div aria-hidden="true" data-timeline-overflow="before" className="pointer-events-none absolute inset-y-0 left-0 z-[100000] w-6" style={{ background: "linear-gradient(to right, var(--rp-surface), transparent)" }} />}
+        {overflow.after && <div aria-hidden="true" data-timeline-overflow="after" className="pointer-events-none absolute inset-y-0 right-0 z-[100000] w-6" style={{ background: "linear-gradient(to left, var(--rp-surface), transparent)" }} />}
         <div
-          className="min-w-0 flex-1"
+          ref={axisRef}
+          onScroll={measureOverflow}
+          className="h-full min-w-0"
           role="region"
           aria-label="Trace time axis"
           tabIndex={0}
@@ -533,6 +591,7 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
               </button>
             );
           })}
+        </div>
         </div>
         </div>
       </div>

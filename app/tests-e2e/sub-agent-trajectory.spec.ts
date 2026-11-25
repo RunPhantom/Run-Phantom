@@ -78,17 +78,17 @@ test.beforeEach(async ({ runPhantom }) => {
 test("Run Phantom UI: clicking a sub-agent's Trajectory bar in the parent view focuses that sub-agent", async ({ page, runPhantom }, testInfo) => {
   await page.goto(`${runPhantom.url}/runs/${TRACE_ID}`);
   const chip = page.getByRole("button", { name: /^agent\s*researcher/ });
-  const details = page.getByRole("dialog", { name: "researcher sub-agent details" });
+  const details = page.getByRole("region", { name: "researcher sub-agent details" });
   await expect(chip).toBeVisible();
   await expect(details).toBeHidden();
 
   const bar = (id: string) => page.locator(`button.timeline-bar[data-meridian-key="${id}"]`);
   for (const id of [SUB_AGENT_FAILED_TOOL, SUB_AGENT_ROOT, SUB_AGENT_LLM]) {
     await bar(id).click();
-    await expect(details, `bar ${id} opens the sub-agent details`).toBeVisible();
+    await expect(details, `bar ${id} opens the sub-agent card`).toBeVisible();
     await expect(chip).toBeFocused();
-    if (id === SUB_AGENT_FAILED_TOOL) await testInfo.attach("trajectory-click-researcher-dialog", { body: await page.screenshot({ animations: "disabled" }), contentType: "image/png" });
-    await page.keyboard.press("Escape");
+    if (id === SUB_AGENT_FAILED_TOOL) await testInfo.attach("trajectory-click-researcher-card", { body: await page.screenshot({ animations: "disabled" }), contentType: "image/png" });
+    await chip.click();
     await expect(details).toBeHidden();
   }
 
@@ -102,7 +102,7 @@ test("Run Phantom UI: clicking a sub-agent's Trajectory bar in the parent view f
   await page.getByTitle("read_changelog - jump to first tool call").click();
   await expect(details).toBeVisible();
 
-  await details.getByRole("button", { name: /Open Sub-Agent/ }).click();
+  await page.getByRole("button", { name: /Open Sub-Agent/ }).click();
   await expect(page.getByRole("button", { name: /Show Parent Agent/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "Expand tool call read_changelog" })).toBeVisible();
   await testInfo.attach("trajectory-open-sub-agent-drill-in", { body: await page.screenshot({ animations: "disabled" }), contentType: "image/png" });
@@ -111,7 +111,7 @@ test("Run Phantom UI: clicking a sub-agent's Trajectory bar in the parent view f
 test("Run Phantom UI: a sub-agent's Trajectory bar opens it from the keyboard", async ({ page, runPhantom }, testInfo) => {
   await page.goto(`${runPhantom.url}/runs/${TRACE_ID}`);
   const chip = page.getByRole("button", { name: /^agent\s*researcher/ });
-  const details = page.getByRole("dialog", { name: "researcher sub-agent details" });
+  const details = page.getByRole("region", { name: "researcher sub-agent details" });
   await expect(chip).toBeVisible();
 
   const failedBar = page.locator(`button.timeline-bar[data-meridian-key="${SUB_AGENT_FAILED_TOOL}"]`);
@@ -121,13 +121,13 @@ test("Run Phantom UI: a sub-agent's Trajectory bar opens it from the keyboard", 
   await expect(chip).toBeFocused();
 
   await page.keyboard.press("Tab");
-  await expect(details.getByRole("button", { name: /Open Sub-Agent/ })).toBeFocused();
-  await testInfo.attach("trajectory-keyboard-dialog-focus", { body: await page.screenshot({ animations: "disabled" }), contentType: "image/png" });
+  await expect(page.getByRole("button", { name: /Open Sub-Agent/ })).toBeFocused();
+  await testInfo.attach("trajectory-keyboard-card-focus", { body: await page.screenshot({ animations: "disabled" }), contentType: "image/png" });
   await page.keyboard.press("Enter");
   await expect(page.getByRole("button", { name: /Show Parent Agent/ })).toBeVisible();
 });
 
-test("Run Phantom UI: a nested sub-agent's Trajectory bar opens only the innermost sub-agent", async ({ page, runPhantom }, testInfo) => {
+test("Run Phantom UI: a nested sub-agent's Trajectory bar opens the innermost sub-agent inside its parent", async ({ page, runPhantom }, testInfo) => {
   const traceId = "5ab0000000000000000000000000d006";
   const nestedId = (slot: number) => `5ab10000${slot.toString(16).padStart(8, "0")}`;
   const innerRoot = nestedId(4);
@@ -149,18 +149,24 @@ test("Run Phantom UI: a nested sub-agent's Trajectory bar opens only the innermo
   ], [nestedId(2), innerRoot]);
 
   await page.goto(`${runPhantom.url}/runs/${traceId}`);
+  const outerChip = page.getByRole("button", { name: /^agent\s*planner/ });
   const innerChip = page.getByRole("button", { name: /^agent\s*reader/ });
-  await expect(innerChip).toBeVisible();
+  const outer = page.getByRole("region", { name: "planner sub-agent details" });
+  const inner = page.getByRole("region", { name: "reader sub-agent details" });
+  // The reader is the planner's work, so it is nested in the planner's card.
+  await expect(outerChip).toBeVisible();
+  await expect(innerChip).toHaveCount(0);
 
   await page.locator(`button.timeline-bar[data-meridian-key="${innerFailedTool}"]`).click();
-  await expect(page.getByRole("dialog", { name: "reader sub-agent details" })).toBeVisible();
-  await expect(innerChip).toBeFocused();
-  await expect(page.getByRole("dialog")).toHaveCount(1);
-  await testInfo.attach("trajectory-nested-reader-only-dialog", { body: await page.screenshot({ animations: "disabled" }), contentType: "image/png" });
+  await expect(outer).toBeVisible();
+  await expect(inner).toBeVisible();
+  await expect(outer.getByRole("button", { name: /^agent\s*reader/ })).toBeFocused();
+  await expect(inner.getByRole("button", { name: "Expand tool call open_file" })).toBeVisible();
+  await testInfo.attach("trajectory-nested-reader-inside-planner", { body: await page.screenshot({ animations: "disabled" }), contentType: "image/png" });
 
-  await page.keyboard.press("Escape");
+  await outerChip.click();
+  await expect(outer).toBeHidden();
   await page.locator(`button.timeline-bar[data-meridian-key="${nestedId(2)}"]`).click();
-  await expect(page.getByRole("dialog", { name: "planner sub-agent details" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^agent\s*planner/ })).toBeFocused();
-  await expect(page.getByRole("dialog")).toHaveCount(1);
+  await expect(outer).toBeVisible();
+  await expect(outerChip).toBeFocused();
 });

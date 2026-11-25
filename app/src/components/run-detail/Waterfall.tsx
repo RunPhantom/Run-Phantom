@@ -565,6 +565,14 @@ function WaterfallRow({
   const offset = span.start_time_ms - traceStart;
   const left = ((offset - view.from) / windowMs) * 100;
   const widthPct = (Math.max(0, span.duration_ms) / windowMs) * 100;
+  // A step that starts where the trace ends (an instant failure that stops the
+  // run) sat at left: 100% and was clipped away entirely. Keep such a bar inside
+  // the track, and give a failed step a mark wide enough to read as one. A step
+  // that starts after a zoomed window stays clipped: pinning it to the edge
+  // would draw it at a time it did not happen.
+  const minBarPx = isErr ? 8 : 2;
+  const startsInView = offset <= view.to + 1e-6;
+  const barLeft = startsInView ? `min(${left}%, calc(100% - ${minBarPx}px))` : `${left}%`;
   const tokens = span.input_tokens != null || span.output_tokens != null;
   const tokenTitle = tokens ? `${span.input_tokens?.toLocaleString() ?? "unknown"} input · ${span.output_tokens?.toLocaleString() ?? "unknown"} output tokens` : undefined;
   const costText = !counted ? "" : cost?.usd != null ? fmtCost(cost.usd) : "—";
@@ -630,19 +638,23 @@ function WaterfallRow({
           <span aria-hidden="true" className="size-2 shrink-0 rounded-[2px]" style={{ background: KIND_COLOR[kind] }} />
           {!narrow && <span aria-hidden="true" className="w-[46px] shrink-0 font-mono text-11 tracking-[0.04em] text-rp-ink-subtle">{TRACE_KIND_LABEL[kind]}</span>}
           {isErr && <AlertTriangle aria-hidden="true" className="size-3.5 shrink-0 text-rp-danger" />}
-          <span title={span.name} className={cn("min-w-0 truncate text-13", isErr ? "font-medium text-rp-danger" : "text-rp-ink", isContext && "opacity-60")}>
-            {highlight(span.name, isMatch ? query : "")}
+          {/* Names win: the chips wrap onto a second line that the one-line
+              height clips, so they disappear before the name truncates. */}
+          <span data-span-name-cell className="flex h-5 min-w-0 flex-1 flex-wrap items-center gap-x-1.5 overflow-hidden">
+            <span title={span.name} className={cn("min-w-0 max-w-full truncate text-13 leading-5", isErr ? "font-medium text-rp-danger" : "text-rp-ink", isContext && "opacity-60")}>
+              {highlight(span.name, isMatch ? query : "")}
+            </span>
+            {chipParts.length > 0 && (
+              <span data-span-chip title={chipTitle} className="min-w-0 max-w-full shrink truncate rounded-sm border border-rp-line-muted px-1 font-mono text-11 leading-4 text-rp-ink-subtle">
+                {chipModel && <span data-span-model>{chipModel}</span>}
+                {(chipModel ? chipParts.slice(1) : chipParts).map((part, index) => <span key={part}>{chipModel || index > 0 ? " · " : ""}{part}</span>)}
+              </span>
+            )}
+            {isSlowest && !narrow && <span className="shrink-0 rounded-sm border border-rp-line px-1 text-11 leading-4 text-rp-ink-subtle" title="The longest step in this run">slowest</span>}
           </span>
           {isMatch && !span.name.toLowerCase().includes(query.trim().toLowerCase()) && (
             <FileSearch role="img" aria-label="Match inside the step's input or output" className="size-3.5 shrink-0 text-rp-ink-subtle" />
           )}
-          {chipParts.length > 0 && (
-            <span data-span-chip title={chipTitle} className="min-w-0 max-w-[50%] shrink-0 truncate rounded-sm border border-rp-line-muted px-1 font-mono text-11 leading-4 text-rp-ink-subtle">
-              {chipModel && <span data-span-model>{chipModel}</span>}
-              {(chipModel ? chipParts.slice(1) : chipParts).map((part, index) => <span key={part}>{chipModel || index > 0 ? " · " : ""}{part}</span>)}
-            </span>
-          )}
-          {isSlowest && !narrow && <span className="shrink-0 rounded-sm border border-rp-line px-1 text-11 text-rp-ink-subtle" title="The longest step in this run">slowest</span>}
           {annotations?.map(annotation => (
             <AnnotationChip key={annotation.id} annotation={annotation} arriving={!!freshIds?.has(annotation.id)} onArrivalEnd={() => onClearFresh?.(annotation.id)} title={annotation.note ?? undefined} />
           ))}
@@ -652,7 +664,8 @@ function WaterfallRow({
           <span
             aria-hidden="true"
             className={cn("absolute top-1/2 h-[10px] -translate-y-1/2 rounded-[2px]", isErr && "rp-trace-bar-error", isContext && "opacity-50")}
-            style={{ left: `${left}%`, width: `max(2px, ${widthPct}%)`, background: isErr ? undefined : KIND_COLOR[kind] }}
+            data-trace-bar
+            style={{ left: barLeft, width: `max(${minBarPx}px, ${widthPct}%)`, background: isErr ? undefined : KIND_COLOR[kind] }}
           />
         </div>
         {showModel && <div className="flex w-[128px] shrink-0 items-center px-2"><span data-span-model className="truncate text-12 text-rp-ink-subtle" title={span.model ?? undefined}>{span.model ? shortModelName(span.model) : ""}</span></div>}

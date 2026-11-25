@@ -293,7 +293,7 @@ test("conversation tab: a sub-agent is one card and its own tool calls stay insi
   await expect(panel.getByText("lookup_order")).toBeVisible();
   await expect(panel.getByText("search_kb")).toHaveCount(0);
   await card.click();
-  const details = page.getByRole("dialog", { name: "delegate_research sub-agent details" });
+  const details = page.getByRole("region", { name: "delegate_research sub-agent details" });
   await expect(details.getByText("search_kb")).toBeVisible();
   await expect(details.getByText("The policy covers 24 months.")).toBeVisible();
 });
