@@ -1,7 +1,7 @@
 import type { SearchSpanHit, SearchSnippet } from "../../../src/search-protocol";
 export function highlightedText(value: SearchSnippet) {
   const pieces=[];let from=0;
-  for(const [index,range] of value.highlights.entries()){pieces.push(value.text.slice(from,range.start));pieces.push(<mark key={index} className="rounded-[2px] bg-rp-wash px-0.5 text-rp-blue">{value.text.slice(range.start,range.end)}</mark>);from=range.end;}
+  for(const [index,range] of value.highlights.entries()){pieces.push(value.text.slice(from,range.start));pieces.push(<mark key={index} className="rounded-[2px] bg-rp-wash text-rp-blue">{value.text.slice(range.start,range.end)}</mark>);from=range.end;}
   pieces.push(value.text.slice(from));
   return pieces;
 }

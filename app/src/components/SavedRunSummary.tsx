@@ -43,7 +43,7 @@ export function SavedRunSummary({ event }: { event: SavedEvent }) {
   return (
     <section aria-label="Saved run summary" className="flex flex-shrink-0 flex-wrap items-start gap-x-6 gap-y-2 border-b border-rp-line bg-white px-5 py-3">
       <div className="min-w-0 flex-1">
-        <h2 className="rp-field-label">Summary</h2>
+        <h2 className="rp-meta uppercase tracking-[0.12em]">Summary</h2>
         <p className="mt-1 text-[13px] leading-5 text-rp-ink">{event.summary || "No summary yet."}</p>
         <p className="rp-field-hint mt-1">{source === "provider" ? `Written by ${PROVIDER_SUMMARY.providerLabel} (${PROVIDER_SUMMARY.model}) at your request.` : "Written on this machine from the captured run. Nothing was sent to a provider."}</p>
         {message && <p role={message.tone === "error" ? "alert" : "status"} className={message.tone === "error" ? "mt-1 text-xs text-rp-danger" : "mt-1 text-xs text-rp-ink-soft"}>{message.text}</p>}
@@ -52,7 +52,7 @@ export function SavedRunSummary({ event }: { event: SavedEvent }) {
         <Button type="button" variant="outline" size="sm" disabled={!keyConfigured || busy || !content.trim()} loading={busy} onClick={() => setOpen(true)}>
           {busy ? "Summarizing…" : `Summarize with ${PROVIDER_SUMMARY.providerLabel}…`}
         </Button>
-        {keyConfigured === false && <p className="rp-field-hint max-w-[240px]">Needs an {PROVIDER_SUMMARY.providerLabel} key. <Link className="text-rp-blue underline underline-offset-2" to="/settings">Add one in Settings</Link>.</p>}
+        {keyConfigured === false && <p className="rp-field-hint max-w-[260px]">Add an {PROVIDER_SUMMARY.providerLabel} key in <Link className="text-rp-blue underline underline-offset-2" to="/settings">Settings</Link> to use this.</p>}
       </div>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent

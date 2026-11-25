@@ -18,7 +18,7 @@ test("saving a run writes a local summary and never calls a provider without con
   await expect(summary).toContainText(saved.summary);
   await expect(summary).toContainText("Nothing was sent to a provider.");
   await expect(summary.getByRole("button", { name: "Summarize with Anthropic…", exact: true })).toBeDisabled();
-  await expect(summary.getByRole("link", { name: "Add one in Settings", exact: true })).toBeVisible();
+  await expect(summary.getByRole("link", { name: "Settings", exact: true })).toBeVisible();
 
   expect((await request.put(`${runPhantom.url}/api/secrets/anthropic`, { data: { value: "sk-ant-placeholder-for-consent-test" } })).ok()).toBe(true);
   await page.reload();
