@@ -11,10 +11,10 @@ import {
 } from "../api/overview";
 import { useRunPhantomConnectionStatus, useRunPhantomEvent } from "../hooks/use-runphantom-ws";
 import { useRegisterCommands } from "../shell/commands";
-import { KpiStrip } from "./home/HomeKpis";
-import { ActivityPanel, AgentsPanel, ModelsPanel, NeedsALookPanel, RunsOverTimePanel } from "./home/HomePanels";
-import { HomeEmptyState } from "./home/HomeEmptyState";
-import { WINDOW_COPY, headlineParts, headlineText, isWorkspaceEmpty } from "./home/home-model";
+import { KpiStrip } from "./overview/HomeKpis";
+import { ActivityPanel, AgentsPanel, ModelsPanel, NeedsALookPanel, RunsOverTimePanel } from "./overview/HomePanels";
+import { HomeEmptyState } from "./overview/HomeEmptyState";
+import { WINDOW_COPY, headlineParts, headlineText, isWorkspaceEmpty } from "./overview/home-model";
 
 const LATEST_RUNS = 8;
 // /api/overview aggregates every run in the window (p95 ~50 ms at 5,000 runs over 30d), and a streaming

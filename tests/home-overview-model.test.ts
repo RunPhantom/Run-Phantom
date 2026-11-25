@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import type { Overview, OverviewBucket } from "../app/src/api/overview";
 import {
   bucketClock, failureOnset, formatRate, headlineParts, headlineText, isWorkspaceEmpty, kpiDelta, kpiSeries, runsLink, sumKnown,
-} from "../app/src/pages/home/home-model";
-import { splitUnit } from "../app/src/pages/home/HomeKpis";
-import { sampleOverview } from "../app/src/pages/home/sample-overview";
+} from "../app/src/pages/overview/home-model";
+import { splitUnit } from "../app/src/pages/overview/HomeKpis";
+import { sampleOverview } from "../app/src/pages/overview/sample-overview";
 
 const HOUR = 3_600_000;
 const NOW = Date.UTC(2026, 10, 25, 18, 0, 0);
