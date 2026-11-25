@@ -125,8 +125,10 @@ export function Waterfall({
   const showUsage = width >= 600;
   const narrow = width < 640;
   const showTrack = width >= TRACK_MIN_PANE_WIDTH;
-  // Without the usage columns the name cell also carries the model/usage chip.
-  const nameWidth = !showTrack ? Math.max(120, width - 64) : narrow ? Math.max(150, Math.round(width * (showUsage ? 0.46 : 0.42))) : width < 900 ? 280 : 320;
+  // Without the usage columns the name cell also carries the model/usage chip, which needs 260px (roomForChip): half
+  // of a 520px pane (1440 with the drawer open) keeps it; narrower panes give the bars the room instead.
+  const nameShare = showUsage ? 0.46 : width >= 520 ? 0.5 : 0.42;
+  const nameWidth = !showTrack ? Math.max(120, width - 64) : narrow ? Math.max(150, Math.round(width * nameShare)) : width < 900 ? 280 : 320;
   const trackWidth = width - nameWidth - 64 - (showUsage ? 152 : 0) - (showModel ? 128 : 0);
 
   const view: Viewport = viewport ?? { from: 0, to: model.span };
