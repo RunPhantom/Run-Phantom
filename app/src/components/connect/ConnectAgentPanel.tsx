@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, ChevronRight, Send } from "lucide-react";
@@ -12,12 +12,19 @@ import { runPath } from "../../utils/navigation";
 import { useLocalService } from "../../shell/otlp";
 import { CodeBlock } from "./CodeBlock";
 import {
-  CONNECT_TABS, DEFAULT_LOCAL_PORT, EXAMPLE_MODEL, cliCommand, codingAgentGuides, curlSnippet,
-  envSnippet, exampleCommand, openTelemetryEnv, pythonSnippet, setupCommand, typescriptSnippet, type ConnectTabId, type LocalService,
+  CONNECT_TABS, DEFAULT_LOCAL_PORT, EXAMPLE_MODEL, PORT_PLACEHOLDER, cliCommand, codingAgentGuides, curlSnippet,
+  envSnippet, exampleCommand, openTelemetryEnv, pythonSnippet, setupCommand, typescriptSnippet, type CliTarget, type ConnectTabId,
 } from "./connect-snippets";
 import { useNewRunArrival, useTestSpan } from "./use-connect";
 
-const PLACEHOLDER_SERVICE: LocalService = { port: DEFAULT_LOCAL_PORT, endpoint: "http://127.0.0.1:<port>/v1/traces", runtime: "source" };
+const PLACEHOLDER_ENDPOINT = `http://127.0.0.1:${PORT_PLACEHOLDER}/v1/traces`;
+
+interface Resolved {
+  endpoint: string;
+  cli: CliTarget;
+  /** Set while the port is unknown: every command embeds it, so copying is held back. */
+  unavailable?: string;
+}
 
 function Step({ index, title, children }: { index?: number; title: ReactNode; children: ReactNode }) {
   return (
@@ -47,22 +54,22 @@ function FullGuideLink({ tab, children }: { tab: ConnectTabId; children: ReactNo
   );
 }
 
-function TabBody({ tab, service, compact }: { tab: ConnectTabId; service: LocalService; compact: boolean }) {
-  const { endpoint } = service;
-  const source = service.runtime === "source";
+function TabBody({ tab, service, compact }: { tab: ConnectTabId; service: Resolved; compact: boolean }) {
+  const { endpoint, cli, unavailable } = service;
+  const source = cli.runtime === "source";
   switch (tab) {
     case "typescript": {
       const example = source && (
         <Step index={compact ? undefined : 1} title="Run the bundled example">
           <Hint>In the Run Phantom folder, with <Code>OPENAI_API_KEY</Code> set in your shell. One question to {EXAMPLE_MODEL} costs well under a cent.</Hint>
-          <CodeBlock code={exampleCommand(endpoint)} label="Copy example command" caption="Shell · examples/tool-agent" data-connect-example />
+          <CodeBlock code={exampleCommand(endpoint)} label="Copy example command" caption="Shell · examples/tool-agent" unavailable={unavailable} data-connect-example />
           {!compact && <Hint>Prefer Anthropic or Gemini? Use <Code>--provider anthropic</Code> or <Code>--provider gemini</Code> with that provider&rsquo;s key.</Hint>}
         </Step>
       );
       const ownCode = (
         <Step index={source && !compact ? 2 : undefined} title="Send steps from your own code">
-          <Hint>No dependencies. Call <Code>sendSpan</Code> after each model or tool call.</Hint>
-          <CodeBlock code={typescriptSnippet(endpoint)} label="Copy TypeScript snippet" caption="runphantom.ts" maxHeight={compact ? 180 : 440} />
+          <Hint>No dependencies. Save it as <Code>runphantom.ts</Code> and run <Code>bun runphantom.ts</Code>, or <Code>node runphantom.ts</Code> on Node 23.6 or later: a run named &ldquo;chat {EXAMPLE_MODEL}&rdquo; appears. Then call <Code>sendSpan</Code> after each model or tool call.</Hint>
+          <CodeBlock code={typescriptSnippet(endpoint)} label="Copy TypeScript snippet" caption="runphantom.ts" maxHeight={compact ? 180 : 440} unavailable={unavailable} />
         </Step>
       );
       if (compact) return <div className="space-y-3">{example || ownCode}{example && <FullGuideLink tab="typescript">Send steps from your own code</FullGuideLink>}</div>;
@@ -78,7 +85,7 @@ function TabBody({ tab, service, compact }: { tab: ConnectTabId; service: LocalS
         <div className={compact ? "space-y-3" : "space-y-6"}>
           <Step title="Send steps from Python">
             <Hint>Standard library only. Save it as <Code>runphantom.py</Code> and run <Code>python3 runphantom.py</Code>: a run named &ldquo;chat {EXAMPLE_MODEL}&rdquo; appears.</Hint>
-            <CodeBlock code={pythonSnippet(endpoint)} label="Copy Python snippet" caption="runphantom.py" maxHeight={compact ? 180 : 440} />
+            <CodeBlock code={pythonSnippet(endpoint)} label="Copy Python snippet" caption="runphantom.py" maxHeight={compact ? 180 : 440} unavailable={unavailable} />
           </Step>
           {!compact && <Hint>Already use OpenTelemetry? Set the variables on the OpenTelemetry tab instead.</Hint>}
         </div>
@@ -88,12 +95,12 @@ function TabBody({ tab, service, compact }: { tab: ConnectTabId; service: LocalS
         <div className={compact ? "space-y-3" : "space-y-6"}>
           <Step index={compact ? undefined : 1} title="Point your exporter here">
             <Hint>Any OpenTelemetry SDK reads these. Run Phantom takes OTLP over HTTP (JSON or protobuf), not gRPC.</Hint>
-            <CodeBlock code={openTelemetryEnv(endpoint)} label="Copy OpenTelemetry variables" caption="Shell · environment" data-connect-env />
+            <CodeBlock code={openTelemetryEnv(endpoint)} label="Copy OpenTelemetry variables" caption="Shell · environment" unavailable={unavailable} data-connect-env />
             {!compact && <Hint>The last line asks GenAI instrumentations to record prompts and replies. Leave it out to keep content off the trace.</Hint>}
           </Step>
           {compact ? <FullGuideLink tab="opentelemetry">Write it to a project&rsquo;s .env instead</FullGuideLink> : (
             <Step index={2} title="Or write it to your project's .env">
-              <CodeBlock code={cliCommand(service, "connect --file=/path/to/your/project/.env")} label="Copy connect command" caption={source ? "Shell · Run Phantom folder" : "Shell"} />
+              <CodeBlock code={cliCommand(cli, "connect --file=/path/to/your/project/.env")} label="Copy connect command" caption={source ? "Shell · Run Phantom folder" : "Shell"} unavailable={unavailable} />
             </Step>
           )}
         </div>
@@ -102,19 +109,19 @@ function TabBody({ tab, service, compact }: { tab: ConnectTabId; service: LocalS
       return (
         <Step title="Send one span from a terminal">
           <Hint>Run it on this machine. A run named &ldquo;Hello from curl&rdquo; appears within a second.</Hint>
-          <CodeBlock code={curlSnippet(endpoint)} label="Copy curl command" caption="Shell · macOS or Linux" data-connect-curl />
+          <CodeBlock code={curlSnippet(endpoint)} label="Copy curl command" caption="Shell · macOS or Linux" unavailable={unavailable} data-connect-curl />
         </Step>
       );
     case "coding-agents": {
-      const guides = codingAgentGuides(service);
-      const where = <>{source ? "Run in the Run Phantom folder. " : ""}Replace <Code>/path/to/your/project</Code> with the project&rsquo;s absolute path.</>;
+      const guides = codingAgentGuides(cli);
+      const where = <>{source ? "Run in the Run Phantom folder. " : ""}Replace <Code>/path/to/your/project</Code> with the project&rsquo;s real absolute path, as printed by <Code>pwd -P</Code> inside it. A path through a symlink is refused.</>;
       if (compact) {
         const [claude] = guides;
         return (
           <div className="space-y-3">
             <Step title={`Record ${claude.name} sessions`}>
               <Hint>{where}</Hint>
-              <CodeBlock code={claude.command} label={`Copy ${claude.name} command`} caption="Shell" />
+              <CodeBlock code={claude.command} label={`Copy ${claude.name} command`} caption="Shell" unavailable={unavailable} />
               <Hint>{claude.then}</Hint>
             </Step>
             <FullGuideLink tab="coding-agents">Codex, Cursor and agent-led setup</FullGuideLink>
@@ -126,7 +133,7 @@ function TabBody({ tab, service, compact }: { tab: ConnectTabId; service: LocalS
           <Hint>Record your coding agent&rsquo;s own sessions as runs. {where}</Hint>
           {guides.map((guide, index) => (
             <Step key={guide.id} index={index + 1} title={guide.name}>
-              <CodeBlock code={guide.command} label={`Copy ${guide.name} command`} caption="Shell" />
+              <CodeBlock code={guide.command} label={`Copy ${guide.name} command`} caption="Shell" unavailable={unavailable} />
               <Hint>{guide.then}</Hint>
               {guide.fullCapture && (
                 <details className="group text-13 text-rp-ink-muted">
@@ -136,17 +143,17 @@ function TabBody({ tab, service, compact }: { tab: ConnectTabId; service: LocalS
                   </summary>
                   <div className="mt-1 space-y-2 pl-5">
                     <Hint>For one project, with your consent to keep message content on this machine:</Hint>
-                    <CodeBlock code={guide.fullCapture} label={`Copy ${guide.name} full-capture command`} caption="Shell" />
+                    <CodeBlock code={guide.fullCapture} label={`Copy ${guide.name} full-capture command`} caption="Shell" unavailable={unavailable} />
                   </div>
                 </details>
               )}
             </Step>
           ))}
           <Step index={guides.length + 1} title="Or let your agent instrument your app">
-            <CodeBlock code={setupCommand(service)} label="Copy setup command" caption="Shell" />
+            <CodeBlock code={setupCommand(cli)} label="Copy setup command" caption="Shell" unavailable={unavailable} />
             <Hint>
               This adds the Run Phantom skills to your coding agents. Then type <Code>/instrument-agent</Code> in Claude Code, Codex or Cursor inside your project.
-              {service.port !== DEFAULT_LOCAL_PORT && <> The skill assumes port {DEFAULT_LOCAL_PORT}, so give the agent the endpoint above.</>}
+              {cli.port !== DEFAULT_LOCAL_PORT && <> The skill assumes port {DEFAULT_LOCAL_PORT}, so give the agent the endpoint above.</>}
             </Hint>
           </Step>
         </div>
@@ -176,11 +183,29 @@ export function ConnectAgentPanel({ compact = false, split = false, tab: control
   const [ownTab, setOwnTab] = useState<ConnectTabId>("typescript");
   const tab = controlledTab ?? ownTab;
   const selectTab = (next: ConnectTabId) => { setOwnTab(next); onTabChange?.(next); };
-  const resolved = service.data ?? PLACEHOLDER_SERVICE;
+  const resolved: Resolved = service.data
+    ? { endpoint: service.data.endpoint, cli: service.data }
+    : { endpoint: PLACEHOLDER_ENDPOINT, cli: { port: null, runtime: "source" }, unavailable: service.isError ? "Port unknown" : "Waiting for the port" };
+
+  useEffect(() => {
+    let active = true;
+    const reveal = () => {
+      const selected = document.getElementById(`${id}-tab-${tab}`);
+      const list = selected?.parentElement;
+      if (!active || !selected || !list) return;
+      const item = selected.getBoundingClientRect(), frame = list.getBoundingClientRect();
+      const offset = item.left - frame.left;
+      if (offset < 0 || offset + item.width > frame.width) list.scrollLeft += offset - (frame.width - item.width) / 2;
+    };
+    reveal();
+    // Tab widths change once the web font loads; measure again so the tab stays fully visible.
+    void document.fonts?.ready.then(reveal);
+    return () => { active = false; };
+  }, [id, tab]);
 
   const guide = (
     <div className="min-w-0">
-      <CodeBlock inline code={envSnippet(resolved.endpoint)} label="Copy endpoint" caption="Endpoint on this machine" data-otlp-snippet />
+      <CodeBlock inline code={envSnippet(resolved.endpoint)} copyValue={resolved.endpoint} label="Copy endpoint URL" caption="Endpoint on this machine" unavailable={resolved.unavailable} data-otlp-snippet />
       {service.isError && <p role="alert" className="mt-1.5 text-12 text-rp-danger">Could not read the local service port; use the port Run Phantom printed when it started.</p>}
       <TabList label="Ways to connect" className={compact ? "mt-3" : "mt-5"}>
         {CONNECT_TABS.map(option => (
@@ -254,7 +279,7 @@ function LiveRow({ waitingLabel, onLoadSamples, samplesLoading, column }: { wait
     }
   };
 
-  const testRunId = test.state.phase === "arrived" || test.state.phase === "stored" ? test.state.traceId : null;
+  const testRunId = "traceId" in test.state ? test.state.traceId : null;
   const latest = arrival && arrival.runId !== testRunId ? arrival : null;
   const latestName = latest ? runs.data?.find(run => run.id === latest.runId) : undefined;
 
@@ -285,7 +310,7 @@ function LiveRow({ waitingLabel, onLoadSamples, samplesLoading, column }: { wait
           </Button>
         </div>
       </div>
-      <TestSpanResult state={test.state} />
+      <TestSpanResult state={test.state} onRemove={() => void test.remove()} />
       {samples.error && <p role="alert" className="mt-2 text-12 text-rp-danger">{samples.error}</p>}
       {samples.count > 0 && (
         <p role="status" className="mt-2 text-13 text-rp-ink-muted">
@@ -297,20 +322,34 @@ function LiveRow({ waitingLabel, onLoadSamples, samplesLoading, column }: { wait
   );
 }
 
-function TestSpanResult({ state }: { state: ReturnType<typeof useTestSpan>["state"] }) {
+function TestSpanResult({ state, onRemove }: { state: ReturnType<typeof useTestSpan>["state"]; onRemove: () => void }) {
   if (state.phase === "idle" || state.phase === "sending") return null;
   if (state.phase === "failed") {
     return <p role="alert" className="mt-2 text-13 text-rp-danger" data-test-span-result="failed">The test span was not stored: {state.message}</p>;
   }
+  if (state.phase === "removed") {
+    return <p role="status" className="mt-2 text-13 leading-5 text-rp-ink-muted" data-test-span-result="removed">Test run removed. Send another any time.</p>;
+  }
+  const arrived = state.phase === "arrived";
+  const removing = state.phase === "removing";
   return (
-    <p role="status" className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-13 leading-5 text-rp-ink" data-test-span-result={state.phase}>
-      <span aria-hidden="true" className={cn("size-2 shrink-0 translate-y-[-1px] rounded-full", state.phase === "arrived" ? "bg-rp-mark-success" : "bg-rp-mark-warning")} />
-      <span>
-        {state.phase === "arrived"
-          ? <>Test span stored and shown live after <span className="font-mono">{state.ms}&nbsp;ms</span>.</>
-          : <>Test span stored, but no live update arrived. Reload if the run list looks stale.</>}
-      </span>
-      <Link to={runPath(state.traceId)} className="inline-flex items-center gap-1 font-medium text-rp-blue underline-offset-4 hover:underline">Open the test run<ArrowRight aria-hidden="true" className="size-3.5" /></Link>
-    </p>
+    <div className="mt-2 space-y-1.5" data-test-span-result={state.phase}>
+      <p role="status" className="flex items-start gap-2 text-13 leading-5 text-rp-ink">
+        <span aria-hidden="true" className={cn("mt-1.5 size-2 shrink-0 rounded-full", state.phase === "stored" ? "bg-rp-mark-warning" : "bg-rp-mark-success")} />
+        <span className="min-w-0">
+          {state.phase === "stored"
+            ? <>Test span stored, but no live update arrived. Reload if the run list looks stale.</>
+            : arrived ? <>Test span stored and shown live after <span className="font-mono">{state.ms}&nbsp;ms</span>.</>
+            : <>Test span stored as a run named &ldquo;Connection test&rdquo;.</>}
+        </span>
+      </p>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <Link to={runPath(state.traceId)} className="rp-touch-target inline-flex items-center gap-1 text-13 font-medium text-rp-blue underline-offset-4 hover:underline">Open the test run<ArrowRight aria-hidden="true" className="size-3.5" /></Link>
+        <button type="button" onClick={onRemove} disabled={removing} className="rp-touch-target rounded-sm text-13 font-medium text-rp-ink-muted underline-offset-4 hover:text-rp-ink hover:underline disabled:opacity-60">
+          {removing ? "Removing test run…" : "Remove test run"}
+        </button>
+      </div>
+      {state.phase === "remove-failed" && <p role="alert" className="text-12 text-rp-danger">The test run was not removed: {state.message}</p>}
+    </div>
   );
 }

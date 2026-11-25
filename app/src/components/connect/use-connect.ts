@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { deleteRun } from "../../api/runs";
 import { useRunPhantomEvent } from "../../hooks/use-runphantom-ws";
 import type { Run } from "../../utils/types";
 import { buildTestTrace, sendTestTrace } from "./test-span";
@@ -22,6 +23,7 @@ export function useNewRunArrival(): { runId: string; at: number } | null {
       if (seen.current.has(runId) || known?.some(run => run.id === runId)) continue;
       seen.current.add(runId);
       setArrival({ runId, at: Date.now() });
+      void queryClient.invalidateQueries({ queryKey: ["runs"], exact: true });
     }
   });
   return arrival;
@@ -32,6 +34,9 @@ export type TestSpanState =
   | { phase: "sending"; traceId: string }
   | { phase: "arrived"; traceId: string; ms: number }
   | { phase: "stored"; traceId: string }
+  | { phase: "removing"; traceId: string }
+  | { phase: "removed"; traceId: string }
+  | { phase: "remove-failed"; traceId: string; message: string }
   | { phase: "failed"; message: string };
 
 /** How long to wait for the live update after the service accepted the trace. */
@@ -73,5 +78,19 @@ export function useTestSpan() {
     }
   }, [queryClient]);
 
-  return { state, send };
+  const remove = useCallback(async () => {
+    if (state.phase !== "arrived" && state.phase !== "stored" && state.phase !== "remove-failed") return;
+    const { traceId } = state;
+    setState({ phase: "removing", traceId });
+    try {
+      await deleteRun(traceId);
+      queryClient.setQueriesData<Run[]>({ queryKey: ["runs"], exact: true }, runs => runs?.filter(run => run.id !== traceId));
+      void queryClient.invalidateQueries({ queryKey: ["home"] });
+      if (mounted.current) setState({ phase: "removed", traceId });
+    } catch (error) {
+      if (mounted.current) setState({ phase: "remove-failed", traceId, message: error instanceof Error ? error.message : "The test run could not be removed." });
+    }
+  }, [state, queryClient]);
+
+  return { state, send, remove };
 }

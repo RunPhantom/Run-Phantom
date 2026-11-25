@@ -9,6 +9,16 @@ export interface LocalService {
 }
 
 export const DEFAULT_LOCAL_PORT = 5947;
+export const PORT_PLACEHOLDER = "<port>";
+
+/**
+ * What the CLI commands need to know. `port` is null until the service has reported it:
+ * the commands then carry a visible `RUNPHANTOM_PORT=<port>` instead of assuming 5947.
+ */
+export interface CliTarget {
+  port: number | null;
+  runtime: LocalRuntime;
+}
 export const ENDPOINT_VARIABLE = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT";
 export const EXAMPLE_MODEL = "gpt-5-nano";
 export const EXAMPLE_PROMPT = "Where is order A1002?";
@@ -37,9 +47,9 @@ export function endpointForPort(port: number): string {
  * The CLI finds the local service by RUNPHANTOM_PORT; without it, a non-default port is
  * missed and the CLI starts a second service on 5947.
  */
-export function cliCommand(service: Pick<LocalService, "port" | "runtime">, args: string): string {
+export function cliCommand(service: CliTarget, args: string): string {
   const program = service.runtime === "binary" ? "runphantom" : "bun x runphantom-dev";
-  const port = service.port === DEFAULT_LOCAL_PORT ? "" : `RUNPHANTOM_PORT=${service.port} `;
+  const port = service.port === DEFAULT_LOCAL_PORT ? "" : `RUNPHANTOM_PORT=${service.port ?? PORT_PLACEHOLDER} `;
   return `${port}${program} ${args}`;
 }
 
@@ -73,7 +83,7 @@ export function openTelemetryEnv(endpoint: string): string {
 }
 
 export function typescriptSnippet(endpoint: string): string {
-  return `// runphantom.ts — no dependencies. Node 20+ or Bun.
+  return `// runphantom.ts — no dependencies. Bun, or Node 23.6+.
 const ENDPOINT = process.env.${ENDPOINT_VARIABLE} ?? "${endpoint}";
 
 const hex = (bytes: number) =>
@@ -172,8 +182,11 @@ export interface CodingAgentGuide {
 }
 
 const PROJECT = "/path/to/your/project";
+/** `mkdir -m` leaves an existing folder's mode alone, so the chmod still runs. */
+const PRIVATE_STATE_DIR = "mkdir -p -m 700 ~/.runphantom && chmod 700 ~/.runphantom";
 
-export function codingAgentGuides(service: Pick<LocalService, "port" | "runtime">): CodingAgentGuide[] {
+export function codingAgentGuides(service: CliTarget): CodingAgentGuide[] {
+  const codexPort = service.port === DEFAULT_LOCAL_PORT ? "" : ` --port ${service.port ?? PORT_PLACEHOLDER}`;
   return [
     {
       id: "claude-code",
@@ -185,8 +198,8 @@ export function codingAgentGuides(service: Pick<LocalService, "port" | "runtime"
     {
       id: "codex",
       name: "Codex",
-      command: wrapCommand(`chmod 700 ~/.runphantom && ${cliCommand(service, `hooks install codex --local --cwd ${PROJECT} --full --consent-full${service.port === DEFAULT_LOCAL_PORT ? "" : ` --port ${service.port}`}`)}`),
-      then: "Codex capture needs Run Phantom's state folder to be private, hence the chmod. Then open Codex in that project, run /hooks and trust the new hooks. Capture is per project and includes message content.",
+      command: `${PRIVATE_STATE_DIR} &&\n${wrapCommand(cliCommand(service, `hooks install codex --local --cwd ${PROJECT} --full --consent-full${codexPort}`))}`,
+      then: "Codex capture needs Run Phantom's state folder to exist and be private to you, hence the mkdir and chmod. Then open Codex in that project, run /hooks and trust the new hooks. Capture is per project and includes message content.",
     },
     {
       id: "cursor",
@@ -198,6 +211,6 @@ export function codingAgentGuides(service: Pick<LocalService, "port" | "runtime"
   ];
 }
 
-export function setupCommand(service: Pick<LocalService, "port" | "runtime">): string {
+export function setupCommand(service: CliTarget): string {
   return cliCommand(service, "setup --global");
 }

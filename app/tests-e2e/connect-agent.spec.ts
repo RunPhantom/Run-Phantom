@@ -26,6 +26,8 @@ test("the sidebar opens the connect guide with this service's real endpoint and 
 
   const endpoint = `http://127.0.0.1:${runPhantom.port}/v1/traces`;
   await expect(page.locator("[data-otlp-snippet]")).toHaveText(`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=${endpoint}`);
+  await page.getByRole("button", { name: "Copy endpoint URL", exact: true }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(endpoint);
   await expect(page.locator("[data-connect-example]")).toContainText("--provider openai --model gpt-5-nano");
 
   const tabs = page.getByRole("tablist", { name: "Ways to connect" });
@@ -73,6 +75,56 @@ test("a test span goes through the OTLP route and arrives live as a run", async 
   await expect(page.getByText("Connection test").first()).toBeVisible();
 });
 
+test("a test run can be removed from the connect guide", async ({ page, runPhantom }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${runPhantom.url}/connect`);
+  const check = page.getByRole("complementary", { name: "Check the connection" });
+  await expect(check.getByText("Listening for new runs…")).toBeVisible({ timeout: 10_000 });
+  await check.getByRole("button", { name: "Send a test span" }).click();
+  const result = check.locator("[data-test-span-result]");
+  await expect(result).toHaveAttribute("data-test-span-result", "arrived", { timeout: 10_000 });
+  await expect.poll(() => runNames(runPhantom.url)).toContain("Connection test");
+
+  await result.getByRole("button", { name: "Remove test run" }).click();
+  await expect(result).toHaveAttribute("data-test-span-result", "removed");
+  await expect(result).toHaveText("Test run removed. Send another any time.");
+  await expect.poll(() => runNames(runPhantom.url)).not.toContain("Connection test");
+  await expect(check.getByText("Listening for new runs…")).toBeVisible();
+});
+
+test("a run sent from outside the browser is named as it arrives", async ({ page, runPhantom }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${runPhantom.url}/connect?tab=curl`);
+  const check = page.getByRole("complementary", { name: "Check the connection" });
+  await expect(check.getByText("Listening for new runs…")).toBeVisible({ timeout: 10_000 });
+  const hex = (bytes: number) => Array.from(crypto.getRandomValues(new Uint8Array(bytes)), b => b.toString(16).padStart(2, "0")).join("");
+  const now = Date.now();
+  const span = { traceId: hex(16), spanId: hex(8), name: "Hello from curl", kind: 1, startTimeUnixNano: `${now}000000`, endTimeUnixNano: `${now + 5}000000`, status: { code: 1 } };
+  const response = await fetch(`${runPhantom.url}/v1/traces`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ resourceSpans: [{ resource: { attributes: [{ key: "service.name", value: { stringValue: "curl" } }] }, scopeSpans: [{ spans: [span] }] }] }),
+  });
+  expect(response.ok).toBe(true);
+  const live = check.locator("[data-waiting-first-run]");
+  await expect(live).toContainText("Run received: Hello from curl.", { timeout: 10_000 });
+  await live.getByRole("link", { name: "Open it" }).click();
+  await expect(page).toHaveURL(new RegExp(`/runs/${span.traceId}$`));
+});
+
+test("commands wait for the real port instead of assuming the default one", async ({ page, runPhantom }) => {
+  await page.route("**/health", route => route.fulfill({ status: 503, contentType: "application/json", body: "{}" }));
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${runPhantom.url}/connect?tab=coding-agents`);
+  await expect(page.getByText("Could not read the local service port", { exact: false })).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator("[data-otlp-snippet]")).toHaveText("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:<port>/v1/traces");
+  const panel = page.getByRole("tabpanel");
+  await expect(panel).toContainText("RUNPHANTOM_PORT=<port> bun x runphantom-dev hooks install claude");
+  await expect(panel).toContainText("--port <port>");
+  await expect(page.getByRole("button", { name: "Copy Claude Code command: Port unknown" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Copy endpoint URL" })).toBeDisabled();
+});
+
 test("the empty Runs page teaches with a labelled sample and fills in when a test span arrives", async ({ page, runPhantom }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`${runPhantom.url}/runs`);
@@ -117,6 +169,23 @@ test("the connect guide fits a phone without sideways scrolling and keeps 44px t
       const box = (await control.boundingBox())!;
       expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(44);
     }
+  } finally {
+    await context.close();
+  }
+});
+
+test("a deep-linked tab is scrolled into view on a phone", async ({ browser, runPhantom }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const page = await context.newPage();
+  try {
+    await page.goto(`${runPhantom.url}/connect?tab=coding-agents`);
+    const list = page.getByRole("tablist", { name: "Ways to connect" });
+    const selected = list.getByRole("tab", { name: "Coding agents", exact: true });
+    await expect(selected).toHaveAttribute("aria-selected", "true", { timeout: 10_000 });
+    await expect.poll(async () => {
+      const [tab, frame] = await Promise.all([selected.boundingBox(), list.boundingBox()]);
+      return !!tab && !!frame && tab.x >= frame.x - 1 && tab.x + tab.width <= frame.x + frame.width + 1;
+    }).toBe(true);
   } finally {
     await context.close();
   }

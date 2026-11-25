@@ -65,14 +65,29 @@ describe("connect commands", () => {
     expect(setupCommand({ port: 6540, runtime: "binary" })).toBe("RUNPHANTOM_PORT=6540 runphantom setup --global");
   });
 
+  test("an unknown port stays a visible placeholder instead of falling back to 5947", () => {
+    expect(cliCommand({ port: null, runtime: "source" }, "setup --global")).toBe("RUNPHANTOM_PORT=<port> bun x runphantom-dev setup --global");
+    const codex = codingAgentGuides({ port: null, runtime: "binary" })[1].command.replace(/ \\\n\s+/g, " ").replace(/&&\n/g, "&& ");
+    expect(codex).toContain("RUNPHANTOM_PORT=<port> runphantom hooks install codex");
+    expect(codex).toEndWith("--port <port>");
+  });
+
   test("coding-agent commands match the CLI's accepted flags", () => {
     const [claude, codex, cursor] = codingAgentGuides({ port: 6540, runtime: "source" });
-    const flat = (command: string) => command.replace(/ \\\n\s+/g, " ");
+    const flat = (command: string) => command.replace(/ \\\n\s+/g, " ").replace(/&&\n/g, "&& ");
     expect(flat(claude.command)).toBe("RUNPHANTOM_PORT=6540 bun x runphantom-dev hooks install claude --global --cwd /path/to/your/project");
-    expect(flat(codex.command)).toBe("chmod 700 ~/.runphantom && RUNPHANTOM_PORT=6540 bun x runphantom-dev hooks install codex --local --cwd /path/to/your/project --full --consent-full --port 6540");
+    expect(flat(codex.command)).toBe("mkdir -p -m 700 ~/.runphantom && chmod 700 ~/.runphantom && RUNPHANTOM_PORT=6540 bun x runphantom-dev hooks install codex --local --cwd /path/to/your/project --full --consent-full --port 6540");
     expect(flat(cursor.command)).toBe("RUNPHANTOM_PORT=6540 bun x runphantom-dev hooks install cursor --local --cwd /path/to/your/project");
-    expect(flat(codingAgentGuides({ port: 5947, runtime: "binary" })[1].command)).toBe("chmod 700 ~/.runphantom && runphantom hooks install codex --local --cwd /path/to/your/project --full --consent-full");
+    expect(flat(codingAgentGuides({ port: 5947, runtime: "binary" })[1].command)).toBe("mkdir -p -m 700 ~/.runphantom && chmod 700 ~/.runphantom && runphantom hooks install codex --local --cwd /path/to/your/project --full --consent-full");
     expect(flat(claude.fullCapture!)).toContain("--local --cwd /path/to/your/project --full --consent-full");
+  });
+
+  test.skipIf(!posix)("every multi-line coding-agent command parses as one shell command", async () => {
+    for (const guide of codingAgentGuides({ port: 6540, runtime: "binary" })) {
+      for (const command of [guide.command, guide.fullCapture].filter((value): value is string => !!value)) {
+        expect((await run(["sh", "-n", "-c", command])).status).toBe(0);
+      }
+    }
   });
 
   test("long commands break before their flags and stay one shell command", () => {
