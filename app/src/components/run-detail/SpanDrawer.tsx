@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { AlertTriangle, ArrowLeft, ChevronRight, Link2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { fmt, displayPayload, detectProvider, isoTimestamp, spanErrorReason } from "../../utils/helpers";
+import { fmt, displayPayload, detectProvider, isoTimestamp } from "../../utils/helpers";
 import { parseSpanAttributes, requestedToolCalls, spanFinishReasons, spanReasoningTokens, stoppedEarlyReason } from "../../utils/span-evidence";
 import type { NormalizedMessage, Span } from "../../utils/types";
 import { JsonView } from "../JsonView";
@@ -12,9 +12,9 @@ import { CaptureVisibilityDetails } from "../CaptureVisibilityDetails";
 import { spanCost } from "../../../../src/pricing/span-cost";
 import { fmtCost } from "../../utils/costs";
 import { CopyButton } from "./CopyButton";
-import { useSpanActions } from "./span-actions";
+import { useSpanActions, type SpanAction } from "./span-actions";
 import { availableTools, looksLikeMarkdown, payloadShape, previewValue, providerOptions, stepAsJson, stepLink } from "./span-details";
-import { readableError, traceKind, TRACE_KIND_LABEL, type TraceKind } from "./trace-model";
+import { readableError, spanErrorText, traceKind, TRACE_KIND_LABEL, type TraceKind } from "./trace-model";
 
 const RENDER_MODE_KEY = "runphantom:span-drawer:render";
 type RenderMode = "pretty" | "raw";
@@ -160,7 +160,7 @@ export function SpanDrawer({ span, spans, agentRootIds, traceStart, mode, onClos
   };
   const kind = traceKind(span, agentRootIds);
   const isErr = span.status === "ERROR";
-  const errorReason = isErr ? spanErrorReason(span) : "";
+  const errorReason = isErr ? spanErrorText(span) : "";
   const readable = isErr ? readableError(span, 400) : "";
   const attrs = useMemo(() => parseSpanAttributes(span.attributes), [span.attributes]);
   const isLlm = !!span.span_type?.includes("LLM");
@@ -182,6 +182,37 @@ export function SpanDrawer({ span, spans, agentRootIds, traceStart, mode, onClos
   const actions = useSpanActions({ span, spans, runId, navigate });
   const provider = detectProvider(span.model, span.provider);
   const backRef = useRef<HTMLButtonElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+  const [headerHeight, setHeaderHeight] = useState(0);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  useEffect(() => { setActionError(null); }, [span.id]);
+
+  // In the sheet the header is sticky inside the scroller; without matching
+  // scroll padding, tabbing to a control just below it left that control
+  // half hidden under the header.
+  useLayoutEffect(() => {
+    const element = headerRef.current;
+    if (mode !== "sheet" || !element) return;
+    const measure = () => setHeaderHeight(element.offsetHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [mode]);
+
+  // An action's failure is shown beside the buttons; a rejected promise from
+  // an extension must not end up as an unhandled rejection the reader never sees.
+  const runAction = (action: SpanAction) => {
+    setActionError(null);
+    Promise.resolve()
+      .then(() => action.run({ span, spans, runId, navigate }))
+      .catch((error: unknown) => {
+        console.error(`Span action "${action.id}" failed`, error);
+        const detail = error instanceof Error && error.message ? `: ${error.message}` : "";
+        setActionError(`${action.label} failed${detail}`);
+      });
+  };
 
   useEffect(() => {
     if (mode === "sheet") requestAnimationFrame(() => backRef.current?.focus());
@@ -207,7 +238,7 @@ export function SpanDrawer({ span, spans, agentRootIds, traceStart, mode, onClos
   }
 
   const header = (
-    <div className={cn("flex-shrink-0 border-b border-rp-line bg-rp-surface px-4 pb-2.5 pt-2.5", mode === "sheet" && "sticky top-0 z-10")}>
+    <div ref={headerRef} className={cn("flex-shrink-0 border-b border-rp-line bg-rp-surface px-4 pb-2.5 pt-2.5", mode === "sheet" && "sticky top-0 z-10")}>
       {mode === "sheet" && (
         <button ref={backRef} type="button" onClick={onClose}
           className="-ml-2 mb-1.5 inline-flex min-h-10 items-center gap-1.5 rounded-control px-2 text-13 font-medium text-rp-ink hover:bg-rp-row-hover">
@@ -232,7 +263,7 @@ export function SpanDrawer({ span, spans, agentRootIds, traceStart, mode, onClos
             const Icon = action.icon;
             return (
               <button key={action.id} type="button" data-span-action={action.id}
-                onClick={() => { void action.run({ span, spans, runId, navigate }); }}
+                onClick={() => runAction(action)}
                 className="inline-flex h-7 items-center gap-1 rounded-control border border-rp-line px-2 text-12 font-medium text-rp-ink hover:bg-rp-row-hover">
                 {Icon && <Icon aria-hidden="true" className="size-3.5" />}
                 {action.label}
@@ -252,6 +283,7 @@ export function SpanDrawer({ span, spans, agentRootIds, traceStart, mode, onClos
       <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-12 text-rp-ink-subtle">
         {metaParts.map((part, index) => <span key={index} className="inline-flex min-w-0 items-center">{part}</span>)}
       </div>
+      {actionError && <p role="alert" data-span-action-error className="mt-1.5 break-words text-12 text-rp-danger">{actionError}</p>}
     </div>
   );
 
@@ -336,7 +368,7 @@ export function SpanDrawer({ span, spans, agentRootIds, traceStart, mode, onClos
           <div className="break-words text-rp-ink">{isoTimestamp(span.start_time_ms)}</div>
           <div className="text-rp-ink-subtle">end</div>
           <div className="break-words text-rp-ink">{isoTimestamp(span.end_time_ms)}</div>
-          <div className="text-rp-ink-subtle">span id</div>
+          <div className="self-center text-rp-ink-subtle">span id</div>
           <SpanIdCopy id={span.id} />
           {span.parent_span_id && <><div className="text-rp-ink-subtle">parent id</div><div className="truncate text-rp-ink" title={span.parent_span_id}>{span.parent_span_id}</div></>}
           {typeof attrs?.["ai.provider.baseURL"] === "string" && <><div className="text-rp-ink-subtle">base url</div><div className="break-words text-rp-ink-subtle">{attrs["ai.provider.baseURL"] as string}</div></>}
@@ -364,7 +396,7 @@ export function SpanDrawer({ span, spans, agentRootIds, traceStart, mode, onClos
   return (
     <div role="region" aria-label="Span details" data-span-drawer={mode} className="flex h-full min-h-0 min-w-0 flex-col bg-rp-surface">
       {mode === "sheet" ? (
-        <div className="sb min-h-0 flex-1 overflow-auto">{header}{body}</div>
+        <div className="sb min-h-0 flex-1 overflow-auto" style={{ scrollPaddingTop: headerHeight + 8 }}>{header}{body}</div>
       ) : (
         <>
           {header}
