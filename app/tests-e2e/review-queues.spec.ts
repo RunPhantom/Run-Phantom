@@ -73,11 +73,11 @@ test("actual review component persists A/B drafts, immediately approves newest e
   await expect.poll(async()=> (await stored(first.id)).draft.target.expectedOutput).toBe("Expected A");
   await expect.poll(async()=> (await stored(second.id)).draft.target.expectedOutput).toBe("Expected B");
   await page.getByRole("textbox",{ name:/Expected response \(required\)/ }).fill("Newest B before approval");
-  await page.getByRole("button",{ name:"Approve local review",exact:true }).click();
+  await page.getByRole("button",{ name:"Approve",exact:true }).click();
   await expect.poll(async()=> (await stored(second.id)).state).toBe("approved");
   expect((await stored(second.id)).draft.target.expectedOutput).toBe("Newest B before approval");
   await page.getByRole("combobox",{ name:"Destination dataset",exact:true }).selectOption({ label:"Curated checkout examples · revision 1" });
-  await page.getByRole("button",{ name:"Promote approved selection",exact:true }).click();
+  await page.getByRole("button",{ name:"Add approved items to dataset",exact:true }).click();
   await expect(page.getByRole("region",{ name:"Dataset promotion",exact:true })).toContainText("Saved revision 2");
   const revisions = await (await request.get("/api/evaluations/datasets")).json() as Array<{ id:string;latestVersion:number }>;
   const revision = await (await request.get(`/api/evaluations/datasets/${revisions[0].id}?version=2`)).json();
@@ -147,7 +147,7 @@ test("typing shortcuts and SPA navigation retain in-flight drafts until acknowle
   await expect(page.getByRole("button",{ name:"Discard local drafts and leave",exact:true })).toBeDisabled();
   await page.getByRole("dialog").press("Control+Enter"); expect((await current()).state).toBe("draft");
   await page.getByRole("button",{ name:"Stay on this page",exact:true }).click(); await expect(note).toHaveValue("Retained while acknowledgment is delayed");
-  await expect(page.getByRole("region",{ name:"Retained drafts",exact:true })).toHaveCount(0);
+  await expect(page.getByRole("region",{ name:"Unsaved drafts",exact:true })).toHaveCount(0);
   await nav.focus(); await nav.press("Enter"); await expect(page.getByRole("heading",{ name:"Evaluations",exact:true })).toBeVisible();
 });
 
@@ -165,9 +165,9 @@ test("structured number, boolean and choice targets persist as actual typed data
   await page.getByRole("spinbutton",{ name:/Score \(required\)/ }).fill("3");
   await page.getByRole("combobox",{ name:/Approved \(required\)/ }).selectOption("true");
   await page.getByRole("combobox",{ name:/Status \(required\)/ }).selectOption("0");
-  await page.getByRole("button",{ name:"Approve local review",exact:true }).click();
+  await page.getByRole("button",{ name:"Approve",exact:true }).click();
   await page.getByRole("combobox",{ name:"Destination dataset",exact:true }).selectOption(dataset.datasetId);
-  await page.getByRole("button",{ name:"Promote approved selection",exact:true }).click();
+  await page.getByRole("button",{ name:"Add approved items to dataset",exact:true }).click();
   await expect(page.getByRole("region",{ name:"Dataset promotion",exact:true })).toContainText("Saved revision 2");
   const revision = await (await request.get(`/api/evaluations/datasets/${dataset.datasetId}?version=2`)).json();
   expect(revision.cases[0].rules).toEqual([{ kind:"jsonPath",path:"score",equals:3 },{ kind:"jsonPath",path:"ok",equals:true },{ kind:"jsonPath",path:"status",equals:"paid" }]);
@@ -199,7 +199,7 @@ test("explicit approval and reapply keep source frames in the displayed window",
   await expect(secondButton).toBeEnabled(); await secondButton.click(); await expect(source).toContainText("Input for source-b");
   await delayAcknowledgment(page, "**/api/review-queues");
   await delayAcknowledgment(page, `**/api/review-queues/${queue.id}/items/${second.id}/*`);
-  await target.fill("Newest second target"); await page.getByRole("button",{ name:"Approve local review",exact:true }).click();
+  await target.fill("Newest second target"); await page.getByRole("button",{ name:"Approve",exact:true }).click();
   await expect.poll(async()=> (await current(second.id)).state).toBe("approved");
   await expect(firstButton).toBeDisabled(); await firstButton.click({ force:true }); await expect(source).toContainText("Input for source-b");
   await expect(page.getByRole("button",{ name:"Reopen review",exact:true })).toBeVisible(); await expect(firstButton).toBeDisabled();
@@ -221,7 +221,7 @@ test("explicit approval and reapply keep source frames in the displayed window",
   await page.getByRole("button",{ name:"Reapply to latest revision",exact:true }).click();
   await expect(page.getByRole("alert").first()).toContainText("not found");
   await expect(source).toHaveCount(0);
-  await expect(page.getByRole("region",{ name:"Retained drafts",exact:true })).toContainText("Checkout response");
+  await expect(page.getByRole("region",{ name:"Unsaved drafts",exact:true })).toContainText("Checkout response");
   const reopened = await current(second.id); await secondButton.click(); await expect(source).toContainText("Input for source-b");
   await page.getByRole("button",{ name:"Delete item",exact:true }).click(); await page.getByRole("button",{ name:"Confirm",exact:true }).click();
   await expect(source).toHaveCount(0); await expect(page.getByRole("dialog")).toHaveCount(0);
