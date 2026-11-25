@@ -61,7 +61,7 @@ export interface RunListPage {
   hasMore: boolean;
 }
 
-interface RunListQuery {
+export interface RunListQuery {
   limit: number;
   statuses: RunStatus[] | null;
   agent?: string;
@@ -76,7 +76,7 @@ interface RunListQuery {
   envelope: boolean;
 }
 
-function parseRunListQuery(query: Record<string, unknown>): RunListQuery {
+export function parseRunListQuery(query: Record<string, unknown>): RunListQuery {
   const rawLimit = queryString(query, "limit", 16);
   const parsedLimit = Number(rawLimit);
   // Legacy callers sent arbitrary limits and were clamped rather than rejected.
@@ -155,6 +155,33 @@ export function toRunListRow(row: RunRow, now: number = Date.now()): RunListRow 
   };
 }
 
+/** The filter half of GET /api/runs: everything except sort, cursor and limit. */
+export function runMatchesQuery(row: RunRow, query: Pick<RunListQuery, "statuses" | "agent" | "model" | "q" | "since" | "until">): boolean {
+  const needle = query.q?.toLowerCase();
+  return (query.since === undefined || row.started_at >= query.since)
+    && (query.until === undefined || row.started_at < query.until)
+    && (!query.statuses || query.statuses.includes(row.facts.status))
+    && (!query.agent || runAgent(row) === query.agent)
+    && (!query.model || runUsesModel(row, query.model))
+    && (!needle || [row.id, row.display_name, row.name, row.event_name, row.facts.inputPreview].some(field => field?.toLowerCase().includes(needle)));
+}
+
+/**
+ * X-Total-Count for several GET /api/runs filter sets at once. Run facts are loaded once for the whole store,
+ * so N saved views cost one aggregate pass instead of N.
+ */
+export function countRuns(db: Database, dbPath: string, rawQueries: readonly Record<string, unknown>[]): number[] {
+  const queries = rawQueries.map(parseRunListQuery);
+  if (queries.length === 0) return [];
+  // When every view is time-bounded (the common "last 24 hours" kind), only runs inside the widest bound are read.
+  const where: string[] = ["1 = 1"];
+  const params: number[] = [];
+  if (queries.every(query => query.since !== undefined)) { where.push("r.started_at >= ?"); params.push(Math.min(...queries.map(query => query.since!))); }
+  if (queries.every(query => query.until !== undefined)) { where.push("r.started_at < ?"); params.push(Math.max(...queries.map(query => query.until!))); }
+  const rows = loadRunRows(db, dbPath, selectRunAggregates(db, where.join(" AND "), params));
+  return queries.map(query => rows.reduce((count, row) => count + (runMatchesQuery(row, query) ? 1 : 0), 0));
+}
+
 export function listRuns(db: Database, dbPath: string, rawQuery: Record<string, unknown>): RunListPage & { envelope: boolean } {
   const query = parseRunListQuery(rawQuery);
   const now = Date.now();
@@ -162,12 +189,7 @@ export function listRuns(db: Database, dbPath: string, rawQuery: Record<string, 
   const params: number[] = [];
   if (query.since !== undefined) { where.push("r.started_at >= ?"); params.push(query.since); }
   if (query.until !== undefined) { where.push("r.started_at < ?"); params.push(query.until); }
-  const needle = query.q?.toLowerCase();
-  const matching = loadRunRows(db, dbPath, selectRunAggregates(db, where.join(" AND "), params)).filter(row =>
-    (!query.statuses || query.statuses.includes(row.facts.status))
-    && (!query.agent || runAgent(row) === query.agent)
-    && (!query.model || runUsesModel(row, query.model))
-    && (!needle || [row.id, row.display_name, row.name, row.event_name, row.facts.inputPreview].some(field => field?.toLowerCase().includes(needle))));
+  const matching = loadRunRows(db, dbPath, selectRunAggregates(db, where.join(" AND "), params)).filter(row => runMatchesQuery(row, query));
   const keyed = matching.map(row => ({ row, value: sortValue(row, query.sort), id: row.id }));
   keyed.sort((a, b) => compare(a, b, query.order));
   const start = query.cursor ? keyed.findIndex(item => compare(item, query.cursor!, query.order) > 0) : 0;

@@ -135,12 +135,9 @@ for (const width of [1440, 1024, 390, 320]) {
     for (const section of SECTIONS) {
       navigation = await openNavigation(page, mobile);
       await navigation.getByRole("link", { name: section.name, exact: true }).click();
-      const expectedPath = section.name === "Runs" && !mobile
-        ? `/runs/${FIXTURE_LIVE_RUN_ID}`
-        : section.path;
-      await expect(page).toHaveURL(`${runPhantom.url}${expectedPath}`);
+      await expect(page).toHaveURL(`${runPhantom.url}${section.path}`);
       if (section.name === "Runs") {
-        if (!mobile) await expect(page.getByRole("tab", { name: "Span Tree", exact: true })).toBeVisible();
+        await expect(page.locator(`[data-run-id="${FIXTURE_LIVE_RUN_ID}"]`)).toBeVisible();
         expect(await readRunPhantomRun(runPhantom.url, FIXTURE_LIVE_RUN_ID)).toEqual(liveRunBefore);
         expect(await readRunPhantomSpans(runPhantom.url, FIXTURE_LIVE_RUN_ID)).toEqual(liveSpansBefore);
       }

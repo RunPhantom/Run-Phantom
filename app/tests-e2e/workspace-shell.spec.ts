@@ -177,15 +177,14 @@ test("grouped navigation keeps pinned names and shows counts only for loaded dat
   expect(box.height).toBe(32);
 });
 
-test("runs page prompts for a run instead of showing onboarding when only sample runs exist", async ({ page, request, runPhantom }) => {
+test("runs page lists sample runs in the table instead of showing onboarding", async ({ page, request, runPhantom }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   expect((await request.post(`${runPhantom.url}/api/demo-traces/replay`)).ok()).toBe(true);
   await page.goto(`${runPhantom.url}/runs`);
-  await expect(page.locator("[data-run-id]")).toHaveCount(3);
-  await expect(page.getByRole("heading", { name: "Pick a run to inspect", exact: true })).toBeVisible();
+  await expect(page.getByRole("grid", { name: "Runs" }).locator("[data-run-id]")).toHaveCount(3);
   await expect(page.getByText("No runs captured yet.")).toHaveCount(0);
   await expect(page.getByText("These are sample runs.", { exact: false })).toBeVisible();
-  await page.getByRole("button", { name: "Open most recent run", exact: true }).click();
+  await page.locator("[data-run-id]").first().click();
   await expect(page).toHaveURL(/\/runs\/demo_/);
   await expect(page.getByRole("tab", { name: "Span Tree", exact: true })).toBeVisible();
 });

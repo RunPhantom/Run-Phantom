@@ -687,6 +687,14 @@
   .rp-enter { animation: rp-enter var(--rp-motion-enter) var(--rp-ease-out) both; }
   .rp-flash { animation: rp-flash var(--rp-motion-flash) var(--rp-ease-out) both; }
   .rp-skeleton { background: var(--rp-line-muted); animation: rp-skeleton 1.2s ease-in-out infinite alternate; }
+  .rp-row-new { animation: rp-enter var(--rp-motion-enter) var(--rp-ease-out) both, rp-flash var(--rp-motion-flash) var(--rp-ease-out) both; }
+  .rp-checkbox { width: 14px; height: 14px; margin: 0; accent-color: var(--rp-blue-solid); cursor: pointer; }
+  .rp-checkbox:focus-visible { outline: 2px solid var(--rp-blue); outline-offset: 2px; }
+  .rp-runs-grid:focus-visible .rp-row-active { box-shadow: inset 2px 0 0 var(--rp-blue), inset 0 0 0 1px var(--rp-wash-border); }
+  .rp-runs-grid .rp-row-active { background-color: var(--rp-row-hover); }
+  .rp-run-cell, .rp-duration-cell { container-type: inline-size; }
+  @container (max-width: 200px) { .rp-run-short-id { display: none; } }
+  @container (max-width: 84px) { .rp-duration-bar { display: none; } }
 }
 
 @keyframes rp-enter {

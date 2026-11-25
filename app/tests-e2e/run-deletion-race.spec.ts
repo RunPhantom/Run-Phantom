@@ -20,14 +20,16 @@ test("deletion replaces held initial and broadcast lists without another event",
   let heldLists = 0;
   let deliveredLists = 0;
   let deletionSettled = false;
-  await page.route(`${runPhantom.url}/api/runs`, async route => {
+  await page.route(url => url.pathname === "/api/runs", async route => {
     const requestNumber = ++listRequests;
     const held = !deletionSettled;
     const response = await route.fetch();
     if (held) {
       heldLists++;
       if (requestNumber === 1) initialHeld.release();
-      const runs = await response.json() as Array<{ id: string }>;
+      // The shell's run count reads a bare array; the run rail reads cursor pages ({ runs }).
+      const body = await response.json() as Array<{ id: string }> | { runs: Array<{ id: string }> };
+      const runs = Array.isArray(body) ? body : body.runs;
       if (!runs.some(run => run.id === FIXTURE_PRIMARY_RUN_ID)) broadcastHeld.release();
       await listsRelease.promise;
     }
@@ -150,7 +152,7 @@ for (const view of ["", "/convo"]) {
     const listHeld = gate();
     const listRelease = gate();
     let holdNextList = true;
-    await page.route(`${runPhantom.url}/api/runs`, async route => {
+    await page.route(url => url.pathname === "/api/runs", async route => {
       if (!holdNextList) return route.continue();
       holdNextList = false;
       const response = await route.fetch();
@@ -182,7 +184,8 @@ for (const view of ["", "/convo"]) {
     listRelease.release();
     await staleListDelivered;
     await expect(page.locator(`[data-run-id="${FIXTURE_PRIMARY_RUN_ID}"]`)).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "More actions" })).toBeVisible();
+    // Deleting the open run returns to the runs table.
+    await expect(page.getByRole("grid", { name: "Runs" })).toBeVisible();
     // Reopen the surviving conversation in the same client/cache. The removed
     // run must not be reintroduced by the held detail or conversation response.
     await page.locator(`[data-run-id="${FIXTURE_SAVED_SIBLING_RUN_ID}"]`).click();
@@ -291,7 +294,8 @@ test("returning to a pending deletion still navigates away on success", async ({
   });
   release.release();
   await expect(page).not.toHaveURL(new RegExp(FIXTURE_PRIMARY_RUN_ID));
-  await expect(page.getByRole("button", { name: "More actions" })).toBeVisible();
+  await expect(page.getByRole("grid", { name: "Runs" })).toBeVisible();
+  await expect(page.locator(`[data-run-id="${FIXTURE_PRIMARY_RUN_ID}"]`)).toHaveCount(0);
   expect(detailReads).toEqual([]);
 });
 

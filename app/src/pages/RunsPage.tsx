@@ -1,28 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { NavigationType, useNavigate, useNavigationType, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { runPath } from "../utils/navigation";
-import { RunListItem, useShortRunIds } from "../components/RunList";
+import { useShortRunIds } from "../components/RunList";
 import { RunDetail } from "../components/RunDetail";
-import { EmptyState } from "../components/EmptyState";
-import { EmptyPanel } from "@/components/ui/empty-panel";
 import { ReplayView } from "../components/ReplayView";
 import { RunComparison } from "../components/RunComparison";
 import { useReplay } from "../hooks/use-replay";
 import { replayDemoTraces } from "../api/demo-traces";
-import { RotateCcw, ArrowRight, X, ArrowLeft, Search } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
-import { fieldClassName } from "@/components/ui/input";
+import { RotateCcw, ArrowRight, X, ArrowLeft } from "lucide-react";
 import { fetchPrices, modelPricingConsentEnabled } from "../utils/costs";
 import { parseReplayMetadata } from "../utils/types";
 import type { Run } from "../utils/types";
-import { plural, runAgentName, runDisplayName, safeDecodeParam } from "../utils/helpers";
-import { useRunPhantomConnected, useRunPhantomMessage } from "../hooks/use-runphantom-ws";
+import { runDisplayName, safeDecodeParam } from "../utils/helpers";
 import { useIsMobile } from "../hooks/use-mobile";
-import { useScrollRestoration } from "../hooks/use-scroll-restoration";
+import { useRuns } from "../hooks/use-runs";
+import { RunsTableView } from "../runs/RunsTableView";
+import { RunRail, useRailRows } from "../runs/RunRail";
+import { runsTablePath } from "../runs/last-search";
+import { isSampleRun } from "../runs/table-model";
+import { hasActiveFilters } from "../../../src/saved-views-protocol";
 
 const FIRST_TIME_SETUP_DISMISSED_KEY = "runphantom:firstTimeSetupDismissed";
-const RUNS_REFRESH_WINDOW_MS = 400;
 
 function loadFirstTimeSetupDismissed(): boolean {
   try {
@@ -38,121 +36,17 @@ function saveFirstTimeSetupDismissed(): void {
   } catch {}
 }
 
-function isDefaultDemoRun(run: Run): boolean {
-  if (run.id.startsWith("demo_")) return true;
-  if (!run.metadata) return false;
-  try {
-    const metadata = JSON.parse(run.metadata);
-    return metadata?.demo === true && metadata?.default === true;
-  } catch {
-    return false;
-  }
-}
-
 export function RunsPage() {
   const navigate = useNavigate();
   const { runId: routeRunId } = useParams<{ runId?: string }>();
   const selectedId = routeRunId ? safeDecodeParam(routeRunId) : null;
-  const isMobile = useIsMobile();
-  const [runs, setRuns] = useState<Run[]>([]);
-  const [replayOriginalId, setReplayOriginalId] = useState<string | null>(null);
-  const [replayCompare, setReplayCompare] = useState(false);
-  const replay = useReplay();
-  const [search, setSearch] = useState("");
-  const [agentFilter, setAgentFilter] = useState<string>("all");
-  const wsConnected = useRunPhantomConnected();
-  const [hoveredSourceId, setHoveredSourceId] = useState<string | null>(null);
+  const allRuns = useRuns();
   const [firstTimeSetupDismissed, setFirstTimeSetupDismissed] = useState(loadFirstTimeSetupDismissed);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  const navigationType = useNavigationType();
-  const [runsError, setRunsError] = useState<string | null>(null);
-  useScrollRestoration(listRef, "runs-list");
-  // The onboarding pane is shown when there are no runs, and "no runs yet" and
-  // "haven't asked yet" looked identical — so a slow /api/runs greeted a user
-  // with a full first-run setup screen for a machine that had traces all along.
-  const [runsLoaded, setRunsLoaded] = useState(false);
+  const hasUserTraces = useMemo(() => (allRuns.data ?? []).some((run) => !isSampleRun(run)), [allRuns.data]);
 
   useEffect(() => {
     if (modelPricingConsentEnabled()) void fetchPrices();
   }, []);
-  const runsRevision = useRef(0);
-  const fetchRuns = useCallback(async () => {
-    const revision = runsRevision.current;
-    try {
-      const res = await fetch("/api/runs");
-      if (!res.ok) throw new Error(`Run list request failed (${res.status})`);
-      const fresh: unknown = await res.json();
-      // A pre-delete list must not restore the removed row or auto-select it.
-      if (revision !== runsRevision.current) return;
-      // A 5xx still returns valid JSON — an error object, not an array. The
-      // updater below runs outside this try, so `fresh.map` threw there and took
-      // the whole route down through the error boundary instead of showing a
-      // recoverable failure in the one column that failed.
-      if (!Array.isArray(fresh)) throw new Error("Run list response was not a list");
-      setRunsError(null);
-      const list = fresh as Run[];
-      setRuns(prev => {
-        if (prev.length === 0) return list;
-        const freshById = new Map(list.map(r => [r.id, r]));
-        const prevIds = new Set(prev.map(r => r.id));
-        const freshIds = new Set(list.map(r => r.id));
-        // If run set changed (added/deleted), use server ordering to avoid
-        // stale runs appearing at wrong positions.
-        const same = prevIds.size === freshIds.size && [...prevIds].every(id => freshIds.has(id));
-        if (!same) return list;
-        // Same set of runs — update data in place, keep client ordering
-        return prev.map(r => freshById.get(r.id)!);
-      });
-    } catch (err) {
-      if (revision !== runsRevision.current) return;
-      setRunsError((err as Error).message || "Could not load runs");
-    } finally {
-      setRunsLoaded(true);
-    }
-  }, []);
-
-  useEffect(() => { fetchRuns(); }, [fetchRuns]);
-
-  // Every WebSocket frame used to trigger a full /api/runs fetch, and a streaming
-  // agent emits one per token — so a single live run put the list endpoint under
-  // continuous load and re-rendered the sidebar on every token. Coalesce to one
-  // refresh per window, with a trailing call so the settled state always lands.
-  const refreshTimer = useRef<number | null>(null);
-  const refreshPending = useRef(false);
-  const scheduleRefresh = useCallback(() => {
-    if (refreshTimer.current !== null) { refreshPending.current = true; return; }
-    void fetchRuns();
-    refreshTimer.current = window.setTimeout(function settle() {
-      refreshTimer.current = null;
-      if (!refreshPending.current) return;
-      refreshPending.current = false;
-      scheduleRefresh();
-    }, RUNS_REFRESH_WINDOW_MS);
-  }, [fetchRuns]);
-
-  useEffect(() => () => {
-    if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current);
-  }, []);
-
-  useRunPhantomMessage(scheduleRefresh);
-
-  useEffect(() => {
-    const handleRunRemoved = (event: Event) => {
-      const runId = (event as CustomEvent<{ runId?: string }>).detail?.runId;
-      if (!runId) return;
-      ++runsRevision.current;
-      setRuns((prev) => prev.filter((run) => run.id !== runId));
-      void fetchRuns();
-    };
-    window.addEventListener("runphantom:run-removed", handleRunRemoved);
-    return () => window.removeEventListener("runphantom:run-removed", handleRunRemoved);
-  }, [fetchRuns]);
-
-  const hasUserTraces = useMemo(
-    () => runs.some((run) => !isDefaultDemoRun(run)),
-    [runs],
-  );
 
   useEffect(() => {
     if (!hasUserTraces || firstTimeSetupDismissed) return;
@@ -160,41 +54,47 @@ export function RunsPage() {
     setFirstTimeSetupDismissed(true);
   }, [firstTimeSetupDismissed, hasUserTraces]);
 
-  useEffect(() => {
-    if (runs.length === 0 || replayOriginalId) return;
-    // An explicit run id in the URL (valid or not) must reach RunDetail so it can
-    // resolve the trace or render TraceNotFound on a 404. Only auto-pick a default
-    // when nothing is selected — otherwise a deep-link to a deleted/unknown run
-    // would silently redirect to an unrelated run.
-    if (selectedId) return;
-    if (isMobile) return;
-    const firstUserTrace = runs.find((run) => !isDefaultDemoRun(run));
-    if (firstUserTrace) navigate(runPath(firstUserTrace.id), { replace: true });
-  }, [isMobile, navigate, replayOriginalId, runs, selectedId]);
+  const openSamples = useCallback(async () => {
+    const runIds = await replayDemoTraces();
+    navigate(runPath(runIds[0] ?? "demo_triage"));
+  }, [navigate]);
+
+  if (!selectedId) {
+    return (
+      <div className="h-full">
+        <h1 className="sr-only">Runs</h1>
+        <RunsTableView onLoadSamples={openSamples} />
+      </div>
+    );
+  }
+  return <RunDetailLayout selectedId={selectedId} />;
+}
+
+function RunDetailLayout({ selectedId }: { selectedId: string }) {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const compareBaseline = searchParams.get("compare");
+  const isMobile = useIsMobile();
+  const [replayOriginalId, setReplayOriginalId] = useState<string | null>(null);
+  const [replayCompare, setReplayCompare] = useState(false);
+  const replay = useReplay();
+  const [hoveredSourceId, setHoveredSourceId] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [railScrolled, setRailScrolled] = useState(false);
+  const rail = useRailRows(railScrolled);
+  const railRows = rail.data.rows;
+  const allRuns = useRuns();
+  const knownRuns = useMemo(() => {
+    const byId = new Map<string, Run>();
+    for (const run of allRuns.data ?? []) byId.set(run.id, run);
+    for (const run of railRows) byId.set(run.id, run);
+    return byId;
+  }, [allRuns.data, railRows]);
+  const runs = useMemo(() => [...knownRuns.values()], [knownRuns]);
 
   useEffect(() => {
     if (isMobile && replayCompare) setReplayCompare(false);
   }, [isMobile, replayCompare]);
-
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const i = setInterval(() => setTick(t => t + 1), 5000);
-    return () => clearInterval(i);
-  }, []);
-
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "/" && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
-        e.preventDefault();
-        searchRef.current?.focus();
-      }
-      if (e.key === "Escape") {
-        if (search) { setSearch(""); searchRef.current?.blur(); }
-      }
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [search]);
 
   useEffect(() => {
     if (replay.replayRunId && replayOriginalId) {
@@ -203,55 +103,8 @@ export function RunsPage() {
     }
   }, [navigate, replay.replayRunId, replayOriginalId]);
 
-  const agentTypes = useMemo(() => {
-    const names = new Set<string>();
-    for (const r of runs) {
-      const name = runAgentName(r);
-      if (name) names.add(name);
-    }
-    return [...names].sort();
-  }, [runs]);
-
-  // Computed over every loaded run, not just the filtered rows, so a row's
-  // suffix does not change while the user types a search.
+  // Ids stay short across every run this page knows, so a row's suffix does not change when the rail pages in more.
   const shortRunIds = useShortRunIds(runs);
-
-  const filtered = useMemo(() => {
-    let list = runs;
-    if (agentFilter !== "all") {
-      list = list.filter(r => runAgentName(r) === agentFilter);
-    }
-    if (!search.trim()) return list;
-    const q = search.toLowerCase();
-    return list.filter(r =>
-      runDisplayName(r).toLowerCase().includes(q) ||
-      (r.event_name ?? "").toLowerCase().includes(q) ||
-      (r.name ?? "").toLowerCase().includes(q) ||
-      (r.user_id ?? "").toLowerCase().includes(q) ||
-      (r.convo_id ?? "").toLowerCase().includes(q) ||
-      r.id.toLowerCase().includes(q)
-    );
-  }, [runs, search, agentFilter]);
-
-
-  const handleClear = async () => {
-    if (!confirm("Clear all runs?")) return;
-    await fetch("/api/clear", { method: "POST" });
-    navigate("/runs", { replace: true });
-    setRuns([]);
-  };
-
-  const openDemoTrace = useCallback(async () => {
-    const runIds = await replayDemoTraces();
-    if (replayOriginalId) { replay.reset(); setReplayOriginalId(null); }
-    const fresh: Run[] = await (await fetch("/api/runs")).json();
-    setRuns(fresh);
-    const firstDemoRunId =
-      runIds.find((id) => fresh.some((run) => run.id === id)) ??
-      fresh.find(isDefaultDemoRun)?.id ??
-      "demo_triage";
-    navigate(runPath(firstDemoRunId));
-  }, [navigate, replay, replayOriginalId]);
 
   const handleFork = useCallback((sourceRunId: string, userMessage?: string, mode?: "local", model?: string, contextOverrides?: Record<string, any>) => {
     setReplayOriginalId(sourceRunId);
@@ -264,141 +117,38 @@ export function RunsPage() {
     navigate(runPath(id));
   }, [navigate, replay, replayOriginalId]);
 
-  useEffect(() => {
-    // Not on Back/Forward: useScrollRestoration is putting the list back where
-    // the reader left it, and revealing the selected row fought that restore and
-    // won, snapping the list to the selected run instead.
-    //
-    // Not on Replace either, which is how this page auto-selects a run on load.
-    // scrollIntoView moves the sequential focus navigation starting point to the
-    // revealed row, so the very first Tab landed inside the run list and skipped
-    // both the skip link and the entire sidebar.
-    if (navigationType === NavigationType.Pop || navigationType === NavigationType.Replace) return;
-    const selected = selectedId
-      ? Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-run-id]") ?? [])
-          .find(el => el.dataset.runId === selectedId)
-      : null;
-    selected?.scrollIntoView({ block: "nearest" });
-  }, [selectedId, filtered, navigationType]);
-
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-      const target = e.target as HTMLElement | null;
-      const isTypingTarget =
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement ||
-        target?.isContentEditable ||
-        (target instanceof HTMLInputElement && target !== searchRef.current);
-      if (isTypingTarget || filtered.length === 0 || !target || !listRef.current?.contains(target)) return;
-
-      e.preventDefault();
-      const currentIndex = filtered.findIndex(run => run.id === selectedId);
-      const nextIndex = e.key === "ArrowDown"
-        ? Math.min(currentIndex + 1, filtered.length - 1)
-        : Math.max(currentIndex === -1 ? filtered.length - 1 : currentIndex - 1, 0);
-      const nextRun = filtered[nextIndex];
-      if (!nextRun || nextRun.id === selectedId) return;
-      handleSelectRun(nextRun.id);
-      window.requestAnimationFrame(() => {
-        const nextRow = Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-run-id]") ?? [])
-          .find((row) => row.dataset.runId === nextRun.id);
-        nextRow?.querySelector<HTMLElement>("button")?.focus();
-      });
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [filtered, handleSelectRun, selectedId]);
+  const closeCompare = () => setSearchParams(previous => {
+    const next = new URLSearchParams(previous);
+    next.delete("compare"); next.delete("debugCompare"); next.delete("debugOffset");
+    return next;
+  }, { replace: true });
 
   return (
     <div className="h-full flex">
       <h1 className="sr-only">Runs</h1>
-      <div
-        // On mobile the list is hidden only when a run is open. It used to be
-        // hidden whenever the filter matched nothing too, which took the search
-        // box away with it — leaving no way to correct or clear the query, and
-        // showing first-run onboarding to someone who simply mistyped.
-        className={cn(
-          isMobile ? (selectedId ? "hidden" : "flex w-full") : "flex w-[264px] border-r border-rp-line",
-          "flex-shrink-0 flex-col bg-rp-surface",
-        )}
-      >
-        <div className="border-b border-rp-line px-4 pb-4 pt-4">
-          <div className="mb-3 flex min-h-7 items-center justify-between">
-            <div role="status" aria-live="polite" className="flex items-center gap-2">
-              <span aria-hidden="true" title={wsConnected ? "Connected" : "Disconnected"}
-                className={cn("size-1.5 rounded-full", wsConnected ? "bg-rp-success" : "bg-rp-danger")} />
-              <span className={cn("rp-eyebrow", !wsConnected && "text-rp-danger")}>{wsConnected ? "connected" : "disconnected"}</span>
-            </div>
-            <button type="button" aria-label="Clear all runs" disabled={runs.length === 0}
-              className="min-h-7 rounded-control px-2 text-[12px] font-medium text-rp-ink-muted transition-[background-color,color] duration-250 ease-standard hover:bg-rp-danger-soft hover:text-rp-danger disabled:pointer-events-none disabled:text-rp-ink-faint"
-              onClick={handleClear}>
-              Clear
-            </button>
-          </div>
-          <div className="relative">
-            <Search aria-hidden="true" className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-rp-ink-faint" />
-            <input
-              ref={searchRef}
-              aria-label="Search runs"
-              className={cn(fieldClassName, "h-9 pl-8 pr-10 text-[13px]")}
-              placeholder="Search runs..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
-            {search ? (
-              <button type="button" aria-label="Clear run search"
-                className="absolute right-1.5 top-1/2 min-h-7 -translate-y-1/2 rounded-control px-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-rp-ink-muted transition-colors duration-250 ease-standard hover:bg-rp-row-hover hover:text-rp-ink"
-                onClick={() => setSearch("")}>
-                esc
-              </button>
-            ) : (
-              <kbd aria-hidden="true" className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded-sm border border-rp-line px-1.5 font-mono text-[10px] leading-4 text-rp-ink-muted">/</kbd>
-            )}
-          </div>
-          {agentTypes.length > 1 && (
-            <select
-              aria-label="Filter runs by agent"
-              className={cn(fieldClassName, "rp-select mt-2 h-9 cursor-pointer pr-9 text-[13px]", agentFilter === "all" ? "text-rp-ink-muted" : "text-rp-ink")}
-              value={agentFilter}
-              onChange={e => setAgentFilter(e.target.value)}
-            >
-              <option value="all">All agents</option>
-              {agentTypes.map(name => (
-                <option key={name} value={name}>{name}</option>
-              ))}
-            </select>
-          )}
-        </div>
-
-        <div ref={listRef} className="flex-1 overflow-auto p-2 space-y-0.5 sb">
-          {runsError
-              ? <div role="alert" className="mx-2 mt-6 rounded-sm border border-rp-danger-border bg-rp-danger-soft px-3 py-3">
-                  <div className="text-[13px] font-medium text-rp-danger">Couldn&rsquo;t load runs</div>
-                  <div className="mt-1 break-words text-[12px] leading-5 text-rp-ink-muted">{runsError}</div>
-                  <Button type="button" variant="secondary" size="sm" className="mt-3" onClick={() => { void fetchRuns(); }}>
-                    Retry
-                  </Button>
-                </div>
-              : filtered.length === 0
-              ? <div className="mx-2 mt-6 rounded-sm border border-dashed border-rp-line-dashed px-3 py-5 text-center text-[13px] text-rp-ink-muted">
-                  {search ? "No matching runs" : "No runs"}
-                </div>
-              : filtered.map(run => (
-                  <RunListItem key={run.id} run={run} shortRunIds={shortRunIds}
-                    selected={run.id === selectedId}
-                    highlighted={run.id === hoveredSourceId}
-                    faded={!!hoveredSourceId && run.id !== hoveredSourceId}
-                    onClick={() => handleSelectRun(run.id)}
-                  />
-                ))}
-        </div>
-      </div>
+      {!isMobile && (
+        <RunRail
+          selectedId={selectedId}
+          shortRunIds={shortRunIds}
+          listRef={listRef}
+          highlightedId={hoveredSourceId}
+          onSelect={handleSelectRun}
+          rows={railRows}
+          total={rail.data.total}
+          filtered={hasActiveFilters(rail.filters)}
+          hasMore={rail.data.hasMore}
+          loadingMore={rail.data.loadingMore}
+          loadMore={rail.data.loadMore}
+          error={rail.data.status === "error" ? rail.data.error : null}
+          retry={rail.data.retry}
+          onScrolled={setRailScrolled}
+        />
+      )}
 
       <div className={`${isMobile && !selectedId ? "hidden" : ""} flex-1 min-w-0 relative overflow-hidden`}>
         {(replay.state !== "idle" || replay.replayRunId) && replayOriginalId
           ? (() => {
-              const origRun = runs.find(r => r.id === replayOriginalId);
+              const origRun = knownRuns.get(replayOriginalId);
               const origName = origRun ? runDisplayName(origRun) : replayOriginalId!.slice(0, 12);
               return <ReplayView
                 originalRunId={replayOriginalId}
@@ -413,9 +163,9 @@ export function RunsPage() {
             })()
           : selectedId
               ? (() => {
-                  const selectedRun = runs.find(r => r.id === selectedId);
+                  const selectedRun = knownRuns.get(selectedId);
                   const meta = selectedRun ? parseReplayMetadata(selectedRun) : null;
-                  const srcRun = meta ? runs.find(r => r.id === meta.replay.sourceRunId) : null;
+                  const srcRun = meta ? knownRuns.get(meta.replay.sourceRunId) : null;
                   const srcName = meta ? (srcRun ? runDisplayName(srcRun) : meta.replay.sourceRunId.slice(0, 12)) : "";
                   return (
                     <div className="h-full flex flex-col">
@@ -423,7 +173,7 @@ export function RunsPage() {
                         <button
                           type="button"
                           className="rp-ease flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-rp-surface px-4 py-2 text-left text-[13px] font-medium text-rp-ink hover:bg-rp-row-hover"
-                          onClick={() => navigate("/runs")}
+                          onClick={() => navigate(runsTablePath())}
                         >
                           <ArrowLeft aria-hidden="true" className="size-3.5 text-rp-blue" />
                           <span>Back to runs</span>
@@ -486,6 +236,24 @@ export function RunsPage() {
                         </div>
                       )}
                       {meta && <RunComparison baselineRunId={meta.replay.sourceRunId} candidateRunId={selectedId} />}
+                      {!meta && compareBaseline && compareBaseline !== selectedId && (
+                        <>
+                          <div className="flex flex-shrink-0 items-center justify-between gap-3 border-b border-rp-line bg-rp-canvas-blue px-4 py-2">
+                            <span className="min-w-0 truncate text-[12px] text-rp-ink-muted">
+                              Comparing with baseline{" "}
+                              <button type="button" className="font-medium text-rp-ink underline-offset-4 hover:text-rp-blue hover:underline" onClick={() => navigate(runPath(compareBaseline))}>
+                                {knownRuns.get(compareBaseline) ? runDisplayName(knownRuns.get(compareBaseline)!) : compareBaseline.slice(0, 12)}
+                              </button>
+                              <span className="rp-meta ml-1.5">({shortRunIds.get(compareBaseline) ?? compareBaseline})</span>
+                            </span>
+                            <button type="button" aria-label="Stop comparing" onClick={closeCompare}
+                              className="flex size-7 flex-shrink-0 items-center justify-center rounded-control text-rp-ink-muted transition-colors duration-fast ease-out hover:bg-rp-row-hover hover:text-rp-ink">
+                              <X aria-hidden="true" className="size-3.5" />
+                            </button>
+                          </div>
+                          <RunComparison baselineRunId={compareBaseline} candidateRunId={selectedId} />
+                        </>
+                      )}
                       <div className="flex-1 min-h-0 flex">
                         <div className="flex-1 min-w-0 overflow-auto sb">
                           <RunDetail runId={selectedId} routeBase="/runs" onForkStarted={handleFork} />
@@ -502,52 +270,9 @@ export function RunsPage() {
                     </div>
                   );
                 })()
-              : runsLoaded && runsError
-                ? (
-                  <div className="flex h-full items-center justify-center px-5 py-10 sm:px-10">
-                    <EmptyPanel
-                      className="w-full max-w-xl animate-fade-rise"
-                      tone="danger"
-                      eyebrow="Runs / Not loaded"
-                      title="Runs could not be loaded"
-                      description="The run list request failed, so this workspace cannot show which runs are stored. Use Retry in the run list once the local daemon is reachable."
-                    />
-                  </div>
-                )
-              : runsLoaded && runs.length > 0
-                ? <PickRunPanel runs={runs} onOpen={handleSelectRun} />
-              : runsLoaded
-                ? <EmptyState onSeeDemoTraces={openDemoTrace} />
-                : (
-                  <div className="flex h-full items-center justify-center" role="status" aria-live="polite">
-                    <span className="rp-eyebrow">Loading runs…</span>
-                  </div>
-                )
+              : null
         }
       </div>
-    </div>
-  );
-}
-
-function PickRunPanel({ runs, onOpen }: { runs: Run[]; onOpen: (runId: string) => void }) {
-  const mostRecent = runs.reduce((latest, run) => run.started_at > latest.started_at ? run : latest, runs[0]!);
-  const samplesOnly = runs.every(isDefaultDemoRun);
-  return (
-    <div className="flex h-full items-start justify-center overflow-auto rp-page">
-      <EmptyPanel
-        className="w-full max-w-xl"
-        eyebrow={`Runs / ${plural(runs.length, "run")}`}
-        title="Pick a run to inspect"
-        description={samplesOnly
-          ? "These are sample runs. Choose one from the list, or open the most recent one. Connect your agent to see your own runs here."
-          : "Choose a run from the list, or open the most recent one."}
-        action={(
-          <Button type="button" variant="primary" onClick={() => onOpen(mostRecent.id)}>
-            Open most recent run
-            <ArrowRight aria-hidden="true" className="size-3.5" />
-          </Button>
-        )}
-      />
     </div>
   );
 }
