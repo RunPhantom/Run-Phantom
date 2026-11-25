@@ -34,6 +34,17 @@ function nextTarget(existing: readonly PlaygroundTarget[], providers: readonly P
   return existing[0] ?? { provider: "openai", model: "gpt-5-nano" };
 }
 
+/** Compare runs start together, so column order comes from the recorded target index, not start time. */
+function targetIndex(spans: ReadonlyArray<{ attributes?: string | null }>): number {
+  for (const span of spans) {
+    try {
+      const value = (JSON.parse(span.attributes ?? "{}") as Record<string, unknown>)["runphantom.playground.target_index"];
+      if (typeof value === "number") return value;
+    } catch { /* unreadable attributes carry no index */ }
+  }
+  return Number.MAX_SAFE_INTEGER;
+}
+
 function resize<T>(items: readonly T[], length: number, make: (index: number) => T): T[] {
   return Array.from({ length }, (_, index) => items[index] ?? make(index));
 }
@@ -169,12 +180,13 @@ export function PlaygroundPage() {
   ], [run]);
 
   const loadFromHistory = async (runs: RunSearchRun[]) => {
-    const drafts = await Promise.all(runs.map(async item => {
+    const loaded = await Promise.all(runs.map(async item => {
       const detail = await getRunDetail(item.id);
       const call = detail.spans.find(span => span.span_type?.includes("LLM"));
       if (!call) throw new Error("This run has no model call to load.");
-      return getDraftFromSpan(call.id, item.id);
+      return { order: targetIndex(detail.spans), draft: await getDraftFromSpan(call.id, item.id) };
     }));
+    const drafts = loaded.sort((a, b) => a.order - b.order).map(item => item.draft);
     const first = drafts[0];
     if (!first) return;
     const targets = drafts.map(item => ({ provider: item.provider, model: item.model }));
