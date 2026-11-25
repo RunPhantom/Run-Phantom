@@ -234,7 +234,7 @@ describe("tool-agent example: exported traces", () => {
       start_time_ms: span.startTimeMs, end_time_ms: span.endTimeMs, duration_ms: span.durationMs, model: span.model ?? null,
       status: span.status, input_tokens: span.inputTokens ?? null, output_tokens: span.outputTokens ?? null,
     }));
-    expect(detectSubAgents(rows)).toEqual([expect.objectContaining({ root_span_id: delegate.spanId, name: "delegate_research", llm_count: 2, tool_count: 1 })]);
+    expect(detectSubAgents(rows)).toEqual([expect.objectContaining({ root_span_id: delegate.spanId, name: "researcher", llm_count: 2, tool_count: 1 })]);
     expect(evidence(spans).root_failed).toBe(false);
   });
 

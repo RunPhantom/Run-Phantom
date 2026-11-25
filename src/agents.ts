@@ -41,6 +41,13 @@ export interface SubAgent {
   total_output_tokens: number;
 }
 
+/** GenAI names an agent span "invoke_agent {gen_ai.agent.name}"; a bare "invoke_agent" carries no agent name. */
+function nestedAgentName(spanName: string): string | null {
+  const match = /^invoke_agent(?:\s+(.*))?$/.exec(spanName.trim());
+  if (!match) return spanName.trim() || null;
+  return match[1]?.trim() || null;
+}
+
 export function detectSubAgents(spans: SpanRow[]): SubAgent[] {
   const children = new Map<string, SpanRow[]>();
   const spanMap = new Map<string, SpanRow>();
@@ -67,8 +74,9 @@ export function detectSubAgents(spans: SpanRow[]): SubAgent[] {
     // 3. OpenTelemetry GenAI: TOOL > invoke_agent > LLM, where the agent's model and tool calls are siblings
     const kids = children.get(span.id) ?? [];
     const llmKids = kids.filter(k => k.span_type?.includes("LLM"));
-    let hasAgenticLoop = kids.some(kid => kid.span_type === "AGENT_ROOT"
+    const nestedAgent = kids.find(kid => kid.span_type === "AGENT_ROOT"
       && (children.get(kid.id) ?? []).some(grandkid => grandkid.span_type?.includes("LLM")));
+    let hasAgenticLoop = nestedAgent !== undefined;
     for (const llm of llmKids) {
       // Pattern 1: LLM child has TOOL grandchildren
       const grandkids = children.get(llm.id) ?? [];
@@ -114,7 +122,7 @@ export function detectSubAgents(spans: SpanRow[]): SubAgent[] {
 
     agents.push({
       root_span_id: span.id,
-      name: span.name,
+      name: nestedAgent ? nestedAgentName(nestedAgent.name) ?? span.name : span.name,
       span_ids: allSpanIds,
       start_time_ms: span.start_time_ms,
       end_time_ms: span.end_time_ms,
