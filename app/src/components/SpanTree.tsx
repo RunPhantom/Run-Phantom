@@ -244,6 +244,42 @@ function SpanDetail({ span }: { span: Span }) {
         {span.attributes && (() => { try { const a = JSON.parse(span.attributes); return a["ai.provider.baseURL"] ? <><div className="text-rp-ink-muted">base url</div><div className="text-rp-ink-muted">{a["ai.provider.baseURL"]}</div></> : null; } catch { return null; } })()}
       </div>
 
+      {span.input_payload && (
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <div className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted">Input</div>
+            <CopyButton label="input" text={tryJson(span.input_payload) ?? span.input_payload} />
+          </div>
+          <div className="rounded-sm border border-rp-line bg-rp-canvas-blue p-2.5">
+            <JsonView data={span.input_payload} />
+          </div>
+        </div>
+      )}
+
+      {span.output_payload && (
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <div className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted">Output</div>
+            <CopyButton label="output" text={tryJson(span.output_payload) ?? span.output_payload} />
+          </div>
+          <div className="rounded-sm border border-rp-line bg-rp-canvas-blue p-2.5">
+            <JsonView data={span.output_payload} />
+          </div>
+        </div>
+      )}
+
+      {evidence.toolCalls.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <div className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted">Output · requested tool calls</div>
+            <CopyButton label="tool calls" text={JSON.stringify(evidence.toolCalls, null, 2)} />
+          </div>
+          <div className="rounded-sm border border-rp-line bg-rp-canvas-blue p-2.5">
+            <JsonView data={evidence.toolCalls} />
+          </div>
+        </div>
+      )}
+
       {span.attributes && (() => {
         try {
           const attrs: unknown = JSON.parse(span.attributes);
@@ -304,42 +340,6 @@ function SpanDetail({ span }: { span: Span }) {
       <GuardDecisions evidence={span.guardEvidence} />
 
       <CaptureVisibilityDetails span={span} />
-
-      {span.input_payload && (
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <div className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted">Input</div>
-            <CopyButton label="input" text={tryJson(span.input_payload) ?? span.input_payload} />
-          </div>
-          <div className="rounded-sm border border-rp-line bg-rp-canvas-blue p-2.5">
-            <JsonView data={span.input_payload} />
-          </div>
-        </div>
-      )}
-
-      {span.output_payload && (
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <div className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted">Output</div>
-            <CopyButton label="output" text={tryJson(span.output_payload) ?? span.output_payload} />
-          </div>
-          <div className="rounded-sm border border-rp-line bg-rp-canvas-blue p-2.5">
-            <JsonView data={span.output_payload} />
-          </div>
-        </div>
-      )}
-
-      {evidence.toolCalls.length > 0 && (
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <div className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted">Output · requested tool calls</div>
-            <CopyButton label="tool calls" text={JSON.stringify(evidence.toolCalls, null, 2)} />
-          </div>
-          <div className="rounded-sm border border-rp-line bg-rp-canvas-blue p-2.5">
-            <JsonView data={evidence.toolCalls} />
-          </div>
-        </div>
-      )}
     </div>
   );
 }

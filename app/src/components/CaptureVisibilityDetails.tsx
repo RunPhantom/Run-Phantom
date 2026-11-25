@@ -5,7 +5,7 @@ export function CaptureVisibilityDetails({ span }: { span: Span }) {
   const capture = span.captureVisibility;
   if (!capture) return null;
   const retrieval = capture.retrieval, embedding = capture.embedding, stream = capture.stream;
-  const title = retrieval ? "Retrieval evidence" : embedding ? "Embedding evidence" : "Stream evidence";
+  const title = retrieval ? "Retrieval evidence" : embedding ? "Embedding evidence" : stream ? "Stream evidence" : "Token usage details";
   const state = stream ? { completed: "Complete stream capture", cancelled: "Stream cancelled", error: "Stream failed", incomplete: "Incomplete stream capture", unknown: "Stream completion unknown" }[stream.state] : null;
   const rows: Array<[string, string | number | null]> = retrieval
     ? [["Collection", retrieval.collection], ["Top K", retrieval.topK], ["Results", retrieval.resultCount], ["Query", retrieval.queryText], ["Summary", retrieval.querySummary]]

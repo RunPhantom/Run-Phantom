@@ -1,6 +1,6 @@
 import { PRICING_VERSION, TOKEN_CATEGORIES, type DetailCategory, type Inclusion, type NormalizedUsage, type TokenCategory, type TokenMeasure } from "./protocol";
 
-const COUNT_ATTRIBUTES: Record<TokenCategory, readonly string[]> = {
+export const COUNT_ATTRIBUTES: Record<TokenCategory, readonly string[]> = {
   input: ["gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens", "ai.usage.inputTokens", "ai.usage.promptTokens", "ai.usage.prompt_tokens", "llm.token_count.prompt"],
   output: ["gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens", "ai.usage.outputTokens", "ai.usage.completionTokens", "ai.usage.completion_tokens", "llm.token_count.completion"],
   cache_read: ["gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.input_tokens.cached", "runphantom.usage.cache_read_tokens", "llm.token_count.prompt_details.cache_read"],
