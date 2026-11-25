@@ -55,7 +55,10 @@ export interface ListPriceEntry {
   readonly cachedInputRatio?: number;
   /** Exclusive end of this price, from the provider's announced change; later calls are unpriced. */
   readonly effectiveUntil?: string;
+  /** Prices the provider has already published for later dates, in ascending order; each replaces the one before from `from` on. */
+  readonly changes?: readonly ListPriceChange[];
 }
+export interface ListPriceChange { readonly from: string; readonly bands: readonly PriceBand[]; readonly cachedInputRatio?: number }
 
 const flat = (input: number, output: number): PriceBand[] => [{ maxPromptTokens: null, input, output }];
 const tiered = (threshold: number, low: [number, number], high: [number, number]): PriceBand[] =>
@@ -119,8 +122,9 @@ export const LIST_PRICES: readonly ListPriceEntry[] = Object.freeze([
   { family: "google", model: "gemini-3.1-pro-preview", aliases: ["gemini-3.1-pro-preview-customtools"], bands: tiered(200_000, [2, 12], [4, 18]), cachedInputRatio: 0.1 },
   { family: "google", model: "gemini-3.1-flash-lite", bands: flat(0.25, 1.5), cachedInputRatio: 0.1 },
   { family: "google", model: "gemini-3.5-flash-lite", bands: flat(0.3, 2.5), cachedInputRatio: 0.1 },
-  { family: "google", model: "gemini-3.6-flash", bands: flat(0.75, 3.75), cachedInputRatio: 0.1, effectiveUntil: "2027-01-01T00:00:00.000Z" },
-  { family: "google", model: "gemini-3.8-flash", bands: flat(0.75, 3.75), cachedInputRatio: 0.1, effectiveUntil: "2027-01-01T00:00:00.000Z" },
+  // Google's page lists $0.75 / $3.75 through 2026-12-31 and $1.50 / $7.50 from 2027-01-01 for both.
+  { family: "google", model: "gemini-3.6-flash", bands: flat(0.75, 3.75), cachedInputRatio: 0.1, changes: [{ from: "2027-01-01T00:00:00.000Z", bands: flat(1.5, 7.5), cachedInputRatio: 0.1 }] },
+  { family: "google", model: "gemini-3.8-flash", bands: flat(0.75, 3.75), cachedInputRatio: 0.1, changes: [{ from: "2027-01-01T00:00:00.000Z", bands: flat(1.5, 7.5), cachedInputRatio: 0.1 }] },
   { family: "google", model: "gemini-4-neon", bands: flat(3, 15), cachedInputRatio: 0.05 },
   { family: "google", model: "gemini-4-hydrogen", bands: flat(1.5, 7.5), cachedInputRatio: 0.05 },
   { family: "google", model: "gemini-4-carbon", bands: flat(2, 10), cachedInputRatio: 0.05, effectiveUntil: "2026-12-01T00:00:00.000Z" },
@@ -136,29 +140,33 @@ const priced = (usdPerMillionTokens: number): CategoryRate => ({ kind: "priced",
  * for the 1-hour cache. A write reported without its duration is priced as
  * the 5-minute default; OpenAI and Gemini report no cache writes.
  */
-function cacheRates(entry: ListPriceEntry, input: number): Partial<Record<TokenCategory, CategoryRate>> {
-  if (entry.cachedInputRatio === undefined) return {};
-  const read = { cache_read: priced(input * entry.cachedInputRatio) };
+function cacheRates(entry: ListPriceEntry, cachedInputRatio: number | undefined, input: number): Partial<Record<TokenCategory, CategoryRate>> {
+  if (cachedInputRatio === undefined) return {};
+  const read = { cache_read: priced(input * cachedInputRatio) };
   if (entry.family !== "anthropic") return read;
   return { ...read, cache_write: priced(input * 1.25), cache_write_5m: priced(input * 1.25), cache_write_1h: priced(input * 2) };
 }
 
-function revisionFor(entry: ListPriceEntry): FrozenRateRevision {
+function revisionFor(entry: ListPriceEntry, change?: ListPriceChange): FrozenRateRevision {
   const source = PRICE_SOURCES[entry.family];
   const notPriced = Object.fromEntries(TOKEN_CATEGORIES.map(category => [category, { kind: "not_applicable" }])) as Record<TokenCategory, CategoryRate>;
+  const from = change?.from.slice(0, 10);
   return freezeRateRevision({
     version: PRICING_VERSION, provider: LIST_PRICE_PROVIDER, model: entry.model, tier: LIST_PRICE_TIER,
-    revision: PRICE_TABLE_REVISION, currency: "USD", unit: "usd_per_million_tokens",
-    source: { kind: "catalogue", name: `${source.name}, list price as of ${PRICE_TABLE_AS_OF}`, reference: source.url, observedAt: OBSERVED_AT },
+    revision: from ? `${PRICE_TABLE_REVISION}/from-${from}` : PRICE_TABLE_REVISION, currency: "USD", unit: "usd_per_million_tokens",
+    source: { kind: "catalogue", name: `${source.name}, list price as of ${PRICE_TABLE_AS_OF}${from ? `, effective from ${from}` : ""}`, reference: source.url, observedAt: OBSERVED_AT },
     aliases: (entry.aliases ?? []).map(alias => ({ provider: LIST_PRICE_PROVIDER, model: alias, tier: LIST_PRICE_TIER })),
-    bands: entry.bands.map(band => ({ maxContextTokens: band.maxPromptTokens, categories: {
-      ...notPriced, input: priced(band.input), output: priced(band.output), ...cacheRates(entry, band.input),
+    bands: (change?.bands ?? entry.bands).map(band => ({ maxContextTokens: band.maxPromptTokens, categories: {
+      ...notPriced, input: priced(band.input), output: priced(band.output), ...cacheRates(entry, change ? change.cachedInputRatio : entry.cachedInputRatio, band.input),
     } })),
   });
 }
 
 const REVISIONS = new Map<ListPriceEntry, FrozenRateRevision>(LIST_PRICES.map(entry => [entry, revisionFor(entry)]));
-export const LIST_PRICE_REVISIONS: readonly FrozenRateRevision[] = Object.freeze([...REVISIONS.values()]);
+const CHANGE_REVISIONS = new Map<ListPriceEntry, ReadonlyArray<{ from: number; revision: FrozenRateRevision }>>(LIST_PRICES.filter(entry => entry.changes?.length)
+  .map(entry => [entry, entry.changes!.map(change => ({ from: Date.parse(change.from), revision: revisionFor(entry, change) }))]));
+/** Every priced period: one revision per row, plus one per published future price. */
+export const LIST_PRICE_REVISIONS: readonly FrozenRateRevision[] = Object.freeze([...REVISIONS.values(), ...[...CHANGE_REVISIONS.values()].flatMap(list => list.map(item => item.revision))]);
 
 const DATED_SUFFIX = /-(?:\d{4}-\d{2}-\d{2}|\d{8}|latest)$/;
 
@@ -207,7 +215,10 @@ export function lookupListPrice(model: string | null | undefined, options: { pro
   const entry = resolveModelIdentity(model.startsWith("models/") ? model.slice("models/".length) : model, identity => BY_IDENTITY.get(identity) ?? [], id => EXCLUDED.has(id));
   if (!entry || !providerMatches(entry.family, options.provider)) return null;
   if (entry.effectiveUntil && typeof options.at === "number" && options.at >= Date.parse(entry.effectiveUntil)) return null;
-  return { entry, revision: REVISIONS.get(entry)! };
+  const at = options.at;
+  const started = typeof at === "number" ? (CHANGE_REVISIONS.get(entry) ?? []).filter(item => at >= item.from) : [];
+  const change = started[started.length - 1];
+  return { entry, revision: change?.revision ?? REVISIONS.get(entry)! };
 }
 
 export interface ListPriceUsage {
