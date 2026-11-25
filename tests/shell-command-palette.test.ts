@@ -4,6 +4,8 @@ import { fuzzyMatchEntry, fuzzyScore } from "../app/src/shell/fuzzy";
 import { ariaKeyShortcuts, chordMatches, formatKeys, matchShortcut, parseKeys, type KeyLike } from "../app/src/shell/keyboard";
 import { commandDetail, commandStatus, listCommands, listShortcuts, registerCommands, registerShortcuts, type PaletteCommand, type ShortcutDefinition } from "../app/src/shell/commands";
 import { buildSections } from "../app/src/shell/palette-model";
+import { matchingRunCommands, recentRuns, RECENT_RUN_LIMIT } from "../app/src/shell/run-commands";
+import type { Run } from "../app/src/utils/types";
 import { readOtlpEndpoint } from "../app/src/shell/otlp";
 import { resolveTheme } from "../app/src/shell/theme";
 import { NAV_GROUPS, NAV_ITEMS, isNavPathActive, sectionLabel } from "../app/src/shell/navigation";
@@ -242,3 +244,36 @@ describe("navigation", () => {
     expect(sectionLabel("/runs/abc")).toBe("Runs");
   });
 });
+
+describe("run matching beyond the recent list", () => {
+  const run = (index: number, name: string, extra: Partial<Run> = {}): Run => ({
+    id: `run-${String(index).padStart(3, "0")}`, name, event_name: null, display_name: null, user_id: null, convo_id: null,
+    started_at: index, last_updated_at: index, metadata: null, ...extra,
+  });
+  const runs = [
+    ...Array.from({ length: 22 }, (_, index) => run(100 + index, `Order lookup ${index}`)),
+    run(1, "Refund stopped by a ledger conflict", { agent: "support_agent" }),
+    run(2, "Refund stopped by a ledger conflict"),
+    run(3, "Warranty question", { model: "gpt-5-nano" }),
+  ];
+
+  test("finds older runs by name, model or id that the recent list leaves out", () => {
+    expect(recentRuns(runs)).toHaveLength(RECENT_RUN_LIMIT);
+    const ledger = matchingRunCommands(runs, "ledger");
+    expect(ledger.map(command => [command.id, command.group])).toEqual([["run:run-002", "Runs"], ["run:run-001", "Runs"]]);
+    expect(matchingRunCommands(runs, "LEDGER conflict")).toHaveLength(2);
+    expect(matchingRunCommands(runs, "gpt-5-nano").map(command => command.id)).toEqual(["run:run-003"]);
+    expect(matchingRunCommands(runs, "run-003").map(command => command.id)).toEqual(["run:run-003"]);
+    const sections = buildSections([...ledger, command("search:runs", "Search runs for “ledger”", "Search", { keywords: ["ledger"] })], "ledger");
+    expect(sections.map(section => section.group)).toEqual(["Runs", "Search"]);
+  });
+
+  test("never repeats a recent run, skips scattered-letter matches and caps the list", () => {
+    expect(matchingRunCommands(runs, "Order lookup 21")).toEqual([]);
+    expect(matchingRunCommands(runs, "lgr")).toEqual([]);
+    expect(matchingRunCommands(runs, "order lookup")).toHaveLength(22 - RECENT_RUN_LIMIT);
+    expect(matchingRunCommands(runs, "   ")).toEqual([]);
+    expect(matchingRunCommands(Array.from({ length: 60 }, (_, index) => run(index, "Same name")), "same").length).toBe(20);
+  });
+});
+

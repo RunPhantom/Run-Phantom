@@ -5,38 +5,16 @@ import { Cable, Contrast, Keyboard, Link2, PanelLeft, PlayCircle, Settings, type
 import { useSidebar } from "@/components/ui/sidebar";
 import { replayDemoTraces } from "../api/demo-traces";
 import { useRuns } from "../hooks/use-runs";
-import { ago, runDisplayName, runStatus, type RunStatus } from "../utils/helpers";
 import { runPath } from "../utils/navigation";
+import { recentRuns, runCommand } from "./run-commands";
 import type { Run } from "../utils/types";
 import { CONNECT_NAV, NAV_ITEMS, SETTINGS_NAV } from "./navigation";
-import { useRegisterCommands, useRegisterShortcuts, type PaletteCommand, type PaletteStatus, type ShortcutDefinition } from "./commands";
+import { useRegisterCommands, useRegisterShortcuts, type PaletteCommand, type ShortcutDefinition } from "./commands";
 import { openCommandPalette, openShortcutSheet, paletteSession } from "./overlays";
 import { setThemePreference, toggleTheme } from "./theme";
 import { readOtlpEndpoint } from "./otlp";
 
-const RECENT_RUN_LIMIT = 8;
-
 let sampleLoad: Promise<string[]> | null = null;
-
-function recentRuns(runs: readonly Run[] | undefined): Run[] {
-  return [...(runs ?? [])].sort((a, b) => b.last_updated_at - a.last_updated_at).slice(0, RECENT_RUN_LIMIT);
-}
-
-const PALETTE_TONE: Record<RunStatus, PaletteStatus["tone"]> = {
-  live: "live",
-  quiet: "unknown",
-  complete: "ok",
-  completed_with_errors: "warning",
-  interrupted: "warning",
-  failed: "error",
-  cancelled: "cancelled",
-  unknown: "unknown",
-};
-
-function statusOf(run: Run): PaletteStatus {
-  const summary = runStatus(run);
-  return { tone: PALETTE_TONE[summary.status], label: summary.label };
-}
 
 /** Registers the shell's own palette commands and global shortcuts. Render inside SidebarProvider. */
 export function ShellCommands() {
@@ -61,20 +39,7 @@ export function ShellCommands() {
   useRegisterCommands(goTo, [goTo]);
 
   const latest = (run: Run): Run => queryClient.getQueryData<Run[]>(["runs"])?.find(row => row.id === run.id) ?? run;
-  const recentCommands: PaletteCommand[] = recent.map((run, index) => {
-    const agent = run.agent ?? null;
-    const name = runDisplayName(run);
-    return {
-      id: `run:${run.id}`,
-      group: "Recent runs",
-      label: name,
-      detail: () => [agent && agent !== name ? agent : null, ago(latest(run).last_updated_at)].filter(Boolean).join(" · "),
-      keywords: [run.id, ...(agent ? [agent] : []), ...(run.model ? [run.model] : [])],
-      status: () => statusOf(latest(run)),
-      order: index,
-      run: ({ navigate: go }) => go(runPath(run.id)),
-    };
-  });
+  const recentCommands = recent.map((run, index) => runCommand(run, "Recent runs", index, latest));
   useRegisterCommands(recentCommands, [recentKey]);
 
   const action = (command: Omit<PaletteCommand, "group"> & { icon: LucideIcon }): PaletteCommand => ({ group: "Actions", ...command });

@@ -6,6 +6,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { commandDetail, commandStatus, useCommands, type CommandContext, type PaletteCommand, type PaletteStatus } from "./commands";
 import { buildSections } from "./palette-model";
+import { matchingRunCommands } from "./run-commands";
+import { useRuns } from "../hooks/use-runs";
 import { closeOverlay, restoreOverlayFocus, useShellOverlay } from "./overlays";
 import { formatKeys, isMacPlatform } from "./keyboard";
 
@@ -69,6 +71,7 @@ function PaletteBody() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const commands = useCommands();
+  const runs = useRuns();
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const [announcement, setAnnouncement] = useState("");
@@ -83,7 +86,8 @@ function PaletteBody() {
     return () => window.clearInterval(timer);
   }, [queryClient]);
 
-  const sections = buildSections([...commands, ...searchCommands(query)], query);
+  const olderRuns = useMemo(() => matchingRunCommands(runs.data, query), [runs.data, query]);
+  const sections = buildSections([...commands, ...olderRuns, ...searchCommands(query)], query);
   const flat = sections.flatMap(section => section.rows);
   const matchCount = flat.filter(row => row.command.group !== "Search").length;
   const nothingMatches = matchCount === 0;

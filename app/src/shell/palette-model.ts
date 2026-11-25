@@ -1,7 +1,7 @@
 import { commandDetail, type PaletteCommand } from "./commands";
 import { fuzzyMatchEntry } from "./fuzzy";
 
-const GROUP_ORDER = ["Go to", "Recent runs", "Search", "Actions", "Help"];
+const GROUP_ORDER = ["Go to", "Recent runs", "Runs", "Search", "Actions", "Help"];
 const MAX_RESULTS = 60;
 
 export interface PaletteRow {
