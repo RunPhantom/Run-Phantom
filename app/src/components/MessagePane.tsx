@@ -1,5 +1,6 @@
 import { AlertTriangle, ArrowRight, Brain, Check, ChevronDown, ChevronLeft, Copy, ExternalLink, Folder as FolderIcon, Home, KeyRound, Loader2, Plus, Send, Terminal, Wrench, X } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type SyntheticEvent } from "react";
+import { createPortal } from "react-dom";
 import { useIsCompactWorkspace } from "../hooks/use-mobile";
 import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
 import { useDialogFocus } from "../hooks/use-dialog-focus";
@@ -13,6 +14,9 @@ import { AcpProviderState } from "./AcpProviderState";
 import { Markdown } from "./Markdown";
 import { RunPhantomMark } from "./RunPhantomMark";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { useRegisterCommands, useRegisterShortcuts } from "../shell/commands";
+import { ariaKeyShortcuts, formatKeys } from "../shell/keyboard";
+import { focusAfterOverlayClose } from "../shell/overlays";
 
 type Role = "user" | "assistant";
 
@@ -114,6 +118,8 @@ const COLLAPSE_PREVIEW_WIDTH = MIN_WIDTH - 24;
 const COLLAPSE_COMMIT_WIDTH = MIN_WIDTH - 78;
 const COLLAPSE_HOLD_MS = 220;
 const COLLAPSE_EXIT_MS = 160;
+/** Without a composer (no coding agent connected yet) Ask lands on the connect action, then on any enabled pane control. */
+const PANE_FALLBACK_FOCUS = ["[data-pane-autofocus]:not(:disabled)", "button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex=\"-1\"])"];
 
 function loadCollapsed(): boolean {
   try {
@@ -152,9 +158,11 @@ function saveProviderIntroSeen(): void {
 interface MessagePaneProps {
   /** If set, messages sent from the pane will carry this run_id. */
   activeRunId?: string | null;
+  /** Header element the "Ask …" launcher is portalled into. */
+  launcherSlot?: HTMLElement | null;
 }
 
-export function MessagePane({ activeRunId }: MessagePaneProps) {
+export function MessagePane({ activeRunId, launcherSlot }: MessagePaneProps) {
   const isOverlay = useIsCompactWorkspace();
   const prefersReducedMotion = usePrefersReducedMotion();
   const [collapsed, setCollapsedState] = useState<boolean>(loadCollapsed);
@@ -183,6 +191,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
   const [closing, setClosing] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const paneRef = useRef<HTMLElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const resizeRef = useRef<{ x: number; width: number; shouldCollapse: boolean } | null>(null);
   const activeClientMessageIdRef = useRef<string | null>(null);
@@ -226,6 +235,46 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
     }, prefersReducedMotion ? 0 : COLLAPSE_EXIT_MS);
   }, [closing, prefersReducedMotion, setCollapsed]);
   const closeOverlay = useCallback(() => setCollapsed(true), [setCollapsed]);
+  const openFromLauncher = useCallback(() => {
+    setWidth(loadWidth());
+    setShowList(showProviderIntro);
+    setCollapsed(false);
+  }, [setCollapsed, showProviderIntro]);
+  const toggleFromShortcut = useCallback(() => {
+    if (collapsed) openFromLauncher();
+    else setCollapsed(true);
+  }, [collapsed, openFromLauncher, setCollapsed]);
+  useRegisterShortcuts([{
+    id: "ask-agent",
+    keys: "mod+j",
+    scope: "Global",
+    description: `Open or hide ${providerLabel(provider)}`,
+    allowInInputs: true,
+    allowInDialogs: true,
+    handler: toggleFromShortcut,
+  }], [provider]);
+  useRegisterCommands([{
+    id: "action:ask-agent",
+    group: "Actions",
+    label: `Ask ${providerLabel(provider)}`,
+    keywords: ["chat", "debug", "coding agent", "claude", "codex"],
+    icon: Terminal,
+    shortcut: "mod+j",
+    order: 6,
+    run: () => {
+      focusAfterOverlayClose(() => {
+        const composer = composerRef.current;
+        const pane = paneRef.current;
+        const target = composer?.isConnected
+          ? composer
+          : PANE_FALLBACK_FOCUS.map(selector => pane?.querySelector<HTMLElement>(selector)).find(Boolean) ?? null;
+        if (!target) return false;
+        target.focus();
+        return document.activeElement === target;
+      });
+      if (collapsed) openFromLauncher();
+    },
+  }], [provider]);
   useDialogFocus(isOverlay && !collapsed && !closing, paneRef, closeOverlay);
 
   function dismissProviderIntro() {
@@ -693,28 +742,29 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
     });
   }
 
-  if (collapsed) {
-    return (
-      <FloatingAskButton
-        provider={provider}
-        onOpen={() => {
-          setWidth(loadWidth());
-          setShowList(showProviderIntro);
-          setCollapsed(false);
-        }}
-      />
-    );
-  }
+  const launcher = launcherSlot ? createPortal(
+    <HeaderAskButton
+      provider={provider}
+      expanded={!collapsed}
+      onToggle={toggleFromShortcut}
+    />,
+    launcherSlot,
+  ) : null;
+
+  if (collapsed) return launcher;
 
   const paneWidth = isOverlay
     ? "min(420px, calc(100vw - 24px))"
     : width;
 
   return (
+    <>
+    {launcher}
     <aside
       ref={paneRef}
       role={isOverlay ? "dialog" : undefined}
       aria-modal={isOverlay ? true : undefined}
+      data-shortcut-passthrough={isOverlay ? "" : undefined}
       aria-label="Coding-agent debug chat"
       className={`${isOverlay
         ? "fixed inset-y-3 right-3 z-40 rounded-lg border border-rp-line bg-rp-surface shadow-e4"
@@ -818,7 +868,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
                     <HeaderIconTooltip label="Copy terminal command">
                       <button
                         onClick={() => void copyOpenInTerminalCommand()}
-                        className="grid h-7 w-7 place-items-center rounded-md border border-[color:var(--rp-border)] bg-white text-[color:var(--rp-ink-soft)] transition-[background-color,border-color,color] duration-250 ease-standard hover:border-[color:var(--rp-ink-a12)] hover:bg-rp-wash hover:border-rp-wash-border hover:text-[color:var(--rp-ink-strong)]"
+                        className="grid h-7 w-7 place-items-center rounded-md border border-[color:var(--rp-border)] bg-rp-surface text-[color:var(--rp-ink-soft)] transition-[background-color,border-color,color] duration-250 ease-standard hover:border-[color:var(--rp-ink-a12)] hover:bg-rp-wash hover:border-rp-wash-border hover:text-[color:var(--rp-ink-strong)]"
                         aria-label="Copy terminal command"
                       >
                         <ExternalLink className="h-3.5 w-3.5" />
@@ -827,7 +877,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
                     {terminalCommandCopied && (
                     <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-lg border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] px-3 py-2 text-[11px] leading-relaxed text-[color:var(--rp-ink-strong)] shadow-2xl">
                       <div>Copied command to clipboard. Run it in your terminal.</div>
-                      <code className="mt-2 block select-all break-all rounded bg-white px-2 py-1.5 font-mono text-[10px] text-[color:var(--rp-ink-strong)]">
+                      <code className="mt-2 block select-all break-all rounded bg-rp-surface px-2 py-1.5 font-mono text-[10px] text-[color:var(--rp-ink-strong)]">
                         {terminalCommand}
                       </code>
                       </div>
@@ -837,7 +887,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
                 <HeaderIconTooltip label="New chat">
                   <button
                     onClick={startNewChat}
-                    className="grid h-7 w-7 place-items-center rounded-md border border-[color:var(--rp-border)] bg-white text-[color:var(--rp-ink-soft)] transition-[background-color,border-color,color] duration-250 ease-standard hover:border-[color:var(--rp-ink-a12)] hover:bg-rp-wash hover:border-rp-wash-border hover:text-[color:var(--rp-ink-strong)]"
+                    className="grid h-7 w-7 place-items-center rounded-md border border-[color:var(--rp-border)] bg-rp-surface text-[color:var(--rp-ink-soft)] transition-[background-color,border-color,color] duration-250 ease-standard hover:border-[color:var(--rp-ink-a12)] hover:bg-rp-wash hover:border-rp-wash-border hover:text-[color:var(--rp-ink-strong)]"
                     aria-label="New chat"
                   >
                     <Plus className="h-3.5 w-3.5" />
@@ -846,7 +896,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
                 <HeaderIconTooltip label="Hide">
                   <button
                     onClick={() => setCollapsed(true)}
-                    className="grid h-7 w-7 place-items-center rounded-md border border-[color:var(--rp-border)] bg-white text-[color:var(--rp-ink-soft)] transition-[background-color,border-color,color] duration-250 ease-standard hover:border-[color:var(--rp-ink-a12)] hover:bg-rp-wash hover:border-rp-wash-border hover:text-[color:var(--rp-ink-strong)]"
+                    className="grid h-7 w-7 place-items-center rounded-md border border-[color:var(--rp-border)] bg-rp-surface text-[color:var(--rp-ink-soft)] transition-[background-color,border-color,color] duration-250 ease-standard hover:border-[color:var(--rp-ink-a12)] hover:bg-rp-wash hover:border-rp-wash-border hover:text-[color:var(--rp-ink-strong)]"
                     aria-label="Hide chat"
                   >
                     <X className="h-3.5 w-3.5" />
@@ -928,6 +978,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
             )}
             <div className="relative overflow-hidden rounded-md border border-rp-line bg-rp-surface transition-[border-color] duration-250 ease-standard hover:border-[color:var(--rp-n10)] focus-within:border-rp-blue">
               <textarea
+                ref={composerRef}
                 role="combobox"
                 aria-autocomplete="list"
                 aria-label={activeRunId ? "Ask about this trace" : `Ask ${providerLabel(provider)}`}
@@ -1005,20 +1056,26 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
         />
       )}
     </aside>
+    </>
   );
 }
 
-function FloatingAskButton({ provider, onOpen }: { provider: AgentProviderId; onOpen: () => void }) {
+/** Stays in place while the pane is open, shown pressed, so the header cluster does not gain a gap and the button doubles as Hide. */
+function HeaderAskButton({ provider, expanded, onToggle }: { provider: AgentProviderId; expanded: boolean; onToggle: () => void }) {
+  const label = `Ask ${providerLabel(provider)}`;
   return (
-    <div data-debug-launcher className="fixed bottom-3 right-4 z-40 lg:right-8">
+    <div data-debug-launcher className="flex">
       <button
         type="button"
-        onClick={onOpen}
-        className="flex h-10 items-center gap-2 rounded-control border border-rp-line bg-white px-4 text-[13px] font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash"
-        title={`Ask ${providerLabel(provider)}`}
+        onClick={onToggle}
+        aria-expanded={expanded}
+        aria-keyshortcuts={ariaKeyShortcuts("mod+j")}
+        className={`flex size-11 items-center justify-center gap-2 rounded-control border text-[13px] font-medium text-rp-ink transition-[background-color,border-color] duration-fast ease-out hover:border-rp-wash-border hover:bg-rp-wash lg:h-9 lg:w-auto lg:px-3 ${expanded ? "border-rp-wash-border bg-rp-wash" : "border-rp-line bg-rp-surface"}`}
+        title={`${expanded ? "Hide" : "Open"} the ${providerLabel(provider)} debug chat (${formatKeys("mod+j")})`}
       >
-        <Terminal aria-hidden="true" className="h-4 w-4 text-rp-blue" />
-        <span>{`Ask ${providerLabel(provider)}`}</span>
+        <Terminal aria-hidden="true" className="size-4 shrink-0 text-rp-blue" />
+        <span className="sr-only lg:not-sr-only lg:whitespace-nowrap">{label}</span>
+        <kbd aria-hidden="true" className="rp-kbd hidden xl:inline-flex">{formatKeys("mod+j")}</kbd>
       </button>
     </div>
   );
@@ -1092,12 +1149,12 @@ function DirectoryPicker({
             aria-label="Working directory path"
             value={pathInput}
             onChange={(event) => setPathInput(event.target.value)}
-            className="min-w-0 flex-1 rounded-md border border-[color:var(--rp-border)] bg-white px-2 py-1.5 font-mono text-xs text-[color:var(--rp-ink-strong)] placeholder:text-[color:var(--rp-ink-muted)] focus:border-[color:var(--rp-border)] focus:outline-none"
+            className="min-w-0 flex-1 rounded-md border border-[color:var(--rp-border)] bg-rp-surface px-2 py-1.5 font-mono text-xs text-[color:var(--rp-ink-strong)] placeholder:text-[color:var(--rp-ink-muted)] focus:border-[color:var(--rp-border)] focus:outline-none"
             placeholder="~/Projects/my-agent"
           />
           <button
             type="submit"
-            className="rounded-md border border-[color:var(--rp-border)] bg-white px-2.5 py-1.5 text-xs text-[color:var(--rp-ink-soft)] transition-colors hover:bg-rp-wash hover:border-rp-wash-border hover:text-[color:var(--rp-ink-strong)]"
+            className="rounded-md border border-[color:var(--rp-border)] bg-rp-surface px-2.5 py-1.5 text-xs text-[color:var(--rp-ink-soft)] transition-colors hover:bg-rp-wash hover:border-rp-wash-border hover:text-[color:var(--rp-ink-strong)]"
           >
             Go to path
           </button>
@@ -1123,7 +1180,7 @@ function DirectoryPicker({
           </button>
         </div>
 
-        <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-[color:var(--rp-border)] bg-white p-1">
+        <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-[color:var(--rp-border)] bg-rp-surface p-1">
           {loading && (
             <div className="flex items-center justify-center gap-2 py-8 text-xs text-[color:var(--rp-ink-muted)]">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1160,7 +1217,7 @@ function DirectoryPicker({
               type="button"
               disabled={!listing}
               onClick={() => listing && onSelect(listing.path)}
-              className="rounded-md border border-[color:var(--rp-border)] bg-white px-2.5 py-1.5 text-xs font-medium text-[color:var(--rp-ink-strong)] transition-colors hover:bg-rp-wash hover:border-rp-wash-border disabled:cursor-not-allowed disabled:opacity-35"
+              className="rounded-md border border-[color:var(--rp-border)] bg-rp-surface px-2.5 py-1.5 text-xs font-medium text-[color:var(--rp-ink-strong)] transition-colors hover:bg-rp-wash hover:border-rp-wash-border disabled:cursor-not-allowed disabled:opacity-35"
             >
               Select
             </button>
@@ -1497,7 +1554,7 @@ function AskUserQuestionCard({
   const complete = Object.keys(answers).length === prompt.questions.length;
 
   return (
-    <div className="message-arrive w-[90%] rounded border px-3 py-3 text-[color:var(--rp-ink-strong)]" style={{ borderColor: "color-mix(in srgb, var(--rp-warning) 24%, white 76%)", background: "color-mix(in srgb, var(--rp-warning) 7%, white 93%)" }}>
+    <div className="message-arrive w-[90%] rounded border px-3 py-3 text-[color:var(--rp-ink-strong)]" style={{ borderColor: "color-mix(in srgb, var(--rp-warning) 24%, var(--rp-surface) 76%)", background: "color-mix(in srgb, var(--rp-warning) 7%, var(--rp-surface) 93%)" }}>
       <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-[color:var(--rp-warning)]">Claude needs input</div>
       <div className="space-y-3">
         {prompt.questions.map((question, questionIndex) => {
@@ -1519,7 +1576,7 @@ function AskUserQuestionCard({
                       role={question.multiSelect ? "checkbox" : "radio"}
                       aria-checked={active}
                       onClick={() => toggle(questionIndex, option.label, question.multiSelect)}
-                      className={`rounded border px-2 py-1.5 text-left text-[color:var(--rp-ink-strong)] transition-[background-color,border-color,color] ${active ? "border-rp-wash-border bg-rp-wash text-rp-blue" : "border-[color:var(--rp-border)] bg-white hover:bg-rp-wash hover:border-rp-wash-border"}`}
+                      className={`rounded border px-2 py-1.5 text-left text-[color:var(--rp-ink-strong)] transition-[background-color,border-color,color] ${active ? "border-rp-wash-border bg-rp-wash text-rp-blue" : "border-[color:var(--rp-border)] bg-rp-surface hover:bg-rp-wash hover:border-rp-wash-border"}`}
                     >
                       <div className="text-xs font-medium">{option.label}</div>
                       {option.description && <div className="mt-0.5 text-[11px] text-[color:var(--rp-ink-muted)]">{option.description}</div>}
@@ -1532,7 +1589,7 @@ function AskUserQuestionCard({
                 value={otherText[questionIndex] ?? ""}
                 onChange={(event) => setOtherText((current) => ({ ...current, [questionIndex]: event.target.value }))}
                 placeholder="Other"
-                className="w-full rounded border border-[color:var(--rp-border)] bg-white px-2 py-1.5 text-xs text-[color:var(--rp-ink-strong)] placeholder:text-[color:var(--rp-ink-muted)] focus:outline-none focus:border-[color:var(--rp-border)]"
+                className="w-full rounded border border-[color:var(--rp-border)] bg-rp-surface px-2 py-1.5 text-xs text-[color:var(--rp-ink-strong)] placeholder:text-[color:var(--rp-ink-muted)] focus:outline-none focus:border-[color:var(--rp-border)]"
               />
             </fieldset>
           );
@@ -1542,7 +1599,7 @@ function AskUserQuestionCard({
         type="button"
         disabled={!complete}
         onClick={() => onAnswer(answers)}
-        className="mt-3 flex min-h-9 items-center justify-center gap-2 rounded border border-[color:var(--rp-border)] bg-white px-3 text-xs text-[color:var(--rp-ink-strong)] hover:bg-rp-wash hover:border-rp-wash-border transition-[background-color,color] duration-250 ease-standard disabled:opacity-35 disabled:cursor-not-allowed disabled:active:scale-100"
+        className="mt-3 flex min-h-9 items-center justify-center gap-2 rounded border border-[color:var(--rp-border)] bg-rp-surface px-3 text-xs text-[color:var(--rp-ink-strong)] hover:bg-rp-wash hover:border-rp-wash-border transition-[background-color,color] duration-250 ease-standard disabled:opacity-35 disabled:cursor-not-allowed disabled:active:scale-100"
       >
         <Send className="h-3.5 w-3.5" />
         Send answer
@@ -1729,6 +1786,7 @@ function AgentConnectCard({
         type="button"
         disabled={busy}
         onClick={() => onProviderChange(selectedProvider)}
+        data-pane-autofocus=""
         // The hover here repeated the base border and background verbatim, so it
         // was a guaranteed no-op; a stronger wash is what makes it read.
         className="rp-primary-control mt-3 flex min-h-10 w-full items-center justify-center rounded-control border border-rp-blue bg-rp-blue px-4 text-[13px] font-medium text-white transition-[background-color,border-color,opacity] duration-250 ease-standard hover:border-rp-blue-hover hover:bg-rp-blue-hover disabled:cursor-not-allowed disabled:opacity-55"
@@ -2056,7 +2114,7 @@ function AgentAskCard({ block }: { block: Extract<AssistantMessageBlock, { type:
           Agent needs an API key
         </div>
         <div className="mt-2 text-sm text-[color:var(--rp-ink-strong)]">Add the key in Run Phantom Settings, or set the environment variable and restart Run Phantom.</div>
-        <code className="mt-2 block rounded-md border border-[color:var(--rp-border)] bg-white px-2 py-1.5 font-mono text-[11px] text-[color:var(--rp-ink-strong)]">
+        <code className="mt-2 block rounded-md border border-[color:var(--rp-border)] bg-rp-surface px-2 py-1.5 font-mono text-[11px] text-[color:var(--rp-ink-strong)]">
           {envVar}=...
         </code>
       </div>

@@ -73,7 +73,7 @@ export function ReplayView({ originalRunId, originalName, replayRunId, error, is
             </span>
             {!comparisonVisible && !isCompact && (
               <button
-                className="flex h-7 flex-shrink-0 items-center gap-1 rounded-control border border-rp-line bg-white px-2 text-[12px] font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash"
+                className="flex h-7 flex-shrink-0 items-center gap-1 rounded-control border border-rp-line bg-rp-surface px-2 text-[12px] font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash"
                 onClick={() => setShowOriginal(true)}
               >
                 compare <ArrowRight aria-hidden="true" className="size-3" />
@@ -83,7 +83,7 @@ export function ReplayView({ originalRunId, originalName, replayRunId, error, is
           <div className="flex items-center gap-1.5 flex-shrink-0">
             {isRunning && onCancel && (
               <button
-                className="h-7 rounded-control border border-rp-line bg-white px-2 text-[12px] font-medium text-rp-danger transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-danger-border hover:bg-rp-danger-soft"
+                className="h-7 rounded-control border border-rp-line bg-rp-surface px-2 text-[12px] font-medium text-rp-danger transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-danger-border hover:bg-rp-danger-soft"
                 onClick={onCancel}
               >
                 cancel
@@ -93,7 +93,7 @@ export function ReplayView({ originalRunId, originalName, replayRunId, error, is
               <button
                 type="button"
                 aria-label="Replay again"
-                className="grid min-h-7 min-w-7 place-items-center rounded-control text-rp-ink-muted transition-colors duration-250 ease-standard hover:bg-white hover:text-rp-blue"
+                className="grid min-h-7 min-w-7 place-items-center rounded-control text-rp-ink-muted transition-colors duration-250 ease-standard hover:bg-rp-surface hover:text-rp-blue"
                 title="Replay"
                 onClick={onReplay}
               >

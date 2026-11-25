@@ -33,6 +33,19 @@
   --rp-text-lg: 14px;      --rp-lh-lg: 20px;      --rp-ls-lg: -0.006em;
   --rp-text-title: 20px;   --rp-lh-title: 28px;   --rp-ls-title: -0.011em;
   --rp-text-display: 28px; --rp-lh-display: 36px; --rp-ls-display: -0.017em;
+  --rp-fs-11: 11px;
+  --rp-fs-12: 12px;
+  --rp-fs-13: 13px;
+  --rp-fs-14: 14px;
+  --rp-fs-17: 17px;
+  --rp-fs-22: 22px;
+  --rp-fs-26: 26px;
+  --rp-fs-28: 28px;
+
+  --rp-page-pt: 20px;
+  --rp-page-px: 24px;
+  --rp-page-pb: 48px;
+
   --rp-weight-regular: 400;
   --rp-weight-medium: 500;
   --rp-weight-semibold: 600;
@@ -40,6 +53,9 @@
   --rp-blue: #0021CC;
   --rp-blue-hover: #001AA3;
   --rp-blue-active: #001680;
+  --rp-blue-solid: #0021CC;
+  --rp-blue-solid-hover: #001AA3;
+  --rp-blue-solid-active: #001680;
   --rp-line: #D9DEEA;
   --rp-line-muted: #E8ECF5;
   --rp-line-strong: #7C8494;
@@ -50,7 +66,7 @@
   --rp-canvas-blue: #F8FAFF;
   --rp-row-hover: #F6F7FA;
   --rp-ink-subtle: #5C6578;
-  --rp-index: #777E8E;
+  --rp-index: #5C6578;
 
   --rp-n0: #FFFFFF;
   --rp-n1: #FFFFFF;
@@ -200,18 +216,22 @@
   --rp-danger-active: #7A1B14;
   --rp-danger-soft: #FEF3F2;
   --rp-danger-border: #FDA29B;
+  --rp-danger-solid: #B42318;
+  --rp-danger-solid-hover: #912018;
 
   --rp-warning: #8A4B08;
   --rp-warning-hover: #743F07;
   --rp-warning-active: #5C3206;
   --rp-warning-soft: #FFF7E6;
   --rp-warning-border: #F2CE8A;
+  --rp-warning-solid: #8A4B08;
 
   --rp-success: #146C43;
   --rp-success-hover: #115C39;
   --rp-success-active: #0E4A2E;
   --rp-success-soft: #ECFDF3;
   --rp-success-border: #86D3A8;
+  --rp-success-solid: #146C43;
 
   --rp-info: #1D4ED8;
   --rp-info-hover: #1E40AF;
@@ -220,6 +240,7 @@
   --rp-info-border: #93C5FD;
 
   --rp-on-solid: #FFFFFF;
+  --rp-on-ink: var(--rp-surface);
 
   --rp-span-1:  #074F5B;
   --rp-span-2:  #656F0D;
@@ -272,11 +293,14 @@
   --rp-json-number: #0953AA;
   --rp-json-boolean: #0C6648;
   --rp-json-null: var(--rp-ink-muted);
+  --rp-json-view-string: #3D4B80;
 
-  --rp-motion-instant: 110ms;
+  --rp-motion-instant: 120ms;
   --rp-motion-state: 180ms;
   --rp-motion-surface-in: 200ms;
   --rp-motion-surface-out: 140ms;
+  --rp-motion-enter: 160ms;
+  --rp-motion-flash: 1200ms;
   --rp-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --rp-ease-in: cubic-bezier(0.3, 0, 0.8, 0.15);
   --rp-ease-move: cubic-bezier(0.77, 0, 0.175, 1);
@@ -286,9 +310,9 @@
 
   --rp-dur-standard: 250ms;
   --rp-dur-rise: 200ms;
-  --rp-dur-spring: 350ms;
+  --rp-dur-spring: 200ms;
   --rp-rise-distance: 6px;
-  --rp-ease-spring: linear(0 0%, 0.0272 2.5%, 0.0924 5%, 0.1771 7.5%, 0.2695 10%, 0.3617 12.5%, 0.4492 15%, 0.5296 17.5%, 0.6015 20%, 0.6648 22.5%, 0.7198 25%, 0.7669 27.5%, 0.8069 30%, 0.8407 32.5%, 0.8691 35%, 0.8927 37.5%, 0.9123 40%, 0.9285 42.5%, 0.9419 45%, 0.9528 47.5%, 0.9618 50%, 0.9691 52.5%, 0.975 55%, 0.9799 57.5%, 0.9838 60%, 0.987 62.5%, 0.9895 65%, 0.9916 67.5%, 0.9933 70%, 0.9946 72.5%, 0.9957 75%, 0.9965 77.5%, 0.9972 80%, 0.9978 82.5%, 0.9982 85%, 0.9986 87.5%, 0.9989 90%, 0.9991 92.5%, 0.9993 95%, 0.9994 97.5%, 1 100%);
+  --rp-ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
 
   --rp-motion-hover-in: 0ms;
   --rp-motion-hover-out: 120ms;
@@ -340,8 +364,166 @@
   --rp-dur-panel: 280ms;
   --rp-ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
   --rp-ease-panel: cubic-bezier(0.22, 1, 0.36, 1);
-  --rp-ease-standard: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --rp-ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
 
+  }
+
+  /* Opt-in only: final-release-audit pins color-scheme light and a bright body by default. */
+  :root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --rp-blue: #8C9EFF;
+  --rp-blue-hover: #B3C0FF;
+  --rp-blue-active: #C9D2FF;
+  --rp-line: #262C39;
+  --rp-line-muted: #1C212C;
+  --rp-line-strong: #5A6274;
+  --rp-wash: #18204A;
+  --rp-wash-border: #33408F;
+  --rp-line-dashed: #3A4252;
+  --rp-canvas-grey: #0F1218;
+  --rp-canvas-blue: #121731;
+  --rp-row-hover: #1A1F2A;
+  --rp-ink-subtle: #969EAE;
+  --rp-index: #969EAE;
+
+  --rp-n0: #181C25;
+  --rp-n1: #12151C;
+  --rp-n2: #0B0D12;
+  --rp-n3: #161A23;
+  --rp-n4: #0F1218;
+  --rp-n5: #1A2244;
+  --rp-n6: #1A2244;
+  --rp-n7: #1C212C;
+  --rp-n8: #1C212C;
+  --rp-n9: #262C39;
+  --rp-n10: #3A4252;
+  --rp-n11: #8A92A3;
+  --rp-n12: #8A92A3;
+  --rp-n13: #9AA2B1;
+  --rp-n14: #A3AAB8;
+  --rp-n15: #C5CAD6;
+  --rp-n16: #E8EBF2;
+  --rp-n17: #E8EBF2;
+  --rp-n18: #E8EBF2;
+  --rp-n19: #E8EBF2;
+
+  --rp-user-surface: #161B2E;
+  --rp-border-strong: #5A6274;
+  --rp-border-heavy: #7C8494;
+
+  --rp-ink-faint: #8A92A3;
+  --rp-ink-muted: #A3AAB8;
+  --rp-ink-soft: #C5CAD6;
+  --rp-ink: #E8EBF2;
+  --rp-ink-strong: #F4F6FA;
+  --rp-ink-max: #F4F6FA;
+  --rp-ink-black: #E8EBF2;
+
+  --rp-shadow-rgb: 0 0 0;
+
+  --rp-wash-1: rgb(232 235 242 / 0.030);
+  --rp-wash-2: rgb(232 235 242 / 0.045);
+  --rp-wash-3: rgb(232 235 242 / 0.065);
+  --rp-wash-4: rgb(232 235 242 / 0.100);
+  --rp-wash-5: rgb(232 235 242 / 0.160);
+
+  --rp-scrim: rgb(0 0 0 / 0.65);
+  --rp-scrim-soft: rgb(0 0 0 / 0.5);
+
+  --rp-ink-a02: rgb(232 235 242 / 0.02);
+  --rp-ink-a04: rgb(232 235 242 / 0.04);
+  --rp-ink-a06: rgb(232 235 242 / 0.06);
+  --rp-ink-a08: rgb(232 235 242 / 0.08);
+  --rp-ink-a10: rgb(232 235 242 / 0.10);
+  --rp-ink-a12: rgb(232 235 242 / 0.12);
+  --rp-ink-a15: rgb(232 235 242 / 0.15);
+  --rp-ink-a18: rgb(232 235 242 / 0.18);
+  --rp-ink-a20: rgb(232 235 242 / 0.20);
+  --rp-ink-a22: rgb(232 235 242 / 0.22);
+
+  --rp-guide: rgb(232 235 242 / 0.12);
+  --rp-guide-hover: rgb(232 235 242 / 0.26);
+  --rp-inset-hairline: rgb(232 235 242 / 0.06);
+  --rp-inset-hairline-soft: rgb(232 235 242 / 0.04);
+  --rp-grid-line: rgb(232 235 242 / 0.035);
+  --rp-accent-flash: rgb(140 158 255 / 0.16);
+  --rp-canvas-fade-0: rgb(11 13 18 / 0);
+  --rp-canvas-fade-1: rgb(11 13 18 / 0.86);
+  --rp-canvas-fade-2: rgb(11 13 18 / 1);
+  --rp-highlight-top: inset 0 1px 0 0 rgb(255 255 255 / 0.04);
+
+  --rp-accent: #8C9EFF;
+  --rp-accent-hover: #B3C0FF;
+  --rp-accent-active: #C9D2FF;
+  --rp-accent-soft: #18204A;
+  --rp-accent-soft-hover: #1F2858;
+  --rp-accent-border: #33408F;
+  --rp-mark-accent: #8C9EFF;
+  --rp-focus: #8C9EFF;
+
+  --rp-danger: #F97066;
+  --rp-danger-hover: #FDA29B;
+  --rp-danger-active: #FECDCA;
+  --rp-danger-soft: #3A1512;
+  --rp-danger-border: #7A271A;
+  --rp-danger-solid: #D92D20;
+  --rp-danger-solid-hover: #B42318;
+
+  --rp-warning: #FDB022;
+  --rp-warning-hover: #FEC84B;
+  --rp-warning-active: #FEDF89;
+  --rp-warning-soft: #33250A;
+  --rp-warning-border: #7A5A10;
+  --rp-warning-solid: #B54708;
+
+  --rp-success: #47CD89;
+  --rp-success-hover: #75E0A7;
+  --rp-success-active: #A6EFC6;
+  --rp-success-soft: #0F2A1E;
+  --rp-success-border: #1E6B47;
+  --rp-success-solid: #067647;
+
+  --rp-info: #84ADFF;
+  --rp-info-hover: #B2CCFF;
+  --rp-info-active: #D1E0FF;
+  --rp-info-soft: #102040;
+  --rp-info-border: #2E4E8F;
+
+  --rp-span-1: #73C6D8;  --rp-span-1-fill: #375863;  --rp-span-1-wash: #202E36;
+  --rp-span-2: #C8D292;  --rp-span-2-fill: #575D49;  --rp-span-2-wash: #2B2F2D;
+  --rp-span-3: #A7B4EE;  --rp-span-3-fill: #4B516C;  --rp-span-3-wash: #272B39;
+  --rp-span-4: #84DCDC;  --rp-span-4-fill: #3D6165;  --rp-span-4-wash: #223137;
+  --rp-span-5: #D2C7FB;  --rp-span-5-fill: #5B5971;  --rp-span-5-wash: #2D2E3B;
+  --rp-span-6: #A4C48B;  --rp-span-6-fill: #495846;  --rp-span-6-wash: #262E2C;
+  --rp-span-7: #8CD3B2;  --rp-span-7-fill: #405D55;  --rp-span-7-wash: #233031;
+  --rp-span-8: #8DC9F2;  --rp-span-8-fill: #41596D;  --rp-span-8-wash: #232E3A;
+  --rp-span-9: #E6AF86;  --rp-span-9-fill: #635044;  --rp-span-9-wash: #302B2B;
+  --rp-span-10: #E1A7CF; --rp-span-10-fill: #614C60; --rp-span-10-wash: #2F2935;
+  --rp-span-11: #D7B7EF; --rp-span-11-fill: #5D536C; --rp-span-11-wash: #2E2C3A;
+  --rp-span-12: #9EC3F8; --rp-span-12-fill: #475770; --rp-span-12-wash: #262D3B;
+  --rp-span-neutral: #A3AAB8;
+  --rp-span-neutral-fill: #2A303C;
+  --rp-span-error-fill: #3A1512;
+  --rp-span-error-hatch: repeating-linear-gradient(45deg, transparent 0 3px, rgb(249 112 102 / 0.28) 3px 6px);
+
+  --rp-json-string: #E0A872;
+  --rp-json-number: #8CB4FF;
+  --rp-json-boolean: #5FD0A0;
+  --rp-json-view-string: #B3BEF5;
+
+  --rp-trace: #B79CF0;
+  --rp-thinking-border: rgb(140 170 230 / 0.30);
+  --rp-thinking-bg: rgb(140 170 230 / 0.08);
+
+  --sidebar-background: 222.000 21.739% 9.020%;
+  --sidebar-foreground: 222.000 27.778% 92.941%;
+  --sidebar-primary: 230.609 100.000% 77.451%;
+  --sidebar-primary-foreground: 222.857 24.138% 5.686%;
+  --sidebar-accent: 228.571 44.681% 18.431%;
+  --sidebar-accent-foreground: 229.737 100.000% 85.098%;
+  --sidebar-border: 221.053 20.000% 18.627%;
+  --sidebar-ring: 230.609 100.000% 77.451%;
   }
 }
 
@@ -427,15 +609,74 @@
     background-repeat: no-repeat;
     background-size: 16px 16px;
   }
+  :root[data-theme="dark"] .rp-select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='M4 6l4 4 4-4' stroke='%23A3AAB8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
   .rp-field-hint {
     font-size: 12px;
     line-height: 18px;
     color: var(--rp-ink-muted);
   }
+
+  .rp-type-eyebrow { font-family: var(--font-mono); font-size: var(--rp-fs-11); line-height: 16px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; }
+  .rp-type-meta { font-size: var(--rp-fs-12); line-height: 16px; }
+  .rp-type-ui { font-size: var(--rp-fs-13); line-height: 20px; }
+  .rp-type-prose { font-size: var(--rp-fs-14); line-height: 22px; }
+  .rp-type-card-title { font-size: var(--rp-fs-17); line-height: 24px; font-weight: 600; letter-spacing: -0.01em; }
+  .rp-type-run-title { font-family: var(--font-display); font-size: var(--rp-fs-22); line-height: 28px; font-weight: 600; letter-spacing: -0.027em; }
+  .rp-type-headline { font-family: var(--font-display); font-size: var(--rp-fs-26); line-height: 32px; font-weight: 600; letter-spacing: -0.03em; text-wrap: balance; }
+  .rp-type-kpi { font-family: var(--font-sans); font-size: var(--rp-fs-28); line-height: 32px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  /* Syne's numerals are lowercase-height, so digits inside a Syne headline are set in Inter. */
+  .rp-type-headline .rp-digits,
+  .rp-type-run-title .rp-digits,
+  .rp-page-title .rp-digits { font-family: var(--font-sans); font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+
+  .rp-page {
+    padding: var(--rp-page-pt) var(--rp-page-px) var(--rp-page-pb);
+  }
+
+  .rp-kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding-inline: 4px;
+    border: 1px solid var(--rp-line);
+    border-radius: var(--rp-radius-sm);
+    background: var(--rp-surface);
+    font-family: var(--font-mono);
+    font-size: var(--rp-fs-11);
+    line-height: 16px;
+    color: var(--rp-ink-subtle);
+  }
+
+  .rp-enter { animation: rp-enter var(--rp-motion-enter) var(--rp-ease-out) both; }
+  .rp-flash { animation: rp-flash var(--rp-motion-flash) var(--rp-ease-out) both; }
+  .rp-skeleton { background: var(--rp-line-muted); animation: rp-skeleton 1.2s ease-in-out infinite alternate; }
 }
 
-html {
+@keyframes rp-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes rp-flash {
+  from { background-color: var(--rp-accent-flash); }
+  to { background-color: transparent; }
+}
+@keyframes rp-skeleton {
+  from { opacity: 1; }
+  to { opacity: 0.6; }
+}
+
+@media (max-width: 639px) {
+  :root { --rp-page-px: 16px; --rp-page-pt: 16px; }
+}
+
+html:not([data-theme="dark"]) {
   color-scheme: light;
+}
+html {
   background-color: var(--rp-canvas);
   background: var(--rp-canvas);
 }
@@ -532,20 +773,6 @@ h1, h2, h3 {
   outline-offset: -4px !important;
 }
 
-.rp-launcher-band:has([data-debug-launcher]) {
-  position: relative;
-  padding-bottom: 65px;
-}
-.rp-launcher-band:has([data-debug-launcher])::after {
-  content: "";
-  position: absolute;
-  inset-inline: 0;
-  bottom: 0;
-  height: 65px;
-  border-top: 1px solid var(--rp-line);
-  background: var(--rp-surface);
-}
-
 .rp-disclosure { list-style: none; }
 .rp-disclosure::-webkit-details-marker { display: none; }
 .rp-disclosure::before {
@@ -574,7 +801,7 @@ details[open] > .rp-disclosure::before { transform: rotate(45deg); }
   transform: translateY(calc(-100% - var(--rp-strip-h, 0px) - 24px));
   border: 0;
   border-radius: var(--rp-radius-control);
-  background: var(--rp-blue);
+  background: var(--rp-blue-solid);
   color: var(--rp-on-solid);
   padding: 12px 20px;
   font-weight: 600;
@@ -600,8 +827,8 @@ input.secret-input-saved:focus::placeholder {
   to { opacity: 1; transform: translateY(0); }
 }
 @keyframes rp-pop-in {
-  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .rp-fade-rise { animation: rp-fade-rise var(--rp-dur-rise) var(--rp-ease-standard) both; }
 .rp-pop {
@@ -623,7 +850,7 @@ input.secret-input-saved:focus::placeholder {
 
 @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:.3} }
 @keyframes spin { to{transform:rotate(360deg)} }
-@keyframes bounce-dot { 0%,80%,100%{transform:scale(0)} 40%{transform:scale(1)} }
+@keyframes bounce-dot { 0%,80%,100%{opacity:.25} 40%{opacity:1} }
 @keyframes grid-dot-pulse { 0%,100%{opacity:.15} 50%{opacity:.8} }
 @keyframes message-arrive {
   from { opacity: 0; transform: translateY(3px); }
@@ -854,12 +1081,6 @@ pre { white-space: pre-wrap; word-break: break-word; font-family: var(--font-mon
 /* visibility, not display: the hidden separator keeps its width, so hiding it
    cannot let the next stat move back up and undo the wrap StatsLine measured. */
 .rp-meta-metrics > [data-line-end] > [data-separator] { visibility: hidden; }
-
-/* The Ask-agent button is fixed to the bottom-right corner, so the last row of a
-   scrollable list ends up underneath it and cannot be tapped. Reserve enough
-   scroll space for the button plus a margin; this only pads the scroll extent, so
-   nothing moves visually until the user reaches the end of the list. */
-.rp-list-scroll { padding-bottom: 60px; }
 
 [data-meridian-key] {
   transition: box-shadow var(--rp-motion-state) var(--rp-ease-out);

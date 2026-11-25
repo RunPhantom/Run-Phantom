@@ -165,7 +165,7 @@ function SubAgentBlock({ agent, spans, subAgentBySpan, onDiveIn }: { agent: SubA
               {agentToolSpans.length > 0 && (
                 <div className="flex flex-wrap gap-1">
                   {agentToolSpans.map(s => (
-                    <span key={s.id} className={cn("inline-flex items-center gap-1 rounded-sm border px-2 py-0.5 font-mono text-[11px]", s.status === "ERROR" ? "border-rp-danger-border bg-rp-danger-soft text-rp-danger" : "border-rp-line bg-white text-rp-ink")}>
+                    <span key={s.id} className={cn("inline-flex items-center gap-1 rounded-sm border px-2 py-0.5 font-mono text-[11px]", s.status === "ERROR" ? "border-rp-danger-border bg-rp-danger-soft text-rp-danger" : "border-rp-line bg-rp-surface text-rp-ink")}>
                       {s.status === "ERROR" ? <AlertCircle /> : <Check />} {s.name} <span className="text-rp-ink-muted">{fmt(s.duration_ms)}</span>
                     </span>
                   ))}

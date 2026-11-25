@@ -51,7 +51,7 @@ export function FlowRepair({ flow, sessionId, available, disabled, onCommitted }
   }
   return <div className="flow-repair w-full min-w-0 space-y-3">
     <Button variant="outline" size="sm" className="aria-expanded:border-rp-wash-border aria-expanded:bg-rp-wash aria-expanded:text-rp-blue" disabled={disabled || busy || !editable.length} aria-expanded={open} aria-label={`Review repair for ${flow.name}`} onClick={() => { setOpen(!open); setStep(editable[0] ?? 0); }}>Review repair</Button>
-    {open && <section aria-label={`Repair ${flow.name}`} className="rp-fade-rise space-y-4 rounded-md border border-rp-line bg-white p-4 text-[13px] text-rp-ink sm:p-5">
+    {open && <section aria-label={`Repair ${flow.name}`} className="rp-fade-rise space-y-4 rounded-md border border-rp-line bg-rp-surface p-4 text-[13px] text-rp-ink sm:p-5">
       <h4 className="flow-repair-heading rp-subsection-title">Review a durable anchor</h4>
       <p className={fine}>Discover current matches, compare the old and proposed identity, then select one candidate. Saving a repair changes this flow only. Replay is a separate action.</p>
       <Meta as="p" className="break-words">Version {flow.version} · revision {flow.revision.slice(0, 12)}</Meta>
@@ -72,7 +72,7 @@ export function FlowRepair({ flow, sessionId, available, disabled, onCommitted }
         <p className={fine}>Ambiguity: {currentProposal.ambiguous ? "Some candidates are ambiguous and cannot be selected." : "No ambiguous candidate identities observed."} Source coverage: {currentProposal.sourceIncomplete ? "Incomplete; some candidates have no source identity." : "Captured for listed candidates."}</p>
         <fieldset disabled={disabled || busy || !available} className="space-y-2 border-t border-rp-line-muted pt-3"><legend className="rp-field-label mb-2 pt-3">Select the new identity</legend>
           {!currentProposal.candidates.length && <p className="text-rp-ink-muted">No complete interactive candidate observed. Refresh after checking the app.</p>}
-          {currentProposal.candidates.map(candidate => <label key={candidate.id} className={cn("flex min-w-0 cursor-pointer items-start gap-3 rounded-sm border p-3 transition-[background-color,border-color] duration-250 ease-standard", selected === candidate.id ? "border-rp-wash-border bg-rp-wash" : "border-rp-line bg-white hover:bg-rp-row-hover", !candidate.selectable && "cursor-not-allowed opacity-60")}>
+          {currentProposal.candidates.map(candidate => <label key={candidate.id} className={cn("flex min-w-0 cursor-pointer items-start gap-3 rounded-sm border p-3 transition-[background-color,border-color] duration-250 ease-standard", selected === candidate.id ? "border-rp-wash-border bg-rp-wash" : "border-rp-line bg-rp-surface hover:bg-rp-row-hover", !candidate.selectable && "cursor-not-allowed opacity-60")}>
             <input type="radio" className="mt-0.5 size-4 shrink-0" name={`repair-${flow.id}`} aria-label={`Select ${candidate.anchor.instance.name || candidate.anchor.instance.testId || candidate.anchor.instance.role}`} disabled={!candidate.selectable} checked={selected === candidate.id} onChange={() => setSelected(candidate.id)} />
             <span className="min-w-0 break-words">New: {describe(candidate.anchor)}<br />New source: {source(candidate.anchor)} · comparison: {candidate.sourceMatch}<br />{candidate.reason}</span>
           </label>)}

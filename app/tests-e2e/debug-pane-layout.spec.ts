@@ -35,22 +35,26 @@ for (const width of [1440, 390, 320]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
   });
 
-  test(`closed debug launcher preserves route space at ${width}px`, async ({ page, request, runPhantom }, testInfo) => {
+  test(`closed debug launcher sits in the header and leaves the route full height at ${width}px`, async ({ page, request, runPhantom }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
     await seedRunPhantomFixtures(runPhantom.url);
     const detailUrl = `${runPhantom.url}/api/runs/detail/${FIXTURE_PRIMARY_RUN_ID}`;
     const before = await (await request.get(detailUrl)).json();
     await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
     await expect(page.locator("[data-connection-status]")).toHaveAttribute("data-connection-status", "connected");
-    const launcher = page.getByRole("button", { name: /Ask (Claude Code|Codex)$/, exact: true });
+    const header = page.locator("[data-workspace-header]");
+    const launcher = header.getByRole("button", { name: /Ask (Claude Code|Codex)$/, exact: true });
     await expect(launcher).toBeVisible();
-    const route = page.locator("#runphantom-main > div > div.flex > div.overflow-auto");
+    await expect(launcher).toHaveAttribute("aria-expanded", "false");
+    const route = page.locator("[data-workspace-route]");
     await expect(route).toBeVisible();
     const routeBox = (await route.boundingBox())!;
     const launcherBox = (await launcher.boundingBox())!;
     await testInfo.attach(`closed-debug-${width}`, { body: await page.screenshot(), contentType: "image/png" });
-    // The route's final controls remain reachable without scrolling behind an opaque launcher.
-    expect(routeBox.y + routeBox.height, "route ends above the closed debug launcher").toBeLessThanOrEqual(launcherBox.y + 1);
+    // The launcher no longer floats over content, so nothing reserves a band at the bottom of the route.
+    expect(launcherBox.y + launcherBox.height, "launcher sits above the route").toBeLessThanOrEqual(routeBox.y + 1);
+    expect(routeBox.y + routeBox.height, "route reaches the bottom of the viewport").toBeGreaterThanOrEqual(899);
+    expect(await page.locator(".rp-launcher-band, .rp-list-scroll").count()).toBe(0);
     expect(await (await request.get(detailUrl)).json()).toEqual(before);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
   });
@@ -62,9 +66,10 @@ for (const width of [1440, 390, 320]) {
     const before = await (await request.get(detailUrl)).json();
     await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
     await expect(page.locator("[data-connection-status]")).toHaveAttribute("data-connection-status", "connected");
-    const launcher = page.getByRole("button", { name: /Ask (Claude Code|Codex)$/, exact: true });
+    const launcher = page.locator("[data-workspace-header]").getByRole("button", { name: /Ask (Claude Code|Codex)$/, exact: true });
     await expect(launcher).toBeVisible();
     await launcher.click();
+    await expect(launcher).toHaveAttribute("aria-expanded", "true");
     const pane = page.locator('aside[aria-label="Coding-agent debug chat"]');
     await expect(pane).toBeVisible();
     const paneBox = (await pane.boundingBox())!;
@@ -77,7 +82,7 @@ for (const width of [1440, 390, 320]) {
     await expect(hide).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(pane).toBeHidden();
-    await expect(launcher).toBeVisible();
+    await expect(launcher).toHaveAttribute("aria-expanded", "false");
     expect(await (await request.get(detailUrl)).json()).toEqual(before);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
   });

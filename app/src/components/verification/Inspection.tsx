@@ -19,7 +19,7 @@ export function Inspection({ response, onSelect }: { response: CommandResult; on
   return <section aria-label="App inspection" className="rp-fade-rise min-w-0 space-y-3 rounded-md border border-rp-line bg-rp-canvas-blue p-4 text-[13px]">
     <Eyebrow as="h3" marker>App inspection</Eyebrow>
     {response.truncated && <p className="rounded-sm border border-rp-warning-border bg-rp-warning-soft px-3 py-2 text-[12px] text-rp-warning">Partial snapshot: some content was omitted or redacted.</p>}
-    {elements ? <><p className="text-rp-ink-muted">{String(data.count ?? elements.length)} elements. Showing the first {Math.min(20, elements.length)}.</p><ul className="max-h-72 divide-y divide-rp-line-muted overflow-auto rounded-sm border border-rp-line-muted bg-white">{elements.slice(0, 20).map((item: unknown, index: number) => {
+    {elements ? <><p className="text-rp-ink-muted">{String(data.count ?? elements.length)} elements. Showing the first {Math.min(20, elements.length)}.</p><ul className="max-h-72 divide-y divide-rp-line-muted overflow-auto rounded-sm border border-rp-line-muted bg-rp-surface">{elements.slice(0, 20).map((item: unknown, index: number) => {
       if (!item || typeof item !== "object") return null;
       const element = item as Record<string, unknown>;
       const id = typeof element.id === "string" ? element.id : "";

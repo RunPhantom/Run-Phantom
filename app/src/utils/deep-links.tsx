@@ -85,7 +85,7 @@ function DeepLink({ kind, id, label }: { kind: "span" | "run"; id: string; label
         fontSize: "0.92em",
         lineHeight: "inherit",
         color: "var(--rp-info)",
-        background: "color-mix(in srgb, var(--rp-info) 10%, white 90%)",
+        background: "color-mix(in srgb, var(--rp-info) 10%, var(--rp-surface) 90%)",
         padding: "0 4px",
         borderRadius: 3,
         textDecoration: "none",

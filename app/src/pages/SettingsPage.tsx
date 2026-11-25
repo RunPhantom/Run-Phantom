@@ -123,7 +123,7 @@ export function SettingsPage() {
 
   return (
     <div className="settings-workspace flex h-full min-h-0 flex-col lg:flex-row">
-      <div className="border-b border-rp-line bg-white px-5 py-6 lg:w-64 lg:flex-shrink-0 lg:border-b-0 lg:border-r lg:px-5 lg:py-8">
+      <div className="border-b border-rp-line bg-rp-surface px-5 py-6 lg:w-64 lg:flex-shrink-0 lg:border-b-0 lg:border-r lg:px-5 lg:py-8">
         <Eyebrow marker tone="accent">Settings / Local</Eyebrow>
         <h1 id={tablistLabelId} className="rp-subsection-title mt-2">
           Settings
@@ -161,7 +161,7 @@ export function SettingsPage() {
         </nav>
       </div>
 
-      <div className="min-h-0 min-w-0 flex-1 overflow-auto px-5 py-8 sm:px-10 sm:py-11">
+      <div className="min-h-0 min-w-0 flex-1 overflow-auto rp-page">
         <div className="w-full max-w-3xl pb-16">
           <SectionBlock
             key={tab}
@@ -297,7 +297,7 @@ function AgentEndpointsSection() {
       {notice && <p role="status" className="settings-feedback">{notice}</p>}
       {!loading && !error && Object.keys(agents).length === 0 && <p className="settings-description">No replay endpoints registered. Start with the setup prompt or add an existing endpoint below.</p>}
       {Object.keys(agents).length > 0 && (
-        <div className="overflow-hidden rounded-lg border border-rp-line bg-white">
+        <div className="overflow-hidden rounded-lg border border-rp-line bg-rp-surface">
           <div className="hidden grid-cols-[minmax(92px,160px)_minmax(0,1fr)_auto_36px] gap-3 border-b border-rp-line bg-rp-canvas px-4 py-2 sm:grid">
             <span className="rp-eyebrow">Name</span>
             <span className="rp-eyebrow">Replay URL</span>
@@ -337,7 +337,7 @@ function AgentEndpointsSection() {
       )}
 
       <form
-        className="grid gap-4 rounded-lg border border-rp-line bg-white p-5 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.6fr)_auto] sm:items-end"
+        className="grid gap-4 rounded-lg border border-rp-line bg-rp-surface p-5 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.6fr)_auto] sm:items-end"
         onSubmit={(event) => {
           event.preventDefault();
           void addAgent();
@@ -491,7 +491,7 @@ function KeysSection() {
         <Eyebrow className="mb-1.5">Data boundary</Eyebrow>
         <p>Provider-backed Ask Agent and summaries send the selected trace content to the configured external provider. Model discovery contacts Anthropic. Optional model pricing contacts OpenRouter only after you enable it below. Playground runs send the prompt you write to the provider you choose. Capture, browsing, saved data, and registered local replay otherwise stay local unless the replay endpoint itself calls a provider.</p>
       </div>
-      <label className="rp-ease flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border border-rp-line bg-white px-4 py-3.5 hover:border-rp-wash-border">
+      <label className="rp-ease flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border border-rp-line bg-rp-surface px-4 py-3.5 hover:border-rp-wash-border">
         <input
           type="checkbox"
           className="mt-0.5 size-4 shrink-0 cursor-pointer accent-[color:var(--rp-blue)]"
@@ -512,7 +512,7 @@ function KeysSection() {
       </label>
       {!statuses && !statusError && <p role="status" className="settings-description">Checking saved key status…</p>}
       {statusError && <div role="alert" className="settings-feedback settings-error"><p>{statusError}</p><Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => setStatusAttempt(value => value + 1)}>Try loading key status again</Button></div>}
-      <div className="divide-y divide-rp-line-muted rounded-lg border border-rp-line bg-white px-5">
+      <div className="divide-y divide-rp-line-muted rounded-lg border border-rp-line bg-rp-surface px-5">
       <SecretInput
         label="Anthropic"
         placeholder="sk-ant-..."
@@ -582,7 +582,7 @@ function DebugSection() {
 
   return (
     <>
-      <div className="flex flex-col gap-4 rounded-lg border border-rp-line bg-white p-5 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-4 rounded-lg border border-rp-line bg-rp-surface p-5 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 flex-col">
           <span className="text-[14px] font-medium text-rp-ink">
             Coding-agent onboarding

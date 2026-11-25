@@ -84,7 +84,7 @@ function SegmentedControl<T extends string>({ label, options, value, onChange, s
             className={cn(
               "inline-flex items-center justify-center gap-1.5 rounded-sm border font-medium transition-[background-color,border-color,color] duration-250 ease-standard disabled:cursor-not-allowed disabled:opacity-50",
               size === "sm" ? "h-8 px-2.5 text-xs" : "h-9 px-3 text-[13px]",
-              checked ? "border-rp-wash-border bg-rp-wash text-rp-blue" : "border-rp-line bg-white text-rp-ink-soft hover:border-[color:var(--rp-n10)] hover:text-rp-ink"
+              checked ? "border-rp-wash-border bg-rp-wash text-rp-blue" : "border-rp-line bg-rp-surface text-rp-ink-soft hover:border-[color:var(--rp-n10)] hover:text-rp-ink"
             )}
           >
             {option.label}

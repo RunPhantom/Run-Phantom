@@ -12,7 +12,7 @@ export function ResponseSpanSelect({ runId, value, onChange, label = "Response s
 }
 export function SnapshotPreview({ snapshot, title = "Source snapshot" }: { snapshot: Snapshot; title?: string }) {
   const metrics = snapshot.metrics;
-  return <section aria-label={title} className="space-y-3 rounded-md border border-rp-line bg-white p-4 text-xs">
+  return <section aria-label={title} className="space-y-3 rounded-md border border-rp-line bg-rp-surface p-4 text-xs">
     <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">{title}</h3><span>{snapshot.complete ? "Complete captured trace" : "Incomplete captured trace"}</span></div>
     {(snapshot.redacted || snapshot.truncated) && <p className="text-[color:var(--rp-warning)]">{snapshot.redacted ? "Sensitive trace content was redacted. " : ""}{snapshot.truncated ? "Some captured content is truncated or unavailable." : ""}</p>}
     {snapshot.warnings.length > 0 && <ul className="space-y-1 text-[color:var(--rp-warning)]">{snapshot.warnings.map((warning, index) => <li key={index} className="break-words">{warning}</li>)}</ul>}

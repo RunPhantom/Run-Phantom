@@ -1,4 +1,4 @@
-.prompt-workspace { padding: 44px 40px 96px; max-width: 1600px; color: var(--rp-ink); font-family: var(--font-sans); font-size: 14px; line-height: 20px; }
+.prompt-workspace { padding: var(--rp-page-pt) var(--rp-page-px) var(--rp-page-pb); max-width: 1600px; color: var(--rp-ink); font-family: var(--font-sans); font-size: 14px; line-height: 20px; }
 .prompt-heading { display: flex; gap: 24px; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
 .prompt-heading h1 { font-family: var(--font-display); font-size: clamp(28px, 1.25vw + 18px, 36px); line-height: 1.12; letter-spacing: -0.039em; margin: 12px 0 12px; font-weight: 600; }
 .prompt-heading p { color: var(--rp-ink-muted); line-height: 1.7; margin: 0; max-width: 70ch; }
@@ -25,7 +25,7 @@
 .prompt-field textarea { font-family: var(--font-mono); font-size: 13px; line-height: 1.65; min-height: 240px; resize: vertical; border: 1px solid var(--rp-line); border-radius: var(--rp-radius-sm); background: var(--rp-surface); color: var(--rp-ink); padding: 12px; width: 100%; transition: border-color var(--rp-dur-standard) var(--rp-ease-standard); }
 .prompt-field textarea:hover { border-color: var(--rp-n10); }
 .prompt-field textarea:focus-visible { border-color: var(--rp-blue); }
-.prompt-field textarea::placeholder { color: var(--rp-ink-faint); }
+.prompt-field textarea::placeholder { color: var(--rp-ink-subtle); }
 .prompt-field textarea:disabled { background: var(--rp-canvas); cursor: not-allowed; }
 .prompt-field textarea.prompt-variable { min-height: 88px; }
 .prompt-workspace :disabled { opacity: .6; }
@@ -59,7 +59,6 @@
   .prompt-library ul { display: flex; gap: 8px; flex-wrap: wrap; margin: 0; }
   .prompt-library li { flex: 1; min-width: 130px; }
   .prompt-library li button { border: 1px solid var(--rp-line); }
-  .prompt-workspace { padding: 32px 20px 96px; }
   .prompt-heading { flex-wrap: wrap; }
   .prompt-library, .prompt-editor, .prompt-preview, .prompt-management { padding: 20px; }
 }

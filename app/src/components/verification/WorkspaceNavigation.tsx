@@ -27,7 +27,7 @@ export function WorkspaceNavigation({ sessionId, reports, ready }: { sessionId?:
     });
     return () => cancelAnimationFrame(frame);
   }, [requested, selected, sessionId, ready]);
-  return <nav aria-label="Verification workspace" className="sticky top-0 z-10 -mx-5 flex min-w-0 flex-nowrap gap-1 overflow-x-auto border-y border-rp-line bg-white px-5 py-2 sm:mx-0 sm:rounded-lg sm:border sm:px-2">
+  return <nav aria-label="Verification workspace" className="sticky top-0 z-10 -mx-5 flex min-w-0 flex-nowrap gap-1 overflow-x-auto border-y border-rp-line bg-rp-surface px-5 py-2 sm:mx-0 sm:rounded-lg sm:border sm:px-2">
     {sections.map(({ id, label }, index) => {
       const next = new URLSearchParams(params); next.set("section", id);
       const current = selected === id;
@@ -35,7 +35,7 @@ export function WorkspaceNavigation({ sessionId, reports, ready }: { sessionId?:
         className={cn("inline-flex min-h-11 shrink-0 items-center gap-2.5 rounded-sm px-3 text-[13px] transition-[background-color,color] duration-250 ease-standard motion-reduce:transition-none",
           current ? "bg-rp-wash font-semibold text-rp-blue" : "font-medium text-rp-ink-muted hover:bg-rp-row-hover hover:text-rp-ink")}>
         <span aria-hidden="true" className={cn("rp-num text-[11px] font-medium", current ? "text-rp-blue" : "text-rp-index")}>{String(index + 1).padStart(2, "0")}</span>{label}
-        {id === "reports" && reports !== undefined && <span className={cn("rp-num rounded-sm border px-1.5 text-[11px] font-medium leading-4", current ? "border-rp-wash-border bg-white" : "border-rp-line text-rp-ink-muted")}>{reports}</span>}
+        {id === "reports" && reports !== undefined && <span className={cn("rp-num rounded-sm border px-1.5 text-[11px] font-medium leading-4", current ? "border-rp-wash-border bg-rp-surface" : "border-rp-line text-rp-ink-muted")}>{reports}</span>}
       </Link>;
     })}
   </nav>;

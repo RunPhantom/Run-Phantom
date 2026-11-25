@@ -16,6 +16,14 @@ export default {
         default: "12px",
         message: "14px",
         header: "21px",
+        11: "var(--rp-fs-11)",
+        12: "var(--rp-fs-12)",
+        13: "var(--rp-fs-13)",
+        14: "var(--rp-fs-14)",
+        17: "var(--rp-fs-17)",
+        22: "var(--rp-fs-22)",
+        26: "var(--rp-fs-26)",
+        28: "var(--rp-fs-28)",
       },
       borderColor: {
         border: "var(--border)",
@@ -48,6 +56,19 @@ export default {
       backgroundColor: {
         background: "var(--background)",
         muted: "var(--muted)",
+        rp: {
+          blue: "var(--rp-blue-solid)",
+          "blue-hover": "var(--rp-blue-solid-hover)",
+          "blue-active": "var(--rp-blue-solid-active)",
+          danger: "var(--rp-danger-solid)",
+          "danger-hover": "var(--rp-danger-solid-hover)",
+          success: "var(--rp-success-solid)",
+          warning: "var(--rp-warning-solid)",
+          mark: "var(--rp-blue)",
+          "mark-danger": "var(--rp-danger)",
+          "mark-success": "var(--rp-success)",
+          "mark-warning": "var(--rp-warning)",
+        },
       },
       textColor: {
         foreground: "var(--foreground)",
@@ -57,10 +78,15 @@ export default {
       transitionTimingFunction: {
         standard: "var(--rp-ease-standard)",
         spring: "var(--rp-ease-spring)",
+        out: "var(--rp-ease-out)",
       },
       transitionDuration: {
         250: "250ms",
         350: "350ms",
+        fast: "var(--rp-motion-instant)",
+        state: "var(--rp-motion-state)",
+        enter: "var(--rp-motion-surface-in)",
+        exit: "var(--rp-motion-surface-out)",
       },
       keyframes: {
         "rp-fade-rise": {
@@ -68,8 +94,8 @@ export default {
           to: { opacity: "1", transform: "translateY(0)" },
         },
         "rp-pop-in": {
-          from: { opacity: "0", transform: "translateY(-4px) scale(0.98)" },
-          to: { opacity: "1", transform: "translateY(0) scale(1)" },
+          from: { opacity: "0", transform: "translateY(-4px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
         },
       },
       animation: {
@@ -92,6 +118,7 @@ export default {
           wash: "var(--rp-wash)",
           "wash-border": "var(--rp-wash-border)",
           canvas: "var(--rp-canvas)",
+          "on-solid": "var(--rp-on-solid)",
           "canvas-blue": "var(--rp-canvas-blue)",
           surface: "var(--rp-surface)",
           "row-hover": "var(--rp-row-hover)",

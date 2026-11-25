@@ -15,7 +15,7 @@ import { fieldClassName } from "@/components/ui/input";
 import { fetchPrices, modelPricingConsentEnabled } from "../utils/costs";
 import { parseReplayMetadata } from "../utils/types";
 import type { Run } from "../utils/types";
-import { runAgentName, runDisplayName, safeDecodeParam } from "../utils/helpers";
+import { plural, runAgentName, runDisplayName, safeDecodeParam } from "../utils/helpers";
 import { useRunPhantomConnected, useRunPhantomMessage } from "../hooks/use-runphantom-ws";
 import { useIsMobile } from "../hooks/use-mobile";
 import { useScrollRestoration } from "../hooks/use-scroll-restoration";
@@ -372,7 +372,7 @@ export function RunsPage() {
           )}
         </div>
 
-        <div ref={listRef} className="flex-1 overflow-auto p-2 space-y-0.5 sb rp-list-scroll">
+        <div ref={listRef} className="flex-1 overflow-auto p-2 space-y-0.5 sb">
           {runsError
               ? <div role="alert" className="mx-2 mt-6 rounded-sm border border-rp-danger-border bg-rp-danger-soft px-3 py-3">
                   <div className="text-[13px] font-medium text-rp-danger">Couldn&rsquo;t load runs</div>
@@ -423,7 +423,7 @@ export function RunsPage() {
                       {isMobile && (
                         <button
                           type="button"
-                          className="rp-ease flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-white px-4 py-2 text-left text-[13px] font-medium text-rp-ink hover:bg-rp-row-hover"
+                          className="rp-ease flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-rp-surface px-4 py-2 text-left text-[13px] font-medium text-rp-ink hover:bg-rp-row-hover"
                           onClick={() => navigate("/runs")}
                         >
                           <ArrowLeft aria-hidden="true" className="size-3.5 text-rp-blue" />
@@ -459,7 +459,7 @@ export function RunsPage() {
                               </span>
                               {!replayCompare && !isMobile && (
                                 <button
-                                  className="flex h-7 flex-shrink-0 items-center gap-1 rounded-control border border-rp-line bg-white px-2 text-[12px] font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash"
+                                  className="flex h-7 flex-shrink-0 items-center gap-1 rounded-control border border-rp-line bg-rp-surface px-2 text-[12px] font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash"
                                   onClick={() => setReplayCompare(true)}>
                                   compare <ArrowRight aria-hidden="true" className="size-3" />
                                 </button>
@@ -515,6 +515,8 @@ export function RunsPage() {
                     />
                   </div>
                 )
+              : runsLoaded && runs.length > 0
+                ? <PickRunPanel runs={runs} onOpen={handleSelectRun} />
               : runsLoaded
                 ? <EmptyState onSeeDemoTraces={openDemoTrace} />
                 : (
@@ -524,6 +526,29 @@ export function RunsPage() {
                 )
         }
       </div>
+    </div>
+  );
+}
+
+function PickRunPanel({ runs, onOpen }: { runs: Run[]; onOpen: (runId: string) => void }) {
+  const mostRecent = runs.reduce((latest, run) => run.started_at > latest.started_at ? run : latest, runs[0]!);
+  const samplesOnly = runs.every(isDefaultDemoRun);
+  return (
+    <div className="flex h-full items-start justify-center overflow-auto rp-page">
+      <EmptyPanel
+        className="w-full max-w-xl"
+        eyebrow={`Runs / ${plural(runs.length, "run")}`}
+        title="Pick a run to inspect"
+        description={samplesOnly
+          ? "These are sample runs. Choose one from the list, or open the most recent one. Connect your agent to see your own runs here."
+          : "Choose a run from the list, or open the most recent one."}
+        action={(
+          <Button type="button" variant="primary" onClick={() => onOpen(mostRecent.id)}>
+            Open most recent run
+            <ArrowRight aria-hidden="true" className="size-3.5" />
+          </Button>
+        )}
+      />
     </div>
   );
 }

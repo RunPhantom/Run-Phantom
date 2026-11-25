@@ -9,7 +9,7 @@ import styles from "./RunComparison.module.css";
 
 const labels: Record<ComparisonFieldName, string> = { name: "Name", span_type: "Span kind", status: "Status", model: "Model", provider: "Provider",
   input_payload: "Input", output_payload: "Output", duration_ms: "Duration (ms)", input_tokens: "Input tokens", output_tokens: "Output tokens" };
-const buttonClass = "min-h-8 rounded-control border border-rp-line bg-white px-2.5 text-xs font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash";
+const buttonClass = "min-h-8 rounded-control border border-rp-line bg-rp-surface px-2.5 text-xs font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash";
 const stateTone = (state: string) => state === "changed" ? "text-rp-blue" : state === "ambiguous" || state === "unavailable" ? "text-rp-warning" : "text-rp-ink";
 const componentLabels = { prompt: "Prompt", tools: "Tools", model: "Model", providers: "Providers", runtime: "Runtime" };
 const reasonLabels: Record<CapturedAgentDefinition["reasons"][number], string> = { capture_missing: "Capture missing", capture_unavailable: "Capture unavailable", capture_ambiguous: "Capture ambiguous", capture_invalid: "Capture invalid", capture_partial: "Capture partial", capture_redacted: "Capture redacted", capture_oversized: "Capture oversized", source_receipt_missing: "Original source receipt unavailable", source_receipt_loss: "Original source receipt has loss", source_identity_unavailable: "Source span identity unavailable" };

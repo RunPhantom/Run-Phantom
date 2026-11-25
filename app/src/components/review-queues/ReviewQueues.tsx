@@ -11,7 +11,7 @@ import { ReviewDrafts, allowsReviewShortcut } from "./drafts";
 import { ReviewTargetEditor, reviewTextarea } from "./ReviewTargetEditor";
 import { QueueSchemaEditor, defaultQueueSchema } from "./QueueSchemaEditor";
 import type { ReviewCursor, PromotionRequest } from "../../../../src/review-queues/protocol";
-const panel = "rp-fade-rise min-w-0 rounded-lg border border-rp-line bg-white p-5 sm:p-6";
+const panel = "rp-fade-rise min-w-0 rounded-lg border border-rp-line bg-rp-surface p-5 sm:p-6";
 const heading = "font-display text-lg font-semibold leading-6 tracking-[-0.025em] text-rp-ink";
 const evidenceLabel = "rp-eyebrow mt-5";
 const evidenceWell = "mt-2 overflow-auto whitespace-pre-wrap break-words rounded-sm border border-rp-line-muted bg-rp-canvas-blue px-4 py-3 font-mono text-xs leading-5 text-rp-ink";
@@ -23,7 +23,7 @@ function ConfirmationDialog({ value, close }: { value: Confirmation | null; clos
   return <Dialog.Root open={!!value} onOpenChange={open => { if (!open && !busy) { close(); setError(""); } }}>
     <Dialog.Portal>
     <Dialog.Overlay className="fixed inset-0 z-50 bg-[rgb(14_18_27/0.32)] data-[state=open]:animate-in data-[state=open]:fade-in-0 motion-reduce:animate-none" />
-    <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-32px)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-rp-line bg-white p-6 shadow-e4 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.98] motion-reduce:animate-none">
+    <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-32px)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-rp-line bg-rp-surface p-6 shadow-e4 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.98] motion-reduce:animate-none">
     <Dialog.Title className="font-display text-[17px] font-semibold leading-6 tracking-[-0.02em] text-rp-ink">{value?.title}</Dialog.Title>
     <Dialog.Description className="mt-3 text-sm leading-6 text-rp-ink-muted">{value?.description}</Dialog.Description>{error && <p role="alert" className="mt-3 text-sm text-rp-danger">{error}</p>}<div className="mt-6 flex flex-wrap justify-end gap-2">
     <Button variant="outline" className="min-h-10" disabled={busy} onClick={() => { close(); setError(""); }}>Cancel</Button>
@@ -43,7 +43,7 @@ export function ReviewQueues({ initialQueueId = "", initialItemId = "", onRetain
   const queue = queues.find(value => value.id === selected);
   const reportDirty = useCallback((count: number, inFlight: number) => { dirty.current = count; onRetainedChange?.({ retained: count, inFlight }); }, [onRetainedChange]);
   const selectQueue = (id: string) => { if (workspaceBusy || dirty.current) { setError("Your drafts are retained. Save, retry or discard them before switching queues."); return; } setError(""); setSelected(id); };
-  return <main className="mx-auto w-full max-w-[1440px] space-y-6 px-5 py-8 text-rp-ink sm:px-10 sm:py-11">
+  return <main className="mx-auto w-full max-w-[1440px] space-y-6 rp-page text-rp-ink">
     <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
     <div className="min-w-0">
     <p className="rp-eyebrow" data-tone="accent"><span aria-hidden="true" className="rp-eyebrow-marker" />Local curation</p>
@@ -147,7 +147,7 @@ function QueueWorkspace({ queue, initialItemId, onDirty, onBusy, onChanged, onCo
     </div>)}</section>}
     <div className="grid items-start gap-5 lg:grid-cols-[260px_minmax(0,1fr)]">
       <section aria-label="Queue items" className={panel}>
-    <h2 className={heading}>{queue.name}</h2>{page && <p className="mt-2 text-xs leading-5 text-rp-ink-muted">{page.counts.total} items · {page.counts.draft} drafts · {page.counts.approved} approved · {page.counts.promoted} promoted</p>}{loading && <p role="status" className="mt-4 text-sm">Loading items…</p>}{page && !page.items.length && <p className="mt-4 text-sm text-rp-ink-muted">This page has no items. Add a captured source to start reviewing.</p>}<ol className="mt-4 space-y-2">{page?.items.map(row => <li key={row.id} className={`flex items-start gap-2 rounded-md border transition-[background-color,border-color] duration-250 ease-standard ${centerId === row.id ? "border-rp-wash-border bg-rp-wash shadow-[inset_2px_0_0_var(--rp-blue)] [&_.rq-row-name]:text-rp-blue" : "border-rp-line bg-white hover:border-rp-wash-border hover:bg-rp-row-hover"}`}>
+    <h2 className={heading}>{queue.name}</h2>{page && <p className="mt-2 text-xs leading-5 text-rp-ink-muted">{page.counts.total} items · {page.counts.draft} drafts · {page.counts.approved} approved · {page.counts.promoted} promoted</p>}{loading && <p role="status" className="mt-4 text-sm">Loading items…</p>}{page && !page.items.length && <p className="mt-4 text-sm text-rp-ink-muted">This page has no items. Add a captured source to start reviewing.</p>}<ol className="mt-4 space-y-2">{page?.items.map(row => <li key={row.id} className={`flex items-start gap-2 rounded-md border transition-[background-color,border-color] duration-250 ease-standard ${centerId === row.id ? "border-rp-wash-border bg-rp-wash shadow-[inset_2px_0_0_var(--rp-blue)] [&_.rq-row-name]:text-rp-blue" : "border-rp-line bg-rp-surface hover:border-rp-wash-border hover:bg-rp-row-hover"}`}>
         {row.state === "approved" && <input className="ml-3 mt-4 size-4 accent-rp-blue" type="checkbox" aria-label={`Select ${row.name} for promotion`} checked={selection.has(row.id)} onChange={event => updateSelection(row.id,row.revision,event.target.checked)} />}<button type="button" disabled={busy} aria-current={centerId === row.id ? "true" : undefined} className="min-h-10 min-w-0 flex-1 rounded-md p-3 text-left text-[13px]" onClick={() => void choose(row.id)}>
     <span className="rq-row-name block break-words font-semibold">{row.name}</span>
     <span className="mt-1 block text-xs text-rp-ink-muted">{row.state === "approved" ? "Local review approved" : row.state === "promoted" ? "Added to dataset" : "Draft"} · revision {row.revision}{state.entries.has(row.id) ? " · draft retained" : ""}</span>

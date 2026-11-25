@@ -4,7 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const primarySolid = "rp-primary-control border border-rp-blue bg-rp-blue text-white hover:border-rp-blue-hover hover:bg-rp-blue-hover active:border-rp-blue-active active:bg-rp-blue-active";
-const secondaryHairline = "border border-rp-line bg-white text-rp-ink hover:border-rp-wash-border hover:bg-rp-wash";
+const secondaryHairline = "border border-rp-line bg-rp-surface text-rp-ink hover:border-rp-wash-border hover:bg-rp-wash";
 
 const buttonVariants = cva(
   "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-control font-medium transition-[background-color,border-color,color] duration-250 ease-standard focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sidebar-ring disabled:pointer-events-none disabled:opacity-50 aria-busy:cursor-progress [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
@@ -17,7 +17,7 @@ const buttonVariants = cva(
         outline: secondaryHairline,
         ghost: "border border-transparent text-rp-ink-soft hover:bg-rp-row-hover hover:text-rp-ink",
         destructive: "rp-primary-control border border-rp-danger bg-rp-danger text-white hover:border-rp-danger-hover hover:bg-rp-danger-hover",
-        "destructive-outline": "border border-rp-line bg-white text-rp-danger hover:border-rp-danger-border hover:bg-rp-danger-soft",
+        "destructive-outline": "border border-rp-line bg-rp-surface text-rp-danger hover:border-rp-danger-border hover:bg-rp-danger-soft",
         link: "h-auto border-0 px-0 text-rp-blue underline-offset-4 hover:text-rp-blue-hover hover:underline",
       },
       size: {
