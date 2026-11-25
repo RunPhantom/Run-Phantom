@@ -150,6 +150,22 @@ test("span drawer: the error comes first, payloads toggle, and the docked width 
   await expect(page).toHaveURL(new RegExp(`/runs/${failedRunId}/spans$`));
 });
 
+test("span drawer at laptop widths keeps the time track beside it and clamps a wide saved width", async ({ page, request, runPhantom }) => {
+  await seed(request, runPhantom.url);
+  await page.addInitScript(() => localStorage.setItem("runphantom:span-drawer:width", "720"));
+  for (const width of [1280, 1366]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto(`${runPhantom.url}/runs/${failedRunId}/spans`);
+    await row(page, failedRunId, "tests").click();
+    await expect(page.getByRole("region", { name: "Span details", exact: true })).toBeVisible();
+    const axis = page.locator("[data-trace-axis]");
+    await expect(axis).toBeVisible();
+    expect((await axis.boundingBox())!.width).toBeGreaterThan(120);
+    const handle = page.getByRole("separator", { name: "Resize step details" });
+    expect(Number(await handle.getAttribute("aria-valuenow"))).toBeLessThan(720);
+  }
+});
+
 test("in-trace search: the find shortcut filters to matches with their parents and Escape clears it", async ({ page, request, runPhantom }) => {
   await seed(request, runPhantom.url);
   await page.setViewportSize({ width: 1440, height: 900 });

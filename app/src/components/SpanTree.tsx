@@ -7,7 +7,7 @@ import { DeepLinkedText } from "../utils/deep-links";
 import { sendRunPhantomMessage } from "../hooks/use-runphantom-ws";
 import { useIsMobile } from "../hooks/use-mobile";
 import { useDialogFocus } from "../hooks/use-dialog-focus";
-import { Waterfall } from "./run-detail/Waterfall";
+import { TRACK_MIN_PANE_WIDTH, Waterfall } from "./run-detail/Waterfall";
 import { SpanDrawer, type DrawerMode } from "./run-detail/SpanDrawer";
 import { buildTraceModel, countedLlmSpans } from "./run-detail/trace-model";
 
@@ -17,7 +17,11 @@ const DRAWER_MAX = 720;
 const DRAWER_DEFAULT = 400;
 /** The drawer may shrink below its preferred minimum when the pane is too narrow for both. */
 const DRAWER_FLOOR = 280;
-const MIN_TRACE_WIDTH = 240;
+/**
+ * The docked drawer never squeezes the trace below the width that still draws the time track: at 1280px with the
+ * run list open the pane is about 760px, and a 400px drawer used to leave 360px, which hid the timeline entirely.
+ */
+const MIN_TRACE_WIDTH = TRACK_MIN_PANE_WIDTH + 20;
 
 function readDrawerWidth(): number {
   try {
@@ -180,7 +184,7 @@ export function SpanTree({
   }, [selectedId, setSelectedId]);
 
   // Docked beside the trace at every desktop width: an overlay covered rows the
-  // reader still needed to click. A narrow trace drops its time track instead.
+  // reader still needed to click. The drawer gives up width before the trace loses its time track.
   const mode: DrawerMode = isMobile ? "sheet" : "docked";
   const maxDrawer = Math.max(DRAWER_FLOOR, Math.min(DRAWER_MAX, Math.round(containerWidth - MIN_TRACE_WIDTH)));
   const effectiveDrawer = Math.max(DRAWER_FLOOR, Math.min(drawerWidth, maxDrawer));

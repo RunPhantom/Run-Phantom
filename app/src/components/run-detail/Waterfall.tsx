@@ -26,6 +26,8 @@ import "./run-detail.css";
 
 const ROW_HEIGHT = 28;
 const INDENT = 14;
+/** Below this pane width the bars would be a few pixels wide, so the list keeps names and durations only. */
+export const TRACK_MIN_PANE_WIDTH = 380;
 const MIN_WINDOW_MS = 1;
 /** Height of the sticky axis header inside the scroll body. */
 const AXIS_HEIGHT = 32;
@@ -122,10 +124,9 @@ export function Waterfall({
   const showModel = width >= 880;
   const showUsage = width >= 600;
   const narrow = width < 640;
-  // Below this the bars would be a few pixels wide; the list keeps names and durations.
-  const showTrack = width >= 380;
+  const showTrack = width >= TRACK_MIN_PANE_WIDTH;
   // Without the usage columns the name cell also carries the model/usage chip.
-  const nameWidth = !showTrack ? Math.max(120, width - 64) : narrow ? Math.max(150, Math.round(width * (showUsage ? 0.46 : 0.58))) : width < 900 ? 280 : 320;
+  const nameWidth = !showTrack ? Math.max(120, width - 64) : narrow ? Math.max(150, Math.round(width * (showUsage ? 0.46 : 0.42))) : width < 900 ? 280 : 320;
   const trackWidth = width - nameWidth - 64 - (showUsage ? 152 : 0) - (showModel ? 128 : 0);
 
   const view: Viewport = viewport ?? { from: 0, to: model.span };
