@@ -32,7 +32,7 @@ Phantom. Runs are named after the first 60 characters of the user's message.
 | Option | Meaning |
 | --- | --- |
 | `--provider openai\|anthropic\|gemini` | Provider to call. Default `openai`. |
-| `--model <id>` | Model to use. Defaults: `gpt-5-nano`, `claude-haiku-4-5-20251001`, `gemini-2.5-flash`. |
+| `--model <id>` | Model to use. Defaults: `gpt-5-nano`, `claude-haiku-4-5-20251001`, `gemini-3.8-flash`. |
 | `--prompt <text>` | One user turn. Repeat it for a multi-turn conversation. |
 | `--interactive` | Chat in the terminal. Every turn shares one conversation id. Type `exit` to stop. |
 | `--subagent` | Adds a `delegate_research` tool that runs a nested `researcher` agent. |
@@ -45,11 +45,12 @@ bun agent.ts --provider gemini --subagent --prompt "My headphones from order A10
 bun agent.ts --provider openai --interactive
 ```
 
-Google closes older Gemini models to newly created API keys. As of November
-2026 both `gemini-2.5-flash` and `gemini-2.5-flash-lite` return HTTP 404 ("no
-longer available to new users") for new keys; the error names the current
-replacement, and the agent prints it as a hint. Pass that model, or any model
-your key lists at `https://generativelanguage.googleapis.com/v1beta/models`:
+The Gemini default is `gemini-3.8-flash`. Google closes older Gemini models to
+newly created API keys: as of November 2026 both `gemini-2.5-flash` and
+`gemini-2.5-flash-lite` return HTTP 404 ("no longer available to new users")
+for new keys. The error names the current replacement, and the agent prints it
+as a hint. To use another model, pass it explicitly; your key's models are
+listed at `https://generativelanguage.googleapis.com/v1beta/models`:
 
 ```bash
 bun agent.ts --provider gemini --model <model-id>

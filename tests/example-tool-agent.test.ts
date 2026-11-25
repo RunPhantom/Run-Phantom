@@ -180,15 +180,15 @@ describe("tool-agent example: exported traces", () => {
 
   test("a Gemini run stops on a fatal tool error, echoes thought signatures and fails the run", async () => {
     replies = [
-      { body: { modelVersion: "gemini-2.5-flash", responseId: "r1", candidates: [{ finishReason: "STOP", content: { role: "model", parts: [{ functionCall: { name: "lookup_order", args: { order_id: "A1005" } }, thoughtSignature: "sig-1" }] } }], usageMetadata: { promptTokenCount: 500, candidatesTokenCount: 20, thoughtsTokenCount: 80 } } },
-      { body: { modelVersion: "gemini-2.5-flash", responseId: "r2", candidates: [{ finishReason: "STOP", content: { role: "model", parts: [{ functionCall: { id: "fc-2", name: "issue_refund", args: { order_id: "A1005", amount_usd: 249, reason: "lost_in_transit" } } }] } }], usageMetadata: { promptTokenCount: 650, candidatesTokenCount: 25 } } },
+      { body: { modelVersion: "gemini-3.8-flash", responseId: "r1", candidates: [{ finishReason: "STOP", content: { role: "model", parts: [{ functionCall: { name: "lookup_order", args: { order_id: "A1005" } }, thoughtSignature: "sig-1" }] } }], usageMetadata: { promptTokenCount: 500, candidatesTokenCount: 20, thoughtsTokenCount: 80 } } },
+      { body: { modelVersion: "gemini-3.8-flash", responseId: "r2", candidates: [{ finishReason: "STOP", content: { role: "model", parts: [{ functionCall: { id: "fc-2", name: "issue_refund", args: { order_id: "A1005", amount_usd: 249, reason: "lost_in_transit" } } }] } }], usageMetadata: { promptTokenCount: 650, candidatesTokenCount: 25 } } },
     ];
     const result = await runTurn("Refund A1005, it was lost.", { provider: "gemini", conversationId: "conv_gem" });
 
     expect(result).toMatchObject({ ok: false, errorType: "ledger_write_conflict" });
     expect(result.error).toContain("issue_refund failed and the run was stopped");
     expect(matchesExpectation(SCENARIOS.find((scenario) => scenario.id === "ledger-conflict")!, result)).toBe(true);
-    expect(providerRequests[0]!.url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent");
+    expect(providerRequests[0]!.url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent");
     expect(providerRequests[0]!.headers["x-goog-api-key"]).toBe("test-gemini");
     const contents = providerRequests[1]!.body.contents as { role: string; parts: Record<string, unknown>[] }[];
     expect(contents[1]).toEqual({ role: "model", parts: [{ functionCall: { name: "lookup_order", args: { order_id: "A1005" } }, thoughtSignature: "sig-1" }] });
@@ -200,7 +200,7 @@ describe("tool-agent example: exported traces", () => {
     expect(root).toMatchObject({ status: "ERROR" });
     expect(root!.attributes["otel.status.message"]).toContain("ledger rejected refund");
     const [llm] = byType(spans, "LLM_GENERATION");
-    expect(llm).toMatchObject({ provider: "gcp.gemini", model: "gemini-2.5-flash", inputTokens: 500, outputTokens: 100 });
+    expect(llm).toMatchObject({ provider: "gcp.gemini", model: "gemini-3.8-flash", inputTokens: 500, outputTokens: 100 });
     expect(llm!.attributes["gen_ai.operation.name"]).toBe("generate_content");
     expect(byType(spans, "TOOL_CALL").map((tool) => [tool.name, tool.status])).toEqual([["lookup_order", "OK"], ["issue_refund", "ERROR"]]);
     expect(evidence(spans)).toEqual({ error_count: 2, tool_error_count: 1, root_failed: true });
@@ -208,7 +208,7 @@ describe("tool-agent example: exported traces", () => {
 
   test("a provider error fails the run with the provider's message on the model span", async () => {
     replies = [{ status: 404, body: { error: { code: 404, message: "This model models/gemini-2.5-flash is no longer available to new users.", status: "NOT_FOUND" } } }];
-    const result = await runTurn("Where is A1002?", { provider: "gemini", conversationId: "conv_404" });
+    const result = await runTurn("Where is A1002?", { provider: "gemini", model: "gemini-2.5-flash", conversationId: "conv_404" });
 
     expect(result).toMatchObject({ ok: false, errorType: "provider_error" });
     expect(matchesExpectation(SCENARIOS.find((scenario) => scenario.id === "ledger-conflict")!, result)).toBe(false);
