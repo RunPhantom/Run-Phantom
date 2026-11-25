@@ -127,7 +127,7 @@ describe.serial("POST /api/playground/runs", () => {
 
     const { detail, span, attributes } = llmSpan(result.runId);
     expect(detail.run?.name).toBe("Playground: gpt-5-nano");
-    expect(detail.run?.event_name).toBe("playground");
+    expect(detail.run?.event_name).toBe("Playground: gpt-5-nano");
     expect(detail.run?.convo_id).toBe(body.comparisonId);
     expect(span).toMatchObject({ id: result.spanId, model: "gpt-5-nano-2025-08-07", provider: "openai", input_tokens: 20, output_tokens: 30, status: "OK", output_payload: "Hello there" });
     expect(attributes).toMatchObject({
@@ -275,6 +275,7 @@ describe.serial("POST /api/playground/runs", () => {
       const { span, attributes } = llmSpan(result.runId);
       expect(span.status).toBe("ERROR");
       expect(attributes["error.type"]).toBe(item.kind);
+      expect(getRunWithSpans(result.runId).spans.filter(entry => (entry as { status?: string }).status === "ERROR")).toHaveLength(1);
       expect(JSON.stringify(getRunWithSpans(result.runId))).not.toContain(KEYS.openai);
     }
   });

@@ -5,7 +5,8 @@ import type { PlaygroundCallResult, PlaygroundMessage, PlaygroundRunRequest, Pla
 import { OTEL_PROVIDER_NAME } from "./providers";
 
 export const PLAYGROUND_TAG = "playground";
-export const PLAYGROUND_EVENT_NAME = "playground";
+/** Per-model so Playground rows in the Runs list (which shows event_name) say which model ran. */
+export const playgroundEventName = (model: string) => `Playground: ${model}`;
 
 type OtlpValue = { stringValue: string } | { intValue: string } | { doubleValue: number } | { boolValue: boolean } | { arrayValue: { values: OtlpValue[] } };
 type OtlpAttribute = { key: string; value: OtlpValue };
@@ -77,6 +78,8 @@ export function buildPlaygroundOtlp(input: {
   const sent = call.sent;
   const failed = result.status === "error";
   const errorStatus = failed ? { code: 2, message: result.error?.message ?? "Provider call failed" } : { code: 1 };
+  // The run's error count counts ERROR spans, so only the LLM span carries the failure; the root stays UNSET.
+  const rootStatus = failed ? { code: 0 } : { code: 1 };
   const operation = target.provider === "gemini" ? "generate_content" : "chat";
   const usage = result.usage;
   const tokens = (value: number | null) => value ?? undefined;
@@ -84,13 +87,14 @@ export function buildPlaygroundOtlp(input: {
   const root = {
     traceId: ids.traceId, spanId: ids.rootSpanId, name: `Playground: ${target.model}`, kind: 1,
     startTimeUnixNano: nanos(call.startedAt), endTimeUnixNano: nanos(Math.max(call.endedAt, call.startedAt)),
-    status: errorStatus,
+    status: rootStatus,
     attributes: attrs(
       attr("runphantom.span.kind", "agent_root"),
       attr("gen_ai.operation.name", "invoke_agent"),
       attr("gen_ai.agent.name", "playground"),
       attr("gen_ai.conversation.id", comparisonId),
-      attr("runphantom.event.name", PLAYGROUND_EVENT_NAME),
+      attr("runphantom.event.name", playgroundEventName(target.model)),
+      attr("runphantom.playground.status", result.status),
       attr("runphantom.playground", true),
       attr("runphantom.playground.comparison_id", comparisonId),
       attr("runphantom.playground.target_index", result.index),
@@ -99,7 +103,6 @@ export function buildPlaygroundOtlp(input: {
       attr("tags", [PLAYGROUND_TAG]),
       attr("runphantom.input", lastUserText(request.messages)),
       attr("runphantom.output", result.output.text || (result.output.toolCalls.length ? JSON.stringify(result.output.toolCalls.map(({ name, arguments: args }) => ({ name, arguments: args }))) : result.error?.message)),
-      attr("error.type", failed ? result.error?.kind : undefined),
     ),
   };
 
