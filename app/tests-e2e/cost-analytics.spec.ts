@@ -102,7 +102,10 @@ test("cost analytics: by default real dated model ids are estimated offline at b
   await page.goto(`${runPhantom.url}/costs`);
   await expect(page.getByRole("combobox", { name: "Estimate source", exact: true })).toHaveValue("list");
   const estimate = (1_000 * 0.05 + 500 * 0.4 + 2_000 * 1 + 100 * 5) / 1e6;
-  await expect(page.getByTestId("estimated-cost")).toContainText(`$${estimate.toFixed(4)}`);
+  // The UI rounds sub-cent amounts to two significant digits, half away from zero (app/src/utils/costs.ts);
+  // toFixed(4) rounds 0.00275 down to 0.0027 through its binary value.
+  const shown = new Intl.NumberFormat("en-US", { minimumSignificantDigits: 2, maximumSignificantDigits: 2 }).format(estimate);
+  await expect(page.getByTestId("estimated-cost")).toContainText(`$${shown}`);
   await expect(page.getByTestId("estimated-cost")).toContainText("2 known · 0 unavailable");
   await page.getByText("Rate and capture provenance", { exact: true }).click();
   await expect(page.getByText(/prices bundled with Run Phantom/)).toBeVisible();
