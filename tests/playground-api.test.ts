@@ -275,7 +275,9 @@ describe.serial("POST /api/playground/runs", () => {
       const { span, attributes } = llmSpan(result.runId);
       expect(span.status).toBe("ERROR");
       expect(attributes["error.type"]).toBe(item.kind);
-      expect(getRunWithSpans(result.runId).spans.filter(entry => (entry as { status?: string }).status === "ERROR")).toHaveLength(1);
+      expect(getRunWithSpans(result.runId).spans.filter(entry => (entry as { status?: string }).status === "ERROR")).toHaveLength(2);
+      const listed = await (await fetch(`${base}/api/runs?envelope=1&ids=${encodeURIComponent(result.runId)}`)).json() as { runs: Array<{ run_status: string; status: string }> };
+      expect(listed.runs.map(row => [row.run_status, row.status])).toEqual([["failed", "failed"]]);
       expect(JSON.stringify(getRunWithSpans(result.runId))).not.toContain(KEYS.openai);
     }
   });

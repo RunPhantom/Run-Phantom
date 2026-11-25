@@ -78,8 +78,6 @@ export function buildPlaygroundOtlp(input: {
   const sent = call.sent;
   const failed = result.status === "error";
   const errorStatus = failed ? { code: 2, message: result.error?.message ?? "Provider call failed" } : { code: 1 };
-  // The run's error count counts ERROR spans, so only the LLM span carries the failure; the root stays UNSET.
-  const rootStatus = failed ? { code: 0 } : { code: 1 };
   const operation = target.provider === "gemini" ? "generate_content" : "chat";
   const usage = result.usage;
   const tokens = (value: number | null) => value ?? undefined;
@@ -87,7 +85,8 @@ export function buildPlaygroundOtlp(input: {
   const root = {
     traceId: ids.traceId, spanId: ids.rootSpanId, name: `Playground: ${target.model}`, kind: 1,
     startTimeUnixNano: nanos(call.startedAt), endTimeUnixNano: nanos(Math.max(call.endedAt, call.startedAt)),
-    status: rootStatus,
+    // The root stands for the whole run (rootFailed in src/run-status.ts): a rejected call produced no output, so the run failed.
+    status: errorStatus,
     attributes: attrs(
       attr("runphantom.span.kind", "agent_root"),
       attr("gen_ai.operation.name", "invoke_agent"),
