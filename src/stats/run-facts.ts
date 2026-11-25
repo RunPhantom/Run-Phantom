@@ -43,11 +43,21 @@ export interface RunFacts {
   readonly finished: number;
   readonly status: RunStatus;
   readonly durationMs: number | null;
+  /** Null unless every counted model call reports it. */
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
   readonly costUsd: number | null;
   readonly costSource: CostSource;
-  readonly model: string | null;
+  readonly llmCalls: number;
+  /** Sums of the calls that report a value; null when none do. */
+  readonly knownInputTokens: number | null;
+  readonly knownOutputTokens: number | null;
+  /** Model calls missing input or output tokens. */
+  readonly tokenUnknownCalls: number;
+  readonly knownCostUsd: number | null;
+  readonly costUnknownCalls: number;
+  /** Normalized model of the first counted model call, else the first span model column in start order. */
+  readonly primaryModel: string | null;
   readonly provider: string | null;
   readonly models: readonly string[];
   readonly inputPreview: string | null;
@@ -71,6 +81,8 @@ export interface RunRow {
   readonly last_updated_at: number;
   readonly metadata: string | null;
   readonly live_event_count: number;
+  /** The legacy runs_with_hints `model`: the first span with a model column, in that view's lookup order. */
+  readonly legacy_model: string | null;
   readonly facts: RunFacts;
 }
 
@@ -88,7 +100,7 @@ export const RUN_FACT_LIMITS = Object.freeze({
 
 interface Aggregate {
   id: string; event_id: string | null; name: string | null; event_name: string | null; display_name: string | null; user_id: string | null; convo_id: string | null;
-  started_at: number; last_updated_at: number; metadata: string | null; live_event_count: number;
+  started_at: number; last_updated_at: number; metadata: string | null; live_event_count: number; legacy_model: string | null;
   span_count: number; error_count: number; tool_count: number; root_count: number; ended_root_count: number; root_error_count: number;
   min_start: number | null; max_end: number | null;
   fp_attributes: number; fp_input: number; fp_output: number; fp_duration: number; fp_tokens: number; fp_ok: number;
@@ -140,7 +152,8 @@ const AGGREGATE_COLUMNS = `
  */
 export function selectRunAggregates(db: Database, where: string, params: readonly (string | number)[]): Aggregate[] {
   return db.query(`SELECT r.id, r.event_id, r.name, r.event_name, r.display_name, r.user_id, r.convo_id, r.started_at, r.last_updated_at, r.metadata,
-      (SELECT COUNT(*) FROM live_events e WHERE e.trace_id = r.id) AS live_event_count, ${AGGREGATE_COLUMNS}
+      (SELECT COUNT(*) FROM live_events e WHERE e.trace_id = r.id) AS live_event_count,
+      (SELECT s2.model FROM spans s2 WHERE s2.run_id = r.id AND s2.model IS NOT NULL LIMIT 1) AS legacy_model, ${AGGREGATE_COLUMNS}
     FROM runs r LEFT JOIN spans s ON s.run_id = r.id
     WHERE ${where} GROUP BY r.id`).all(...params) as Aggregate[];
 }
@@ -173,7 +186,7 @@ export function loadRunRows(db: Database, dbPath: string, aggregates: readonly A
   return aggregates.map(aggregate => ({
     id: aggregate.id, event_id: aggregate.event_id, name: aggregate.name, event_name: aggregate.event_name, display_name: aggregate.display_name,
     user_id: aggregate.user_id, convo_id: aggregate.convo_id, started_at: aggregate.started_at, last_updated_at: aggregate.last_updated_at,
-    metadata: aggregate.metadata, live_event_count: aggregate.live_event_count, facts: facts.get(aggregate.id)!,
+    metadata: aggregate.metadata, live_event_count: aggregate.live_event_count, legacy_model: aggregate.legacy_model, facts: facts.get(aggregate.id)!,
   }));
 }
 
@@ -222,6 +235,7 @@ function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[], rates:
     generations.push(generation);
   }
   const known = (values: Array<number | null>) => values.length && values.every(value => value !== null) ? (values as number[]).reduce((sum, value) => sum + value, 0) : null;
+  const partial = (values: Array<number | null>) => values.some(value => value !== null) ? values.reduce<number>((sum, value) => sum + (value ?? 0), 0) : null;
   const inputTokens = known(generations.map(item => item.inputTokens));
   const outputTokens = known(generations.map(item => item.outputTokens));
   const costUsd = known(generations.map(item => item.costUsd));
@@ -252,7 +266,11 @@ function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[], rates:
   return Object.freeze({
     spanCount: aggregate.span_count, errorCount: aggregate.error_count, toolCount: aggregate.tool_count, finished, status, durationMs,
     inputTokens, outputTokens, costUsd, costSource,
-    model: lead?.model ?? fallbackModel, provider: lead?.provider ?? spans.find(span => span.provider)?.provider ?? null, models: Object.freeze(models),
+    llmCalls: generations.length,
+    knownInputTokens: partial(generations.map(item => item.inputTokens)), knownOutputTokens: partial(generations.map(item => item.outputTokens)),
+    tokenUnknownCalls: generations.filter(item => item.inputTokens === null || item.outputTokens === null).length,
+    knownCostUsd: partial(generations.map(item => item.costUsd)), costUnknownCalls: generations.filter(item => item.costUsd === null).length,
+    primaryModel: lead?.model ?? fallbackModel, provider: lead?.provider ?? spans.find(span => span.provider)?.provider ?? null, models: Object.freeze(models),
     inputPreview: inputPreview(firstGeneration, spans.find(span => span.parent_span_id === null) ?? null),
     captureCompletion: rootCaptureCompletion(root),
     generations: Object.freeze(generations), errors: Object.freeze(errors), toolCalls: Object.freeze(toolCalls), toolFailures: Object.freeze(toolFailures),

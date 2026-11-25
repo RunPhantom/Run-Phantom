@@ -38,9 +38,16 @@ export interface RunListRow extends LegacyRunListRow {
   est_cost_usd: number | null;
   cost_source: CostSource;
   tool_count: number;
+  primary_model: string | null;
   provider: string | null;
   models: string[];
   input_preview: string | null;
+  llm_calls: number;
+  known_input_tokens: number | null;
+  known_output_tokens: number | null;
+  token_unknown_calls: number;
+  known_cost_usd: number | null;
+  cost_unknown_calls: number;
 }
 
 export interface RunListPage {
@@ -111,7 +118,7 @@ function sortValue(row: RunRow, sort: RunListSort): number | null {
     case "started_at": return row.started_at;
     case "duration": return facts.durationMs;
     case "cost": return facts.costUsd;
-    case "tokens": return facts.inputTokens === null && facts.outputTokens === null ? null : (facts.inputTokens ?? 0) + (facts.outputTokens ?? 0);
+    case "tokens": return facts.inputTokens === null || facts.outputTokens === null ? null : facts.inputTokens + facts.outputTokens;
     case "errors": return facts.errorCount;
   }
 }
@@ -131,11 +138,13 @@ export function toRunListRow(row: RunRow): RunListRow {
   const facts = row.facts;
   return {
     id: row.id, event_id: row.event_id, name: row.name, event_name: row.event_name, display_name: row.display_name, user_id: row.user_id, convo_id: row.convo_id,
-    started_at: row.started_at, last_updated_at: row.last_updated_at, metadata: row.metadata, model: facts.model, finished: facts.finished,
+    started_at: row.started_at, last_updated_at: row.last_updated_at, metadata: row.metadata, model: row.legacy_model, finished: facts.finished,
     span_count: facts.spanCount, live_event_count: row.live_event_count, capture_completion: facts.captureCompletion, error_count: facts.errorCount,
     status: facts.status, agent: runAgent(row), duration_ms: facts.durationMs, input_tokens: facts.inputTokens, output_tokens: facts.outputTokens,
     est_cost_usd: facts.costUsd === null ? null : roundUsd(facts.costUsd), cost_source: facts.costSource, tool_count: facts.toolCount,
-    provider: facts.provider, models: [...facts.models], input_preview: facts.inputPreview,
+    primary_model: facts.primaryModel, provider: facts.provider, models: [...facts.models], input_preview: facts.inputPreview,
+    llm_calls: facts.llmCalls, known_input_tokens: facts.knownInputTokens, known_output_tokens: facts.knownOutputTokens, token_unknown_calls: facts.tokenUnknownCalls,
+    known_cost_usd: facts.knownCostUsd === null ? null : roundUsd(facts.knownCostUsd), cost_unknown_calls: facts.costUnknownCalls,
   };
 }
 

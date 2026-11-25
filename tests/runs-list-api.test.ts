@@ -42,17 +42,37 @@ describe("GET /api/runs rows", () => {
     }
   });
 
+  test("keeps the legacy model rule when span models disagree, and adds primary_model", () => {
+    const client = getDrizzleDb().$client;
+    client.query("INSERT INTO runs(id,name,event_name,started_at,last_updated_at) VALUES('r-models','delta','delta',?,?)").run(FIXTURE_NOW - 6 * HOUR, FIXTURE_NOW - 6 * HOUR + 3_000);
+    const insert = client.prepare(`INSERT INTO spans(run_id,id,parent_span_id,name,span_type,status,start_time_ms,end_time_ms,duration_ms,model,provider,attributes) VALUES('r-models',?,?,?,?,'OK',?,?,?,?,?,?)`);
+    const at = FIXTURE_NOW - 6 * HOUR;
+    insert.run("late-llm", "root", "chat", "LLM_GENERATION", at + 2_000, at + 2_500, 500, "gpt-4.1-mini", "openai", JSON.stringify({ "gen_ai.response.model": "gpt-4.1-mini-2025-04-14", "gen_ai.usage.input_tokens": 3, "gen_ai.usage.output_tokens": 1 }));
+    insert.run("root", null, "delta", "AGENT_ROOT", at, at + 3_000, 3_000, "root-configured-model", null, null);
+    insert.run("outer", "root", "chat", "LLM_GENERATION", at + 100, at + 1_000, 900, null, null, JSON.stringify({ "gen_ai.response.model": "gpt-4o-mini", "gen_ai.usage.input_tokens": 5, "gen_ai.usage.output_tokens": 2 }));
+    insert.run("inner", "outer", "chat", "LLM_GENERATION", at + 50, at + 900, 850, "gpt-5-nano", "openai", null);
+    const legacy = getRuns(5000).find(row => row.id === "r-models")!;
+    const row = list().runs.find(item => item.id === "r-models")!;
+    expect(legacy.model).toBe("gpt-4.1-mini");
+    for (const [key, value] of Object.entries(legacy)) expect({ key, value: row[key as keyof typeof row] }).toEqual({ key, value });
+    expect(row).toMatchObject({ primary_model: "gpt-4o-mini", models: ["gpt-4o-mini", "gpt-4.1-mini-2025-04-14"] });
+    expect(ids({ model: "root-configured-model" })).toEqual([]);
+  });
+
   test("adds duration, tokens, cost, errors, tools, model and input preview", () => {
     const byId = new Map(list().runs.map(row => [row.id, row]));
     expect(byId.get("r-ok")).toMatchObject({
       status: "completed", agent: "alpha", duration_ms: 10_000, input_tokens: 100, output_tokens: 20, est_cost_usd: 0.002, cost_source: "reported",
-      error_count: 0, tool_count: 1, model: "gpt-4o-mini", provider: "openai", models: ["gpt-4o-mini"], input_preview: "Summarise the March invoices for ACME and flag anything overdue.",
+      error_count: 0, tool_count: 1, model: "gpt-4o-mini", primary_model: "gpt-4o-mini", provider: "openai", models: ["gpt-4o-mini"], input_preview: "Summarise the March invoices for ACME and flag anything overdue.",
+      llm_calls: 1, known_input_tokens: 100, known_output_tokens: 20, token_unknown_calls: 0, known_cost_usd: 0.002, cost_unknown_calls: 0,
     });
     expect(byId.get("r-tool-err")).toMatchObject({ status: "completed_with_errors", duration_ms: 20_000, input_tokens: 300, output_tokens: 50, est_cost_usd: null, cost_source: "unknown", error_count: 1, tool_count: 2, input_preview: "Review PR 842" });
     expect(byId.get("r-failed")).toMatchObject({ status: "failed", duration_ms: 30_000, error_count: 2, est_cost_usd: 0.004, input_preview: null });
-    expect(byId.get("r-running")).toMatchObject({ status: "running", finished: 0, duration_ms: null, input_tokens: 50, output_tokens: null, est_cost_usd: null, cost_source: "unknown" });
+    expect(byId.get("r-running")).toMatchObject({ status: "running", finished: 0, duration_ms: null, input_tokens: 50, output_tokens: null, est_cost_usd: null, cost_source: "unknown",
+      llm_calls: 1, known_input_tokens: 50, known_output_tokens: null, token_unknown_calls: 1, known_cost_usd: null, cost_unknown_calls: 1 });
+    expect(byId.get("r-tool-err")).toMatchObject({ llm_calls: 1, known_cost_usd: null, cost_unknown_calls: 1 });
     expect(byId.get("r-nested")).toMatchObject({ input_tokens: 1000, output_tokens: 100, est_cost_usd: 0.01, cost_source: "reported", display_name: "Nested calls" });
-    expect(byId.get("old")).toMatchObject({ status: "completed", input_tokens: null, est_cost_usd: null, cost_source: "unknown", model: null, models: [] });
+    expect(byId.get("old")).toMatchObject({ status: "completed", input_tokens: null, est_cost_usd: null, cost_source: "unknown", model: null, primary_model: null, models: [], llm_calls: 0, known_input_tokens: null, token_unknown_calls: 0 });
   });
 
   test("estimates unreported calls from a registered price table", () => {
@@ -77,7 +97,7 @@ describe("GET /api/runs parameters", () => {
     expect(ids({ sort: "cost" })).toEqual(["r-nested", "r-failed", "r-ok", "p-ok", "r-tool-err", "r-running", "p-failed", "old"]);
     expect(ids({ sort: "cost", order: "asc" })).toEqual(["p-ok", "r-ok", "r-failed", "r-nested", "old", "p-failed", "r-running", "r-tool-err"]);
     expect(ids({ sort: "duration" })).toEqual(["r-failed", "r-tool-err", "r-ok", "p-failed", "r-nested", "p-ok", "old", "r-running"]);
-    expect(ids({ sort: "tokens" }).slice(0, 3)).toEqual(["r-nested", "r-tool-err", "r-failed"]);
+    expect(ids({ sort: "tokens" })).toEqual(["r-nested", "r-tool-err", "r-failed", "r-ok", "p-ok", "r-running", "p-failed", "old"]);
     expect(ids({ sort: "errors" }).slice(0, 3)).toEqual(["r-failed", "r-tool-err", "p-failed"]);
   });
 

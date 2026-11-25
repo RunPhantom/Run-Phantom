@@ -225,7 +225,7 @@ export function computeOverview(db: Database, dbPath: string, rawQuery: Record<s
 
   const liveRuns = all.filter(row => row.facts.status === "running" && row.last_updated_at >= liveSince)
     .sort((a, b) => b.last_updated_at - a.last_updated_at || (a.id < b.id ? 1 : -1)).slice(0, OVERVIEW_LIMITS.liveRuns)
-    .map(row => ({ runId: row.id, name: runDisplayName(row), agent: runAgent(row), startedAt: row.started_at, lastUpdatedAt: row.last_updated_at, spanCount: row.facts.spanCount, model: row.facts.model }));
+    .map(row => ({ runId: row.id, name: runDisplayName(row), agent: runAgent(row), startedAt: row.started_at, lastUpdatedAt: row.last_updated_at, spanCount: row.facts.spanCount, model: row.facts.primaryModel }));
 
   return {
     version: OVERVIEW_VERSION, asOf: now,

@@ -33,7 +33,7 @@ export function runDisplayName(row: Pick<RunRow, "id" | "display_name" | "event_
 }
 
 export function runUsesModel(row: RunRow, model: string): boolean {
-  return row.facts.model === model || row.facts.models.includes(model);
+  return row.facts.primaryModel === model || row.facts.models.includes(model);
 }
 
 /** Nearest-rank percentile, matching the Team metrics endpoint. Input must be sorted ascending. */
