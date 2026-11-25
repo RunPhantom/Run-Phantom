@@ -3,6 +3,7 @@ import { ArrowLeft, Search, Upload, X } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { RunDetail } from "../components/RunDetail";
 import { RunListItem, useShortRunIds } from "../components/RunList";
+import { replayDemoTraces } from "../api/demo-traces";
 import { searchRuns, searchSpanHits, searchSuggestions, getSearchScope, type RunSearchResult, type SearchHitPage } from "../api/runs";
 import { SearchFilters } from "../components/SearchFilters";
 import { SearchSpanHits } from "../components/SearchSpanHits";
@@ -208,11 +209,9 @@ export function SearchPage() {
     setDemoLoading(true);
     setError(null);
     try {
-      const response = await fetch("/api/demo-traces/replay", { method: "POST" });
-      if (!response.ok) throw new Error(`Could not load demo traces (${response.status})`);
-      const body = await response.json() as { runIds?: string[] };
+      const [firstRunId] = await replayDemoTraces();
       setRefresh((value) => value + 1);
-      if (body.runIds?.[0]) openRun(body.runIds[0], `${tracePath("/search", body.runIds[0])}${querySuffix}`);
+      if (firstRunId) openRun(firstRunId, `${tracePath("/search", firstRunId)}${querySuffix}`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load demo traces.");
     } finally {

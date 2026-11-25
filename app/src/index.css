@@ -295,6 +295,25 @@
   --rp-json-null: var(--rp-ink-muted);
   --rp-json-view-string: #3D4B80;
 
+  /* Chart marks (design-direction section 9). Status trio validated with the dataviz palette checks on #FFFFFF. */
+  --rp-chart-1: #2747E8;
+  --rp-chart-history: #B7C0D4;
+  --rp-chart-track: #E8ECF5;
+  --rp-chart-ok: var(--rp-chart-1);
+  --rp-chart-warn: #DC6803;
+  --rp-chart-fail: #B42318;
+  --rp-chart-grid: var(--rp-line-muted);
+  --rp-chart-baseline: var(--rp-line);
+  --rp-chart-axis: var(--rp-ink-subtle);
+  --rp-chart-crosshair: var(--rp-line-strong);
+  --rp-chart-hover: rgb(14 18 27 / 0.04);
+  --rp-chart-p50: #9AABF5;
+  --rp-chart-p95: #0021CC;
+  --rp-chart-kind-model: #2747E8;
+  --rp-chart-kind-tool: #0F8C7C;
+  --rp-chart-kind-search: #A88300;
+  --rp-chart-kind-agent: #8A5CE6;
+
   --rp-motion-instant: 120ms;
   --rp-motion-state: 180ms;
   --rp-motion-surface-in: 200ms;
@@ -511,6 +530,20 @@
   --rp-json-number: #8CB4FF;
   --rp-json-boolean: #5FD0A0;
   --rp-json-view-string: #B3BEF5;
+
+  /* Status trio validated with the dataviz palette checks on the dark surface #12151C. */
+  --rp-chart-1: #5B74F5;
+  --rp-chart-history: #3A4252;
+  --rp-chart-track: #1C212C;
+  --rp-chart-warn: #BD8806;
+  --rp-chart-fail: #B8352E;
+  --rp-chart-hover: rgb(232 235 242 / 0.05);
+  --rp-chart-p50: #4A5BB0;
+  --rp-chart-p95: #8C9EFF;
+  --rp-chart-kind-model: #5B74F5;
+  --rp-chart-kind-tool: #169C8A;
+  --rp-chart-kind-search: #A8870F;
+  --rp-chart-kind-agent: #9271EE;
 
   --rp-trace: #B79CF0;
   --rp-thinking-border: rgb(140 170 230 / 0.30);
