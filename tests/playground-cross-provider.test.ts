@@ -195,7 +195,7 @@ describe("draft fidelity", () => {
       return [draft.model, draft.modelSubstituted, draft.warnings.filter(warning => warning.includes("not available"))];
     };
     expect(opened("gpt-5-mini-2025-08-07")).toEqual(["gpt-5-mini", false, []]);
-    expect(opened("gpt-4o-mini-latest")).toEqual(["gpt-4o-mini", false, []]);
+    expect(opened("gpt-4o-mini-latest")).toEqual(["gpt-4o-mini", true, ["gpt-4o-mini-latest is not available in the Playground, so gpt-4o-mini was selected instead."]]);
     expect(opened("claude-haiku-4-5", "anthropic")).toEqual(["claude-haiku-4-5-20251001", false, []]);
     expect(opened("models/gemini-3.8-flash", "google")).toEqual(["gemini-3.8-flash", false, []]);
     expect(opened("gpt-5-nano-doesnotexist")).toEqual(["gpt-5-nano", true, ["gpt-5-nano-doesnotexist is not available in the Playground, so gpt-5-nano was selected instead."]]);

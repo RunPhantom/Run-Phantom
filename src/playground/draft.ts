@@ -62,23 +62,25 @@ function detectProvider(...hints: Array<string | null | undefined>): PlaygroundP
   return null;
 }
 
-const DATED_SUFFIX = /-(?:\d{4}-\d{2}-\d{2}|\d{8}|latest)$/;
+const DATED_SUFFIX = /-(?:\d{4}-\d{2}-\d{2}|\d{8})$/;
 
 /**
- * Maps a captured model id onto the Playground list. The id itself, a dated or "-latest" snapshot of a listed id
+ * Maps a captured model id onto the Playground list. The id itself, a dated snapshot of a listed id
  * (gpt-5-mini-2025-08-07), or the undated alias of a listed snapshot (claude-haiku-4-5) count as the same model.
- * Any other listed id the captured one extends (gpt-4o-mini-search-preview) is only a stand-in.
+ * Any other listed id the captured one extends is only a stand-in: "-latest" ids, because the alias moves to newer
+ * snapshots than the listed one, and variants such as gpt-4o-mini-search-preview.
  */
 function matchModel(provider: PlaygroundProvider, captured: string | null): { model: string; exact: boolean } | null {
   if (!captured) return null;
   const id = captured.startsWith("models/") ? captured.slice("models/".length) : captured;
   const candidates = PLAYGROUND_MODELS.filter(item => item.provider === provider).map(item => item.model);
   const base = id.replace(DATED_SUFFIX, "");
-  const dated = base !== id && !id.endsWith("-latest");
-  const same = candidates.find(item => item === id) ?? candidates.find(item => item === base)
-    ?? (dated ? undefined : candidates.find(item => item.replace(DATED_SUFFIX, "") === base));
+  const same = candidates.find(item => item === id)
+    ?? (base !== id ? candidates.find(item => item === base) : candidates.find(item => item.replace(DATED_SUFFIX, "") === id));
   if (same) return { model: same, exact: true };
-  const nearest = candidates.filter(item => id.startsWith(`${item}-`)).sort((a, b) => b.length - a.length)[0];
+  const nearest = candidates
+    .filter(item => id.startsWith(`${item}-`) || id.startsWith(`${item.replace(DATED_SUFFIX, "")}-`))
+    .sort((a, b) => b.length - a.length)[0];
   return nearest ? { model: nearest, exact: false } : null;
 }
 
