@@ -1,8 +1,14 @@
-export const RUN_STATUSES = ["live", "complete", "completed_with_errors", "failed", "cancelled", "interrupted", "unknown"] as const;
+export const RUN_STATUSES = ["live", "quiet", "complete", "completed_with_errors", "failed", "cancelled", "interrupted", "unknown"] as const;
 export type RunStatus = typeof RUN_STATUSES[number];
 
 /** A run whose roots have not all ended reads as live only while spans keep arriving this recently. */
 export const RUN_QUIET_AFTER_MS = 30_000;
+/**
+ * Spans are exported only when they end (src/parse.ts), so a run waiting on
+ * one long model or tool call receives nothing until that call returns. Only
+ * a silence this long is treated as evidence that the run was interrupted.
+ */
+export const RUN_INTERRUPTED_AFTER_MS = 10 * 60_000;
 
 /**
  * Stored facts a status is derived from. `/api/runs` rows and run detail
@@ -100,9 +106,23 @@ export function deriveRunStatus(run: RunStatusEvidence, now: number = Date.now()
     if (errorCount > 0) return summary("completed_with_errors", `Completed · ${errorPhrase(errorCount, toolErrorCount)}`, `The run finished, but ${errorPhrase(errorCount, toolErrorCount)} occurred inside it.`);
     return summary("complete", "Run complete", "Every root span ended without an error.");
   }
-  if (typeof run.last_updated_at === "number" && now - run.last_updated_at < RUN_QUIET_AFTER_MS) return summary("live", "Run live", "Spans are still arriving.");
+  const silentFor = typeof run.last_updated_at === "number" ? now - run.last_updated_at : null;
+  if (silentFor !== null && silentFor < RUN_QUIET_AFTER_MS) return summary("live", "Run live", "Spans are still arriving.");
   if (!count(run.span_count) && run.span_count !== undefined) return summary("unknown", "No spans recorded", "The run recorded no spans, so its outcome is unknown.");
-  return summary("interrupted", "Run interrupted", `No spans arrived for ${RUN_QUIET_AFTER_MS / 1000}s and the run never recorded its end.`);
+  if (silentFor !== null && silentFor < RUN_INTERRUPTED_AFTER_MS) {
+    return summary("quiet", "Run quiet", `No new spans for ${silence(silentFor)}. Spans arrive when they end, so a long model or tool call keeps a running run quiet.`);
+  }
+  return summary("interrupted", "Run interrupted", `No spans arrived for ${RUN_INTERRUPTED_AFTER_MS / 60_000} minutes and the run never recorded its end.`);
+}
+
+function silence(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return seconds < 120 ? `${seconds}s` : `${Math.floor(seconds / 60)} minutes`;
+}
+
+/** Live and quiet runs have not recorded their end yet; actions that need a finished run wait for them. */
+export function runInProgress(status: RunStatus): boolean {
+  return status === "live" || status === "quiet";
 }
 
 export function runStatusTone(status: RunStatus): "success" | "warning" | "danger" | "neutral" {

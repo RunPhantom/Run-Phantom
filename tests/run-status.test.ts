@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { closeDb, getRuns, getRunWithSpans, insertSpan, upsertRun } from "../src/db";
 import { searchRuns } from "../src/run-search";
-import { deriveRunStatus, RUN_QUIET_AFTER_MS, runErrorEvidenceFromSpans } from "../src/run-status";
+import { deriveRunStatus, RUN_INTERRUPTED_AFTER_MS, RUN_QUIET_AFTER_MS, runErrorEvidenceFromSpans, runInProgress, runStatusTone } from "../src/run-status";
 
 const NOW = Date.UTC(2026, 10, 25, 12);
 
@@ -30,8 +30,20 @@ describe("deriveRunStatus", () => {
   test("an unfinished run is live only while spans keep arriving", () => {
     const open = { ...finished, finished: 0 };
     expect(deriveRunStatus({ ...open, last_updated_at: NOW - RUN_QUIET_AFTER_MS + 1 }, NOW).status).toBe("live");
-    expect(deriveRunStatus({ ...open, last_updated_at: NOW - RUN_QUIET_AFTER_MS }, NOW)).toMatchObject({ status: "interrupted", label: "Run interrupted" });
     expect(deriveRunStatus({ ...open, span_count: 0, last_updated_at: NOW - RUN_QUIET_AFTER_MS }, NOW)).toMatchObject({ status: "unknown", label: "No spans recorded" });
+  });
+
+  test("a quiet run waiting on a long call is not called interrupted until the interrupted threshold", () => {
+    const open = { ...finished, finished: 0 };
+    const quiet = deriveRunStatus({ ...open, last_updated_at: NOW - 45_000 }, NOW);
+    expect(quiet).toMatchObject({ status: "quiet", label: "Run quiet" });
+    expect(quiet.detail).toContain("No new spans for 45s");
+    expect(runInProgress(quiet.status)).toBe(true);
+    expect(runStatusTone(quiet.status)).toBe("neutral");
+    expect(deriveRunStatus({ ...open, last_updated_at: NOW - RUN_INTERRUPTED_AFTER_MS + 1 }, NOW).status).toBe("quiet");
+    const interrupted = deriveRunStatus({ ...open, last_updated_at: NOW - RUN_INTERRUPTED_AFTER_MS }, NOW);
+    expect(interrupted).toMatchObject({ status: "interrupted", label: "Run interrupted" });
+    expect(runInProgress(interrupted.status)).toBe(false);
   });
 
   test("validated partial captures stay unknown instead of guessing an outcome", () => {

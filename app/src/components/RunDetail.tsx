@@ -26,7 +26,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Badge as UiBadge, badgeVariants } from "@/components/ui/badge";
 import { fieldClassName } from "@/components/ui/input";
 import { fmt, plural, runDisplayName, runStatusTone, isoTimestamp, safeDecodeParam, spanErrorReason } from "../utils/helpers";
-import { deriveRunStatus, runErrorEvidenceFromSpans, type RunStatusEvidence, type RunStatusSummary } from "../../../src/run-status";
+import { deriveRunStatus, runErrorEvidenceFromSpans, runInProgress, RUN_QUIET_AFTER_MS, type RunStatusEvidence, type RunStatusSummary } from "../../../src/run-status";
 import { useRunStatus } from "../hooks/use-run-status";
 import { buildReplayModelOptions } from "../utils/replay-models";
 import { captureCompletion, observationReplayUnavailable } from "../../../src/spans/normalized";
@@ -748,10 +748,11 @@ function runStatusEvidence(run: Run, spans: readonly Span[]): RunStatusEvidence 
 
 /** A sub-agent has no root of its own here, so its errors are child errors of a run that is either still live or finished. */
 function subAgentStatus(runStatus: RunStatusSummary | null, spans: readonly Span[]): RunStatusSummary {
-  const live = runStatus?.status === "live";
+  const inProgress = runStatus ? runInProgress(runStatus.status) : false;
   const unavailable = spans.some(span => captureCompletion(span.normalized?.capture) === "unavailable");
   const { error_count, tool_error_count } = runErrorEvidenceFromSpans(spans);
-  return deriveRunStatus({ last_updated_at: live ? Date.now() : null, finished: !live, error_count, tool_error_count, root_failed: false, capture_completion: unavailable ? "unavailable" : null });
+  const lastUpdatedAt = runStatus?.status === "live" ? Date.now() : runStatus?.status === "quiet" ? Date.now() - RUN_QUIET_AFTER_MS : null;
+  return deriveRunStatus({ last_updated_at: lastUpdatedAt, finished: !inProgress, error_count, tool_error_count, root_failed: false, capture_completion: unavailable ? "unavailable" : null });
 }
 
 function ViewHeader({
@@ -776,7 +777,7 @@ function ViewHeader({
   annotationError?: string | null;
   onDownload?: () => void;
 }) {
-  const active = status.status === "live";
+  const active = runInProgress(status.status);
   const onBack = breadcrumb?.onBack;
   const parentName = breadcrumb?.parentName;
   const onFork = fork?.onFork;
@@ -924,7 +925,7 @@ function ViewHeader({
         <>
           <div data-run-header className="mb-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             <div data-run-header-title className="flex min-w-[12rem] flex-1 items-center gap-2">
-              {active && <span aria-hidden="true" className="pulse-dot size-2 flex-shrink-0 rounded-full bg-rp-success" />}
+              {status.status === "live" && <span aria-hidden="true" className="pulse-dot size-2 flex-shrink-0 rounded-full bg-rp-success" />}
               {onFork && !active ? (
                 <InlineEdit value={displayTitle}
                   onConfirm={handleRename}
@@ -1856,7 +1857,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   // Normal run view
   const replayUnavailable = spans.some(span => observationReplayUnavailable(span.normalized?.capture));
   const status = runStatusSummary ?? deriveRunStatus(runStatusEvidence(run, spans));
-  const active = status.status === "live";
+  const active = runInProgress(status.status);
   const tools = spans.filter(s => s.span_type === "TOOL_CALL");
   const llms = spans.filter(s => s.span_type?.includes("LLM"));
   const errs = spans.filter(s => s.status === "ERROR");

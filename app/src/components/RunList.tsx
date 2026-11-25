@@ -32,7 +32,7 @@ export function RunListItem({ run, shortRunIds, selected, highlighted, faded, on
   onClick: () => void;
 }) {
   const status = runStatus(run);
-  const active = status.status === "live";
+  const pulsing = status.status === "live";
   const saved = !!useSavedEvent(run.id);
   const replayMeta = parseReplayMetadata(run);
   const isReplay = !!replayMeta;
@@ -57,7 +57,7 @@ export function RunListItem({ run, shortRunIds, selected, highlighted, faded, on
         )}
         onClick={onClick}>
         <div className="flex items-start gap-2">
-          <span aria-hidden="true" className={cn("mt-[7px] size-1.5 shrink-0 rounded-full", active ? "pulse-dot bg-rp-success" : "bg-transparent")} />
+          <span aria-hidden="true" className={cn("mt-[7px] size-1.5 shrink-0 rounded-full", pulsing ? "pulse-dot bg-rp-success" : "bg-transparent")} />
           {/* The age sits last in the DOM so the row's accessible name reads
               name, status, id, age, while the grid places it on the title line. */}
           <div className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] gap-x-1.5 overflow-hidden">

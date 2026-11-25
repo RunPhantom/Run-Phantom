@@ -1,4 +1,4 @@
-import { deriveRunStatus, type RunStatusEvidence, type RunStatusSummary } from "../../../src/run-status";
+import { deriveRunStatus, runInProgress, type RunStatusEvidence, type RunStatusSummary } from "../../../src/run-status";
 import type { Span } from "./types";
 
 export function fmt(ms: number | null | undefined): string {
@@ -53,7 +53,7 @@ export function runStatus(run: RunStatusEvidence, now: number = Date.now()): Run
 }
 
 export function isActive(run: RunStatusEvidence, now: number = Date.now()): boolean {
-  return deriveRunStatus(run, now).status === "live";
+  return runInProgress(deriveRunStatus(run, now).status);
 }
 
 /**
