@@ -84,7 +84,7 @@ function AppLayout() {
                 <SidebarTrigger className="size-11 shrink-0 rounded-control border border-rp-line text-rp-ink hover:bg-rp-row-hover hover:text-rp-ink lg:size-9" />
                 <nav aria-label="Workspace breadcrumb" className="min-w-0 text-[13px]">
                   <ol className="flex min-w-0 items-center gap-3">
-                    <li className="hidden shrink-0 sm:block"><Link to="/" className="text-rp-ink-muted transition-colors duration-250 ease-standard hover:text-rp-blue">Workspace</Link></li>
+                    <li className="hidden shrink-0 sm:block"><Link to="/" className="rp-touch-target text-rp-ink-muted transition-colors duration-250 ease-standard hover:text-rp-blue">Workspace</Link></li>
                     <li aria-hidden="true" className="hidden text-rp-ink-faint sm:block">/</li>
                     <li aria-current={activeRunId ? undefined : "page"} className="shrink-0 font-medium text-rp-ink">{section}</li>
                     {activeRunId && <>

@@ -559,7 +559,7 @@ function ViewHeader({
                       aria-controls={optionsOpen ? replayOptionsId : undefined}
                       aria-haspopup="dialog"
                       disabled={active || replayUnavailable || agentRegistryStatus !== "success"}
-                      className="rp-primary-control flex items-center justify-center border border-l-0 border-rp-blue bg-rp-blue px-2 text-white shadow-[inset_1px_0_0_rgb(255_255_255/0.28)] transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-blue-hover hover:bg-rp-blue-hover disabled:cursor-not-allowed disabled:border-rp-line disabled:bg-[color:var(--rp-n4)] disabled:text-rp-ink-muted disabled:shadow-[inset_1px_0_0_var(--rp-line)]"
+                      className="rp-primary-control flex items-center justify-center border border-l-0 border-rp-blue bg-rp-blue px-2 text-white [@media(pointer:coarse)]:min-w-11 shadow-[inset_1px_0_0_rgb(255_255_255/0.28)] transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-blue-hover hover:bg-rp-blue-hover disabled:cursor-not-allowed disabled:border-rp-line disabled:bg-[color:var(--rp-n4)] disabled:text-rp-ink-muted disabled:shadow-[inset_1px_0_0_var(--rp-line)]"
                       onClick={() => {
                         if (active || replayUnavailable) return;
                         setAnnotationPopoverOpen(false);

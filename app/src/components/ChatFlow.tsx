@@ -281,7 +281,7 @@ function UserMessage({ content, parts, images, onEdit }: { content: string; part
           <button
             type="button"
             aria-label="Edit message and replay run"
-            className="absolute -bottom-2 -right-2 flex min-h-7 min-w-7 items-center justify-center rounded-control border border-rp-line bg-rp-surface text-rp-ink-muted opacity-0 transition-[opacity,background-color,color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash hover:text-rp-blue focus-visible:opacity-100 group-hover/usermsg:opacity-100"
+            className="absolute -bottom-2 -right-2 flex min-h-7 min-w-7 items-center justify-center rounded-control border border-rp-line bg-rp-surface text-rp-ink-muted opacity-0 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11 [@media(pointer:coarse)]:opacity-100 transition-[opacity,background-color,color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash hover:text-rp-blue focus-visible:opacity-100 group-hover/usermsg:opacity-100"
             title="Edit & replay"
             onClick={() => editAction(content)}
           >

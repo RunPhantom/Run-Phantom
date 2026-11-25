@@ -74,7 +74,7 @@ export function BarList<T>({ caption, rows, rowKey, nameHeader, name, nameTitle,
             >
               <th scope="row" className={cn("max-w-0 pr-3 text-left font-normal", barPlacement === "under" ? "py-1" : "h-8")}>
                 {target ? (
-                  <Link to={target} title={nameTitle?.(row)} className="block truncate rounded-control text-rp-ink underline-offset-4 group-hover:text-rp-blue group-hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]">
+                  <Link to={target} title={nameTitle?.(row)} className="block truncate rounded-control text-rp-ink underline-offset-4 [@media(pointer:coarse)]:py-3 group-hover:text-rp-blue group-hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]">
                     {name(row)}
                   </Link>
                 ) : <span title={nameTitle?.(row)} className="block truncate text-rp-ink">{name(row)}</span>}

@@ -10,7 +10,7 @@ import { deleteRun } from "../../api/runs";
 import { evidenceApi } from "../../api/evaluations";
 import type { Run } from "../../utils/types";
 
-export const HEADER_ACTION = cn(buttonVariants({ variant: "secondary", size: "sm" }), "gap-1.5 px-2.5 [&_svg]:size-3.5 md:h-7");
+export const HEADER_ACTION = cn(buttonVariants({ variant: "secondary", size: "sm" }), "gap-1.5 px-2.5 [&_svg]:size-3.5 md:h-7 [@media(pointer:coarse)]:min-w-11");
 
 export function MoreMenu({ runId, onAnnotate, onDownload, triggerRef: externalTriggerRef }: {
   runId?: string;

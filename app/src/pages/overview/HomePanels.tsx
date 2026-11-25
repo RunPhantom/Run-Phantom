@@ -117,7 +117,7 @@ export function NeedsALookPanel({ overview }: { overview: Overview }) {
     <Panel
       id="home-needs-a-look"
       title="Needs a look"
-      meta={failed || withErrors ? <Link to={runsLink({ status: ["failed", "completed_with_errors"], window })} className="rounded-control underline-offset-4 hover:text-rp-blue hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]">{failed} failed · {withErrors} with errors</Link> : null}
+      meta={failed || withErrors ? <Link to={runsLink({ status: ["failed", "completed_with_errors"], window })} className="rp-touch-target rounded-control underline-offset-4 hover:text-rp-blue hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]">{failed} failed · {withErrors} with errors</Link> : null}
     >
       {failures.length === 0 ? (
         <p className="flex items-start gap-2 py-2 text-13 text-rp-ink-muted"><Dot tone="success" />Nothing needs a look. No run failed or hit an error {WINDOW_COPY[window].phrase}.</p>
@@ -131,7 +131,7 @@ export function NeedsALookPanel({ overview }: { overview: Overview }) {
               <li key={failure.runId}>
                 <Link
                   to={target}
-                  className="flex items-start gap-2.5 rounded-sm px-2 py-0.5 leading-5 transition-colors duration-fast hover:bg-rp-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]"
+                  className="flex items-start gap-2.5 rounded-sm px-2 py-0.5 leading-5 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:py-1 transition-colors duration-fast hover:bg-rp-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]"
                   data-needs-a-look={failure.runId}
                 >
                   <Dot tone={failure.status === "failed" ? "danger" : "warning"} />
@@ -162,7 +162,7 @@ export function NeedsALookPanel({ overview }: { overview: Overview }) {
                 <Link
                   to={traceSpanPath("/runs", tool.lastError.runId, tool.lastError.spanId)}
                   title={tool.lastError.message ?? undefined}
-                  className="flex items-baseline justify-between gap-3 rounded-sm px-2 py-1 text-13 transition-colors duration-fast hover:bg-rp-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]"
+                  className="flex items-baseline justify-between gap-3 rounded-sm px-2 py-1 [@media(pointer:coarse)]:items-center [@media(pointer:coarse)]:min-h-11 text-13 transition-colors duration-fast hover:bg-rp-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]"
                   data-failing-tool={tool.tool}
                 >
                   <span className="truncate font-mono text-12 text-rp-ink">{tool.tool}</span>
@@ -188,7 +188,7 @@ export function AgentsPanel({ overview }: { overview: Overview }) {
       id="home-agents"
       title="Agents"
       meta={`${overview.kpis.activeAgents.value ?? 0} active`}
-      footer={total > rows.length || overview.truncated.byAgent ? <>Top {rows.length} of {overview.truncated.byAgent ? `${total}+` : total} by runs · <Link className="text-rp-blue underline-offset-4 hover:underline" to={runsLink({ window })}>All runs</Link></> : undefined}
+      footer={total > rows.length || overview.truncated.byAgent ? <>Top {rows.length} of {overview.truncated.byAgent ? `${total}+` : total} by runs · <Link className="rp-touch-target text-rp-blue underline-offset-4 hover:underline" to={runsLink({ window })}>All runs</Link></> : undefined}
     >
       <BarList
         caption={`Agents ${WINDOW_COPY[window].phrase}, by runs`}
@@ -269,7 +269,7 @@ function ActivityLine({ id, href, status, statusLabel, tone, live, name, meta, a
     <li className={fresh ? "rp-flash rounded-sm" : undefined}>
       <Link
         to={href}
-        className="flex items-start gap-2.5 rounded-sm px-2 py-0.5 leading-5 transition-colors duration-fast hover:bg-rp-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]"
+        className="flex items-start gap-2.5 rounded-sm px-2 py-0.5 leading-5 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:py-1 transition-colors duration-fast hover:bg-rp-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]"
         data-activity-run={id}
         data-activity-status={status}
       >
@@ -355,7 +355,7 @@ export function ActivityPanel({ runs, liveRuns, limit = 8 }: { runs: readonly La
       id="home-activity"
       title="Latest activity"
       meta={liveRuns.length ? <span className="flex items-center gap-1.5"><span aria-hidden="true" className="pulse-dot size-1.5 rounded-full bg-rp-mark-success" />{liveRuns.length} running</span> : "Nothing running"}
-      footer={<Link className="text-rp-blue underline-offset-4 hover:underline" to="/runs">Open Runs</Link>}
+      footer={<Link className="rp-touch-target text-rp-blue underline-offset-4 hover:underline" to="/runs">Open Runs</Link>}
     >
       {items === null
         ? <div role="status" aria-label="Loading latest runs">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="mt-2 h-8 w-full first:mt-0" />)}</div>
