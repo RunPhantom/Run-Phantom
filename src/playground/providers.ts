@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   PLAYGROUND_LIMITS, emptyUsage, findPlaygroundModel,
   type PlaygroundError, type PlaygroundErrorKind, type PlaygroundFinishReason, type PlaygroundMessage, type PlaygroundProvider,
@@ -61,7 +61,15 @@ function openAiMessages(request: PlaygroundRunRequest): unknown[] {
 }
 
 // Anthropic tool_use ids must match ^[a-zA-Z0-9_-]+$; drafts opened from other providers may carry ids with . or :.
-const anthropicId = (id: string) => id.replace(/[^A-Za-z0-9_-]/g, "_");
+// The hash suffix keeps ids such as "a.b" and "a:b" distinct after the rewrite.
+export function anthropicId(id: string): string {
+  const safe = id.replace(/[^A-Za-z0-9_-]/g, "_");
+  return safe === id ? id : `${safe}_${createHash("sha256").update(id).digest("hex").slice(0, 8)}`;
+}
+
+/** Prefix of ids invented for Gemini function calls that arrived without one; they are never sent back to Google. */
+export const GEMINI_SYNTHETIC_CALL_ID = "gemini_call_";
+const geminiCallId = (id: string): { id?: string } => id.startsWith(GEMINI_SYNTHETIC_CALL_ID) ? {} : { id };
 
 function anthropicMessages(messages: PlaygroundMessage[]): unknown[] {
   const out: Array<{ role: "user" | "assistant"; content: unknown[] }> = [];
@@ -103,9 +111,9 @@ function geminiContents(messages: PlaygroundMessage[]): unknown[] {
       for (const call of message.toolCalls ?? []) names.set(call.id, call.name);
       push("model", [
         ...(message.content.trim() ? [{ text: message.content }] : []),
-        ...(message.toolCalls ?? []).map(call => ({ functionCall: { name: call.name, args: call.arguments }, ...(call.signature ? { thoughtSignature: call.signature } : {}) })),
+        ...(message.toolCalls ?? []).map(call => ({ functionCall: { ...geminiCallId(call.id), name: call.name, args: call.arguments }, ...(call.signature ? { thoughtSignature: call.signature } : {}) })),
       ]);
-    } else push("user", [{ functionResponse: { name: message.name ?? names.get(message.toolCallId) ?? "tool", response: geminiResponse(message.content) } }]);
+    } else push("user", [{ functionResponse: { ...geminiCallId(message.toolCallId), name: message.name ?? names.get(message.toolCallId) ?? "tool", response: geminiResponse(message.content) } }]);
   }
   return out;
 }
@@ -326,7 +334,10 @@ function geminiAccumulator(): StreamAccumulator {
     push(event) {
       const data = parseData(event);
       const error = record(data.error);
-      if (error) throw new ProviderStreamError(error.status === "RESOURCE_EXHAUSTED" ? "rate_limit" : error.status === "UNAVAILABLE" ? "overloaded" : "provider_error", str(error.message));
+      if (error) throw new ProviderStreamError(
+        error.status === "RESOURCE_EXHAUSTED" ? (quotaExhausted(error) ? "quota" : "rate_limit") : error.status === "UNAVAILABLE" ? "overloaded" : "provider_error",
+        str(error.message),
+      );
       state.responseId = str(data.responseId) ?? state.responseId;
       state.responseModel = str(data.modelVersion) ?? state.responseModel;
       const usage = record(data.usageMetadata);
@@ -355,7 +366,7 @@ function geminiAccumulator(): StreamAccumulator {
         if (typeof part.text === "string" && part.text) { state.text += part.text; delta = (delta ?? "") + part.text; }
         const call = record(part.functionCall);
         if (call) state.toolCalls.push({
-          id: str(call.id) ?? `call_${randomBytes(6).toString("hex")}`, name: str(call.name) ?? "",
+          id: str(call.id) ?? `${GEMINI_SYNTHETIC_CALL_ID}${randomBytes(6).toString("hex")}`, name: str(call.name) ?? "",
           arguments: record(call.args) ?? {}, ...(str(part.thoughtSignature) ? { signature: part.thoughtSignature as string } : {}),
         });
       }
@@ -416,6 +427,19 @@ export function playgroundError(kind: PlaygroundErrorKind, target: PlaygroundTar
   };
 }
 
+/**
+ * Google answers both per-minute throttling and exhausted daily/free-tier quota with 429 RESOURCE_EXHAUSTED and
+ * "You exceeded your current quota". Only a QuotaFailure whose quota ids are all per-minute is a short-lived rate limit.
+ */
+function quotaExhausted(error: Record<string, unknown>): boolean {
+  const details = Array.isArray(error.details) ? (error.details as unknown[]).map(record).filter((item): item is Record<string, unknown> => item !== null) : [];
+  const quotaIds = details.filter(item => String(item["@type"] ?? "").endsWith("google.rpc.QuotaFailure"))
+    .flatMap(item => Array.isArray(item.violations) ? item.violations as unknown[] : [])
+    .map(item => String(record(item)?.quotaId ?? ""));
+  if (quotaIds.length && quotaIds.every(id => /PerMinute/i.test(id))) return false;
+  return quotaIds.length > 0 || /exceeded your current quota/i.test(String(error.message ?? ""));
+}
+
 /** Classifies a non-2xx provider response from its status and documented error envelope. */
 export function classifyHttpError(provider: PlaygroundProvider, status: number, bodyText: string): { kind: PlaygroundErrorKind; providerMessage: string | null } {
   let body: Record<string, unknown> | null = null;
@@ -431,6 +455,7 @@ export function classifyHttpError(provider: PlaygroundProvider, status: number, 
   if (status === 401 || status === 403 || type === "authentication_error" || type === "permission_error" || reasons.includes("API_KEY_INVALID") || /api key not valid|invalid api key|incorrect api key/.test(message)) return { kind: "auth", providerMessage };
   if (status === 402 || code === "insufficient_quota" || type === "insufficient_quota" || /credit balance is too low|insufficient.?quota/.test(message)) return { kind: "quota", providerMessage };
   if (status === 404 || code === "model_not_found" || type === "not_found_error" || (provider === "openai" && /model .*does not exist/.test(message))) return { kind: "invalid_model", providerMessage };
+  if (googleStatus === "RESOURCE_EXHAUSTED" && error && quotaExhausted(error)) return { kind: "quota", providerMessage };
   if (status === 429 || googleStatus === "RESOURCE_EXHAUSTED" || type === "rate_limit_error") return { kind: "rate_limit", providerMessage };
   if (status === 529 || status === 503 || type === "overloaded_error" || googleStatus === "UNAVAILABLE") return { kind: "overloaded", providerMessage };
   if (status === 408 || status === 504) return { kind: "timeout", providerMessage };

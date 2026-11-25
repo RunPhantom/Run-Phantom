@@ -262,6 +262,8 @@ describe.serial("POST /api/playground/runs", () => {
       { provider: "gemini", model: "gemini-2.5-flash", response: () => json(400, { error: { code: 400, message: "API key not valid. Please pass a valid API key.", status: "INVALID_ARGUMENT", details: [{ reason: "API_KEY_INVALID" }] } }), kind: "auth", status: 400 },
       { provider: "gemini", model: "gemini-2.5-flash", response: () => json(404, { error: { code: 404, message: "This model models/gemini-2.5-flash is no longer available to new users.", status: "NOT_FOUND" } }), kind: "invalid_model", status: 404 },
       { provider: "gemini", model: "gemini-2.5-flash-lite", response: () => json(429, { error: { code: 429, message: "Resource has been exhausted.", status: "RESOURCE_EXHAUSTED" } }), kind: "rate_limit", status: 429 },
+      { provider: "gemini", model: "gemini-3.8-flash", response: () => json(429, { error: { code: 429, message: "You exceeded your current quota, please check your plan and billing details.", status: "RESOURCE_EXHAUSTED", details: [{ "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier" }] }] } }), kind: "quota", status: 429 },
+      { provider: "gemini", model: "gemini-3.8-flash", response: () => json(429, { error: { code: 429, message: "You exceeded your current quota, please check your plan and billing details.", status: "RESOURCE_EXHAUSTED", details: [{ "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [{ quotaId: "GenerateRequestsPerMinutePerProjectPerModel-FreeTier" }] }] } }), kind: "rate_limit", status: 429 },
       { provider: "gemini", model: "gemini-2.5-flash-lite", response: () => { throw new TypeError("fetch failed"); }, kind: "network", status: null },
     ];
     for (const item of cases) {
@@ -347,6 +349,34 @@ describe.serial("POST /api/playground/runs", () => {
     const { results: [result] } = await (await post({ ...userTurn, provider: "openai", model: "gpt-5-nano", params: { maxOutputTokens: 512 } })).json() as { results: Array<Record<string, any>> };
     expect(result).toMatchObject({ status: "ok", finishReason: "length", output: { text: "" }, usage: { outputTokens: 512, reasoningTokens: 512 }, timeToFirstTokenMs: null });
     expect(result.warnings).toContain("All output tokens were used for reasoning, so there is no answer. Raise max output tokens or lower the reasoning effort.");
+  });
+
+  test("keeps rewritten Anthropic tool ids distinct and sends provider call ids back to Gemini", async () => {
+    const turns = (ids: [string, string]) => ({
+      ...userTurn, tools: [{ name: "lookup", parameters: { type: "object", properties: {} } }],
+      messages: [
+        { role: "user", content: "Look up both" },
+        { role: "assistant", content: "", toolCalls: ids.map(id => ({ id, name: "lookup", arguments: {} })) },
+        ...ids.map((id, index) => ({ role: "tool", toolCallId: id, content: `result ${index}` })),
+      ],
+    });
+    upstream = () => anthropicText("ok");
+    await post({ ...turns(["a.b", "a:b"]), provider: "anthropic", model: "claude-haiku-4-5-20251001" });
+    const [assistant, results] = (calls[0].body.messages as Array<{ content: Array<Record<string, string>> }>).slice(1);
+    const useIds = assistant.content.map(block => block.id);
+    expect(new Set(useIds).size).toBe(2);
+    expect(useIds.every(id => /^[A-Za-z0-9_-]+$/.test(id))).toBe(true);
+    expect(results.content.map(block => block.tool_use_id)).toEqual(useIds);
+
+    calls = [];
+    upstream = () => geminiText("ok");
+    await post({ ...turns(["fc_1", "gemini_call_0a1b2c3d4e5f"]), provider: "gemini", model: "gemini-3.8-flash" });
+    const [model, user] = (calls[0].body.contents as Array<{ parts: Array<Record<string, any>> }>).slice(1);
+    expect(model.parts.map(part => part.functionCall)).toEqual([{ id: "fc_1", name: "lookup", args: {} }, { name: "lookup", args: {} }]);
+    expect(user.parts.map(part => part.functionResponse)).toEqual([
+      { id: "fc_1", name: "lookup", response: { result: "result 0" } },
+      { name: "lookup", response: { result: "result 1" } },
+    ]);
   });
 
   test("refuses invalid requests before contacting any provider", async () => {
