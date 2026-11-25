@@ -124,6 +124,15 @@ describe("bundled list price table", () => {
     expect(call("gemini-2.5-pro", "2027-01-01T00:00:00Z")).toMatchObject({ inputUsdPerMillion: 1.5, outputUsdPerMillion: 7.5, revision: { revision: "runphantom-list-prices/2026-11-25/from-2027-01-01" } });
     expect(PRICE_SOURCES.google.url).toBe("https://aistudio.google.com/docs/pricing");
   });
+
+  test("model resolution is memoised per model and provider, while the call time still picks the price period", () => {
+    for (let index = 0; index < 3; index++) {
+      expect(lookupListPrice("claude-haiku-4-5-20251001", { provider: "aws.bedrock" })).toBeNull();
+      expect(lookupListPrice("claude-haiku-4-5-20251001", { provider: "anthropic" })?.entry.model).toBe("claude-haiku-4-5-20251001");
+      expect(lookupListPrice("gemini-4-carbon", { at: Date.parse("2026-12-01T00:00:00Z") })).toBeNull();
+      expect(lookupListPrice("gemini-4-carbon", { at: Date.parse("2026-11-01T00:00:00Z") })).not.toBeNull();
+    }
+  });
 });
 
 describe("cached input pricing", () => {

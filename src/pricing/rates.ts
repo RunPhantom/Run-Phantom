@@ -56,7 +56,11 @@ function rateSource(value: unknown): FrozenRateRevision["source"] {
 }
 
 /** Copies the supplied values before freezing, so later catalogue/override edits cannot rewrite an estimate. */
+/** Revisions this function returned; they are deeply frozen, so validating them again cannot change the result. */
+const FROZEN = new WeakSet<object>();
+
 export function freezeRateRevision(value: unknown): FrozenRateRevision {
+  if (typeof value === "object" && value !== null && FROZEN.has(value)) return value as FrozenRateRevision;
   const item = record(value);
   fields(item, ["provider", "model", "tier", "version", "revision", "currency", "unit", "source", "aliases", "bands"]);
   if (item.version !== PRICING_VERSION || item.currency !== "USD" || item.unit !== "usd_per_million_tokens") throw new Error("Unsupported pricing version, currency or units");
@@ -78,11 +82,13 @@ export function freezeRateRevision(value: unknown): FrozenRateRevision {
     const categories = Object.fromEntries(TOKEN_CATEGORIES.map(category => [category, categoryRate(supplied[category], category)])) as Record<TokenCategory, CategoryRate>;
     return Object.freeze({ maxContextTokens: band.maxContextTokens as number | null, categories: Object.freeze(categories) });
   });
-  return Object.freeze({
+  const frozen: FrozenRateRevision = Object.freeze({
     ...canonical, version: PRICING_VERSION, revision: text(item.revision, "revision"), currency: "USD", unit: "usd_per_million_tokens",
     source,
     aliases: Object.freeze(aliases), bands: Object.freeze(bands),
   });
+  FROZEN.add(frozen);
+  return frozen;
 }
 
 export function rateMatchesUsage(usage: NormalizedUsage, revision: FrozenRateRevision): boolean {

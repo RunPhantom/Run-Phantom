@@ -215,10 +215,24 @@ function providerMatches(family: PriceFamily, provider: string | null | undefine
 
 export interface ListPriceMatch { readonly entry: ListPriceEntry; readonly revision: FrozenRateRevision }
 
+const RESOLVED = new Map<string, ListPriceEntry | null>();
+const RESOLVED_LIMIT = 4_096;
+
+function resolveEntry(model: string, provider: string | null | undefined): ListPriceEntry | null {
+  const key = `${model}\u0000${provider ?? ""}`;
+  const cached = RESOLVED.get(key);
+  if (cached !== undefined) return cached;
+  const entry = resolveModelIdentity(model.startsWith("models/") ? model.slice("models/".length) : model, identity => BY_IDENTITY.get(identity) ?? [], id => EXCLUDED.has(id));
+  const result = entry && providerMatches(entry.family, provider) ? entry : null;
+  if (RESOLVED.size >= RESOLVED_LIMIT) RESOLVED.clear();
+  RESOLVED.set(key, result);
+  return result;
+}
+
 export function lookupListPrice(model: string | null | undefined, options: { provider?: string | null; at?: number | null } = {}): ListPriceMatch | null {
   if (!model) return null;
-  const entry = resolveModelIdentity(model.startsWith("models/") ? model.slice("models/".length) : model, identity => BY_IDENTITY.get(identity) ?? [], id => EXCLUDED.has(id));
-  if (!entry || !providerMatches(entry.family, options.provider)) return null;
+  const entry = resolveEntry(model, options.provider);
+  if (!entry) return null;
   if (entry.effectiveUntil && typeof options.at === "number" && options.at >= Date.parse(entry.effectiveUntil)) return null;
   const at = options.at;
   const started = typeof at === "number" ? (CHANGE_REVISIONS.get(entry) ?? []).filter(item => at >= item.from) : [];

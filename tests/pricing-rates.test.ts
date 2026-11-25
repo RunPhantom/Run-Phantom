@@ -10,6 +10,13 @@ describe("frozen rate revisions", () => {
     expect(rates.revision).toBe("fixture-rate-1");
   });
 
+  test("returns a revision it already froze as is, and still validates copies of it", () => {
+    const rates = freezeRateRevision(rateFixture());
+    expect(freezeRateRevision(rates)).toBe(rates);
+    const copy = { ...rates, currency: "EUR" };
+    expect(() => freezeRateRevision(copy)).toThrow("Unsupported");
+  });
+
   test.each([-1, NaN, Infinity, -Infinity])("refuses invalid rate %p", value => {
     expect(() => freezeRateRevision(rateFixture({ input: { kind: "priced", usdPerMillionTokens: value } }))).toThrow("Invalid input rate");
   });
