@@ -7,7 +7,7 @@ export const PROVIDERS: readonly Provider[] = ["openai", "anthropic", "gemini"];
 export const DEFAULT_MODELS: Readonly<Record<Provider, string>> = {
   openai: "gpt-5-nano",
   anthropic: "claude-haiku-4-5-20251001",
-  gemini: "gemini-2.5-flash",
+  gemini: "gemini-3.8-flash",
 };
 
 /** `gen_ai.provider.name` values from the OpenTelemetry GenAI semantic conventions. */

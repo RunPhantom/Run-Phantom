@@ -242,7 +242,7 @@ function tool(value: unknown, index: number): PlaygroundTool {
   const description = item.description === undefined ? undefined : text(item.description, `${what} description`, PLAYGROUND_LIMITS.toolDescriptionChars, { allowEmpty: true });
   const parameters = item.parameters === undefined ? { type: "object", properties: {} } : plainObject(item.parameters, `${what} parameters`);
   if (parameters.type !== undefined && parameters.type !== "object") fail(`${what} parameters must describe an object.`);
-  if (Buffer.byteLength(JSON.stringify(parameters)) > PLAYGROUND_LIMITS.toolSchemaBytes) fail(`${what} parameters must be at most ${PLAYGROUND_LIMITS.toolSchemaBytes} bytes.`);
+  if (new TextEncoder().encode(JSON.stringify(parameters)).byteLength > PLAYGROUND_LIMITS.toolSchemaBytes) fail(`${what} parameters must be at most ${PLAYGROUND_LIMITS.toolSchemaBytes} bytes.`);
   return { name, ...(description ? { description } : {}), parameters: { type: "object", ...parameters } };
 }
 

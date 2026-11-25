@@ -20,6 +20,9 @@ import { VerificationPage } from "./pages/VerificationPage";
 import { EvaluationsPage } from "./pages/EvaluationsPage";
 import { ReviewQueuesRoute } from "./components/review-queues/ReviewQueuesRoute";
 import { PromptsPage } from "./pages/PromptsPage";
+import { PlaygroundPage } from "./pages/PlaygroundPage";
+import { openInPlaygroundAction } from "./components/playground/open-in-playground";
+import { registerSpanAction } from "./components/run-detail/span-actions";
 import { RouteError } from "./components/RouteError";
 import { sendRunPhantomMessage, useRunPhantomConnectionStatus } from "./hooks/use-runphantom-ws";
 import { useAgentUiCommands } from "./hooks/use-agent-ui-commands";
@@ -31,6 +34,8 @@ import { CommandPalette } from "./shell/CommandPalette";
 import { ShortcutSheet } from "./shell/ShortcutSheet";
 import { ShellCommands } from "./shell/ShellCommands";
 import { CommandPaletteTrigger, ThemeToggle } from "./shell/HeaderActions";
+
+registerSpanAction(openInPlaygroundAction);
 
 const DISCONNECTED_NOTICE_DELAY_MS = 100;
 
@@ -179,6 +184,7 @@ export const localRoutes: RouteObject[] = [
       { path: "costs", element: <CostAnalyticsPage />, errorElement: <RouteError /> },
       { path: "review-queues", element: <ReviewQueuesRoute />, errorElement: <RouteError /> },
       { path: "prompts", element: <PromptsPage />, errorElement: <RouteError /> },
+      { path: "playground", element: <PlaygroundPage />, errorElement: <RouteError /> },
       { path: "*", element: <NotFoundPage />, errorElement: <RouteError /> },
     ],
   },
