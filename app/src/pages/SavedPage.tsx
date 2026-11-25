@@ -234,14 +234,14 @@ function FilterBar({ filters, agents, onUpdate, onResetSecondary }: {
           className="rp-pop fixed z-[9999] w-[240px] space-y-3 rounded-lg border border-rp-line bg-rp-surface p-3 shadow-e3"
         >
           <label className="grid gap-1.5">
-            <span className="rp-field-label">Agent</span>
+            <span className="rp-field-label">Run name</span>
             <Select
-              aria-label="Filter by agent"
+              aria-label="Filter by run name"
               className="h-8 text-[13px]"
               value={filters.agent}
               onChange={e => onUpdate({ agent: e.target.value })}
             >
-              <option value="">All agents</option>
+              <option value="">All run names</option>
               {agents.map(a => <option key={a} value={a}>{a}</option>)}
             </Select>
           </label>
@@ -260,7 +260,7 @@ function ActiveFilterChips({ filters, onUpdate }: {
 }) {
   const chips: { key: string; label: string; clear: () => void }[] = [];
   if (filters.search) chips.push({ key: "search", label: `"${filters.search}"`, clear: () => onUpdate({ search: "" }) });
-  if (filters.agent) chips.push({ key: "agent", label: `Agent: ${filters.agent}`, clear: () => onUpdate({ agent: "" }) });
+  if (filters.agent) chips.push({ key: "agent", label: `Run name: ${filters.agent}`, clear: () => onUpdate({ agent: "" }) });
   if (chips.length === 0) return null;
   return (
     <div className="flex flex-wrap items-center gap-1.5" data-testid="active-filter-chips">
@@ -351,7 +351,7 @@ export function SavedPage() {
       className="w-full max-w-lg animate-fade-rise"
       eyebrow="Saved / Empty"
       title="No saved runs"
-      description="Open a run and choose Save in its header to keep it here. Saved runs can be filed into folders and filtered by agent."
+      description="Open a run and choose Save in its header to keep it here. Saved runs can be filed into folders and filtered by run name."
     />
   );
 
@@ -407,7 +407,7 @@ export function SavedPage() {
             />
           ))}
           {filtered.length === 0 && !isEmpty && (
-            <EmptyPanel compact className="animate-fade-rise" title="No saved runs match" description="Clear the search, folder or agent filter to see every saved run." />
+            <EmptyPanel compact className="animate-fade-rise" title="No saved runs match" description="Clear the search, folder or run name filter to see every saved run." />
           )}
           {isEmpty && isMobile && emptyPanel}
         </div>
