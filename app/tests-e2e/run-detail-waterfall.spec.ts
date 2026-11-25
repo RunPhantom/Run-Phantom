@@ -144,7 +144,7 @@ test("in-trace search: the find shortcut filters to matches with their parents a
 
   await find.fill("expected 401");
   await expect(row(page, failedRunId, "bun")).toBeVisible();
-  await expect(row(page, failedRunId, "bun").getByText("match inside")).toBeVisible();
+  await expect(row(page, failedRunId, "bun").getByRole("img", { name: "Match inside the step's input or output" })).toBeVisible();
 
   await find.press("Escape");
   await expect(find).toHaveValue("");

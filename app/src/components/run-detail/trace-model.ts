@@ -189,7 +189,7 @@ function firstLine(text: string, limit = 120): string {
 }
 
 /** Error text a person can read: a JSON `{message}` or `{error}` payload is unwrapped. */
-export function readableError(span: Span): string {
+export function readableError(span: Span, limit = 120): string {
   const raw = spanErrorReason(span);
   if (!raw) return "";
   try {
@@ -197,12 +197,12 @@ export function readableError(span: Span): string {
     if (value && typeof value === "object" && !Array.isArray(value)) {
       const record = value as Record<string, unknown>;
       for (const key of ["message", "error", "reason", "detail"]) {
-        if (typeof record[key] === "string" && record[key]) return firstLine(record[key] as string);
+        if (typeof record[key] === "string" && record[key]) return firstLine(record[key] as string, limit);
       }
     }
-    if (typeof value === "string") return firstLine(value);
+    if (typeof value === "string") return firstLine(value, limit);
   } catch { /* plain text */ }
-  return firstLine(raw);
+  return firstLine(raw, limit);
 }
 
 export interface FailureSentence {

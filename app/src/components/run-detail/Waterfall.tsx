@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, ChevronDown, ChevronRight, ChevronUp, Search, Timer, X } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, ChevronUp, FileSearch, Search, Timer, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fmt } from "../../utils/helpers";
 import { setMeridian, clearMeridian } from "../../utils/meridian";
@@ -114,7 +114,7 @@ export function Waterfall({
   const narrow = width < 640;
   // Below this the bars would be a few pixels wide; the list keeps names and durations.
   const showTrack = width >= 380;
-  const nameWidth = !showTrack ? Math.max(120, width - 64) : narrow ? Math.max(150, Math.round(width * 0.46)) : width < 900 ? 250 : 320;
+  const nameWidth = !showTrack ? Math.max(120, width - 64) : narrow ? Math.max(150, Math.round(width * 0.46)) : width < 900 ? 280 : 320;
   const trackWidth = width - nameWidth - 64 - (showUsage ? 152 : 0) - (showModel ? 128 : 0);
 
   const view: Viewport = viewport ?? { from: 0, to: model.span };
@@ -547,7 +547,7 @@ function WaterfallRow({
             {highlight(span.name, isMatch ? query : "")}
           </span>
           {isMatch && !span.name.toLowerCase().includes(query.trim().toLowerCase()) && (
-            <span className="shrink-0 rounded-sm border border-rp-line px-1 text-11 text-rp-ink-subtle">match inside</span>
+            <FileSearch role="img" aria-label="Match inside the step's input or output" className="size-3.5 shrink-0 text-rp-ink-subtle" />
           )}
           {isSlowest && !narrow && <span className="shrink-0 rounded-sm border border-rp-line px-1 text-11 text-rp-ink-subtle" title="The longest step in this run">slowest</span>}
           {annotations?.map(annotation => (

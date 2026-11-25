@@ -56,31 +56,33 @@ function MessageTranscript({ messages }: { messages: NormalizedMessage[] }) {
                   <ChevronRight aria-hidden="true" className="mr-1 inline size-3 transition-transform group-open/msg:rotate-90" />
                   {message.content.split("\n")[0]!.slice(0, 120) || "(empty)"}
                 </summary>
-                <PayloadText text={message.content} mode="pretty" />
+                <PayloadText text={message.content} mode="pretty" prose={message.role !== "tool"} />
               </details>
-            : <PayloadText text={message.content} mode="pretty" />}
+            : <PayloadText text={message.content} mode="pretty" prose />}
         </li>
       ))}
     </ol>
   );
 }
 
-function PayloadText({ text, mode }: { text: string; mode: RenderMode }) {
+/** `prose` sets model text in the reading face; tool payloads and raw views stay monospaced. */
+function PayloadText({ text, mode, prose = false }: { text: string; mode: RenderMode; prose?: boolean }) {
   const shown = displayPayload(text) ?? "";
   if (mode === "pretty" && looksLikeMarkdown(text)) {
     return <div className="rp-drawer-markdown min-w-0 text-14 leading-6 text-rp-ink"><Markdown>{shown}</Markdown></div>;
   }
+  if (mode === "pretty" && prose) return <p className="whitespace-pre-wrap break-words text-14 leading-6 text-rp-ink">{shown}</p>;
   return <pre className="whitespace-pre-wrap break-words font-mono text-12 leading-5 text-rp-ink">{shown}</pre>;
 }
 
-function Payload({ payload, mode, messages }: { payload: string; mode: RenderMode; messages?: NormalizedMessage[] }) {
+function Payload({ payload, mode, messages, prose = false }: { payload: string; mode: RenderMode; messages?: NormalizedMessage[]; prose?: boolean }) {
   if (mode === "pretty" && messages?.length) return <MessageTranscript messages={messages} />;
   const shape = payloadShape(payload);
   if (shape.kind === "json") {
     if (mode === "raw") return <pre className="whitespace-pre-wrap break-words font-mono text-12 leading-5 text-rp-ink">{displayPayload(payload)}</pre>;
     return <JsonView data={shape.value} maxExpand={2} copyable />;
   }
-  return <PayloadText text={shape.text} mode={mode} />;
+  return <PayloadText text={shape.text} mode={mode} prose={prose} />;
 }
 
 function Section({ title, actions, children, id }: { title: ReactNode; actions?: ReactNode; children: ReactNode; id?: string }) {
@@ -159,7 +161,7 @@ export function SpanDrawer({ span, spans, agentRootIds, traceStart, mode, onClos
   const kind = traceKind(span, agentRootIds);
   const isErr = span.status === "ERROR";
   const errorReason = isErr ? spanErrorReason(span) : "";
-  const readable = isErr ? readableError(span) : "";
+  const readable = isErr ? readableError(span, 400) : "";
   const attrs = useMemo(() => parseSpanAttributes(span.attributes), [span.attributes]);
   const isLlm = !!span.span_type?.includes("LLM");
   const evidence = useMemo(() => {
@@ -282,14 +284,14 @@ export function SpanDrawer({ span, spans, agentRootIds, traceStart, mode, onClos
       {span.input_payload && (
         <Section id={`span-input-${span.id}`} title="Input"
           actions={<><RenderToggle mode={renderMode} onChange={changeRenderMode} /><CopyButton value={span.input_payload} label="Copy span input" /></>}>
-          <div className="rounded-sm border border-rp-line bg-rp-canvas p-2.5"><Payload payload={span.input_payload} mode={renderMode} messages={messages} /></div>
+          <div className="rounded-sm border border-rp-line bg-rp-canvas p-2.5"><Payload payload={span.input_payload} mode={renderMode} messages={messages} prose={isLlm} /></div>
         </Section>
       )}
 
       {span.output_payload && !outputIsError && (
         <Section id={`span-output-${span.id}`} title="Output"
           actions={<>{!span.input_payload && <RenderToggle mode={renderMode} onChange={changeRenderMode} />}<CopyButton value={span.output_payload} label="Copy span output" /></>}>
-          <div className="rounded-sm border border-rp-line bg-rp-canvas p-2.5"><Payload payload={span.output_payload} mode={renderMode} /></div>
+          <div className="rounded-sm border border-rp-line bg-rp-canvas p-2.5"><Payload payload={span.output_payload} mode={renderMode} prose={isLlm} /></div>
         </Section>
       )}
 
