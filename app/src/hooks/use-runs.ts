@@ -4,6 +4,7 @@ import {
   getRunDetail,
   listConversationRuns,
   listRuns,
+  listRunsPage,
   normalizeRunDetail,
   type NormalizedRunDetailData,
 } from "../api/runs";
@@ -39,10 +40,26 @@ export function useRunDeletions() {
   return useSyncExternalStore(subscribeRunDeletions, () => deletingRuns);
 }
 
+export const RUNS_KEY = ["runs"] as const;
+export const RECENT_RUNS_KEY = ["runs", "recent"] as const;
+export const RECENT_RUN_LIMIT = 8;
+
+/**
+ * Every run (up to the server's 5000-row cap). Only pages that list or look up arbitrary runs should use it; the shell
+ * reads `useRecentRuns`. Kept current by `useRunListSync`, which merges changed rows instead of refetching the list.
+ */
 export function useRuns() {
   return useQuery({
-    queryKey: ["runs"],
+    queryKey: RUNS_KEY,
     queryFn: listRuns,
+  });
+}
+
+/** The newest runs by last activity plus the total run count: one small page for the nav count and the palette. */
+export function useRecentRuns() {
+  return useQuery({
+    queryKey: RECENT_RUNS_KEY,
+    queryFn: ({ signal }) => listRunsPage({ limit: String(RECENT_RUN_LIMIT) }, signal),
   });
 }
 

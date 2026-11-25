@@ -23,7 +23,6 @@ export function useNewRunArrival(): { runId: string; at: number } | null {
       if (seen.current.has(runId) || known?.some(run => run.id === runId)) continue;
       seen.current.add(runId);
       setArrival({ runId, at: Date.now() });
-      void queryClient.invalidateQueries({ queryKey: ["runs"], exact: true });
     }
   });
   return arrival;

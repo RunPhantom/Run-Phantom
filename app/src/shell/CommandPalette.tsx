@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { commandDetail, commandStatus, useCommands, type CommandContext, type PaletteCommand, type PaletteStatus } from "./commands";
 import { buildSections } from "./palette-model";
 import { matchingRunCommands } from "./run-commands";
-import { useRuns } from "../hooks/use-runs";
+import { RECENT_RUNS_KEY, useRuns } from "../hooks/use-runs";
 import { closeOverlay, restoreOverlayFocus, useShellOverlay } from "./overlays";
 import { formatKeys, isMacPlatform } from "./keyboard";
 
@@ -33,7 +33,7 @@ function Highlighted({ text, indices }: { text: string; indices: number[] }): Re
 }
 
 const DETAIL_REFRESH_MS = 30_000;
-/** /api/runs returns up to 5000 metrics-enriched rows, so a palette opened again within this window reuses the list. */
+/** A palette opened again within this window reuses the recent-runs page instead of reading it again. */
 const RECENT_RUNS_FRESH_MS = 10_000;
 
 const STATUS_DOTS: Record<PaletteStatus["tone"], string> = {
@@ -80,8 +80,8 @@ function PaletteBody() {
   const [, setTick] = useState(0);
 
   useEffect(() => {
-    const updatedAt = queryClient.getQueryState(["runs"])?.dataUpdatedAt ?? 0;
-    if (Date.now() - updatedAt > RECENT_RUNS_FRESH_MS) void queryClient.invalidateQueries({ queryKey: ["runs"], exact: true });
+    const updatedAt = queryClient.getQueryState(RECENT_RUNS_KEY)?.dataUpdatedAt ?? 0;
+    if (Date.now() - updatedAt > RECENT_RUNS_FRESH_MS) void queryClient.invalidateQueries({ queryKey: RECENT_RUNS_KEY, exact: true });
     const timer = window.setInterval(() => setTick(tick => tick + 1), DETAIL_REFRESH_MS);
     return () => window.clearInterval(timer);
   }, [queryClient]);
