@@ -207,7 +207,10 @@ export function ConnectAgentPanel({ compact = false, split = false, tab: control
   if (split) {
     return (
       <div className={cn("grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start", className)} data-connect-panel>
-        <div className="min-w-0 rounded-lg border border-rp-line bg-rp-surface p-4 sm:p-6">{guide}</div>
+        <section aria-labelledby={`${id}-guide`} className="min-w-0 rounded-lg border border-rp-line bg-rp-surface p-4 sm:p-6">
+          <h2 id={`${id}-guide`} className="sr-only">Ways to connect</h2>
+          {guide}
+        </section>
         <aside aria-labelledby={`${id}-check`} className="min-w-0 rounded-lg border border-rp-line bg-rp-surface p-4 sm:p-5 lg:sticky lg:top-5">
           <h2 id={`${id}-check`} className="rp-type-card-title text-rp-ink">Check the connection</h2>
           <p className="mt-1 text-13 leading-5 text-rp-ink-muted">A test span goes through the same endpoint your agent uses and shows up as a run.</p>

@@ -32,9 +32,9 @@ export function TeachingEmptyState({
   const inline = size === "inline";
   return (
     <div className={cn("grid min-w-0 [&>*]:col-start-1 [&>*]:row-start-1", className)} data-teaching-empty {...data}>
-      <div aria-hidden="true" inert className="pointer-events-none min-w-0 select-none overflow-hidden opacity-40 saturate-[0.4]" data-empty-ghost>
+      <div aria-hidden="true" inert className="pointer-events-none min-w-0 select-none overflow-hidden" data-empty-ghost>
         <p className="rp-type-eyebrow mb-2 text-rp-ink-subtle">{ghostLabel}</p>
-        {ghost}
+        <div className="opacity-40 saturate-[0.4]">{ghost}</div>
       </div>
       <div className={cn("relative flex min-w-0 justify-center", inline ? "items-center px-2 py-4" : "items-start pb-6 pt-4 sm:px-6 sm:pt-10")}>
         <section
