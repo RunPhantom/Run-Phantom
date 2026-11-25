@@ -69,8 +69,8 @@ function groupStats(rows: readonly OutcomeRow[], generations: readonly Generatio
   };
 }
 
-function byRunsThenName<T extends { runs: number }>(key: (row: T) => string | null) {
-  return (a: T, b: T) => b.runs - a.runs || (key(a) === null ? 1 : key(b) === null ? -1 : key(a)! < key(b)! ? -1 : key(a)! > key(b)! ? 1 : 0);
+function byCountThenName<T>(count: (row: T) => number, key: (row: T) => string | null) {
+  return (a: T, b: T) => count(b) - count(a) || (key(a) === null ? 1 : key(b) === null ? -1 : key(a)! < key(b)! ? -1 : key(a)! > key(b)! ? 1 : 0);
 }
 
 export function computeOverview(db: Database, dbPath: string, rawQuery: Record<string, unknown>, now = Date.now()): Overview {
@@ -119,7 +119,7 @@ export function computeOverview(db: Database, dbPath: string, rawQuery: Record<s
   const byAgentAll = [...agentGroups].map(([agent, rows]): OverviewAgentRow => {
     const durations = sortedNumbers(rows.map(row => row.facts.durationMs));
     return { agent, ...groupStats(rows, rows.flatMap(row => generationsFor(row, query.model))), durationP50Ms: percentile(durations, 0.5), durationP95Ms: percentile(durations, 0.95) };
-  }).sort(byRunsThenName(row => row.agent));
+  }).sort(byCountThenName(row => row.runs, row => row.agent));
 
   const modelGroups = new Map<string | null, { rows: Set<OutcomeRow>; generations: GenerationFact[]; providers: Map<string, number> }>();
   for (const row of current) for (const generation of generationsFor(row, query.model)) {
@@ -135,7 +135,7 @@ export function computeOverview(db: Database, dbPath: string, rawQuery: Record<s
     const provider = [...group.providers].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]?.[0] ?? null;
     return { model, provider, ...groupStats([...group.rows], group.generations), calls: group.generations.length, callP50Ms: percentile(calls, 0.5), callP95Ms: percentile(calls, 0.95),
       durationP50Ms: percentile(durations, 0.5), durationP95Ms: percentile(durations, 0.95) };
-  }).sort(byRunsThenName(row => row.model));
+  }).sort(byCountThenName(row => row.calls, row => row.model));
 
   const tools = new Map<string, OverviewFailingTool>();
   for (const row of current) {

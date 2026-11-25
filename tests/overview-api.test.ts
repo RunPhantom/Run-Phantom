@@ -110,6 +110,17 @@ describe("GET /api/overview computation", () => {
     expect(month.kpis.runs).toEqual({ value: 8, previous: 0 });
   });
 
+  test("models rank by calls, the measure the Home panel shows", () => {
+    seedMetricsFixture(getDrizzleDb().$client);
+    const client = getDrizzleDb().$client;
+    const at = FIXTURE_NOW - HOUR;
+    client.query("INSERT INTO runs(id,name,event_name,started_at,last_updated_at) VALUES('chatty','gamma','gamma',?,?)").run(at, at + 60_000);
+    const insert = client.prepare(`INSERT INTO spans(run_id,id,parent_span_id,name,span_type,status,start_time_ms,end_time_ms,duration_ms,model,provider) VALUES('chatty',?,?,?,?,?,?,?,?,?,?)`);
+    insert.run("root", null, "gamma", "AGENT_ROOT", "OK", at, at + 60_000, 60_000, null, null);
+    for (let index = 0; index < 6; index++) insert.run(`llm-${index}`, "root", "chat", "LLM_GENERATION", "OK", at + index * 100, at + index * 100 + 50, 50, "claude-haiku-4-5", "anthropic");
+    expect(overview().byModel.map(row => [row.model, row.calls, row.runs])).toEqual([["claude-haiku-4-5", 7, 2], ["gpt-4o-mini", 4, 4]]);
+  });
+
   test("failing tools count every failure in a run, beyond the stored error sample", () => {
     const client = getDrizzleDb().$client;
     const at = FIXTURE_NOW - HOUR;

@@ -4,7 +4,8 @@ import {
   bucketClock, failureOnset, formatRate, headlineParts, headlineText, isWorkspaceEmpty, kpiDelta, kpiSeries, runsLink, sumKnown,
 } from "../app/src/pages/overview/home-model";
 import { splitUnit } from "../app/src/pages/overview/HomeKpis";
-import { activityItems } from "../app/src/pages/overview/HomePanels";
+import { ModelsPanel, activityItems } from "../app/src/pages/overview/HomePanels";
+import { createRequire } from "node:module";
 import type { LatestRunRow, OverviewLiveRun } from "../app/src/api/overview";
 import { sampleOverview } from "../app/src/pages/overview/sample-overview";
 
@@ -152,4 +153,24 @@ describe("latest activity", () => {
 test("kpi series carry the partial flag of each bucket", () => {
   const buckets = [bucket(0, 2), { ...bucket(1, 1), partial: true }];
   expect(kpiSeries(buckets).partial).toEqual([false, true]);
+});
+
+describe("Models panel", () => {
+  const appRequire = createRequire(new URL("../app/package.json", import.meta.url));
+  const { renderToStaticMarkup } = appRequire("react-dom/server");
+  const { createElement } = appRequire("react");
+  const { MemoryRouter } = appRequire("react-router-dom");
+
+  test("adds + only to a token total that has a known part", () => {
+    const base = sampleOverview(NOW);
+    const row = base.byModel[0];
+    const byModel = [
+      { ...row, model: "mixed-model", inputTokens: 100, outputTokens: 20, tokenUnknownCalls: 1 },
+      { ...row, model: "silent-model", inputTokens: null, outputTokens: null, tokenUnknownCalls: 1, calls: 1 },
+    ];
+    const html: string = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(ModelsPanel, { overview: { ...base, byModel } })));
+    expect(html).toContain("120+");
+    expect(html).not.toContain("—+");
+    expect(html).toContain("1 of 1 call did not report tokens");
+  });
 });

@@ -244,7 +244,10 @@ export function ModelsPanel({ overview }: { overview: Overview }) {
         barPlacement="under"
         columns={[
           { id: "calls", header: "Calls", cell: row => row.calls },
-          { id: "tokens", header: "Tokens", headerTitle: "Input plus output tokens", cell: row => <span title={row.tokenUnknownCalls ? `${row.tokenUnknownCalls} calls did not report tokens` : undefined}>{formatTokens(sumKnown(row.inputTokens, row.outputTokens))}{row.tokenUnknownCalls ? "+" : ""}</span> },
+          { id: "tokens", header: "Tokens", headerTitle: "Input plus output tokens", cell: row => {
+            const known = sumKnown(row.inputTokens, row.outputTokens);
+            return <span title={row.tokenUnknownCalls ? `${row.tokenUnknownCalls} of ${row.calls} ${row.calls === 1 ? "call" : "calls"} did not report tokens` : undefined}>{formatTokens(known)}{known !== null && row.tokenUnknownCalls ? "+" : ""}</span>;
+          } },
           { id: "cost", header: anyEstimated ? "Est." : "Cost", headerTitle: anyEstimated ? "Estimated cost" : "Reported cost", cell: row => <span title={row.costUnknownCalls ? `${row.costUnknownCalls} of ${row.calls} calls have no price` : undefined}>{row.costUsd === null ? "—" : fmtCost(row.costUsd)}{row.costUsd !== null && row.costUnknownCalls ? "+" : ""}</span> },
         ]}
         emptyLabel={`No model calls ${WINDOW_COPY[window].phrase}.`}
