@@ -66,6 +66,7 @@ export function ShellCommands() {
   })), []);
   useRegisterCommands(goTo, [goTo]);
 
+  const latest = (run: Run): Run => queryClient.getQueryData<Run[]>(["runs"])?.find(row => row.id === run.id) ?? run;
   const recentCommands: PaletteCommand[] = recent.map((run, index) => {
     const agent = runAgentName(run);
     const name = runDisplayName(run);
@@ -73,9 +74,9 @@ export function ShellCommands() {
       id: `run:${run.id}`,
       group: "Recent runs",
       label: name,
-      detail: () => [agent && agent !== name ? agent : null, ago(run.last_updated_at)].filter(Boolean).join(" · "),
+      detail: () => [agent && agent !== name ? agent : null, ago(latest(run).last_updated_at)].filter(Boolean).join(" · "),
       keywords: [run.id, ...(agent ? [agent] : []), ...(run.model ? [run.model] : [])],
-      status: () => statusOf(run),
+      status: () => statusOf(latest(run)),
       order: index,
       run: ({ navigate: go }) => go(runPath(run.id)),
     };
