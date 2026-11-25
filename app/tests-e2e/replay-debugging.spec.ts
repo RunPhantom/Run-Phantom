@@ -268,9 +268,9 @@ test("local replay: sidebar rows keep each part on one unclipped line at laptop 
       }));
       expect(parts.filter((part) => part.lines !== 1 || part.clipped), `parts of ${label} that wrap or are cut off`).toEqual([]);
 
-      const status = await middle(row.getByText(/^Run \w+$/));
+      const status = await middle(row.locator("[data-run-list-status]"));
       expect(Math.abs(await middle(row.locator("[data-run-short-id]")) - status), `short id sits on the meta line of ${label}`).toBeLessThan(1);
-      expect(Math.abs(await middle(row.getByText(/^(?:just now|\d+\w+ ago)$/)) - status), `age sits on the meta line of ${label}`).toBeLessThan(1);
+      expect(Math.abs(await middle(row.locator("[data-run-age]")) - await middle(row.locator("[data-run-name]"))), `age sits on the title line of ${label}`).toBeLessThan(1);
     }
     await expect(page.getByText("connected", { exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath(`replay-row-layout-${width}.png`) });

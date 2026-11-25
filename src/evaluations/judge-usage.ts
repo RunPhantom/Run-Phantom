@@ -1,3 +1,4 @@
+import { estimateListPriceCost } from "../pricing/list-prices";
 import { validTokenCount } from "../pricing/usage";
 import { comparisonTarget } from "../prompts/comparison-protocol";
 import { providerResponseUsage } from "../prompts/providers";
@@ -15,7 +16,7 @@ export function unavailableJudgeUsage(provider: JudgeUsage["provider"], model: s
     costUsd: null, rateRevision: null, costUnavailableReason: reason };
 }
 
-/** Prices the provider-reported usage with the same frozen rates as prompt comparisons; unpriced models keep their tokens. */
+/** Prices the provider-reported usage with the same frozen rates as prompt comparisons, else bundled list prices; unpriced models keep their tokens. */
 export function measureJudgeUsage(provider: JudgeUsage["provider"], model: string, envelope: unknown): JudgeUsage {
   if (!envelope || typeof envelope !== "object" || Array.isArray(envelope) || (envelope as Record<string, unknown>).usage === undefined) {
     return unavailableJudgeUsage(provider, model, "Provider reported no usage");
@@ -30,12 +31,27 @@ export function measureJudgeUsage(provider: JudgeUsage["provider"], model: strin
   if (usage.inputTokens === null || usage.outputTokens === null) return { ...usage, costUnavailableReason: "Provider usage omitted input or output tokens" };
   let target;
   try { target = comparisonTarget({ provider, model }); }
-  catch { return { ...usage, costUnavailableReason: "No frozen rate for this judge model" }; }
+  catch { return listPricedJudgeUsage(usage); }
   const { estimate } = estimateComparisonUsage(target, source);
   if (estimate.coverage !== "complete" || estimate.totalUsd === null || !Number.isFinite(estimate.totalUsd)) {
     return { ...usage, rateRevision: estimate.rateRevision?.revision ?? null, costUnavailableReason: estimate.reasons[0] ?? "Cost could not be estimated" };
   }
   return { ...usage, costUsd: estimate.totalUsd, rateRevision: estimate.rateRevision?.revision ?? null };
+}
+
+/**
+ * Judge models outside the comparison roster are priced from the bundled list
+ * prices, response model first. OpenAI's prompt_tokens includes cached
+ * tokens; Anthropic's input_tokens excludes cache reads and writes.
+ */
+function listPricedJudgeUsage(usage: JudgeUsage): JudgeUsage {
+  for (const model of new Set([usage.responseModel, usage.model].filter((value): value is string => !!value))) {
+    const estimate = estimateListPriceCost({ model, provider: usage.provider, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens,
+      cacheReadTokens: usage.cacheReadTokens, cacheWriteTokens: usage.cacheWriteTokens, inputIncludesCache: usage.provider === "openai" });
+    if (estimate.kind === "estimated") return { ...usage, costUsd: estimate.totalUsd, rateRevision: estimate.revision.revision };
+    if (estimate.reason !== "model_unpriced") return { ...usage, costUnavailableReason: "Cached token usage could not be priced" };
+  }
+  return { ...usage, costUnavailableReason: "No list price for this judge model" };
 }
 
 /** Admits only the exact usage shape; anything else is dropped rather than repaired. */

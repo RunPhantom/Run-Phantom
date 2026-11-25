@@ -505,7 +505,7 @@ function KeysSection() {
         <span className="min-w-0">
           <span className="block text-[13px] font-medium text-rp-ink">Fetch public model pricing</span>
           <span className="mt-0.5 block text-[12px] leading-5 text-rp-ink-muted">
-            Contacts OpenRouter for public price metadata. No trace content, prompts, or API keys are included.
+            Cost estimates use bundled list prices offline by default. Turn this on to also price other models from OpenRouter's public catalogue. Only the catalogue is requested; no trace content, prompts, or API keys are sent.
           </span>
         </span>
       </label>

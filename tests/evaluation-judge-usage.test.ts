@@ -1,3 +1,4 @@
+import { PRICE_TABLE_REVISION } from "../src/pricing/list-prices";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -36,7 +37,7 @@ const judgment = JSON.stringify({ score: 0.9, reason: "Correct." });
 const judge = (value: RubricRule, body: unknown, status = 200) => evaluateRubric(value, snapshot(), snapshot().input,
   { fetch: (() => Promise.resolve(Response.json(body, { status }))) as unknown as typeof fetch });
 const openai = (usage?: unknown, model = "gpt-6.1-terra") => ({ model, service_tier: "default", choices: [{ message: { role: "assistant", content: judgment }, finish_reason: "stop" }], ...(usage === undefined ? {} : { usage }) });
-const anthropic = (usage?: unknown) => ({ type: "message", model: "claude-sonnet-5-5", content: [{ type: "text", text: judgment }], stop_reason: "end_turn", ...(usage === undefined ? {} : { usage }) });
+const anthropic = (usage?: unknown, model = "claude-sonnet-5-5") => ({ type: "message", model, content: [{ type: "text", text: judgment }], stop_reason: "end_turn", ...(usage === undefined ? {} : { usage }) });
 
 describe("model judge usage and cost", () => {
   test("OpenAI usage with cached and reasoning tokens is priced with the frozen gpt-6.1-terra rate", async () => {
@@ -54,11 +55,29 @@ describe("model judge usage and cost", () => {
     expect(result.usage!.costUsd).toBeCloseTo((100 * 2 + 10 * 0.1 + 30 * 10) / 1e6, 12);
   });
 
+  test("judge models outside the comparison roster are priced from bundled list prices, dated ids included", async () => {
+    const mini = await judge(rule("openai", "gpt-4.1-mini"), openai({ prompt_tokens: 50, completion_tokens: 5 }, "gpt-4.1-mini-2025-04-14"));
+    expect(mini.usage).toMatchObject({ responseModel: "gpt-4.1-mini-2025-04-14", costUnavailableReason: null, rateRevision: PRICE_TABLE_REVISION });
+    expect(mini.usage!.costUsd).toBeCloseTo((50 * 0.4 + 5 * 1.6) / 1e6, 12);
+    const nano = await judge(rule("openai", "gpt-5-nano"), openai({ prompt_tokens: 1000, completion_tokens: 200 }, "gpt-5-nano-2025-08-07"));
+    expect(nano.usage!.costUsd).toBeCloseTo((1000 * 0.05 + 200 * 0.4) / 1e6, 12);
+    const cached = await judge(rule("openai", "gpt-5-nano"), openai({ prompt_tokens: 1000, completion_tokens: 200, prompt_tokens_details: { cached_tokens: 512 } }, "gpt-5-nano-2025-08-07"));
+    expect(cached.usage).toMatchObject({ cacheReadTokens: 512, costUnavailableReason: null, rateRevision: PRICE_TABLE_REVISION });
+    // OpenAI cached tokens are part of prompt_tokens: 488 uncached at $0.05/M, 512 cached at $0.005/M.
+    expect(cached.usage!.costUsd).toBeCloseTo((488 * 0.05 + 512 * 0.005 + 200 * 0.4) / 1e6, 12);
+  });
+
+  test("Anthropic judge cache reads and writes outside the roster are priced on top of input", async () => {
+    const result = await judge(rule("anthropic", "claude-opus-4-1"), anthropic({ input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 1000, cache_creation_input_tokens: 200 }, "claude-opus-4-1-20250805"));
+    expect(result.usage).toMatchObject({ cacheReadTokens: 1000, cacheWriteTokens: 200, costUnavailableReason: null, rateRevision: PRICE_TABLE_REVISION });
+    expect(result.usage!.costUsd).toBeCloseTo((100 * 15 + 1000 * 1.5 + 200 * 18.75 + 10 * 75) / 1e6, 12);
+  });
+
   test("missing usage, unpriced models and failed requests are unavailable, never $0", async () => {
     const missing = await judge(rule("openai", "gpt-6.1-terra"), openai());
     expect(missing.status).toBe("pass"); expect(missing.usage).toMatchObject({ inputTokens: null, outputTokens: null, costUsd: null, costUnavailableReason: "Provider reported no usage" });
-    const unpriced = await judge(rule("openai", "gpt-4.1-mini"), openai({ prompt_tokens: 50, completion_tokens: 5 }));
-    expect(unpriced.usage).toMatchObject({ inputTokens: 50, outputTokens: 5, costUsd: null, costUnavailableReason: "No frozen rate for this judge model" });
+    const unpriced = await judge(rule("openai", "gpt-unlisted-judge"), openai({ prompt_tokens: 50, completion_tokens: 5 }, "gpt-unlisted-judge"));
+    expect(unpriced.usage).toMatchObject({ inputTokens: 50, outputTokens: 5, costUsd: null, costUnavailableReason: "No list price for this judge model" });
     const unknownSnapshot = await judge(rule("openai", "gpt-6.1-terra"), openai({ prompt_tokens: 50, completion_tokens: 5 }, "gpt-6.1-terra-2099-01-01"));
     expect(unknownSnapshot.usage).toMatchObject({ inputTokens: 50, outputTokens: 5, costUsd: null, costUnavailableReason: "rate_identity_mismatch" });
     const failed = await judge(rule("anthropic", "claude-sonnet-5-5"), { type: "error" }, 529);

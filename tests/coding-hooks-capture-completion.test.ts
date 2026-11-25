@@ -36,7 +36,7 @@ test("generic live SDK runs retain activity even with matching names and unavail
   expect(listed.capture_completion).toBeNull(); expect(isActive(listed)).toBe(true);
   expect(getRunWithSpans("ordinary").run?.capture_completion).toBeNull();
   expect(isActive({ last_updated_at: Date.now() - 31_000, finished: 1 })).toBe(false);
-  expect(isActive({ last_updated_at: Date.now() - 4_000, finished: 1, live_event_count: 1 })).toBe(true);
+  expect(isActive({ last_updated_at: Date.now() - 4_000, finished: 1, live_event_count: 1 })).toBe(false);
 });
 test("malformed, unknown-version and oversized root claims grant no validated capture projection", () => {
   seed("malformed", "{"); seed("unknown", attributes.replace("observation/v1", "observation/v999"));

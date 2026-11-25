@@ -6,9 +6,12 @@ import { getDbPath } from "./db";
 import { runSearchWorker, type RunSearchWork } from "./run-search-worker";
 import { compileSearchFilter, parseSearchFilter, SearchFilterError, type SearchFilter } from "./search-filter";
 import { hasDuplicateJsonKeys } from "./json-keys";
+import type { RunStatus } from "./run-status";
+import { RUN_STATUS_FILTER_VALUES, runStatusFilterSql, runStatusSql } from "./run-status-sql";
 
 export const RUN_SEARCH_LIMITS = { queryChars: 256, pageSize: 100, responseBytes: 120_000, timeoutMs: 5_000, workers: 2 } as const;
-export type RunSearchStatus = "running" | "completed" | "failed";
+/** A shared RunStatus, or the `running` (live or quiet) and `completed` (with or without errors) groups. */
+export type RunSearchStatus = RunStatus | "running" | "completed";
 export interface RunSearchSummary {
   id: string;
   name: string | null;
@@ -21,9 +24,14 @@ export interface RunSearchSummary {
   metadata: null;
   model: string | null;
   provider: string | null;
-  status: RunSearchStatus;
+  /** The same status deriveRunStatus gives this run, computed in SQL. */
+  status: RunStatus;
+  replay_outcome: "failed" | "cancelled" | null;
   finished: number;
   error_count: number;
+  tool_error_count: number;
+  /** 1 when the span standing for the run errored; see rootFailed in run-status.ts. */
+  root_failed: number;
   span_count: number;
   live_event_count: number;
 }
@@ -50,7 +58,7 @@ function parseInput(value: unknown, dbPath: string): SearchInput {
   const model = field("model");
   const provider = field("provider");
   const rawStatus = field("status");
-  if (rawStatus && rawStatus !== "all" && !["running", "completed", "failed"].includes(rawStatus)) return invalid("status must be running, completed, failed, or all");
+  if (rawStatus && rawStatus !== "all" && !RUN_STATUS_FILTER_VALUES.includes(rawStatus)) return invalid(`status must be all or one of ${RUN_STATUS_FILTER_VALUES.join(", ")}`);
   let filter: SearchFilter | undefined, cursorKey: string | undefined;
   if (input.filter !== undefined) {
     try {
@@ -108,12 +116,10 @@ function buildQuery(input: SearchInput): { sql: string; params: (string | number
     if (input.provider) { match.push("s.provider = ?"); params.push(input.provider); }
     where.push(`EXISTS (SELECT 1 FROM spans s WHERE s.run_id = r.id AND ${match.join(" AND ")})`);
   }
-  const failed = "EXISTS (SELECT 1 FROM spans s WHERE s.run_id = r.id AND s.status = 'ERROR')";
-  const finished = "(EXISTS (SELECT 1 FROM spans s WHERE s.run_id = r.id AND s.parent_span_id IS NULL) AND NOT EXISTS (SELECT 1 FROM spans s WHERE s.run_id = r.id AND s.parent_span_id IS NULL AND (s.status IS NULL OR s.status NOT IN ('OK', 'ERROR'))))";
-  if (!input.filter) {
-    if (input.status === "failed") where.push(failed);
-    if (input.status === "completed") where.push(`NOT ${failed} AND ${finished}`);
-    if (input.status === "running") where.push(`NOT ${failed} AND NOT ${finished}`);
+  const derived = runStatusSql("r");
+  if (!input.filter && input.status) {
+    const match = runStatusFilterSql(derived.status, input.status, "eq");
+    where.push(match.sql); params.push(...match.params);
   }
   params.push(input.limit + 1);
   return {
@@ -124,9 +130,12 @@ function buildQuery(input: SearchInput): { sql: string; params: (string | number
       r.started_at, r.last_updated_at, NULL AS metadata,
       (SELECT substr(s.model, 1, 512) FROM spans s WHERE s.run_id = r.id AND s.model IS NOT NULL ORDER BY s.start_time_ms, s.id LIMIT 1) AS model,
       (SELECT substr(s.provider, 1, 512) FROM spans s WHERE s.run_id = r.id AND s.provider IS NOT NULL ORDER BY s.start_time_ms, s.id LIMIT 1) AS provider,
-      CASE WHEN ${failed} THEN 'failed' WHEN ${finished} THEN 'completed' ELSE 'running' END AS status,
-      ${finished} AS finished,
+      ${derived.status} AS status,
+      ${derived.replay} AS replay_outcome,
+      ${derived.finished} AS finished,
       (SELECT COUNT(*) FROM spans s WHERE s.run_id = r.id AND s.status = 'ERROR') AS error_count,
+      (SELECT COUNT(*) FROM spans s WHERE s.run_id = r.id AND s.status = 'ERROR' AND s.span_type = 'TOOL_CALL') AS tool_error_count,
+      ${derived.rootFailed} AS root_failed,
       (SELECT COUNT(*) FROM spans s WHERE s.run_id = r.id) AS span_count,
       (SELECT COUNT(*) FROM live_events e WHERE e.trace_id = r.id) AS live_event_count
       FROM matching JOIN runs r ON r.id = matching.id ORDER BY r.started_at DESC, r.id DESC`,

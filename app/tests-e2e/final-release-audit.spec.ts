@@ -107,11 +107,14 @@ test("release audit: visible save and delete stay local and error-free", async (
 
 test("release audit: status is explicit without relying on color", async ({ page, runPhantom }) => {
   await seedRunPhantomFixtures(runPhantom.url);
+  // A run whose root span has ended is complete even while live events still
+  // arrive, so the live run here is one that has streamed events but no spans.
+  const liveRunId = "0000000000000000000000000000003a";
   const liveResponse = await fetch(`${runPhantom.url}/v1/live`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      traceId: FIXTURE_LIVE_RUN_ID,
+      traceId: liveRunId,
       type: "message",
       content: "Still working",
       timestamp: Date.now(),
@@ -119,8 +122,8 @@ test("release audit: status is explicit without relying on color", async ({ page
   });
   expect(liveResponse.ok).toBe(true);
 
-  await page.goto(`${runPhantom.url}/runs/${FIXTURE_LIVE_RUN_ID}`);
-  const liveRow = page.locator(`[data-run-id="${FIXTURE_LIVE_RUN_ID}"]`);
+  await page.goto(`${runPhantom.url}/runs/${liveRunId}`);
+  const liveRow = page.locator(`[data-run-id="${liveRunId}"]`);
   await expect(liveRow.getByText("Run live", { exact: true })).toBeAttached();
   await expect(page.getByText("Run live", { exact: true }).last()).toBeVisible();
 

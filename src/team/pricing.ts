@@ -30,5 +30,5 @@ export function buildCostAnalyticsReport(scope: CostAnalyticsReport["scope"], sp
   if (redactTeamText(JSON.stringify(request.rates)) !== JSON.stringify(request.rates)) throw new CostAnalyticsError("invalid_request", "Invalid cost analytics rates");
   const sourceRevision = "sha256:" + createHash("sha256").update(JSON.stringify({ version: "runphantom-cost-source/1", scope, request, spans })).digest("hex");
   const result = aggregateCostAnalytics(spans.map(safeProjection), request);
-  return Object.freeze({ ...result, asOf, scope: Object.freeze({ ...scope }), sourceRevision, rateAuthority: "request-declared" });
+  return Object.freeze({ ...result, asOf, scope: Object.freeze({ ...scope }), sourceRevision, rateAuthority: request.estimateMode === "list-prices" ? "bundled-list-prices" : "request-declared" });
 }

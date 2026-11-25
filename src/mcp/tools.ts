@@ -2,6 +2,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { callVerificationTool, VERIFICATION_TOOLS } from "./verification-tools";
 import { callEvaluationTool, EVALUATION_TOOLS } from "./evaluation-tools";
 import { parseSearchFilter, SearchFilterError } from "../search-filter";
+import { RUN_STATUS_FILTER_VALUES } from "../run-status-sql";
 import { callPermissionPromptTool, permissionPromptTools } from "./permission-prompt-tool";
 import { callBrowserTool, BROWSER_TOOLS } from "./browser-tools";
 import {
@@ -18,7 +19,7 @@ import {
 } from "../agent-chat";
 
 const TOOLS = [
-  { name: "search_span_hits", description: "Search captured spans using literal text and closed typed predicates on the same occurrence. Returns separately bounded, redacted snippets and UTF16 highlights; absent or oversized complete fields are unavailable. At most50 hits per page. Follow the resource-bound nextCursor.", inputSchema: { type: "object", additionalProperties: false, properties: { q: {type:"string",maxLength:256}, model:{type:"string",maxLength:256},provider:{type:"string",maxLength:256},status:{type:"string",enum:["all","running","completed","failed"]},filter:{type:"object"},limit:{type:"integer",minimum:1,maximum:50},cursor:{type:"string",maxLength:4096} } } },
+  { name: "search_span_hits", description: "Search captured spans using literal text and closed typed predicates on the same occurrence. Returns separately bounded, redacted snippets and UTF16 highlights; absent or oversized complete fields are unavailable. At most50 hits per page. Follow the resource-bound nextCursor.", inputSchema: { type: "object", additionalProperties: false, properties: { q: {type:"string",maxLength:256}, model:{type:"string",maxLength:256},provider:{type:"string",maxLength:256},status:{type:"string",enum:["all",...RUN_STATUS_FILTER_VALUES]},filter:{type:"object"},limit:{type:"integer",minimum:1,maximum:50},cursor:{type:"string",maxLength:4096} } } },
   { name: "search_suggestions", description: "List at most20 captured local model, provider or valid tag suggestions for a literal prefix. Contains no payloads and makes no remote provider calls.", inputSchema: {type:"object",additionalProperties:false,required:["field"],properties:{field:{type:"string",enum:["model","provider","tag"]},prefix:{type:"string",maxLength:256},limit:{type:"integer",minimum:1,maximum:20}}} },
   {
     name: "search_runs",
@@ -27,7 +28,7 @@ const TOOLS = [
       type: "object",
       properties: {
         q: { type: "string", maxLength: 256, description: "Literal substring; empty browses all runs. %, _ and quotes are literal." },
-        status: { type: "string", enum: ["all", "running", "completed", "failed"] },
+        status: { type: "string", enum: ["all", ...RUN_STATUS_FILTER_VALUES], description: "A run status (live, quiet, complete, completed_with_errors, failed, cancelled, interrupted, unknown), or the groups running (live or quiet) and completed (with or without errors)." },
         model: { type: "string", maxLength: 256 },
         provider: { type: "string", maxLength: 256 },
         filter: {

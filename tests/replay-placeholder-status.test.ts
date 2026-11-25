@@ -29,32 +29,35 @@ describe("replay placeholder status", () => {
 
   test("a failed placeholder is never live and reads failed", () => {
     expect(isActive(failed)).toBe(false);
-    expect(runStatus(failed, 0)).toBe("failed");
+    expect(runStatus(failed).status).toBe("failed");
   });
 
   test("a cancelled placeholder is never live and reads cancelled", () => {
     expect(isActive(cancelled)).toBe(false);
-    expect(runStatus(cancelled, 0)).toBe("cancelled");
+    expect(runStatus(cancelled).status).toBe("cancelled");
   });
 
   test("the recorded failure outlasts the recency window", () => {
     const stale = { ...failed, last_updated_at: Date.now() - 60_000 };
-    expect(runStatus(stale, 0)).toBe("failed");
-    expect(runStatus({ ...cancelled, last_updated_at: Date.now() - 60_000 }, 0)).toBe("cancelled");
+    expect(runStatus(stale).status).toBe("failed");
+    expect(runStatus({ ...cancelled, last_updated_at: Date.now() - 60_000 }).status).toBe("cancelled");
   });
 
   test("an in-flight placeholder without an error is still live", () => {
     const pending = placeholder();
     expect(isActive(pending)).toBe(true);
-    expect(runStatus(pending, 0)).toBe("live");
-    expect(runStatus({ ...pending, last_updated_at: Date.now() - 60_000 }, 0)).toBe("complete");
+    expect(runStatus(pending).status).toBe("live");
+  });
+
+  test("a quiet placeholder that never recorded spans or an end is unknown, not complete", () => {
+    expect(runStatus({ ...placeholder(), last_updated_at: Date.now() - 60_000, span_count: 0 }).status).toBe("unknown");
   });
 
   test("ordinary runs keep their span-derived status", () => {
     const done = { last_updated_at: Date.now() - 60_000, finished: 1, metadata: null };
-    expect(runStatus(done, 0)).toBe("complete");
-    expect(runStatus(done, 2)).toBe("failed");
-    expect(runStatus({ ...done, last_updated_at: Date.now(), finished: null }, 0)).toBe("live");
-    expect(runStatus({ ...done, metadata: "not json" }, 0)).toBe("complete");
+    expect(runStatus(done).status).toBe("complete");
+    expect(runStatus({ ...done, error_count: 2, root_failed: true }).status).toBe("failed");
+    expect(runStatus({ ...done, last_updated_at: Date.now(), finished: null }).status).toBe("live");
+    expect(runStatus({ ...done, metadata: "not json" }).status).toBe("complete");
   });
 });

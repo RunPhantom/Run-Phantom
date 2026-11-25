@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { isRunDeleting, setRunDeleting, subscribeRunDeletions, setRunDeletionError, useRunDeletionError, useRunDeletions } from "../hooks/use-runs";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
@@ -25,9 +25,10 @@ import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
 import { Badge as UiBadge, badgeVariants } from "@/components/ui/badge";
 import { fieldClassName } from "@/components/ui/input";
-import { fmt, isActive, plural, replayOutcome, runDisplayName, isoTimestamp, safeDecodeParam, spanErrorReason } from "../utils/helpers";
+import { fmt, plural, runDisplayName, runStatusTone, isoTimestamp, safeDecodeParam, spanErrorReason } from "../utils/helpers";
+import { deriveRunStatus, runErrorEvidenceFromSpans, runInProgress, RUN_QUIET_AFTER_MS, type RunStatusEvidence, type RunStatusSummary } from "../../../src/run-status";
+import { useRunStatus } from "../hooks/use-run-status";
 import { buildReplayModelOptions } from "../utils/replay-models";
-import type { RunStatus } from "../utils/helpers";
 import { captureCompletion, observationReplayUnavailable } from "../../../src/spans/normalized";
 import { useQueryClient } from "@tanstack/react-query";
 import { parseReplayMetadata } from "../utils/types";
@@ -50,7 +51,8 @@ import { useAnnotations } from "../hooks/use-annotations";
 import type { Annotation, AnnotationKind } from "../hooks/use-annotations";
 import { useAgentForEvent } from "../hooks/use-agents";
 import { useRunPhantomConnectionStatus, useRunPhantomEvent } from "../hooks/use-runphantom-ws";
-import { getCostBreakdown, getPricingSnapshot, getPricingUsageByModel, subscribePricing, fmtCost, fmtRate } from "../utils/costs";
+import { getPricingSnapshot, getRunCostRows, subscribePricing, fmtCost, fmtRate, type ModelCostRow } from "../utils/costs";
+import { PRICE_TABLE_AS_OF } from "../../../src/pricing/list-prices";
 import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
 import { useDialogFocus } from "../hooks/use-dialog-focus";
 
@@ -370,14 +372,7 @@ function StatsLine({ stats, model, spans, active, startedAt, completionUnavailab
     return () => clearInterval(i);
   }, [active, completionUnavailable]);
 
-  const breakdown = useMemo(() => {
-    if (!spans) return [];
-    const byModel = getPricingUsageByModel(spans);
-    return [...byModel.entries()].map(([m, { inTok, outTok }]) => ({
-      model: m, inTok, outTok,
-      breakdown: pricing.catalogue ? getCostBreakdown(m, inTok, outTok) : null,
-    }));
-  }, [spans, pricing.catalogue]);
+  const breakdown = useMemo(() => spans ? getRunCostRows(spans, pricing) : [], [spans, pricing]);
 
   useLayoutEffect(() => {
     if (!showCost) return;
@@ -415,11 +410,14 @@ function StatsLine({ stats, model, spans, active, startedAt, completionUnavailab
   const durRemSec = durSec % 60;
   const hasTokens = inTok > 0 || outTok > 0;
   const hasCost = breakdown.length > 0;
-  const known = breakdown.filter(row => row.breakdown !== null);
+  const known = breakdown.filter(row => row.totalUsd !== null);
   const unavailableCount = breakdown.length - known.length;
-  const totalCost = known.reduce((sum, row) => sum + row.breakdown!.totalCost, 0);
+  const totalCost = known.reduce((sum, row) => sum + row.totalUsd!, 0);
   const availableTotal = known.length > 0 && Number.isFinite(totalCost);
-  const costLabel = availableTotal ? `${unavailableCount ? "Known estimates" : "Estimated cost"} ${fmtCost(totalCost)}${unavailableCount ? ` · ${unavailableCount} unavailable` : ""}` : "Estimate unavailable";
+  const allReported = known.every(row => row.sources.listPrice === 0 && row.sources.catalogue === 0);
+  const costLabel = !availableTotal ? "Estimate unavailable"
+    : unavailableCount ? `${allReported ? "Known reported cost" : "Known estimates"} ${fmtCost(totalCost)} · ${unavailableCount} unavailable`
+    : `${allReported ? "Reported cost" : "Estimated cost"} ${fmtCost(totalCost)}`;
 
   // Where the stats wrap, the separator after the last stat on a line has
   // nothing to separate; index.css hides it on the stat marked here.
@@ -473,32 +471,14 @@ function StatsLine({ stats, model, spans, active, startedAt, completionUnavailab
               <span aria-live="polite">{costLabel}</span>
             </button>
             {showCost && (
-              <div ref={costPanelRef} id={costPanelId} role="region" aria-label="Nominal cost estimates" className="fixed z-50 overflow-y-auto rounded-md border border-rp-line bg-rp-surface p-4 text-[12px] shadow-e3"
+              <div ref={costPanelRef} id={costPanelId} role="region" aria-label="Cost breakdown" className="fixed z-50 overflow-y-auto rounded-md border border-rp-line bg-rp-surface p-4 text-[12px] shadow-e3"
                 style={{ ...costPosition, maxHeight: "min(400px, calc(100vh - 32px))", visibility: costPosition ? "visible" : "hidden" }}>
-                <div className="rp-eyebrow mb-2">Nominal input/output estimates</div>
-                <p className="mb-3 whitespace-normal leading-5 text-rp-ink-muted">OpenRouter catalogue quotes; actual provider and tier billing may differ. Cache, audio, discounts, and other fees are excluded. Reported cost stays separate.</p>
+                <div className="rp-eyebrow mb-2">Cost by model</div>
+                <p className="mb-3 whitespace-normal leading-5 text-rp-ink-muted">Reported costs are used as is. Estimates price input, output and cached input at list prices as of {PRICE_TABLE_AS_OF}, or input and output at OpenRouter catalogue quotes; fees excluded.</p>
                 {breakdown.map(b => (
                   <div key={b.model === null ? "missing-model" : `model:${b.model}`} className="mb-3 last:mb-0 whitespace-normal break-words">
                     <div className="mb-1 font-mono text-[12px] font-medium text-rp-ink">{b.model ?? "Model unavailable"}</div>
-                    {b.breakdown ? (
-                      <div className="space-y-1 text-rp-ink-muted">
-                        <div className="flex justify-between gap-4">
-                          <span>{b.inTok!.toLocaleString()} input @ {fmtRate(b.breakdown.inRate)}/M</span>
-                          <span className="rp-num text-rp-ink">{fmtCost(b.breakdown.inCost)}</span>
-                        </div>
-                        <div className="flex justify-between gap-4">
-                          <span>{b.outTok!.toLocaleString()} output @ {fmtRate(b.breakdown.outRate)}/M</span>
-                          <span className="rp-num text-rp-ink">{fmtCost(b.breakdown.outCost)}</span>
-                        </div>
-                        <div className="flex justify-between gap-4 border-t border-rp-line pt-1">
-                          <span className="text-rp-ink">total</span>
-                          <span className="rp-num font-medium text-rp-ink">{fmtCost(b.breakdown.totalCost)}</span>
-                        </div>
-                        <div>Catalogue ID: {b.breakdown.catalogueId}</div>
-                        <div>Revision: <span className="font-mono">{b.breakdown.rateRevision}</span></div>
-                        <div>Fetched: {b.breakdown.source.observedAt}</div>
-                      </div>
-                    ) : <p className="text-rp-ink-muted">{b.model === null ? "Model identity was not captured." : b.inTok === null || b.outTok === null ? "Input or output token capture is unavailable." : pricing.status === "disabled" ? "Public pricing is disabled. Enable it in Settings." : pricing.status === "loading" || pricing.status === "idle" ? "Public pricing is loading." : pricing.status === "error" ? pricing.error : "No unambiguous exact catalogue price is available."}</p>}
+                    <CostRowDetail row={b} />
                   </div>
                 ))}
               </div>
@@ -506,6 +486,48 @@ function StatsLine({ stats, model, spans, active, startedAt, completionUnavailab
           </span>
         </Stat>
       )}
+    </div>
+  );
+}
+
+function CostLine({ label, amount, strong = false }: { label: ReactNode; amount: number; strong?: boolean }) {
+  return (
+    <div className={cn("flex justify-between gap-4", strong && "border-t border-rp-line pt-1")}>
+      <span className={cn(strong && "text-rp-ink")}>{label}</span>
+      <span className={cn("rp-num text-rp-ink", strong && "font-medium")}>{fmtCost(amount)}</span>
+    </div>
+  );
+}
+
+function CostRowDetail({ row }: { row: ModelCostRow }) {
+  const { sources } = row;
+  const used = [sources.reported, sources.listPrice, sources.catalogue].filter(count => count > 0).length;
+  // Per-token lines only when one source priced every call; calls in different price bands would make one rate untrue.
+  const tokens = used === 1 && row.totalUsd !== null && row.inTok !== null && row.outTok !== null;
+  return (
+    <div className="space-y-1 text-rp-ink-muted">
+      {sources.reported > 0 && <CostLine label="Reported on the span" amount={row.reportedUsd} />}
+      {row.listPrice && <>
+        {tokens && Math.abs(row.inTok! * row.listPrice.inRate / 1_000_000 + row.outTok! * row.listPrice.outRate / 1_000_000 + row.listPriceCacheUsd - row.listPriceUsd) <= 1e-9 * Math.max(1, row.listPriceUsd) && <>
+          <CostLine label={`${row.inTok!.toLocaleString()} input @ ${fmtRate(row.listPrice.inRate)}/M`} amount={row.inTok! * row.listPrice.inRate / 1_000_000} />
+          <CostLine label={`${row.outTok!.toLocaleString()} output @ ${fmtRate(row.listPrice.outRate)}/M`} amount={row.outTok! * row.listPrice.outRate / 1_000_000} />
+        </>}
+        {row.listPriceCacheTokens > 0 && <CostLine label={`${row.listPriceCacheTokens.toLocaleString()} cached input tokens`} amount={row.listPriceCacheUsd} />}
+        <CostLine label="Estimated at list price" amount={row.listPriceUsd} strong={tokens || row.listPriceCacheTokens > 0} />
+        <p>Price for {row.listPrice.priceModel} from <a className="text-rp-blue underline underline-offset-4 hover:text-rp-blue-hover" href={row.listPrice.sourceUrl} target="_blank" rel="noreferrer">{row.listPrice.sourceName}</a>, as of {row.listPrice.asOf}.</p>
+      </>}
+      {row.catalogue && <>
+        {tokens && <>
+          <CostLine label={`${row.inTok!.toLocaleString()} input @ ${fmtRate(row.catalogue.inRate)}/M`} amount={row.catalogue.inCost} />
+          <CostLine label={`${row.outTok!.toLocaleString()} output @ ${fmtRate(row.catalogue.outRate)}/M`} amount={row.catalogue.outCost} />
+        </>}
+        <CostLine label="Estimated from the OpenRouter catalogue" amount={row.catalogueUsd} strong={tokens} />
+        <div>Catalogue ID: {row.catalogue.catalogueId}</div>
+        <div>Revision: <span className="font-mono">{row.catalogue.rateRevision}</span></div>
+        <div>Fetched: {row.catalogue.source.observedAt}</div>
+      </>}
+      {used > 1 && row.totalUsd !== null && <CostLine label="total" amount={row.totalUsd} strong />}
+      {row.unavailableReason && <p>{used > 0 ? "Some calls are unpriced. " : ""}{row.unavailableReason}</p>}
     </div>
   );
 }
@@ -645,10 +667,10 @@ function InlineEdit({ value, onConfirm, className, style, inputStyle }: {
     );
   }
   return (
-    <button type="button" aria-label={`Rename ${value}`} className={`group/edit inline-flex items-center gap-1 cursor-pointer bg-transparent text-left ${className ?? ""}`} style={style}
+    <button type="button" aria-label={`Rename ${value}`} title={value} className={`group/edit inline-flex min-w-0 max-w-full items-center gap-1 cursor-pointer bg-transparent text-left ${className ?? ""}`} style={style}
       onClick={() => setEditing(true)}>
-      {value}
-      <Pencil aria-hidden="true" className="size-3 text-rp-ink-muted opacity-0 transition-opacity duration-250 ease-standard group-hover/edit:opacity-100" />
+      <span className="min-w-0 truncate">{value}</span>
+      <Pencil aria-hidden="true" className="size-3 shrink-0 text-rp-ink-muted opacity-0 transition-opacity duration-250 ease-standard group-hover/edit:opacity-100" />
     </button>
   );
 }
@@ -720,13 +742,27 @@ function ReplayRegistryNotice({ status, onRetry }: {
   );
 }
 
+function runStatusEvidence(run: Run, spans: readonly Span[]): RunStatusEvidence {
+  const unavailable = run.capture_completion === "unavailable" || spans.some(span => captureCompletion(span.normalized?.capture) === "unavailable");
+  return { ...run, ...runErrorEvidenceFromSpans(spans), span_count: spans.length, capture_completion: unavailable ? "unavailable" : null };
+}
+
+/** A sub-agent has no root of its own here, so its errors are child errors of a run that is either still live or finished. */
+function subAgentStatus(runStatus: RunStatusSummary | null, spans: readonly Span[]): RunStatusSummary {
+  const inProgress = runStatus ? runInProgress(runStatus.status) : false;
+  const unavailable = spans.some(span => captureCompletion(span.normalized?.capture) === "unavailable");
+  const { error_count, tool_error_count } = runErrorEvidenceFromSpans(spans);
+  const lastUpdatedAt = runStatus?.status === "live" ? Date.now() : runStatus?.status === "quiet" ? Date.now() - RUN_QUIET_AFTER_MS : null;
+  return deriveRunStatus({ last_updated_at: lastUpdatedAt, finished: !inProgress, error_count, tool_error_count, root_failed: false, capture_completion: unavailable ? "unavailable" : null });
+}
+
 function ViewHeader({
-  title, model, active, stats, allSpans, startedAt, anthropicModels,
+  title, model, status, stats, allSpans, startedAt, anthropicModels,
   run, isReplay, breadcrumb, fork, onAnnotateRun, annotationError, onDownload,
 }: {
   title: string;
   model?: string | null;
-  active: boolean;
+  status: RunStatusSummary;
   stats: { spans: number; tools: number; llms: number; errors: number; dur: number; agents?: number; inTokens?: number; outTokens?: number };
   allSpans?: Span[];
   startedAt?: number;
@@ -742,6 +778,7 @@ function ViewHeader({
   annotationError?: string | null;
   onDownload?: () => void;
 }) {
+  const active = runInProgress(status.status);
   const onBack = breadcrumb?.onBack;
   const parentName = breadcrumb?.parentName;
   const onFork = fork?.onFork;
@@ -848,10 +885,8 @@ function ViewHeader({
   }, [optionsOpen]);
   const displayTitle = cleanTitle(title);
   const completionUnavailable = run?.capture_completion === "unavailable" || allSpans?.some(span => captureCompletion(span.normalized?.capture) === "unavailable") === true;
-  const status: RunStatus = (run && replayOutcome(run)) || (active ? "live" : stats.errors > 0 ? "failed" : "complete");
-  const statusLabel = completionUnavailable ? "Completion unavailable" : { live: "Run live", failed: "Run failed", cancelled: "Run cancelled", complete: "Run complete" }[status];
-  const statusTone = completionUnavailable ? "neutral" : status === "live" ? "success" : status === "failed" ? "danger" : "neutral";
-  const statusPillClass = badgeVariants({ tone: statusTone });
+  const statusLabel = status.label;
+  const statusPillClass = cn(badgeVariants({ tone: runStatusTone(status.status) }), "shrink-0");
   return (
     <div className={cn("flex-shrink-0 bg-rp-surface", isReplay ? "px-4 py-2.5" : "px-4 pb-3 pt-4 sm:px-5")}>
       {parentName && onBack ? (
@@ -866,7 +901,7 @@ function ViewHeader({
               <div className="flex items-center gap-2 mb-1">
                 <h2 className="font-display text-[18px] font-semibold tracking-[-0.02em] text-rp-ink">{displayTitle}</h2>
                 {model && <UiBadge tone="neutral" mono>{model}</UiBadge>}
-                <span className={statusPillClass}>
+                <span className={statusPillClass} title={status.detail}>
                   {statusLabel}
                 </span>
               </div>
@@ -891,24 +926,25 @@ function ViewHeader({
         <>
           <div data-run-header className="mb-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             <div data-run-header-title className="flex min-w-[12rem] flex-1 items-center gap-2">
-              {active && <span aria-hidden="true" className="pulse-dot size-2 flex-shrink-0 rounded-full bg-rp-success" />}
+              {status.status === "live" && <span aria-hidden="true" className="pulse-dot size-2 flex-shrink-0 rounded-full bg-rp-success" />}
               {onFork && !active ? (
                 <InlineEdit value={displayTitle}
                   onConfirm={handleRename}
                   className="truncate font-display text-[20px] font-semibold leading-7 tracking-[-0.02em] text-rp-ink"
                   inputStyle={{ fontSize: 20, fontWeight: 600 }} />
               ) : (
-                <h2 className="truncate font-display text-[20px] font-semibold leading-7 tracking-[-0.02em] text-rp-ink">{displayTitle}</h2>
+                <h2 title={displayTitle} className="min-w-0 truncate font-display text-[20px] font-semibold leading-7 tracking-[-0.02em] text-rp-ink">{displayTitle}</h2>
               )}
               <span
                 data-run-status
+                data-status={status.status}
                 className={statusPillClass}
                 title={statusLabel}
               >
                 {statusLabel}
               </span>
             </div>
-            {!active && (
+            {run && (
               <div ref={optionsRef} data-run-actions className="relative flex min-w-0 flex-wrap items-center gap-1.5">
                 {onAnnotateRun && (
                   <>
@@ -992,10 +1028,11 @@ function ViewHeader({
                   return <>
                   <div className="rp-clipped-ring flex h-8 items-stretch overflow-hidden rounded-control">
                     <button
-                      disabled={replayUnavailable || agentRegistryStatus !== "success"}
+                      disabled={active || replayUnavailable || agentRegistryStatus !== "success"}
+                      title={active ? "Replay is available once the run finishes" : undefined}
                       className="rp-primary-control flex items-center gap-1.5 border border-rp-blue bg-rp-blue px-3 text-[12px] font-medium text-white transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-blue-hover hover:bg-rp-blue-hover disabled:cursor-not-allowed disabled:border-rp-line disabled:bg-[color:var(--rp-n4)] disabled:text-rp-ink-muted"
                       onClick={() => {
-                        if (replayUnavailable || agentRegistryStatus !== "success") return;
+                        if (active || replayUnavailable || agentRegistryStatus !== "success") return;
                         if (agentConfigured) {
                           onFork(undefined, forkMode, forkModel || undefined);
                         } else {
@@ -1013,10 +1050,10 @@ function ViewHeader({
                       aria-expanded={optionsOpen}
                       aria-controls={optionsOpen ? replayOptionsId : undefined}
                       aria-haspopup="dialog"
-                      disabled={replayUnavailable || agentRegistryStatus !== "success"}
+                      disabled={active || replayUnavailable || agentRegistryStatus !== "success"}
                       className="rp-primary-control flex items-center justify-center border border-l-0 border-rp-blue bg-rp-blue px-2 text-white shadow-[inset_1px_0_0_rgb(255_255_255/0.28)] transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-blue-hover hover:bg-rp-blue-hover disabled:cursor-not-allowed disabled:border-rp-line disabled:bg-[color:var(--rp-n4)] disabled:text-rp-ink-muted disabled:shadow-[inset_1px_0_0_var(--rp-line)]"
                       onClick={() => {
-                        if (replayUnavailable) return;
+                        if (active || replayUnavailable) return;
                         setAnnotationPopoverOpen(false);
                         setOptionsOpen(!optionsOpen);
                       }}
@@ -1756,6 +1793,8 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
     });
   }, [runId, savedForRun, annotationsApi.loaded, annotationsApi.annotations]);
 
+  const runStatusSummary = useRunStatus(data?.run ? runStatusEvidence(data.run, data.spans) : null);
+
   if (loading) return <div role="status" className="flex h-full items-center justify-center gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-rp-ink-muted">Loading run <Dots /></div>;
   if (notFound || !data?.run) return <TraceNotFound runId={runId} backPath={routeBase ?? "/runs"} />;
 
@@ -1783,7 +1822,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
         <ViewHeader
           title={agent.name}
           model={agent.model}
-          active={isActive(run)}
+          status={subAgentStatus(runStatusSummary, agentSpans)}
           startedAt={agent.start_time_ms}
           anthropicModels={anthropicModels}
           stats={{
@@ -1818,7 +1857,8 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
 
   // Normal run view
   const replayUnavailable = spans.some(span => observationReplayUnavailable(span.normalized?.capture));
-  const active = isActive(run);
+  const status = runStatusSummary ?? deriveRunStatus(runStatusEvidence(run, spans));
+  const active = runInProgress(status.status);
   const tools = spans.filter(s => s.span_type === "TOOL_CALL");
   const llms = spans.filter(s => s.span_type?.includes("LLM"));
   const errs = spans.filter(s => s.status === "ERROR");
@@ -1849,7 +1889,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
       <ViewHeader
         title={runDisplayName(run)}
         model={model}
-        active={active}
+        status={status}
         // A run stays "active" for 30s after its last live event, and the
         // header clock kept counting wall time past the run's own end ("12s"
         // for a 6.2s run). Once finished, the header shows the recorded span.

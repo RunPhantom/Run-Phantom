@@ -24,12 +24,12 @@ const POPULATIONS: readonly Population[] = [
     { model: "fixture/missing-price", input: 100, output: 50, reported: null },
   ], ready: "Estimate unavailable", reported: null },
   { name: "free zero", runId: "0000000000000000000000000000f170", rows: [
-    { model: "fixture/free", input: 0, output: 0, reported: 0.123 },
-  ], ready: "Estimated cost $0.00", reported: 0.123 },
+    { model: "fixture/free", input: 0, output: 0, reported: null },
+  ], ready: "Estimated cost $0.00", reported: null },
   { name: "mixed known and unavailable", runId: "0000000000000000000000000000f180", rows: [
-    { model: "fixture/known", input: 200, output: 300, reported: 0.123 },
-    { model: "fixture/missing-price", input: 100, output: 50, reported: 0.123 },
-  ], ready: "Known estimates $0.0051 · 1 unavailable", reported: 0.246 },
+    { model: "fixture/known", input: 200, output: 300, reported: null },
+    { model: "fixture/missing-price", input: 100, output: 50, reported: null },
+  ], ready: "Known estimates $0.0051 · 1 unavailable", reported: null },
 ];
 
 test.use({ hasTouch: true });
@@ -430,7 +430,7 @@ async function checkLayout(page: Page, population: Population, state: State, des
   await expect(stats).toBeVisible();
   if (population.rows.length === 0) {
     await expect(triggers).toHaveCount(0);
-    await expect(page.getByRole("region", { name: "Nominal cost estimates" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Cost breakdown" })).toHaveCount(0);
     await expect(stats.locator(":scope > span")).toHaveCount(1);
     await expect(stats).not.toContainText("$0.00");
   } else {
@@ -463,12 +463,12 @@ async function disclosure(page: Page, population: Population, state: State, acti
   if (activation === "keyboard") { await button.focus(); await page.keyboard.press("Enter"); }
   else if (activation === "touch") await button.tap();
   else await button.click();
-  const region = page.getByRole("region", { name: "Nominal cost estimates", exact: true });
+  const region = page.getByRole("region", { name: "Cost breakdown", exact: true });
   await expect(button).toHaveAttribute("aria-expanded", "true");
   await expect(region).toBeVisible();
   const id = await region.getAttribute("id"); expect(id).toBeTruthy();
   await expect(button).toHaveAttribute("aria-controls", id!);
-  await expect(region).toContainText("Reported cost stays separate.");
+  await expect(region).toContainText("Reported costs are used as is.");
   await expect(region).toContainText("OpenRouter catalogue quotes");
   await expect(region.locator(":scope > div")).toHaveCount(population.rows.length + 1);
   for (const row of population.rows) {
@@ -486,8 +486,8 @@ async function disclosure(page: Page, population: Population, state: State, acti
     } else {
       const reason = row.model === null ? "Model identity was not captured."
         : row.input === null || row.output === null ? "Input or output token capture is unavailable."
-        : state === "disabled" || state === "revoked" ? "Public pricing is disabled. Enable it in Settings."
-        : state === "loading" ? "Public pricing is loading." : "No unambiguous exact catalogue price is available.";
+        : state === "disabled" || state === "revoked" ? "No list price. Enable public pricing in Settings."
+        : state === "loading" ? "No list price. Public pricing is loading." : "No list price or unambiguous catalogue price.";
       await expect(entry).toContainText(reason);
       await expect(entry).not.toContainText("Catalogue ID:");
       await expect(entry).not.toContainText("Revision:");

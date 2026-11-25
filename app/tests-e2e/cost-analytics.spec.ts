@@ -77,7 +77,7 @@ test("cost analytics: navigation, reload and JSON export preserve reported snaps
   await page.getByTestId("reported-cost").scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath("cost-analytics-manual-desktop.png"), fullPage: true });
   const reloadedResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/api/pricing/analytics" && response.request().method() === "POST" && response.request().postDataJSON().rates.length === 0);
   await page.reload();
-  await expect(page.getByRole("combobox", { name: "Estimate source", exact: true })).toHaveValue("reported");
+  await expect(page.getByRole("combobox", { name: "Estimate source", exact: true })).toHaveValue("list");
   await expect(page.getByTestId("reported-cost")).toContainText("$0.123");
   await expect(page.getByTestId("estimated-cost")).toContainText("Unavailable");
   const reloaded: CostAnalyticsReport = await (await reloadedResponse).json();
@@ -87,6 +87,26 @@ test("cost analytics: navigation, reload and JSON export preserve reported snaps
   const afterDetailResponse = await page.request.get(`${runPhantom.url}/api/runs/detail/${traceId}`); expect(afterDetailResponse.ok()).toBe(true); const afterDetail = await afterDetailResponse.json();
   const afterSnapshotResponse = await page.request.get(`${runPhantom.url}/api/evaluations/runs/${traceId}/snapshot`); expect(afterSnapshotResponse.ok()).toBe(true); const afterSnapshot = await afterSnapshotResponse.json();
   expect(afterDetail.spans).toEqual(beforeDetail.spans); expect(afterSnapshot.metrics).toEqual(beforeSnapshot.metrics); expect(afterSnapshot.models).toEqual(beforeSnapshot.models);
+});
+
+test("cost analytics: by default real dated model ids are estimated offline at bundled list prices", async ({ page, runPhantom }) => {
+  const now = Date.now() - 1_000;
+  const rows = [{ model: "gpt-5-nano-2025-08-07", provider: "openai", input: 1_000, output: 500 }, { model: "claude-haiku-4-5-20251001", provider: "anthropic", input: 2_000, output: 100 }];
+  const spans = rows.map((row, index) => ({ traceId: "0000000000000000000000000000f1a0", spanId: (0xf1a0 + index).toString(16).padStart(16, "0"), name: "Real model call",
+    startTimeUnixNano: String(BigInt(now + index * 10) * 1_000_000n), endTimeUnixNano: String(BigInt(now + index * 10 + 5) * 1_000_000n), status: { code: 1 },
+    attributes: Object.entries({ "runphantom.span.kind": "llm_call", "gen_ai.response.model": row.model, "gen_ai.provider.name": row.provider, "gen_ai.usage.input_tokens": row.input, "gen_ai.usage.output_tokens": row.output })
+      .map(([key, value]) => ({ key, value: typeof value === "number" ? { intValue: String(value) } : { stringValue: value } })) }));
+  expect((await page.request.post(`${runPhantom.url}/v1/traces`, { data: { resourceSpans: [{ scopeSpans: [{ spans }] }] } })).ok()).toBe(true);
+  let externalRequests = 0;
+  await page.route(catalogueUrl, async route => { externalRequests++; await route.abort(); });
+  await page.goto(`${runPhantom.url}/costs`);
+  await expect(page.getByRole("combobox", { name: "Estimate source", exact: true })).toHaveValue("list");
+  const estimate = (1_000 * 0.05 + 500 * 0.4 + 2_000 * 1 + 100 * 5) / 1e6;
+  await expect(page.getByTestId("estimated-cost")).toContainText(`$${estimate.toFixed(4)}`);
+  await expect(page.getByTestId("estimated-cost")).toContainText("2 known · 0 unavailable");
+  await page.getByText("Rate and capture provenance", { exact: true }).click();
+  await expect(page.getByText(/prices bundled with Run Phantom/)).toBeVisible();
+  expect(externalRequests).toBe(0);
 });
 
 test("cost analytics: export refuses draft rates, pending calculations and changed captures", async ({ page, runPhantom }) => {
@@ -161,6 +181,9 @@ test("cost analytics: consented nominal quote is explicit and revocation removes
   let catalogueRequests = 0; await page.route(catalogueUrl, async route => { catalogueRequests++; await route.fulfill({ contentType: "application/json", body: catalogue }); });
   await page.goto(`${runPhantom.url}/costs`); await page.getByRole("combobox", { name: "Estimate source", exact: true }).selectOption("nominal");
   await expect(page.getByText(/Public pricing is disabled/)).toBeVisible(); expect(catalogueRequests).toBe(0);
+  // Without consent the catalogue estimate waits, but captured tokens and reported cost stay visible.
+  await expect(page.getByTestId("reported-cost")).toContainText("$0.123"); await expect(page.getByTestId("estimated-cost")).toContainText("Unavailable");
+  await expect(page.getByRole("region", { name: "Cost breakdown table" }).getByRole("rowheader", { name: "unpriced-model", exact: true })).toBeVisible();
   await page.getByRole("link", { name: /^settings$/i }).click(); await page.getByRole("checkbox", { name: /fetch public model pricing/i }).check();
   await page.getByRole("link", { name: "Cost & usage", exact: true }).click(); await page.getByRole("combobox", { name: "Estimate source", exact: true }).selectOption("nominal");
   await expect(page.getByTestId("estimated-cost")).toContainText("$0.0051"); await outputAssertions(page);
@@ -168,7 +191,8 @@ test("cost analytics: consented nominal quote is explicit and revocation removes
   await expect(page.getByText("fixture/fixture-model", { exact: true })).toBeVisible(); expect(catalogueRequests).toBe(1);
   await page.getByTestId("reported-cost").scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath("cost-analytics-nominal-desktop.png"), fullPage: true });
   const settings = await context.newPage(); await settings.goto(`${runPhantom.url}/settings`); await settings.getByRole("checkbox", { name: /fetch public model pricing/i }).uncheck();
-  await expect(page.getByText(/Public pricing is disabled/)).toBeVisible(); await expect(page.getByTestId("estimated-cost")).toHaveCount(0); expect(catalogueRequests).toBe(1); await settings.close();
+  await expect(page.getByText(/Public pricing is disabled/)).toBeVisible(); await expect(page.getByTestId("estimated-cost")).not.toContainText("$0.0051");
+  await expect(page.getByTestId("estimated-cost")).toContainText("Unavailable"); await expect(page.getByTestId("reported-cost")).toContainText("$0.123"); expect(catalogueRequests).toBe(1); await settings.close();
 });
 
 for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 800 }, { width: 1024, height: 768 }, { width: 768, height: 1024 }, { width: 390, height: 844 }, { width: 320, height: 740 }]) {
