@@ -1,6 +1,6 @@
 import { useState, type KeyboardEvent, type PointerEvent } from "react";
-import { ChartTooltip, TooltipRow } from "./ChartFrame";
-import { areaPath, compact, endpointIndices, linePath, linear, nearestPoint, niceTicks } from "./scale";
+import { ChartTooltip, TooltipRow, useChartA11y } from "./ChartFrame";
+import { areaPath, chartKeyStep, compact, endpointIndices, linePath, linear, nearestPoint, niceTicks } from "./scale";
 import { useElementSize } from "./use-element-size";
 
 export interface LineSeries {
@@ -21,11 +21,15 @@ const SIDE = 6;
  * x positions, sharing one y axis. A crosshair snaps to the nearest position and
  * the readout lists every series there.
  */
-export function TimeSeries({ series, titles, axisLabels, height = 180, area = false, format = compact, emptyLabel = "No data in this window", partial }: {
+export function TimeSeries({ label, series, titles, axisLabels, width: fixedWidth, height = 180, area = false, format = compact, emptyLabel = "No data in this window", partial }: {
+  /** One-sentence summary; the chart's accessible name. */
+  label: string;
   series: readonly LineSeries[];
   /** Tooltip heading per x position. */
   titles: readonly string[];
   axisLabels: (index: number) => string;
+  /** Fixed width in pixels; omit to fill the parent. */
+  width?: number;
   height?: number;
   area?: boolean;
   format?: (value: number) => string;
@@ -33,7 +37,7 @@ export function TimeSeries({ series, titles, axisLabels, height = 180, area = fa
   /** Positions that cover only part of their span; their points are drawn hollow. */
   partial?: readonly boolean[];
 }) {
-  const [ref, { width }] = useElementSize<HTMLDivElement>();
+  const [ref, { width }] = useElementSize<HTMLDivElement>(fixedWidth);
   const [active, setActive] = useState<number | null>(null);
   const count = titles.length;
   const known = series.flatMap(item => item.values.filter((value): value is number => value !== null && Number.isFinite(value)));
@@ -52,14 +56,16 @@ export function TimeSeries({ series, titles, axisLabels, height = 180, area = fa
     setActive(offset < AXIS_W - 4 ? null : nearestPoint(offset - AXIS_W, plotW, count));
   };
   const key = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!count) return;
-    const current = active ?? count - 1;
-    if (event.key === "ArrowRight") { event.preventDefault(); setActive(active === null ? current : Math.min(count - 1, current + 1)); }
-    else if (event.key === "ArrowLeft") { event.preventDefault(); setActive(active === null ? current : Math.max(0, current - 1)); }
-    else if (event.key === "Home") { event.preventDefault(); setActive(0); }
-    else if (event.key === "End") { event.preventDefault(); setActive(count - 1); }
-    else if (event.key === "Escape") setActive(null);
+    const next = chartKeyStep(event.key, active, count);
+    if (next === undefined) return;
+    if (event.key !== "Escape") event.preventDefault();
+    setActive(next);
   };
+  const a11y = useChartA11y({
+    label,
+    readout: active !== null && !empty ? seriesReadout(titles[active], series, active, format, partial?.[active] ?? false) : "",
+    hint: empty ? "" : "Use the left and right arrow keys to read each point.",
+  });
 
   return (
     <div
@@ -67,6 +73,7 @@ export function TimeSeries({ series, titles, axisLabels, height = 180, area = fa
       className="relative select-none outline-none focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]"
       style={{ height }}
       tabIndex={count ? 0 : -1}
+      {...a11y.rootProps}
       aria-keyshortcuts="ArrowLeft ArrowRight Home End"
       onPointerMove={pointer}
       onPointerLeave={() => setActive(null)}
@@ -123,6 +130,7 @@ export function TimeSeries({ series, titles, axisLabels, height = 180, area = fa
           {partial?.[active] && <p className="mt-1 text-11 text-rp-ink-subtle">Partial: only part of this span is in the window.</p>}
         </ChartTooltip>
       )}
+      {a11y.announcer}
     </div>
   );
 }
@@ -130,4 +138,13 @@ export function TimeSeries({ series, titles, axisLabels, height = 180, area = fa
 function isolated(values: readonly (number | null)[], index: number): boolean {
   const known = (position: number) => position >= 0 && position < values.length && values[position] !== null && Number.isFinite(values[position]);
   return !known(index - 1) && !known(index + 1);
+}
+
+/** The readout at one x position as a sentence; unknown values say so rather than reading as zero. */
+export function seriesReadout(title: string | undefined, series: readonly LineSeries[], index: number, format: (value: number) => string, partial = false): string {
+  const values = series.map(item => {
+    const value = item.values[index];
+    return `${item.label} ${value === null || value === undefined || !Number.isFinite(value) ? "unknown" : format(value)}`;
+  }).join(", ");
+  return `${title ?? ""}: ${values}.${partial ? " Partial: only part of this span is in the window." : ""}`;
 }

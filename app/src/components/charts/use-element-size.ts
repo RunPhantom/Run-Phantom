@@ -2,8 +2,12 @@ import { useLayoutEffect, useRef, useState } from "react";
 
 export interface ElementSize { width: number; height: number }
 
-/** Content-box size of the referenced element, kept current with a ResizeObserver. */
-export function useElementSize<T extends HTMLElement>(): [React.RefObject<T | null>, ElementSize] {
+/**
+ * Content-box size of the referenced element, kept current with a ResizeObserver.
+ * `fixedWidth` skips measuring the width, for charts placed in a known box and for
+ * server rendering, where layout effects never run.
+ */
+export function useElementSize<T extends HTMLElement>(fixedWidth?: number): [React.RefObject<T | null>, ElementSize] {
   const ref = useRef<T | null>(null);
   const [size, setSize] = useState<ElementSize>({ width: 0, height: 0 });
   useLayoutEffect(() => {
@@ -22,5 +26,5 @@ export function useElementSize<T extends HTMLElement>(): [React.RefObject<T | nu
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  return [ref, size];
+  return [ref, fixedWidth === undefined ? size : { width: fixedWidth, height: size.height }];
 }

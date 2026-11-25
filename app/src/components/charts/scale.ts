@@ -149,3 +149,21 @@ export function binValues(values: readonly number[], binCount = 12): HistogramBi
   for (const value of finite) bins[Math.min(count - 1, Math.floor((value - min) / width))].count++;
   return bins;
 }
+
+/**
+ * The active index after a key press on a focused chart. Arrow keys start from
+ * `from` when nothing is active yet; Home and End jump to the ends; Escape clears
+ * (null). Undefined means the key is not a chart key and should not be consumed.
+ */
+export function chartKeyStep(key: string, active: number | null, count: number, from: "first" | "last" = "last"): number | null | undefined {
+  if (count <= 0) return undefined;
+  const start = from === "first" ? 0 : count - 1;
+  switch (key) {
+    case "ArrowRight": return active === null ? start : Math.min(count - 1, active + 1);
+    case "ArrowLeft": return active === null ? start : Math.max(0, active - 1);
+    case "Home": return 0;
+    case "End": return count - 1;
+    case "Escape": return null;
+    default: return undefined;
+  }
+}

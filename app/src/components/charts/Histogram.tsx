@@ -1,6 +1,6 @@
 import { useState, type KeyboardEvent, type PointerEvent } from "react";
-import { ChartTooltip, TooltipRow } from "./ChartFrame";
-import { columnPath, compact, linear, niceTicks, slotAt, type HistogramBin } from "./scale";
+import { ChartTooltip, TooltipRow, useChartA11y } from "./ChartFrame";
+import { chartKeyStep, columnPath, compact, linear, niceTicks, slotAt, type HistogramBin } from "./scale";
 import { useElementSize } from "./use-element-size";
 
 const AXIS_W = 40;
@@ -13,16 +13,20 @@ const RADIUS = 2;
  * Distribution of a measure as touching columns separated by a 2px surface gap.
  * The x axis labels only the range ends; hover or arrow keys read each bin.
  */
-export function Histogram({ bins, formatValue, unitLabel, height = 160, color = "var(--rp-chart-1)", emptyLabel = "No values in this window" }: {
+export function Histogram({ label, bins, formatValue, unitLabel, width: fixedWidth, height = 160, color = "var(--rp-chart-1)", emptyLabel = "No values in this window" }: {
+  /** One-sentence summary; the chart's accessible name. */
+  label: string;
   bins: readonly HistogramBin[];
   formatValue: (value: number) => string;
   /** What a bin counts, e.g. "runs". */
   unitLabel: string;
+  /** Fixed width in pixels; omit to fill the parent. */
+  width?: number;
   height?: number;
   color?: string;
   emptyLabel?: string;
 }) {
-  const [ref, { width }] = useElementSize<HTMLDivElement>();
+  const [ref, { width }] = useElementSize<HTMLDivElement>(fixedWidth);
   const [active, setActive] = useState<number | null>(null);
   const max = Math.max(0, ...bins.map(bin => bin.count));
   const ticks = niceTicks(max || 1, 3, true);
@@ -39,13 +43,17 @@ export function Histogram({ bins, formatValue, unitLabel, height = 160, color = 
     setActive(offset < AXIS_W ? null : slotAt(offset - AXIS_W, plotW, bins.length));
   };
   const key = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!bins.length) return;
-    const current = active ?? 0;
-    if (event.key === "ArrowRight") { event.preventDefault(); setActive(active === null ? 0 : Math.min(bins.length - 1, current + 1)); }
-    else if (event.key === "ArrowLeft") { event.preventDefault(); setActive(active === null ? 0 : Math.max(0, current - 1)); }
-    else if (event.key === "Escape") setActive(null);
+    const next = chartKeyStep(event.key, active, bins.length, "first");
+    if (next === undefined) return;
+    if (event.key !== "Escape") event.preventDefault();
+    setActive(next);
   };
   const bin = active !== null ? bins[active] : null;
+  const a11y = useChartA11y({
+    label,
+    readout: bin && !empty ? `${formatValue(bin.from)} to ${formatValue(bin.to)}: ${compact(bin.count)} ${unitLabel}.` : "",
+    hint: empty ? "" : "Use the left and right arrow keys to read each bin.",
+  });
 
   return (
     <div
@@ -53,6 +61,8 @@ export function Histogram({ bins, formatValue, unitLabel, height = 160, color = 
       className="relative select-none outline-none focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]"
       style={{ height }}
       tabIndex={bins.length ? 0 : -1}
+      {...a11y.rootProps}
+      aria-keyshortcuts="ArrowLeft ArrowRight Home End"
       onPointerMove={pointer}
       onPointerLeave={() => setActive(null)}
       onBlur={() => setActive(null)}
@@ -94,6 +104,7 @@ export function Histogram({ bins, formatValue, unitLabel, height = 160, color = 
           <TooltipRow color={color} shape="square" label={unitLabel} value={compact(bin.count)} />
         </ChartTooltip>
       )}
+      {a11y.announcer}
     </div>
   );
 }

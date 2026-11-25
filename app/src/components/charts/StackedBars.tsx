@@ -1,6 +1,6 @@
 import { useState, type KeyboardEvent, type PointerEvent } from "react";
-import { ChartTooltip, TooltipRow } from "./ChartFrame";
-import { columnPath, compact, endpointIndices, linear, niceTicks, slotAt } from "./scale";
+import { ChartTooltip, TooltipRow, useChartA11y } from "./ChartFrame";
+import { chartKeyStep, columnPath, compact, endpointIndices, linear, niceTicks, slotAt } from "./scale";
 import { useElementSize } from "./use-element-size";
 
 export interface StackSeries { id: string; label: string; color: string }
@@ -29,19 +29,24 @@ const RADIUS = 2;
  * baseline; later series stack on top, separated by a 2px surface gap. Hover or
  * arrow keys show every series for that bucket; click or Enter calls `onActivate`.
  */
-export function StackedBars({ buckets, series, axisLabels, height: fixedHeight, minHeight = 160, emptyLabel = "No runs in this window", onActivate, activateHint }: {
+export function StackedBars({ label, buckets, series, axisLabels, width: fixedWidth, height: fixedHeight, minHeight = 160, emptyLabel = "No runs in this window", onActivate, activateHint }: {
+  /** One-sentence summary; the chart's accessible name. */
+  label: string;
   buckets: readonly StackBucket[];
   series: readonly StackSeries[];
   /** Labels for the endpoint ticks, indexed like `buckets`. */
   axisLabels: (index: number) => string;
+  /** Fixed width in pixels; omit to fill the parent. */
+  width?: number;
   /** Fixed plot height; omit to fill the parent's height (at least `minHeight`). */
   height?: number;
   minHeight?: number;
   emptyLabel?: string;
   onActivate?: (index: number) => void;
+  /** Pointer hint in the tooltip, e.g. "Click to open these runs"; keyboard users hear "Press Enter to …". */
   activateHint?: string;
 }) {
-  const [ref, { width, height: measured }] = useElementSize<HTMLDivElement>();
+  const [ref, { width, height: measured }] = useElementSize<HTMLDivElement>(fixedWidth);
   const height = fixedHeight ?? Math.max(minHeight, measured);
   const [active, setActive] = useState<number | null>(null);
   const totals = buckets.map(bucket => bucket.values.reduce((sum, value) => sum + Math.max(0, value), 0));
@@ -61,18 +66,21 @@ export function StackedBars({ buckets, series, axisLabels, height: fixedHeight, 
     setActive(event.clientX - box.left < AXIS_W ? null : index);
   };
   const key = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!buckets.length) return;
-    const current = active ?? buckets.length - 1;
-    if (event.key === "ArrowRight") { event.preventDefault(); setActive(Math.min(buckets.length - 1, active === null ? current : current + 1)); }
-    else if (event.key === "ArrowLeft") { event.preventDefault(); setActive(Math.max(0, active === null ? current : current - 1)); }
-    else if (event.key === "Home") { event.preventDefault(); setActive(0); }
-    else if (event.key === "End") { event.preventDefault(); setActive(buckets.length - 1); }
-    else if ((event.key === "Enter" || event.key === " ") && active !== null && onActivate) { event.preventDefault(); onActivate(active); }
-    else if (event.key === "Escape") setActive(null);
+    if ((event.key === "Enter" || event.key === " ") && active !== null && onActivate) { event.preventDefault(); onActivate(active); return; }
+    const next = chartKeyStep(event.key, active, buckets.length);
+    if (next === undefined) return;
+    if (event.key !== "Escape") event.preventDefault();
+    setActive(next);
   };
 
   const activeBucket = active !== null ? buckets[active] : null;
   const activeX = active !== null ? AXIS_W + slot * (active + 0.5) : 0;
+  const activeLabel = activateHint ? activateHint.replace(/^Click/, "Press Enter") : "";
+  const a11y = useChartA11y({
+    label,
+    readout: activeBucket && !empty ? stackReadout(activeBucket, series, onActivate ? activeLabel : "") : "",
+    hint: empty ? "" : `Use the left and right arrow keys to read each bar${onActivate ? "; press Enter to open its runs" : ""}.`,
+  });
 
   return (
     <div
@@ -80,6 +88,7 @@ export function StackedBars({ buckets, series, axisLabels, height: fixedHeight, 
       className="relative select-none outline-none focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]"
       style={fixedHeight ? { height: fixedHeight } : { height: "100%", minHeight }}
       tabIndex={buckets.length ? 0 : -1}
+      {...a11y.rootProps}
       aria-keyshortcuts="ArrowLeft ArrowRight Home End Enter"
       onPointerMove={pointer}
       onPointerLeave={() => setActive(null)}
@@ -147,6 +156,14 @@ export function StackedBars({ buckets, series, axisLabels, height: fixedHeight, 
           {onActivate && activateHint && <p className="mt-1 border-t border-rp-line-muted pt-1 text-11 text-rp-ink-subtle">{activateHint}</p>}
         </ChartTooltip>
       )}
+      {a11y.announcer}
     </div>
   );
+}
+
+/** The tooltip as one sentence, for the live region. */
+export function stackReadout(bucket: StackBucket, series: readonly StackSeries[], hint = ""): string {
+  const values = series.map((item, index) => `${item.label} ${compact(bucket.values[index] ?? 0)}`).join(", ");
+  return [`${bucket.title}: ${values}.`, bucket.partial ? "Partial: only part of this span is in the window." : "", ...(bucket.notes ?? []).map(note => `${note}.`), hint ? `${hint}.` : ""]
+    .filter(Boolean).join(" ");
 }

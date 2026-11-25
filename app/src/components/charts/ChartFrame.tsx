@@ -30,9 +30,13 @@ export function ChartLegend({ items, className }: { items: readonly LegendItem[]
 /**
  * The accessible shell every chart sits in: a one-sentence summary as the image's
  * name, and a "View as table" toggle that swaps the plot for the same numbers as rows.
+ * Set `interactive` for a focusable chart (StackedBars, TimeSeries, Histogram): the
+ * children of role="img" are presentational to assistive technology, so the chart
+ * then names itself with `label` and announces the bucket under the keyboard.
  */
-export function ChartFrame({ summary, table, legend, title, titleId, className, children, actions }: {
+export function ChartFrame({ summary, table, legend, title, titleId, className, children, actions, interactive = false }: {
   summary: string;
+  interactive?: boolean;
   table: ChartTable;
   legend?: readonly LegendItem[];
   title?: ReactNode;
@@ -62,7 +66,9 @@ export function ChartFrame({ summary, table, legend, title, titleId, className, 
         </div>
       </div>
       <div id={regionId} className="mt-3 min-h-0 flex-1">
-        {asTable ? <ChartDataTable table={table} /> : <div role="img" aria-label={summary} className="h-full">{children}</div>}
+        {asTable ? <ChartDataTable table={table} />
+          : interactive ? <div className="h-full">{children}</div>
+            : <div role="img" aria-label={summary} className="h-full">{children}</div>}
       </div>
     </div>
   );
@@ -118,4 +124,22 @@ export function TooltipRow({ color, label, value, shape = "line" }: { color?: st
       <span className="font-mono font-medium tabular-nums text-rp-ink">{value}</span>
     </div>
   );
+}
+
+/**
+ * Accessible name, key help and a polite live readout for a focusable chart. The
+ * readout is the text of the tooltip, so keyboard and screen-reader users hear the
+ * bucket the arrow keys moved to.
+ */
+export function useChartA11y({ label, readout, hint }: { label: string; readout: string; hint: string }) {
+  const hintId = useId();
+  return {
+    rootProps: { role: "group", "aria-roledescription": "chart", "aria-label": label, "aria-describedby": hintId } as const,
+    announcer: (
+      <>
+        <span id={hintId} className="sr-only">{hint}</span>
+        <span className="sr-only" aria-live="polite" aria-atomic="true" data-chart-readout>{readout}</span>
+      </>
+    ),
+  };
 }

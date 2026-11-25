@@ -58,6 +58,7 @@ export function RunsOverTimePanel({ overview, interactive = true }: { overview: 
   return (
     <section aria-labelledby={titleId} className="flex h-full min-w-0 flex-col rounded-lg border border-rp-line bg-rp-surface p-4" data-home-panel="runs-over-time">
       <ChartFrame
+        interactive
         className="flex-1"
         title={<h2 id={titleId} className="text-14 font-semibold text-rp-ink">Runs per {BUCKET_NOUN[window]}</h2>}
         summary={summary}
@@ -76,6 +77,7 @@ export function RunsOverTimePanel({ overview, interactive = true }: { overview: 
         }}
       >
         <StackedBars
+          label={summary}
           buckets={stack}
           series={RUN_SERIES}
           minHeight={196}
