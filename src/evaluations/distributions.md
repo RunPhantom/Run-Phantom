@@ -1,6 +1,6 @@
 # Evaluation distributions
 
-In **Evaluations → Distributions and trends**, select 1–20 finished experiments, choose one exact check or one captured metric, and click **Analyze distribution**. No agent or evaluator is rerun. Existing automatic verdicts remain intact.
+In the **Score distribution** section of **Evaluations**, select 1–20 finished experiments, choose one exact check or one captured metric, and click **Analyze distribution**. No agent or evaluator is rerun. Existing automatic verdicts remain intact.
 
 The list shows the latest 50 experiments. Add a retained experiment ID to select older evidence. Experiments appear in the order you select them; adjacent trends follow that order. Selection order does not establish chronology or independent sampling.
 

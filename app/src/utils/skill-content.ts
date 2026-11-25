@@ -7,7 +7,7 @@ const SKILL_PROMPTS: Record<EmbeddedSkillName, string> = {
     "Requirements:",
     "- find the real agent entry point and existing telemetry owner first",
     "- prefer the repo's existing OTLP/OpenTelemetry setup over adding a second provider",
-    "- point local trace export at RUNPHANTOM_LOCAL_DEBUGGER=http://127.0.0.1:5947/v1/",
+    "- point the OTLP/HTTP trace exporter at OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:5947/v1/traces (use the daemon's actual port)",
     "- make the smallest safe change that yields one useful run",
     "- verify the run appears in Run Phantom before adding richer spans",
     "",

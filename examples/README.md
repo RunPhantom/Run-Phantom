@@ -16,6 +16,8 @@ bun run dev
 
 The default trace endpoint is <http://localhost:5947/v1/traces>. Override it
 with the standard `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` environment variable.
+**Connect an agent** in the app shows the same commands filled in with the
+daemon's actual port.
 
 ## Examples
 
