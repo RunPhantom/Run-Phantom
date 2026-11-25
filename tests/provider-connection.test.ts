@@ -39,8 +39,8 @@ describe.serial("provider connection check", () => {
       if (url.includes("anthropic")) return json(200, { data: [{ id: "claude-haiku-4-5-20251001" }], has_more: true });
       return json(200, { models: [{ name: "models/gemini-3.5-flash-lite" }, { name: "models/gemini-3.8-flash" }, { name: "x" }] });
     };
-    setStoredSecret("openai", "sk-proj-stored-openai-fixture-0001");
-    process.env.ANTHROPIC_API_KEY = "sk-ant-env-anthropic-fixture-0002";
+    setStoredSecret("openai", "sk-proj-stored-0001");
+    process.env.ANTHROPIC_API_KEY = "sk-ant-env-fix-0002";
     setStoredSecret("gemini", "AIza-stored-gemini-fixture-0003");
 
     const openai = await checkProviderConnection("openai", { fetch: fetcher });
@@ -49,8 +49,8 @@ describe.serial("provider connection check", () => {
 
     expect(seen.map(call => call.url)).toEqual([PROVIDER_MODELS_ENDPOINT.openai, PROVIDER_MODELS_ENDPOINT.anthropic, PROVIDER_MODELS_ENDPOINT.gemini]);
     expect(seen.every(call => call.method === "GET")).toBe(true);
-    expect(seen[0]!.headers.Authorization).toBe("Bearer sk-proj-stored-openai-fixture-0001");
-    expect(seen[1]!.headers).toMatchObject({ "x-api-key": "sk-ant-env-anthropic-fixture-0002", "anthropic-version": "2023-06-01" });
+    expect(seen[0]!.headers.Authorization).toBe("Bearer sk-proj-stored-0001");
+    expect(seen[1]!.headers).toMatchObject({ "x-api-key": "sk-ant-env-fix-0002", "anthropic-version": "2023-06-01" });
     expect(seen[2]!.headers["x-goog-api-key"]).toBe("AIza-stored-gemini-fixture-0003");
     for (const call of seen) expect(call.url).not.toMatch(/fixture/);
 
@@ -61,7 +61,7 @@ describe.serial("provider connection check", () => {
   });
 
   test("classifies a rejected key and strips the key from the provider's message", async () => {
-    const key = "sk-proj-rejected-fixture-key-9999";
+    const key = "sk-proj-rejected-9999";
     setStoredSecret("openai", key);
     const result = await checkProviderConnection("openai", {
       fetch: async () => json(401, { error: { message: `Incorrect API key provided: ${key}`, type: "invalid_request_error", code: "invalid_api_key" } }),
@@ -88,7 +88,7 @@ describe.serial("provider connection check", () => {
   });
 
   test("a 200 without a model list is still a working key, with the count unknown", async () => {
-    setStoredSecret("anthropic", "sk-ant-stored-anthropic-fixture-0004");
+    setStoredSecret("anthropic", "sk-ant-stored-0004");
     const result = await checkProviderConnection("anthropic", { fetch: async () => new Response("not json", { status: 200 }) });
     expect(result).toMatchObject({ ok: true, modelCount: null, modelCountComplete: false, message: "Anthropic accepted the key." });
   });
@@ -96,8 +96,8 @@ describe.serial("provider connection check", () => {
 
 describe("maskSecret", () => {
   test("keeps a known prefix and the last four characters only", () => {
-    expect(maskSecret("sk-proj-abcdefghijklmnop1234")).toBe("sk-proj-…1234");
-    expect(maskSecret("sk-ant-api03-abcdefghijklmnopWXYZ")).toBe("sk-ant-…WXYZ");
+    expect(maskSecret("sk-proj-abcdefgh1234")).toBe("sk-proj-…1234");
+    expect(maskSecret("sk-ant-api03-abWXYZ")).toBe("sk-ant-…WXYZ");
     expect(maskSecret("AIzaSyA-abcdefghijklmnop-9876")).toBe("AIza…9876");
     expect(maskSecret("plain-provider-token-5555")).toBe("…5555");
   });

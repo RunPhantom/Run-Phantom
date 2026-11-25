@@ -41,7 +41,7 @@ afterAll(async () => {
 
 describe.serial("settings provider and data endpoints", () => {
   test("key status carries a masked hint of the effective key and never the key", async () => {
-    const key = "sk-proj-settings-api-fixture-key-7Q2x";
+    const key = "sk-proj-settings-7Q2x";
     expect((await fetch(`${base}/api/secrets/openai`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value: key }) })).ok).toBe(true);
     const body = await (await fetch(`${base}/api/secrets`)).text();
     expect(body).not.toContain(key);

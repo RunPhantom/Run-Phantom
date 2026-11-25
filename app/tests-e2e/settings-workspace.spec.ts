@@ -261,7 +261,7 @@ test("settings shows each provider's key source, a masked hint and a connection 
   await expect(panel.getByText("Not set", { exact: true })).toHaveCount(3);
   await expect(panel.getByRole("button", { name: /^Test .* connection$/ })).toHaveCount(0);
 
-  const key = "sk-proj-settings-ui-fixture-key-Z9y8";
+  const key = "sk-proj-settings-Z9y8";
   await panel.getByLabel("OpenAI", { exact: true }).fill(key);
   await panel.getByRole("button", { name: "Save OpenAI key" }).click();
   await expect(panel.getByText("saved", { exact: true })).toBeVisible();
