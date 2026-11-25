@@ -14,6 +14,7 @@ import { StickToBottom, useStickToBottomContext, type StickToBottomContext } fro
 import { Dots } from "./Icons";
 import { Button } from "./Button";
 import { ChatFlow } from "./ChatFlow";
+import { subAgentsWithin } from "./chat-items";
 import { SpanTree } from "./SpanTree";
 import { ConvoDetail } from "./ConvoDetail";
 import { SavePopover } from "./SavePopover";
@@ -1406,7 +1407,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
         ) : (
           <StickToBottom id={agentPanelId} role="tabpanel" aria-labelledby={agentOverviewTabId} className={STICK_LAYOUT} resize={prefersReducedMotion ? "instant" : "smooth"} initial={false} contextRef={stickToBottomContextRef}>
             <StickToBottom.Content className="sb">
-              {agentTab === "chat" && <ChatFlow spans={agentSpans} liveEvents={[]} subAgents={[]} onDiveIn={setFocusedAgent} />}
+              {agentTab === "chat" && <ChatFlow spans={agentSpans} liveEvents={[]} subAgents={subAgentsWithin(agent, paneData.subAgents)} onDiveIn={setFocusedAgent} asSubAgent />}
             </StickToBottom.Content>
             <ScrollToBottomButton />
           </StickToBottom>

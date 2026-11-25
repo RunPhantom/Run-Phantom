@@ -86,3 +86,37 @@ describe("conversation stream for a turn that delegated to a sub-agent", () => {
     expect(out && "content" in out ? out.content : null).toBe("Yes, it is covered.");
   });
 });
+
+describe("conversation stream for an orchestrator that hands off to nested agents", () => {
+  // root invoke_agent -> invoke_agent sub-0 -> invoke_agent sub-0-0 -> chat + tool; the root makes no model call.
+  const spans = [
+    span({ id: "root", span_type: "AGENT_ROOT", start_time_ms: 1000, input_payload: "Find the needle.", output_payload: "Found it in shard 0-0." }),
+    span({ id: "sub-0", span_type: "AGENT_ROOT", start_time_ms: 1010, input_payload: "Search shard group 0" }),
+    span({ id: "sub-0-0", span_type: "AGENT_ROOT", start_time_ms: 1020, input_payload: "step 0 depth 2" }),
+    span({ id: "chat", span_type: "LLM_GENERATION", start_time_ms: 1030,
+      input_payload: JSON.stringify([{ role: "user", content: "step 0 depth 2" }]), output_payload: "Checking item 0." }),
+    span({ id: "lookup", span_type: "TOOL_CALL", start_time_ms: 1040 }),
+  ];
+  const base = { start_time_ms: 1010, end_time_ms: 1100, duration_ms: 90, model: null, status: "OK", llm_count: 1, tool_count: 1, total_input_tokens: 0, total_output_tokens: 0 };
+  const subAgents = [
+    { ...base, root_span_id: "sub-0", name: "sub-0", span_ids: ["sub-0", "sub-0-0", "chat", "lookup"] },
+    { ...base, root_span_id: "sub-0-0", name: "sub-0-0", span_ids: ["sub-0-0", "chat", "lookup"] },
+  ];
+  const events = buildConvoEvents([{ run, spans, subAgents }]);
+
+  test("the user's message is the run's input, not a sub-agent's prompt", () => {
+    const user = events.find(e => e.type === "user_msg");
+    expect(user && "content" in user ? user.content : null).toBe("Find the needle.");
+  });
+
+  test("only the outermost sub-agent is a card, and it can reach the agents inside it", () => {
+    const group = events.find(e => e.type === "tool_group");
+    expect(group?.type === "tool_group" ? group.items.map(item => item.kind === "sub_agent" ? item.agent.name : item.span.id) : null).toEqual(["sub-0"]);
+    expect(group?.type === "tool_group" && group.items[0].kind === "sub_agent" ? group.items[0].subAgents.length : 0).toBe(2);
+  });
+
+  test("the answer is the root agent's output", () => {
+    const out = events.find(e => e.type === "llm_out");
+    expect(out && "content" in out ? out.content : null).toBe("Found it in shard 0-0.");
+  });
+});

@@ -1,9 +1,10 @@
 import { isActive } from "../utils/helpers";
 import { messagesFromSpan } from "../utils/messageParsing";
 import type { Run, Span, SubAgent } from "../utils/types";
+import { outermostSubAgents } from "./chat-items";
 
-/** `owner` maps each of the agent's spans to its root, for the card's focus requests. */
-export type ConvoToolItem = { kind: "tool"; span: Span } | { kind: "sub_agent"; agent: SubAgent; owner: Map<string, string> };
+/** `subAgents` is every agent of the turn, so the card can nest the agents inside it. */
+export type ConvoToolItem = { kind: "tool"; span: Span } | { kind: "sub_agent"; agent: SubAgent; subAgents: readonly SubAgent[] };
 
 /** A single event in the conversation stream */
 export type ConvoEvent =
@@ -13,28 +14,16 @@ export type ConvoEvent =
   | { type: "llm_out"; content: string; time: number; turnIndex: number }
   | { type: "active"; time: number; turnIndex: number };
 
-/**
- * A sub-agent's own steps belong under its card, not in the parent's
- * transcript. Only outermost agents get a card; a nested agent is part of its
- * parent's work.
- */
-function outermostAgents(subAgents: readonly SubAgent[]): { agents: SubAgent[]; members: Set<string> } {
-  const inner = new Set<string>();
-  for (const agent of subAgents) for (const id of agent.span_ids) if (id !== agent.root_span_id) inner.add(id);
-  const agents = subAgents.filter(agent => !inner.has(agent.root_span_id));
-  const members = new Set<string>();
-  for (const agent of agents) for (const id of agent.span_ids) if (id !== agent.root_span_id) members.add(id);
-  return { agents, members };
-}
-
 export function buildConvoEvents(turns: { run: Run; spans: Span[]; subAgents?: readonly SubAgent[] }[]): ConvoEvent[] {
   const events: ConvoEvent[] = [];
 
   for (let i = 0; i < turns.length; i++) {
     const { run, spans: turnSpans, subAgents = [] } = turns[i];
-    const { agents, members } = outermostAgents(subAgents);
+    // A sub-agent's own steps belong under its card, not in the parent's transcript.
+    const agents = outermostSubAgents(subAgents);
+    const members = new Set(agents.flatMap(agent => agent.span_ids.filter(id => id !== agent.root_span_id)));
     const agentRoots = new Map(agents.map(agent => [agent.root_span_id, agent]));
-    const subAgentItem = (agent: SubAgent): ConvoToolItem => ({ kind: "sub_agent", agent, owner: new Map(agent.span_ids.map(id => [id, agent.root_span_id])) });
+    const subAgentItem = (agent: SubAgent): ConvoToolItem => ({ kind: "sub_agent", agent, subAgents });
     const spans = members.size ? turnSpans.filter(span => !members.has(span.id)) : turnSpans;
 
     events.push({ type: "turn_start", turnIndex: i, run, time: run.started_at });
@@ -46,6 +35,12 @@ export function buildConvoEvents(turns: { run: Run; spans: Span[]; subAgents?: r
       .sort((a, b) => a.start_time_ms - b.start_time_ms);
     const traceSpans = spans
       .filter(s => s.span_type === "TRACE")
+      .sort((a, b) => a.start_time_ms - b.start_time_ms);
+    // An orchestrator that only delegates makes no model call of its own; its
+    // task is the input on its root agent span.
+    const spanIds = new Set(spans.map(s => s.id));
+    const rootAgentSpans = spans
+      .filter(s => s.span_type === "AGENT_ROOT" && !agentRoots.has(s.id) && (!s.parent_span_id || !spanIds.has(s.parent_span_id)))
       .sort((a, b) => a.start_time_ms - b.start_time_ms);
 
     const toolSpans = spans
@@ -60,7 +55,7 @@ export function buildConvoEvents(turns: { run: Run; spans: Span[]; subAgents?: r
     const inputSpan = llmSpans.find(s => {
       if (s.normalized?.kind === "llm" && s.normalized.userMessage) return true;
       return !!s.input_payload;
-    }) ?? traceSpans.find(s => !!s.input_payload);
+    }) ?? traceSpans.find(s => !!s.input_payload) ?? rootAgentSpans.find(s => !!s.input_payload);
     if (inputSpan?.normalized?.kind === "llm" && inputSpan.normalized.userMessage) {
       userMsg = inputSpan.normalized.userMessage;
     } else if (inputSpan?.input_payload) {
@@ -100,6 +95,7 @@ export function buildConvoEvents(turns: { run: Run; spans: Span[]; subAgents?: r
     };
     const outputSpan = lastWithOutput(llmSpans)
       ?? lastWithOutput(traceSpans)
+      ?? lastWithOutput(rootAgentSpans)
       ?? lastWithOutput(spans.filter(s => s.span_type === "INTERNAL"));
     if (outputSpan?.output_payload) {
       events.push({ type: "llm_out", content: outputSpan.output_payload, time: outputSpan.end_time_ms, turnIndex: i });

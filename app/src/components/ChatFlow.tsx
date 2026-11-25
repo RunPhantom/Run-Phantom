@@ -1,45 +1,20 @@
 import { CaptureVisibilityDetails } from "./CaptureVisibilityDetails";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Pencil } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { argsPreview, compactTokens, displayPayload, fmt, MAX_INLINE_PAYLOAD, plural, spanErrorReason, trunc, tryJson } from "../utils/helpers";
-import { parseSpanAttributes, spanFinishReasons, spanReasoningTokens, stoppedEarlyReason } from "../utils/span-evidence";
+import { compactTokens, displayPayload, fmt, MAX_INLINE_PAYLOAD, plural, trunc, tryJson } from "../utils/helpers";
 import type { LiveEvent, Span, SubAgent } from "../utils/types";
-import { Button } from "./Button";
 import { FlameTimeline } from "./FlameTimeline";
 import { AlertCircle, Check, Chevron, Dots, Spinner } from "./Icons";
 import { Markdown } from "./Markdown";
-import { MessageImages, MessageList, messagesFromSpan } from "./MessageList";
+import { MessageImages, MessageList } from "./MessageList";
 import { ToolCallPill } from "./ToolCallPill";
-import { extractLiveToolArgs } from "./chat-flow-live";
 import { useSmoothText } from "../hooks/use-smooth-text";
 import { canEditReplayMessage } from "../utils/messageParsing";
 import { spanCost } from "../../../src/pricing/span-cost";
 import { fmtCost } from "../utils/costs";
 import { countedLlmSpans } from "./run-detail/trace-model";
-import { looksLikeMarkdown, markdownPreview } from "./run-detail/span-details";
-
-type ToolGroupItem = { type: "tool"; span: Span } | { type: "sub_agent"; agent: SubAgent };
-type LiveToolItem =
-  | { type: "live_tool_start"; name: string; argsPreview: string | null; time: number }
-  | { type: "live_tool_result"; name: string; time: number };
-
-type ChatItem =
-  | { type: "capture"; span: Span; time: number }
-  | { type: "tool"; span: Span; time: number }
-  | { type: "tool_group"; items: ToolGroupItem[]; time: number; liveTools?: LiveToolItem[] }
-  | { type: "sub_agent"; agent: SubAgent; time: number }
-  | { type: "user_msg"; content: string; parts?: string[]; images?: string[]; time: number; independentObservation?: boolean }
-  | { type: "system_msg"; content: string; time: number; prevMessages?: { role: string; content: string }[] }
-  | { type: "llm_out"; span: Span; time: number }
-  | { type: "llm_stop"; span: Span; error: string | null; reason: string | null; reasoningOnly: boolean; time: number }
-  | LiveToolItem
-  | { type: "reasoning"; content: string; time: number }
-  | { type: "text_delta"; content: string; time: number };
-
-function isSyntheticPartialLlmSpan(span: Span): boolean {
-  return span.id.startsWith("evt_") || span.span_type === "LLM";
-}
+import { buildChatItems, subAgentsWithin, type ChatItem } from "./chat-items";
 
 function PreviousMessages({ messages }: { messages: { role: string; content: string }[] }) {
   const [expanded, setExpanded] = useState(false);
@@ -75,152 +50,136 @@ function PreviousMessages({ messages }: { messages: { role: string; content: str
   );
 }
 
-export function SubAgentBlock({ agent, spans, subAgentBySpan, onDiveIn }: { agent: SubAgent; spans: Span[]; subAgentBySpan: Map<string, string>; onDiveIn?: (id: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const btnRef = useRef<HTMLButtonElement>(null);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-  const [focusRequest, setFocusRequest] = useState(0);
-  const a = agent;
+type AgentDisclosure = {
+  expanded: ReadonlySet<string>;
+  toggle: (rootSpanId: string) => void;
+  focus: { rootSpanId: string; request: number } | null;
+  md: boolean;
+};
+const AgentDisclosureContext = createContext<AgentDisclosure | null>(null);
 
-  const agentSpanSet = new Set(a.span_ids);
-  const rootSpan = spans.find(s => s.id === a.root_span_id);
-  const agentToolSpans = spans.filter(s => agentSpanSet.has(s.id) && s.span_type === "TOOL_CALL" && s.id !== a.root_span_id);
-  // Find sub-agent LLM spans for input/output (agent.subagent or nested generateText)
-  const agentLLMs = spans.filter(s => agentSpanSet.has(s.id) && s.span_type?.includes("LLM") && s.id !== a.root_span_id);
-  const agentInput = agentLLMs.find(s => s.normalized?.kind === "llm" && s.normalized.userMessage)?.normalized
-    ?? null;
-  const inputText = agentInput?.kind === "llm" ? agentInput.userMessage : (agentLLMs.find(s => s.input_payload)?.input_payload ?? rootSpan?.input_payload);
-  const agentOutput = [...agentLLMs].reverse().find(s => s.output_payload);
-  const usage = useMemo(() => {
-    const members = new Set(a.span_ids);
-    const calls = countedLlmSpans(spans.filter(s => members.has(s.id) && s.id !== a.root_span_id));
+function useAgentUsage(agent: SubAgent, spans: Span[]) {
+  return useMemo(() => {
+    const members = new Set(agent.span_ids);
+    const calls = countedLlmSpans(spans.filter(s => members.has(s.id) && s.id !== agent.root_span_id));
     let known = 0, unknown = 0, estimated = false;
     for (const call of calls) {
       const cost = spanCost(call);
       if (cost.usd == null) unknown++;
       else { known += cost.usd; if (cost.source === "list-price") estimated = true; }
     }
-    return { calls: calls.length, known, unknown, estimated };
-  }, [spans, a.root_span_id, a.span_ids]);
-  const tokens = a.total_input_tokens + a.total_output_tokens;
-  const costText = usage.calls === 0 || usage.unknown === usage.calls ? null
-    : `${fmtCost(usage.known)}${usage.unknown ? "+" : ""}${usage.estimated ? " est." : ""}`;
+    const costText = calls.length === 0 || unknown === calls.length ? null
+      : `${fmtCost(known)}${unknown ? "+" : ""}${estimated ? " est." : ""}`;
+    return { costText };
+  }, [spans, agent.root_span_id, agent.span_ids]);
+}
 
-  useEffect(() => {
-    if (open && btnRef.current) {
-      const rect = btnRef.current.getBoundingClientRect();
-      const popH = 320;
-      const spaceBelow = window.innerHeight - rect.bottom - 8;
-      setPos({ top: spaceBelow >= popH ? rect.bottom + 4 : Math.max(4, rect.top - popH - 4), left: rect.left });
-    }
-  }, [open, focusRequest]);
+/**
+ * A sub-agent as a collapsible card in its parent's transcript. Expanded, it
+ * shows the agent's own prompt, replies, tool calls and the cards of the
+ * agents it delegated to, recursively.
+ */
+export function SubAgentBlock({ agent, spans, subAgents, onDiveIn }: { agent: SubAgent; spans: Span[]; subAgents: readonly SubAgent[]; onDiveIn?: (id: string) => void }) {
+  const disclosure = useContext(AgentDisclosureContext);
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = disclosure ? disclosure.expanded.has(agent.root_span_id) : localOpen;
+  const headerRef = useRef<HTMLButtonElement>(null);
+  const bodyId = useId();
+  const { costText } = useAgentUsage(agent, spans);
+  const tokens = agent.total_input_tokens + agent.total_output_tokens;
+  const failed = agent.status === "ERROR";
+  const focusRequest = disclosure?.focus?.rootSpanId === agent.root_span_id ? disclosure.focus.request : 0;
 
-  // The parent transcript renders none of this sub-agent's spans, so Trajectory
-  // focus requests for any of them land on this chip. The scroll is instant
-  // because the popover is fixed-positioned from the chip's settled rect.
+  // The Trajectory asks for a span inside this agent: the provider has
+  // already expanded this card and its ancestors, so the header is mounted.
   useEffect(() => {
-    const handler = (e: Event) => {
-      const spanId = (e as CustomEvent<{ spanId?: string }>).detail?.spanId;
-      if (!spanId || subAgentBySpan.get(spanId) !== a.root_span_id || !btnRef.current) return;
-      btnRef.current.scrollIntoView({ behavior: "instant", block: "center" });
-      btnRef.current.focus({ preventScroll: true });
-      setOpen(true);
-      setFocusRequest(n => n + 1);
-    };
-    document.addEventListener("runphantom:focus-tool", handler);
-    return () => document.removeEventListener("runphantom:focus-tool", handler);
-  }, [a.root_span_id, subAgentBySpan]);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => { if (!btnRef.current?.contains(e.target as Node)) setOpen(false); };
-    const keyHandler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setOpen(false);
-        window.requestAnimationFrame(() => btnRef.current?.focus());
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    document.addEventListener("keydown", keyHandler);
-    return () => {
-      document.removeEventListener("mousedown", handler);
-      document.removeEventListener("keydown", keyHandler);
-    };
-  }, [open]);
+    if (!focusRequest || !headerRef.current) return;
+    headerRef.current.scrollIntoView({ behavior: "instant", block: "center" });
+    headerRef.current.focus({ preventScroll: true });
+  }, [focusRequest]);
 
   return (
-    <div className="inline-block">
-      <button ref={btnRef}
-        type="button"
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        className="inline-flex min-h-8 items-center gap-1.5 rounded-sm border border-rp-line bg-rp-surface px-2.5 py-1 text-xs font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash aria-expanded:border-rp-wash-border aria-expanded:bg-rp-wash"
-        onClick={() => setOpen(!open)}
-      >
-        <span className="rounded-sm bg-rp-wash px-1 py-0.5 font-mono text-[10px] font-medium uppercase leading-none tracking-[0.08em] text-rp-blue">agent</span>
-        <span className="text-rp-ink">{a.name}</span>
-        <span className="rp-num text-[11px] text-rp-ink-muted">{plural(a.tool_count, "tool")} &middot; {fmt(a.duration_ms)}{tokens > 0 && <> &middot; {compactTokens(tokens)} tok</>}{costText && <> &middot; {costText}</>}</span>
-        <Chevron open={open} size={10} />
-      </button>
-
-        {open && pos && (
-          <div
-            className="rp-pop fixed z-[9999] flex flex-col rounded-md border border-rp-line bg-rp-surface shadow-e3"
-            role="dialog"
-            aria-label={`${a.name} sub-agent details`}
-            style={{ top: pos.top, left: Math.max(16, Math.min(pos.left, window.innerWidth - Math.min(360, window.innerWidth - 32) - 16)), width: "min(360px, calc(100vw - 32px))", maxHeight: 340 }}
-            onMouseDown={e => e.stopPropagation()}
+    <section
+      data-sub-agent={agent.root_span_id}
+      className={cn("min-w-0 basis-full rounded-md border bg-rp-surface", failed ? "border-rp-danger-border" : "border-rp-line")}
+    >
+      <div className="flex min-w-0 items-center gap-1 p-1">
+        <button
+          ref={headerRef}
+          type="button"
+          aria-expanded={open}
+          aria-controls={bodyId}
+          className="flex min-h-9 min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5 rounded-sm px-2 py-1 text-left text-xs transition-colors duration-250 ease-standard hover:bg-rp-row-hover"
+          onClick={() => disclosure ? disclosure.toggle(agent.root_span_id) : setLocalOpen(!localOpen)}
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="shrink-0 text-rp-ink-muted"><Chevron open={open} size={10} /></span>
+            <span className="shrink-0 rounded-sm bg-rp-wash px-1 py-0.5 font-mono text-[10px] font-medium uppercase leading-none tracking-[0.08em] text-rp-blue">agent</span>
+            <span className="min-w-0 truncate font-medium text-rp-ink">{agent.name}</span>
+            {failed && <span className="inline-flex shrink-0 items-center gap-1 font-medium text-rp-danger"><AlertCircle /> failed</span>}
+          </span>
+          <span className="rp-num min-w-0 text-[11px] text-rp-ink-muted">
+            {plural(agent.tool_count, "tool")} &middot; {fmt(agent.duration_ms)}{tokens > 0 && <> &middot; {compactTokens(tokens)} tok</>}{costText && <> &middot; {costText}</>}
+          </span>
+        </button>
+        {onDiveIn && (
+          <button
+            type="button"
+            className="min-h-9 shrink-0 whitespace-nowrap rounded-control px-2.5 text-[12px] font-medium text-rp-blue transition-colors duration-250 ease-standard hover:bg-rp-wash"
+            onClick={() => onDiveIn(agent.root_span_id)}
           >
-            <div className="p-3 space-y-2 overflow-auto sb flex-1 min-h-0">
-              {/* Input — shown as a user-message bubble */}
-              {inputText && (
-                <div className="flex justify-end">
-                  <div className="max-w-[90%] rounded-md border border-rp-line bg-rp-canvas-blue px-2.5 py-1.5">
-                    <pre className="whitespace-pre-wrap font-sans text-[12px] leading-snug text-rp-ink">{trunc(inputText, 150)}</pre>
-                  </div>
-                </div>
-              )}
-
-              {/* Tools */}
-              {agentToolSpans.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {agentToolSpans.map(s => (
-                    <span key={s.id} className={cn("inline-flex items-center gap-1 rounded-sm border px-2 py-0.5 font-mono text-[11px]", s.status === "ERROR" ? "border-rp-danger-border bg-rp-danger-soft text-rp-danger" : "border-rp-line bg-rp-surface text-rp-ink")}>
-                      {s.status === "ERROR" ? <AlertCircle /> : <Check />} {s.name} <span className="text-rp-ink-muted">{fmt(s.duration_ms)}</span>
-                    </span>
-                  ))}
-                </div>
-              )}
-
-              {/* Output */}
-              {agentOutput?.output_payload && (
-                <div>
-                  <div className="mb-1 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted">Output</div>
-                  {looksLikeMarkdown(agentOutput.output_payload)
-                    ? <div className="text-[12px] leading-relaxed text-rp-ink [&_p]:my-1"><Markdown>{markdownPreview(agentOutput.output_payload)}</Markdown></div>
-                    : <pre className="whitespace-pre-wrap font-sans text-[12px] leading-relaxed text-rp-ink">{trunc(agentOutput.output_payload, 150)}</pre>}
-                </div>
-              )}
-
-            </div>
-
-            {/* Footer — always visible */}
-            <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2 border-t border-rp-line px-3 py-2">
-              {onDiveIn ? (
-                <Button className="shrink-0 whitespace-nowrap" onClick={() => { setOpen(false); onDiveIn(a.root_span_id); }}>
-                  Open Sub-Agent &rarr;
-                </Button>
-              ) : <div />}
-              <div className="rp-meta min-w-0 flex-1 break-words text-right text-[10px]">
-                {a.model && <>{a.model} &middot; </>}
-                {a.llm_count} LLM &middot; {plural(a.tool_count, "tool")} &middot; {fmt(a.duration_ms)}
-                {a.total_input_tokens > 0 && <> &middot; {a.total_input_tokens.toLocaleString()} in</>}
-                {a.total_output_tokens > 0 && <> &middot; {a.total_output_tokens.toLocaleString()} out</>}
-                {costText && <> &middot; {costText}</>}
-              </div>
-            </div>
-          </div>
+            Open Sub-Agent &rarr;
+          </button>
         )}
+      </div>
+      {open && (
+        <div id={bodyId} role="region" aria-label={`${agent.name} sub-agent details`} className="border-t border-rp-line-muted">
+          <SubAgentBody agent={agent} spans={spans} subAgents={subAgents} onDiveIn={onDiveIn} costText={costText} md={disclosure?.md ?? true} />
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SubAgentBody({ agent, spans, subAgents, onDiveIn, costText, md }: { agent: SubAgent; spans: Span[]; subAgents: readonly SubAgent[]; onDiveIn?: (id: string) => void; costText: string | null; md: boolean }) {
+  const items = useMemo(() => {
+    const members = new Set(agent.span_ids);
+    const own = spans.filter(s => members.has(s.id) && s.id !== agent.root_span_id);
+    const root = spans.find(s => s.id === agent.root_span_id);
+    return buildChatItems({ spans: own, liveEvents: [], subAgents: subAgentsWithin(agent, subAgents), fallbackInput: root?.input_payload ?? null });
+  }, [agent, spans, subAgents]);
+
+  return (
+    <div className="space-y-1.5 pb-2 pt-1">
+      {items.length === 0
+        ? <p className="px-4 py-2 text-[13px] text-rp-ink-muted">No messages or tool calls were recorded for this agent.</p>
+        : <ChatItemList items={items} spans={spans} subAgents={subAgents} onDiveIn={onDiveIn} md={md} asSubAgent />}
+      <p className="rp-meta break-words px-4 pt-1 text-[10px]">
+        {agent.model && <>{agent.model} &middot; </>}
+        {plural(agent.llm_count, "LLM call")} &middot; {plural(agent.tool_count, "tool")} &middot; {fmt(agent.duration_ms)}
+        {agent.total_input_tokens > 0 && <> &middot; {agent.total_input_tokens.toLocaleString()} in</>}
+        {agent.total_output_tokens > 0 && <> &middot; {agent.total_output_tokens.toLocaleString()} out</>}
+        {costText && <> &middot; {costText}</>}
+      </p>
+    </div>
+  );
+}
+
+/** The task a parent agent handed to a sub-agent. It is not something the user typed. */
+function AgentPrompt({ content }: { content: string }) {
+  const capped = content.length > MAX_INLINE_PAYLOAD ? `${content.slice(0, MAX_INLINE_PAYLOAD)}…` : content;
+  const long = capped.length > 280 || capped.split("\n").length > 4;
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="px-4 pb-1 pt-2">
+      <div className="max-w-[85%] rounded-md border border-rp-line bg-rp-canvas-blue px-3 py-2">
+        <div className="mb-1 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-rp-ink-muted">Prompt from parent agent</div>
+        <pre className={cn("whitespace-pre-wrap break-words font-sans text-[13px] leading-relaxed text-rp-ink", long && !expanded && "line-clamp-4")}>{capped}</pre>
+        {long && (
+          <button type="button" aria-expanded={expanded} className="-ml-1.5 mt-0.5 rounded-sm px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-rp-ink-muted transition-colors duration-250 ease-standard hover:bg-rp-row-hover hover:text-rp-ink"
+            onClick={() => setExpanded(!expanded)}>{expanded ? "Show less" : "Show all"}</button>
+        )}
+      </div>
     </div>
   );
 }
@@ -440,13 +399,119 @@ function LLMErrorBanner({ content }: { content: string }) {
 const RENDER_MODE_KEY = "runphantom:llm-render-mode";
 const EMPTY_SUB_AGENTS: SubAgent[] = [];
 
-export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDiveIn, isActive, lastUpdatedAt, onEditMessage, replayError }: {
+function ChatItemList({ items, spans, subAgents, onDiveIn, md, onMdChange, onEditMessage, asSubAgent = false }: {
+  items: ChatItem[]; spans: Span[]; subAgents: readonly SubAgent[]; onDiveIn?: (rootSpanId: string) => void;
+  md: boolean; onMdChange?: (md: boolean) => void; onEditMessage?: (content: string) => void; asSubAgent?: boolean;
+}) {
+  let seenLLM = false;
+  return items.map((item, i) => {
+    const isFirstLLM = !!onMdChange && item.type === "llm_out" && !seenLLM;
+    if (item.type === "llm_out") seenLLM = true;
+    if (item.type === "tool_group") {
+      return (
+        <div key={`tg${i}`} className="flex flex-wrap gap-1.5 px-4 py-0.5 items-center">
+          {item.items.map((gi, j) =>
+            gi.type === "tool"
+              ? <ToolCallPill key={gi.span.id} span={gi.span} />
+              : <SubAgentBlock key={`sa${j}-${gi.agent.root_span_id}`} agent={gi.agent} spans={spans} subAgents={subAgents} onDiveIn={onDiveIn} />
+          )}
+          {item.liveTools?.map((lt, j) => lt.type === "live_tool_start" ? (
+            <span key={`lts${j}`} className="inline-flex items-center gap-1.5 rounded-sm border border-rp-wash-border bg-rp-wash py-1 pl-2 pr-3 text-xs font-medium text-rp-blue">
+              <Spinner style={{ marginRight: 3 }} />
+              <span className="text-rp-ink">{lt.name}</span>
+              {lt.argsPreview && <span className="font-normal text-rp-ink-muted">({lt.argsPreview})</span>}
+            </span>
+          ) : lt.type === "live_tool_result" ? (
+            <span key={`ltr${j}`} className="inline-flex items-center gap-1.5 rounded-sm border border-rp-line bg-rp-surface px-2.5 py-1 text-xs font-medium text-rp-ink">
+              <Check /> <span className="text-rp-ink">{lt.name}</span>
+            </span>
+          ) : null)}
+        </div>
+      );
+    }
+
+    if (item.type === "capture") return <div key={`cap-${item.span.id}`} className="px-4 py-1"><CaptureVisibilityDetails span={item.span} /></div>;
+
+    if (item.type === "system_msg") {
+      return (
+        <div key={`sys${i}`} className="px-4 space-y-1.5">
+          {item.content && <MessageList messages={[{ role: "system", content: item.content }]} />}
+          {item.prevMessages && item.prevMessages.length > 0 && (
+            <PreviousMessages messages={item.prevMessages} />
+          )}
+        </div>
+      );
+    }
+
+    if (item.type === "user_msg") {
+      if (asSubAgent) return <AgentPrompt key={`usr${i}`} content={item.content} />;
+      return <UserMessage key={`usr${i}`} content={item.content} parts={item.parts} images={item.images} onEdit={item.independentObservation || item.fromAgentInput ? undefined : onEditMessage} />;
+    }
+
+    if (item.type === "llm_out") {
+      const s = item.span;
+      const isErr = s.status === "ERROR";
+      const capture = s.normalized?.capture;
+      const content = capture?.entityKind === "assistant" ? capture.assistantText : s.output_payload;
+      return (
+        <div key={`lo${i}`} className="px-4 py-2">
+          {isFirstLLM && onMdChange && (
+            <div className="mb-2 flex justify-start" data-testid="llm-render-mode-toolbar">
+              <RenderModeToggle md={md} onChange={onMdChange} />
+            </div>
+          )}
+          {isErr && content !== null && (
+            <div className="max-w-[85%]"><LLMErrorBanner content={content} /></div>
+          )}
+          {capture?.entityKind === "assistant" && content === null && <div className="text-[12px] text-rp-ink-muted">Assistant observation · Text unavailable; inspect the captured span payload.</div>}
+          {!isErr && content !== null && (
+            <LLMOutput content={content} md={md} />
+          )}
+        </div>
+      );
+    }
+
+    if (item.type === "llm_stop") {
+      return (
+        <div key={`ls${i}`} className="px-4 py-2" data-testid="llm-stop">
+          {item.error
+            ? <div className="max-w-[85%]"><LLMErrorBanner content={item.error} /></div>
+            : <p role="status" className="max-w-[85%] text-[13px] leading-6 text-rp-ink-muted">
+                No answer text. Generation stopped early: <span className="font-mono text-rp-ink">{item.reason}</span>
+                {item.reasoningOnly && item.span.output_tokens != null ? `. All ${item.span.output_tokens.toLocaleString()} output tokens were reasoning.` : "."}
+              </p>}
+        </div>
+      );
+    }
+
+    if (item.type === "reasoning") {
+      return (
+        <div key={`r${i}`} className="mx-4 my-1 whitespace-pre-wrap border-l-2 border-rp-line py-1 pl-3 text-[12px] italic leading-[1.6] text-rp-ink-muted">
+          <SmoothTextDelta content={item.content} enabled={true} as="span" className="whitespace-pre-wrap" style={{ color: "inherit" }} />
+        </div>
+      );
+    }
+
+    if (item.type === "text_delta") {
+      return (
+        <div key={`td${i}`} className="px-4">
+          <SmoothTextDelta content={item.content} enabled={true} />
+        </div>
+      );
+    }
+
+    return null;
+  });
+}
+
+export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDiveIn, isActive, lastUpdatedAt, onEditMessage, replayError, asSubAgent = false }: {
   spans: Span[]; liveEvents: LiveEvent[]; subAgents?: SubAgent[]; onDiveIn?: (rootSpanId: string) => void; isActive?: boolean; lastUpdatedAt?: number; onEditMessage?: (content: string) => void; replayError?: { code: string; message: string } | null;
+  /** The transcript is a focused sub-agent's: its input came from the parent agent, not the user. */
+  asSubAgent?: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  // detectSubAgents also reports agents nested inside another, and the outer
-  // agent's span_ids include the inner one's. The smallest agent holding a span
-  // owns it, so a Trajectory focus request opens exactly one chip.
+  // An outer agent's span_ids include every inner agent's spans, so the
+  // smallest agent holding a span owns it.
   const subAgentBySpan = useMemo(() => {
     const owner = new Map<string, string>();
     for (const agent of [...subAgents].sort((a, b) => b.span_ids.length - a.span_ids.length)) {
@@ -465,201 +530,33 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
     }
   };
 
-  const items = useMemo(() => {
-    const all: ChatItem[] = [];
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  const [focus, setFocus] = useState<AgentDisclosure["focus"]>(null);
+  const toggle = useCallback((rootSpanId: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (!next.delete(rootSpanId)) next.add(rootSpanId);
+      return next;
+    });
+  }, []);
 
-    const parentSpanIds = new Set(spans.map(s => s.id));
-    const doChildNames = new Set(["ai.streamText.doStream", "ai.streamText.doGenerate", "ai.generateText.doGenerate"]);
-    const llmSpans: Span[] = [];
-    // Collect doStream/doGenerate children keyed by parent — they hold the full
-    // conversation history (system prompt, previous messages, tool results) that
-    // the parent span's ai.prompt doesn't include.
-    const doChildrenByParent = new Map<string, Span[]>();
-
-    // Sub-agent root spans render as agent blocks; their non-root spans are
-    // hidden from the main view and only shown when the user dives in.
-    const agentRootIds = new Set(subAgents.map(a => a.root_span_id));
-    const agentSpanIds = new Set(subAgents.flatMap(a => a.span_ids));
-
-    for (const span of spans) {
-      if (agentSpanIds.has(span.id) && !agentRootIds.has(span.id)) continue;
-
-      if (doChildNames.has(span.name) && span.parent_span_id && parentSpanIds.has(span.parent_span_id)) {
-        const siblings = doChildrenByParent.get(span.parent_span_id) ?? [];
-        siblings.push(span);
-        doChildrenByParent.set(span.parent_span_id, siblings);
-        continue;
-      }
-
-      const capture = span.normalized?.capture;
-      if (capture?.entityKind === "prompt") {
-        if (capture.userText !== null) all.push({ type: "user_msg", content: capture.userText, time: span.start_time_ms ?? 0, independentObservation: true });
-        continue;
-      }
-      if (agentRootIds.has(span.id)) {
-        const agent = subAgents.find(a => a.root_span_id === span.id)!;
-        all.push({ type: "sub_agent", agent, time: span.start_time_ms });
-      } else if (span.span_type === "TOOL_CALL") {
-        all.push({ type: "tool", span, time: span.start_time_ms });
-      } else if (span.span_type?.includes("LLM")) {
-        llmSpans.push(span);
-        if (span.captureVisibility?.stream) all.push({ type: "capture", span, time: span.start_time_ms });
-      } else if (span.span_type === "RETRIEVAL" || span.span_type === "EMBEDDING") {
-        all.push({ type: "capture", span, time: span.start_time_ms });
-      }
-    }
-
-    const hasRealOtlpLlmSpan = llmSpans.some(span => !isSyntheticPartialLlmSpan(span));
-    const visibleLlmSpans = hasRealOtlpLlmSpan
-      ? llmSpans.filter(span => !isSyntheticPartialLlmSpan(span))
-      : llmSpans;
-
-    let prevMsgCount = 0;
-    for (let i = 0; i < visibleLlmSpans.length; i++) {
-      const span = visibleLlmSpans[i];
-      if (span.normalized?.capture?.entityKind === "assistant") {
-        all.push({ type: "llm_out", span, time: span.start_time_ms ?? 0 });
-        continue;
-      }
-      // Prefer the richest child span's messages — the last doStream/doGenerate
-      // child has the full conversation including system prompt, all previous
-      // messages, and tool results. Fall back to the parent span if no children.
-      const children = doChildrenByParent.get(span.id);
-      const richestChild = children?.length ? children[children.length - 1] : null;
-      const firstChild = children?.length ? children[0] : null;
-      const messages = (richestChild ? messagesFromSpan(richestChild) : null) ?? messagesFromSpan(span);
-      // For the first LLM call's messages use the first child (initial prompt),
-      // since richestChild may include tool-result context from later steps.
-      const firstMessages = (firstChild ? messagesFromSpan(firstChild) : null) ?? messagesFromSpan(span);
-      if (messages && messages.length > 0) {
-        const systemMsgs = messages.filter(m => m.role === "system");
-        const nonSystem = messages.filter(m => m.role !== "system");
-        if (i === 0) {
-          // Use firstMessages for the initial user message extraction
-          const initMsgs = firstMessages ?? messages;
-          const initNonSystem = initMsgs.filter(m => m.role !== "system");
-          const lastUserIdx = initNonSystem.reduce((acc, m, idx) => m.role === "user" ? idx : acc, -1);
-          const prevMessages = lastUserIdx > 0 ? initNonSystem.slice(0, lastUserIdx) : [];
-          if (systemMsgs.length > 0 || prevMessages.length > 0) {
-            all.push({ type: "system_msg", content: systemMsgs.length > 0 ? systemMsgs.map(m => m.content).join("\n\n") : "", time: span.start_time_ms - 2, prevMessages: prevMessages.length > 0 ? prevMessages : undefined });
-          }
-        }
-        const newMsgs = i === 0 ? nonSystem : nonSystem.slice(Math.max(0, prevMsgCount - systemMsgs.length));
-        const lastUser = newMsgs.filter(m => m.role === "user").pop();
-        if (lastUser) all.push({ type: "user_msg", content: lastUser.content, parts: lastUser.parts, images: lastUser.images, time: span.start_time_ms });
-        prevMsgCount = messages.length;
-      } else if (span.input_payload) {
-        all.push({ type: "user_msg", content: span.input_payload, time: span.start_time_ms });
-      }
-      // Add outputs from each doStream/doGenerate child (each is a separate
-      // LLM call — e.g. before tool use and after). Fall back to the parent
-      // span's output when no child carries an output_payload, so a completed
-      // turn always has something to render even if children only captured
-      // tool calls / reasoning.
-      const childrenWithOutput = children?.filter(c => c.output_payload) ?? [];
-      if (childrenWithOutput.length > 0) {
-        for (const child of childrenWithOutput) {
-          all.push({ type: "llm_out", span: child, time: child.end_time_ms });
-        }
-      } else if (span.output_payload) {
-        all.push({ type: "llm_out", span, time: span.end_time_ms });
-      } else {
-        // No answer text: say why when the span reports it, instead of leaving
-        // the turn blank after the user's message.
-        const error = span.status === "ERROR" ? spanErrorReason(span) || null : null;
-        const attrs = parseSpanAttributes(span.attributes);
-        const reason = stoppedEarlyReason(spanFinishReasons(attrs));
-        const reasoning = spanReasoningTokens(attrs);
-        if (error || reason) {
-          all.push({ type: "llm_stop", span, error, reason, time: span.end_time_ms,
-            reasoningOnly: reasoning !== null && span.output_tokens != null && span.output_tokens > 0 && reasoning >= span.output_tokens });
-        }
-      }
-    }
-
-    // A text_delta is superseded only when an llm_out item will render the
-    // same text in its place. Suppressing purely by timestamp dropped text
-    // when the corresponding span shipped without an output_payload, leaving
-    // the turn blank. Track the end times of the spans we'll actually render
-    // as llm_out items, and only drop deltas covered by those.
-    const renderedLLMEndTimes = all.flatMap(item => item.type === "llm_out" ? [item.span.end_time_ms] : []);
-
-    const completedCounts = new Map<string, number>();
-    for (const s of spans) {
-      if (s.span_type === "TOOL_CALL" && s.end_time_ms) {
-        completedCounts.set(s.name, (completedCounts.get(s.name) ?? 0) + 1);
-      }
-    }
-    const seenStart = new Map<string, number>();
-    const seenResult = new Map<string, number>();
-
-    const spanById = new Map(spans.map(s => [s.id, s]));
-
-    for (const evt of liveEvents) {
-      if (evt.type === "tool_start" || evt.type === "tool_result") {
-        // For tool_start, content is the tool name.
-        // For tool_result, content is the result data; look up tool name from the span.
-        const name = evt.type === "tool_start"
-          ? (evt.content ?? "")
-          : (evt.span_id ? spanById.get(evt.span_id)?.name : null) ?? "";
-        if (!name) continue;
-        const map = evt.type === "tool_start" ? seenStart : seenResult;
-        const n = (map.get(name) ?? 0) + 1;
-        map.set(name, n);
-        if (n <= (completedCounts.get(name) ?? 0)) continue;
-        if (evt.type === "tool_start") {
-          all.push({ type: "live_tool_start", name, argsPreview: argsPreview(extractLiveToolArgs(evt.metadata)), time: evt.timestamp });
-        }
-        if (evt.type === "tool_result") all.push({ type: "live_tool_result", name, time: evt.timestamp });
-      } else if (evt.type === "reasoning" || evt.type === "reasoning-delta" || evt.type === "reasoning_delta") {
-        // Reasoning is kept even after completion — it's valuable context.
-        all.push({ type: "reasoning", content: evt.content ?? "", time: evt.timestamp });
-      } else if (evt.type === "text_delta") {
-        const superseded = renderedLLMEndTimes.some(t => evt.timestamp <= t);
-        if (!superseded) {
-          all.push({ type: "text_delta", content: evt.content ?? "", time: evt.timestamp });
-        }
-      }
-    }
-
-    // Tie-break by item role so a turn's input → work → output ordering is
-    // preserved even when timestamps coincide (e.g. the synthetic LLM span
-    // shares its start_time with the first tool span on fast turns).
-    const chatItemPriority = (t: ChatItem["type"]): number => {
-      if (t === "user_msg" || t === "system_msg") return 0;
-      if (t === "llm_out" || t === "llm_stop") return 2;
-      return 1;
+  // A Trajectory focus request for a span inside a sub-agent opens the card of
+  // the innermost agent that owns it, and every card around that one.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const spanId = (e as CustomEvent<{ spanId?: string }>).detail?.spanId;
+      const owner = spanId ? subAgentBySpan.get(spanId) : undefined;
+      if (!owner) return;
+      const chain = subAgents.filter(agent => agent.span_ids.includes(owner)).map(agent => agent.root_span_id);
+      setExpanded(prev => new Set([...prev, ...chain]));
+      setFocus(prev => ({ rootSpanId: owner, request: (prev?.request ?? 0) + 1 }));
     };
-    all.sort((a, b) => (a.time - b.time) || (chatItemPriority(a.type) - chatItemPriority(b.type)));
+    document.addEventListener("runphantom:focus-tool", handler);
+    return () => document.removeEventListener("runphantom:focus-tool", handler);
+  }, [subAgentBySpan, subAgents]);
+  const disclosure = useMemo<AgentDisclosure>(() => ({ expanded, toggle, focus, md }), [expanded, toggle, focus, md]);
 
-    const grouped: ChatItem[] = [];
-    let tg: { type: "tool_group"; items: ToolGroupItem[]; time: number; liveTools?: LiveToolItem[] } | null = null;
-    for (const item of all) {
-      if (item.type === "tool" || item.type === "sub_agent" || item.type === "live_tool_start" || item.type === "live_tool_result") {
-        if (!tg) tg = { type: "tool_group", items: [], time: item.time };
-        if (item.type === "tool") tg.items.push({ type: "tool", span: item.span });
-        else if (item.type === "sub_agent") tg.items.push({ type: "sub_agent", agent: item.agent });
-        else { if (!tg.liveTools) tg.liveTools = []; tg.liveTools.push(item); }
-      } else {
-        if (tg) { grouped.push(tg); tg = null; }
-        grouped.push(item);
-      }
-    }
-    if (tg) grouped.push(tg);
-
-    const merged: ChatItem[] = [];
-    for (const item of grouped) {
-      const prev = merged[merged.length - 1];
-      if (item.type === "reasoning" && prev?.type === "reasoning") {
-        prev.content += item.content;
-      } else if (item.type === "text_delta" && prev?.type === "text_delta") {
-        prev.content += item.content;
-      } else {
-        merged.push(item);
-      }
-    }
-    return merged;
-  }, [spans, liveEvents, subAgents]);
+  const items = useMemo(() => buildChatItems({ spans, liveEvents, subAgents }), [spans, liveEvents, subAgents]);
 
   if (items.length === 0) {
     if (replayError) {
@@ -705,110 +602,14 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
     );
   }
 
-  const hasLLMOutput = items.some(it => it.type === "llm_out");
-
   return (
-    <div ref={scrollRef} className="space-y-1.5 py-2 pb-24">
-      {spans.some(span => span.normalized?.capture) && <div role="status" className="rp-meta px-4">Producer-reported observations · Partial capture · Runtime unverified</div>}
-      <div className="min-w-0 px-3 pt-1 sm:px-4"><FlameTimeline spans={spans} subAgents={subAgents} onDiveIn={onDiveIn} /></div>
-      {(() => { let seenLLM = false; return items.map((item, i) => {
-        const isFirstLLM = hasLLMOutput && item.type === "llm_out" && !seenLLM;
-        if (item.type === "llm_out") seenLLM = true;
-        if (item.type === "tool_group") {
-          return (
-            <div key={`tg${i}`} className="flex flex-wrap gap-1.5 px-4 py-0.5 items-center">
-              {item.items.map((gi, j) =>
-                gi.type === "tool"
-                  ? <ToolCallPill key={gi.span.id} span={gi.span} />
-                  : <SubAgentBlock key={`sa${j}`} agent={gi.agent} spans={spans} subAgentBySpan={subAgentBySpan} onDiveIn={onDiveIn} />
-              )}
-              {item.liveTools?.map((lt, j) => lt.type === "live_tool_start" ? (
-                <span key={`lts${j}`} className="inline-flex items-center gap-1.5 rounded-sm border border-rp-wash-border bg-rp-wash py-1 pl-2 pr-3 text-xs font-medium text-rp-blue">
-                  <Spinner style={{ marginRight: 3 }} />
-                  <span className="text-rp-ink">{lt.name}</span>
-                  {lt.argsPreview && <span className="font-normal text-rp-ink-muted">({lt.argsPreview})</span>}
-                </span>
-              ) : lt.type === "live_tool_result" ? (
-                <span key={`ltr${j}`} className="inline-flex items-center gap-1.5 rounded-sm border border-rp-line bg-rp-surface px-2.5 py-1 text-xs font-medium text-rp-ink">
-                  <Check /> <span className="text-rp-ink">{lt.name}</span>
-                </span>
-              ) : null)}
-            </div>
-          );
-        }
-
-        if (item.type === "capture") return <div key={`cap-${item.span.id}`} className="px-4 py-1"><CaptureVisibilityDetails span={item.span} /></div>;
-
-        if (item.type === "system_msg") {
-          return (
-            <div key={`sys${i}`} className="px-4 space-y-1.5">
-              {item.content && <MessageList messages={[{ role: "system", content: item.content }]} />}
-              {item.prevMessages && item.prevMessages.length > 0 && (
-                <PreviousMessages messages={item.prevMessages} />
-              )}
-            </div>
-          );
-        }
-
-        if (item.type === "user_msg") {
-          return <UserMessage key={`usr${i}`} content={item.content} parts={item.parts} images={item.images} onEdit={item.independentObservation ? undefined : onEditMessage} />;
-        }
-
-        if (item.type === "llm_out") {
-          const s = item.span;
-          const isErr = s.status === "ERROR";
-          const capture = s.normalized?.capture;
-          const content = capture?.entityKind === "assistant" ? capture.assistantText : s.output_payload;
-          return (
-            <div key={`lo${i}`} className="px-4 py-2">
-              {isFirstLLM && (
-                <div className="mb-2 flex justify-start" data-testid="llm-render-mode-toolbar">
-                  <RenderModeToggle md={md} onChange={handleMdChange} />
-                </div>
-              )}
-              {isErr && content !== null && (
-                <div className="max-w-[85%]"><LLMErrorBanner content={content} /></div>
-              )}
-              {capture?.entityKind === "assistant" && content === null && <div className="text-[12px] text-rp-ink-muted">Assistant observation · Text unavailable; inspect the captured span payload.</div>}
-              {!isErr && content !== null && (
-                <LLMOutput content={content} md={md} />
-              )}
-            </div>
-          );
-        }
-
-        if (item.type === "llm_stop") {
-          return (
-            <div key={`ls${i}`} className="px-4 py-2" data-testid="llm-stop">
-              {item.error
-                ? <div className="max-w-[85%]"><LLMErrorBanner content={item.error} /></div>
-                : <p role="status" className="max-w-[85%] text-[13px] leading-6 text-rp-ink-muted">
-                    No answer text. Generation stopped early: <span className="font-mono text-rp-ink">{item.reason}</span>
-                    {item.reasoningOnly && item.span.output_tokens != null ? `. All ${item.span.output_tokens.toLocaleString()} output tokens were reasoning.` : "."}
-                  </p>}
-            </div>
-          );
-        }
-
-        if (item.type === "reasoning") {
-          return (
-            <div key={`r${i}`} className="mx-4 my-1 whitespace-pre-wrap border-l-2 border-rp-line py-1 pl-3 text-[12px] italic leading-[1.6] text-rp-ink-muted">
-              <SmoothTextDelta content={item.content} enabled={true} as="span" className="whitespace-pre-wrap" style={{ color: "inherit" }} />
-            </div>
-          );
-        }
-
-        if (item.type === "text_delta") {
-          return (
-            <div key={`td${i}`} className="px-4">
-              <SmoothTextDelta content={item.content} enabled={true} />
-            </div>
-          );
-        }
-
-        return null;
-      }); })()}
-      <ActiveSpinner isActive={isActive} lastUpdatedAt={lastUpdatedAt} liveEvents={liveEvents} spans={spans} />
-    </div>
+    <AgentDisclosureContext.Provider value={disclosure}>
+      <div ref={scrollRef} className="space-y-1.5 py-2 pb-24">
+        {spans.some(span => span.normalized?.capture) && <div role="status" className="rp-meta px-4">Producer-reported observations · Partial capture · Runtime unverified</div>}
+        <div className="min-w-0 px-3 pt-1 sm:px-4"><FlameTimeline spans={spans} subAgents={subAgents} onDiveIn={onDiveIn} /></div>
+        <ChatItemList items={items} spans={spans} subAgents={subAgents} onDiveIn={onDiveIn} md={md} onMdChange={handleMdChange} onEditMessage={onEditMessage} asSubAgent={asSubAgent} />
+        <ActiveSpinner isActive={isActive} lastUpdatedAt={lastUpdatedAt} liveEvents={liveEvents} spans={spans} />
+      </div>
+    </AgentDisclosureContext.Provider>
   );
 }

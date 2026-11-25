@@ -63,64 +63,69 @@ async function seedSubAgentWithFailedTool(url: string): Promise<void> {
   expect(detail.subAgents.map((agent) => agent.root_span_id)).toEqual([SUB_AGENT_ROOT]);
 }
 
-async function openSubAgentPopover(page: Page, url: string): Promise<Locator> {
-  await page.setViewportSize({ width: 1280, height: 720 });
+async function openSubAgentCard(page: Page, url: string, width = 1280, height = 720): Promise<Locator> {
+  await page.setViewportSize({ width, height });
   await page.goto(`${url}/runs/${TRACE_ID}`);
-  await page.locator("button[aria-haspopup='dialog']", { hasText: "researcher" }).click();
-  const popover = page.getByRole("dialog", { name: "researcher sub-agent details" });
-  await expect(popover).toBeVisible();
-  return popover;
+  await page.getByRole("button", { name: /^agent\s*researcher/ }).click();
+  const details = page.getByRole("region", { name: "researcher sub-agent details" });
+  await expect(details).toBeVisible();
+  return details;
 }
 
 test.beforeEach(async ({ runPhantom }) => {
   await clearRunPhantom(runPhantom.url);
 });
 
-test("sub-agent popover: a failed tool is marked as an error, not with a success check", async ({ page, runPhantom }, testInfo) => {
+test("sub-agent card: a failed tool is marked as an error, not with a success check", async ({ page, runPhantom }, testInfo) => {
   await seedSubAgentWithFailedTool(runPhantom.url);
-  const popover = await openSubAgentPopover(page, runPhantom.url);
+  const details = await openSubAgentCard(page, runPhantom.url);
 
-  // Every tool in the popover drew the green check, so read_changelog, which
+  // Every tool in the sub-agent drew the green check, so read_changelog, which
   // failed, read "✓ read_changelog 1.1s" in green.
-  const chip = (name: string) => popover.evaluate((root, toolName) => {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      if (node.textContent?.trim() !== toolName || !node.parentElement) continue;
-      const element = node.parentElement;
-      const icon = element.querySelector("svg");
-      const danger = document.createElement("span");
-      danger.style.color = "var(--rp-danger)";
-      document.body.append(danger);
-      const dangerColor = getComputedStyle(danger).color;
-      danger.remove();
-      return {
-        alert: !!icon?.querySelector("circle"),
-        check: !!icon?.querySelector("polyline"),
-        stroke: icon?.getAttribute("stroke") ?? null,
-        danger: getComputedStyle(element).color === dangerColor,
-      };
-    }
-    return null;
-  }, name);
-
-  expect(await chip("read_changelog")).toEqual({ alert: true, check: false, stroke: "var(--rp-danger)", danger: true });
-  expect(await chip("list_files")).toEqual({ alert: false, check: true, stroke: "var(--rp-success)", danger: false });
-  await popover.screenshot({ path: testInfo.outputPath("sub-agent-tool-statuses.png") });
-});
-
-test("sub-agent popover: the open button keeps its label on one line at 1280x720", async ({ page, runPhantom }, testInfo) => {
-  await seedSubAgentWithFailedTool(runPhantom.url);
-  const popover = await openSubAgentPopover(page, runPhantom.url);
-
-  // The footer's model and token summary squeezed the button, which wrapped
-  // as "Open Sub-" over "Agent →".
-  const open = popover.getByRole("button", { name: "Open Sub-Agent →" });
-  await expect(open).toBeVisible();
-  const lines = await open.evaluate((button) => {
-    const range = document.createRange();
-    range.selectNodeContents(button);
-    return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
+  const pill = (name: string) => details.getByRole("button", { name: `Expand tool call ${name}` }).evaluate((button) => {
+    const icon = button.querySelector("svg");
+    const danger = document.createElement("span");
+    danger.style.color = "var(--rp-danger)";
+    document.body.append(danger);
+    const dangerColor = getComputedStyle(danger).color;
+    danger.remove();
+    return {
+      alert: !!icon?.querySelector("circle"),
+      check: !!icon?.querySelector("polyline"),
+      stroke: icon?.getAttribute("stroke") ?? null,
+      danger: getComputedStyle(button).color === dangerColor,
+    };
   });
-  expect(lines, "lines in the Open Sub-Agent label").toBe(1);
-  await popover.screenshot({ path: testInfo.outputPath("sub-agent-complete-footer-1280.png") });
+
+  expect(await pill("read_changelog")).toEqual({ alert: true, check: false, stroke: "var(--rp-danger)", danger: true });
+  expect(await pill("list_files")).toEqual({ alert: false, check: true, stroke: "var(--rp-success)", danger: false });
+  await details.screenshot({ path: testInfo.outputPath("sub-agent-tool-statuses.png") });
 });
+
+test("sub-agent card: the prompt is the parent's task, not a user message, and replies follow it", async ({ page, runPhantom }) => {
+  await seedSubAgentWithFailedTool(runPhantom.url);
+  const details = await openSubAgentCard(page, runPhantom.url);
+  await expect(details.getByText("Prompt from parent agent")).toBeVisible();
+  await expect(details.getByText("Research the release notes for 2.4.0")).toBeVisible();
+  await expect(details.getByText("Reading the changelog.")).toBeVisible();
+  await expect(page.getByText("Research the release notes for 2.4.0")).toHaveCount(1);
+  await expect(details).toContainText(/claude-haiku-4-5 · 1 LLM call · 2 tools/);
+});
+
+for (const [width, height] of [[1280, 720], [390, 844]] as const) {
+  test(`sub-agent card: the open button keeps its label on one line at ${width}x${height}`, async ({ page, runPhantom }, testInfo) => {
+    await seedSubAgentWithFailedTool(runPhantom.url);
+    await openSubAgentCard(page, runPhantom.url, width, height);
+
+    // A squeezed button wrapped as "Open Sub-" over "Agent →".
+    const open = page.getByRole("button", { name: "Open Sub-Agent →" });
+    await expect(open).toBeVisible();
+    const lines = await open.evaluate((button) => {
+      const range = document.createRange();
+      range.selectNodeContents(button);
+      return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
+    });
+    expect(lines, "lines in the Open Sub-Agent label").toBe(1);
+    await page.locator("[data-sub-agent]").screenshot({ path: testInfo.outputPath(`sub-agent-card-${width}.png`) });
+  });
+}

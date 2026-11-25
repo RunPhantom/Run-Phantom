@@ -190,7 +190,14 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
     for (const span of spans) if (!drawn.has(span)) ids.add(span.id);
     return ids;
   }, [spans, vizSpans]);
-  const layout = useMemo(() => buildCondensedTimeline(vizSpans, subAgents, 0, undrawnParentIds), [vizSpans, subAgents, undrawnParentIds]);
+  // Invocation grouping needs a drawn root. An agent -> agent hand-off is rooted
+  // at its undrawn agent span; it still opens from its bars via the
+  // conversation's focus request.
+  const groupedAgents = useMemo(() => {
+    const drawn = new Set(vizSpans.map(span => span.id));
+    return subAgents.filter(agent => drawn.has(agent.root_span_id));
+  }, [vizSpans, subAgents]);
+  const layout = useMemo(() => buildCondensedTimeline(vizSpans, groupedAgents, 0, undrawnParentIds), [vizSpans, groupedAgents, undrawnParentIds]);
   const hasVizSpans = layout.entries.length > 0;
   const [compact, setCompact] = useState(false);
   const coarsePointer = useCoarsePointer();
@@ -327,7 +334,7 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
   const scrollViewportW = Math.max((containerW || 300) - labelW, 160);
   const chartW = Math.min(12_000, Math.max(scrollViewportW, dur * MIN_PX_PER_MS, MIN_CHART_W, compact && shortestInterval !== Infinity ? (dur / shortestInterval) * minimumPaintWidth : 0));
   // Paint bounds participate in compact packing, so the minimum visible bar never covers its neighbour.
-  const packed = compact ? buildCondensedTimeline(vizSpans, subAgents, (minimumPaintWidth * dur) / chartW, undrawnParentIds) : layout;
+  const packed = compact ? buildCondensedTimeline(vizSpans, groupedAgents, (minimumPaintWidth * dur) / chartW, undrawnParentIds) : layout;
   const rowOf = (entry: TimelineEntry) => compact ? packed.entries[entry.sourceIndex].row : unknownRows.get(entry.key) ?? namedRows.get(entry.span.name)!;
   const rows = new Map<number, TimelineEntry[]>();
   for (const entry of layout.entries) {

@@ -636,8 +636,7 @@ test("a stale no-agent response keeps a newer selected real sub-agent until its 
     await post(runPhantom.url, "/api/import-run", fixture());
     const old = await reads.next(0);
     await post(runPhantom.url, "/api/import-run", subAgentFixture());
-    await page.getByRole("button", { name: /agent worker/ }).click();
-    await page.getByRole("dialog", { name: "worker sub-agent details" }).getByRole("button", { name: /Open Sub-Agent/ }).click();
+    await page.locator("[data-sub-agent]", { hasText: "worker" }).getByRole("button", { name: /Open Sub-Agent/ }).click();
     await expect(page.getByRole("tablist", { name: "Sub-agent views" })).toBeVisible();
     old.release(); await old.delivered; await finished(old.request);
     const covering = await reads.next(1);
