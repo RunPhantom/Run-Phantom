@@ -29,6 +29,12 @@ export interface ErrorFact {
   readonly message: string | null;
 }
 
+export interface ToolFailureFact {
+  readonly failures: number;
+  /** The latest failing call by start time; ties go to the later span in start order. */
+  readonly last: ErrorFact;
+}
+
 /** Everything the overview and run list derive from a run's spans; cached per run. */
 export interface RunFacts {
   readonly spanCount: number;
@@ -47,8 +53,10 @@ export interface RunFacts {
   readonly inputPreview: string | null;
   readonly captureCompletion: "unavailable" | null;
   readonly generations: readonly GenerationFact[];
+  /** The first RUN_FACT_LIMITS.errorsPerRun failing spans in start order; errorCount has the full count. */
   readonly errors: readonly ErrorFact[];
   readonly toolCalls: Readonly<Record<string, number>>;
+  readonly toolFailures: Readonly<Record<string, ToolFailureFact>>;
 }
 
 export interface RunRow {
@@ -69,7 +77,7 @@ export interface RunRow {
 export const RUN_FACT_LIMITS = Object.freeze({
   previewChars: 140,
   errorMessageChars: 200,
-  errorsPerRun: 100,
+  errorsPerRun: 20,
   cacheEntries: 50_000,
   idsPerQuery: 400,
   ancestryDepth: 256,
@@ -84,6 +92,7 @@ interface Aggregate {
   span_count: number; error_count: number; tool_count: number; root_count: number; ended_root_count: number; root_error_count: number;
   min_start: number | null; max_end: number | null;
   fp_attributes: number; fp_input: number; fp_output: number; fp_duration: number; fp_tokens: number; fp_ok: number;
+  fp_names: number; fp_generations: number; fp_model: number; fp_start: number; fp_end: number; fp_parent: number; fp_rowid: number | null; fp_model_min: string | null; fp_model_max: string | null;
 }
 
 interface SpanRow {
@@ -107,14 +116,27 @@ const AGGREGATE_COLUMNS = `
   TOTAL(octet_length(s.output_payload)) AS fp_output,
   TOTAL(s.duration_ms) AS fp_duration,
   TOTAL(s.input_tokens) + TOTAL(s.output_tokens) * 65536 AS fp_tokens,
-  COALESCE(SUM(s.status = 'OK'), 0) AS fp_ok`;
+  COALESCE(SUM(s.status = 'OK'), 0) AS fp_ok,
+  TOTAL(length(s.name)) + TOTAL(length(s.span_type)) * 4096 AS fp_names,
+  COALESCE(SUM(s.span_type = 'LLM_GENERATION'), 0) AS fp_generations,
+  TOTAL(length(s.model)) + TOTAL(length(s.provider)) * 4096 AS fp_model,
+  TOTAL(s.start_time_ms) AS fp_start,
+  TOTAL(s.end_time_ms) AS fp_end,
+  TOTAL(length(s.parent_span_id)) AS fp_parent,
+  MAX(s.rowid) AS fp_rowid,
+  MIN(s.model) AS fp_model_min,
+  MAX(s.model) AS fp_model_max`;
 
 /**
  * One grouped pass over the selected runs' spans. Its totals double as the
- * cache fingerprint, so a new, removed, ended or failed span, or any change in
- * a span's attribute, payload or token size, recomputes that run. An in-place
- * rewrite that keeps every byte length and total equal is not detected; the
- * ingest paths only ever re-send identical spans or fill in missing fields.
+ * cache fingerprint, so a new, removed, re-inserted, ended or failed span, a
+ * re-typed or re-parented span, a moved start or end time, a changed model, or
+ * any change in a name, provider, attribute, payload or token size recomputes
+ * that run. Several ingest paths write spans with raw SQL (coding hooks, trace
+ * import), so there is no single write hook to invalidate from. An in-place
+ * rewrite that keeps every one of these lengths and totals equal, such as a
+ * reported cost of 0.0012 becoming 0.0034, is not detected until the run
+ * changes again or the daemon restarts.
  */
 export function selectRunAggregates(db: Database, where: string, params: readonly (string | number)[]): Aggregate[] {
   return db.query(`SELECT r.id, r.event_id, r.name, r.event_name, r.display_name, r.user_id, r.convo_id, r.started_at, r.last_updated_at, r.metadata,
@@ -134,8 +156,10 @@ export function loadRunRows(db: Database, dbPath: string, aggregates: readonly A
   const missing: Aggregate[] = [];
   for (const aggregate of aggregates) {
     const hit = cache.get(cacheKey(dbPath, aggregate.id));
-    if (hit && hit.fingerprint === fingerprint(aggregate, rates)) facts.set(aggregate.id, hit.facts);
-    else missing.push(aggregate);
+    if (hit && hit.fingerprint === fingerprint(aggregate, rates)) {
+      facts.set(aggregate.id, hit.facts);
+      remember(cacheKey(dbPath, aggregate.id), hit.fingerprint, hit.facts);
+    } else missing.push(aggregate);
   }
   for (let offset = 0; offset < missing.length; offset += RUN_FACT_LIMITS.idsPerQuery) {
     const batch = missing.slice(offset, offset + RUN_FACT_LIMITS.idsPerQuery);
@@ -156,8 +180,10 @@ export function loadRunRows(db: Database, dbPath: string, aggregates: readonly A
 const cacheKey = (dbPath: string, runId: string) => `${dbPath}\u0000${runId}`;
 const fingerprint = (aggregate: Aggregate, rates: ServerCostRates) => JSON.stringify([aggregate.span_count, aggregate.error_count, aggregate.tool_count, aggregate.root_count,
   aggregate.ended_root_count, aggregate.root_error_count, aggregate.min_start, aggregate.max_end, aggregate.fp_attributes, aggregate.fp_input,
-  aggregate.fp_output, aggregate.fp_duration, aggregate.fp_tokens, aggregate.fp_ok, rates.key]);
+  aggregate.fp_output, aggregate.fp_duration, aggregate.fp_tokens, aggregate.fp_ok, aggregate.fp_names, aggregate.fp_generations, aggregate.fp_model,
+  aggregate.fp_start, aggregate.fp_end, aggregate.fp_parent, aggregate.fp_rowid, aggregate.fp_model_min, aggregate.fp_model_max, rates.key]);
 
+/** Least-recently-used: a hit is re-inserted, so the oldest key in Map order is the coldest entry. */
 function remember(key: string, value: string, facts: RunFacts): void {
   cache.delete(key);
   cache.set(key, { fingerprint: value, facts });
@@ -206,10 +232,22 @@ function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[], rates:
   const fallbackModel = spans.find(span => span.model)?.model ?? null;
   const errors: ErrorFact[] = [];
   const toolCalls: Record<string, number> = Object.create(null);
+  const toolFailureSpans = new Map<string, { failures: number; last: SpanRow }>();
+  const errorFact = (span: SpanRow): ErrorFact => ({ spanId: span.id, name: span.name, spanType: span.span_type, startMs: span.start_time_ms, message: errorMessage(span) });
   for (const span of spans) {
     if (span.span_type === "TOOL_CALL") toolCalls[span.name] = (toolCalls[span.name] ?? 0) + 1;
-    if (span.status === "ERROR" && errors.length < RUN_FACT_LIMITS.errorsPerRun) errors.push({ spanId: span.id, name: span.name, spanType: span.span_type, startMs: span.start_time_ms, message: errorMessage(span) });
+    if (span.status !== "ERROR") continue;
+    if (errors.length < RUN_FACT_LIMITS.errorsPerRun) errors.push(errorFact(span));
+    if (span.span_type !== "TOOL_CALL") continue;
+    const tool = toolFailureSpans.get(span.name);
+    if (!tool) toolFailureSpans.set(span.name, { failures: 1, last: span });
+    else {
+      tool.failures++;
+      if ((span.start_time_ms ?? -Infinity) >= (tool.last.start_time_ms ?? -Infinity)) tool.last = span;
+    }
   }
+  const toolFailures: Record<string, ToolFailureFact> = Object.create(null);
+  for (const [name, tool] of toolFailureSpans) toolFailures[name] = Object.freeze({ failures: tool.failures, last: errorFact(tool.last) });
   const root = spans.find(span => span.parent_span_id === null && span.span_type === "AGENT_ROOT") ?? null;
   return Object.freeze({
     spanCount: aggregate.span_count, errorCount: aggregate.error_count, toolCount: aggregate.tool_count, finished, status, durationMs,
@@ -217,7 +255,7 @@ function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[], rates:
     model: lead?.model ?? fallbackModel, provider: lead?.provider ?? spans.find(span => span.provider)?.provider ?? null, models: Object.freeze(models),
     inputPreview: inputPreview(firstGeneration, spans.find(span => span.parent_span_id === null) ?? null),
     captureCompletion: rootCaptureCompletion(root),
-    generations: Object.freeze(generations), errors: Object.freeze(errors), toolCalls: Object.freeze(toolCalls),
+    generations: Object.freeze(generations), errors: Object.freeze(errors), toolCalls: Object.freeze(toolCalls), toolFailures: Object.freeze(toolFailures),
   });
 }
 

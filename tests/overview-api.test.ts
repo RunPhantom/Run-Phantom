@@ -103,6 +103,20 @@ describe("GET /api/overview computation", () => {
     expect(month.kpis.runs).toEqual({ value: 8, previous: 0 });
   });
 
+  test("failing tools count every failure in a run, beyond the stored error sample", () => {
+    const client = getDrizzleDb().$client;
+    const at = FIXTURE_NOW - HOUR;
+    client.query("INSERT INTO runs(id,name,event_name,started_at,last_updated_at) VALUES('many','omega','omega',?,?)").run(at, at + 60_000);
+    const insert = client.prepare(`INSERT INTO spans(run_id,id,parent_span_id,name,span_type,status,start_time_ms,end_time_ms,duration_ms,attributes) VALUES('many',?,?,?,?,?,?,?,?,?)`);
+    insert.run("root", null, "omega", "AGENT_ROOT", "OK", at, at + 60_000, 60_000, null);
+    for (let index = 0; index < 30; index++) insert.run(`fetch-${index}`, "root", "fetch_url", "TOOL_CALL", "ERROR", at + 100 + index * 10, at + 105 + index * 10, 5, JSON.stringify({ "error.message": `Attempt ${index} returned 503.` }));
+    const result = overview();
+    expect(result.topFailingTools).toEqual([
+      { tool: "fetch_url", failures: 30, calls: 30, failedRuns: 1, lastError: { message: "Attempt 29 returned 503.", runId: "many", spanId: "fetch-29", at: at + 390 } },
+    ]);
+    expect(result.recentFailures[0]).toMatchObject({ runId: "many", errorCount: 30, error: { spanId: "fetch-0", message: "Attempt 0 returned 503." } });
+  });
+
   test("agent and model filters narrow every section", () => {
     seedMetricsFixture(getDrizzleDb().$client);
     const alpha = overview({ agent: "alpha" });

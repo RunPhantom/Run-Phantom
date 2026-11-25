@@ -203,16 +203,14 @@ export function computeOverview(db: Database, dbPath: string, rawQuery: Record<s
 
   const tools = new Map<string, OverviewFailingTool>();
   for (const row of current) {
-    const failedHere = new Set<string>();
-    for (const error of row.facts.errors) {
-      if (error.spanType !== "TOOL_CALL") continue;
-      let tool = tools.get(error.name);
-      if (!tool) tools.set(error.name, tool = { tool: error.name, failures: 0, calls: 0, failedRuns: 0, lastError: { message: error.message, runId: row.id, spanId: error.spanId, at: error.startMs } });
-      tool.failures++;
-      failedHere.add(error.name);
-      if ((error.startMs ?? -Infinity) >= (tool.lastError.at ?? -Infinity)) tool.lastError = { message: error.message, runId: row.id, spanId: error.spanId, at: error.startMs };
+    for (const [name, failure] of Object.entries(row.facts.toolFailures)) {
+      const last = { message: failure.last.message, runId: row.id, spanId: failure.last.spanId, at: failure.last.startMs };
+      const tool = tools.get(name);
+      if (!tool) { tools.set(name, { tool: name, failures: failure.failures, calls: 0, failedRuns: 1, lastError: last }); continue; }
+      tool.failures += failure.failures;
+      tool.failedRuns++;
+      if ((last.at ?? -Infinity) >= (tool.lastError.at ?? -Infinity)) tool.lastError = last;
     }
-    for (const name of failedHere) tools.get(name)!.failedRuns++;
   }
   for (const row of current) for (const [name, count] of Object.entries(row.facts.toolCalls)) { const tool = tools.get(name); if (tool) tool.calls += count; }
   const topFailingTools = [...tools.values()].sort((a, b) => b.failures - a.failures || (b.lastError.at ?? 0) - (a.lastError.at ?? 0) || (a.tool < b.tool ? -1 : 1)).slice(0, OVERVIEW_LIMITS.topFailingTools);

@@ -114,6 +114,23 @@ describe("run facts cache", () => {
     expect(facts("cached").costSource).toBe("estimated");
     expect(facts("cached").costUsd).toBeCloseTo(0.00003, 15);
   });
+
+  test("recomputes when a span is re-typed, renamed, re-modelled or moved without changing its sizes", () => {
+    run("shape"); span("shape", "root", { type: "AGENT_ROOT" });
+    span("shape", "step", { parent: "root", type: "TOOL_CALL", model: "gpt-4o-mini", input: 7, output: 3 });
+    expect(facts("shape")).toMatchObject({ generations: [], model: "gpt-4o-mini", toolCalls: { step: 1 } });
+    db().query("UPDATE spans SET span_type = 'LLM_GENERATION' WHERE run_id = 'shape' AND id = 'step'").run();
+    expect(facts("shape")).toMatchObject({ inputTokens: 7, outputTokens: 3, toolCalls: {} });
+    expect(facts("shape").generations).toHaveLength(1);
+    db().query("UPDATE spans SET model = 'gpt-4o-maxi' WHERE run_id = 'shape' AND id = 'step'").run();
+    expect(facts("shape").model).toBe("gpt-4o-maxi");
+    db().query("UPDATE spans SET name = 'stop', span_type = 'TOOL_CALL' WHERE run_id = 'shape' AND id = 'step'").run();
+    expect(facts("shape").toolCalls).toEqual({ stop: 1 });
+    db().query("UPDATE spans SET status = 'ERROR', start_time_ms = 15 WHERE run_id = 'shape' AND id = 'step'").run();
+    expect(facts("shape").errors[0]).toMatchObject({ spanId: "step", startMs: 15 });
+    db().query("UPDATE spans SET start_time_ms = 16 WHERE run_id = 'shape' AND id = 'step'").run();
+    expect(facts("shape").errors[0].startMs).toBe(16);
+  });
 });
 
 describe("previews and error sentences", () => {
