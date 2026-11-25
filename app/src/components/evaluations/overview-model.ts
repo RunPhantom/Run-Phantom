@@ -19,14 +19,16 @@ export function datasetRows(datasets: readonly Dataset[], experiments: readonly 
 }
 
 /**
- * The completed experiment that ran immediately before `experiment` on the same dataset revision.
- * Only that pairing is comparable: the API rejects comparisons across revisions or evaluators.
+ * The newest completed experiment before `experiment` on the same dataset revision and evaluation/snapshot versions,
+ * matching the compare API's preconditions. Per-check evaluator versions are not in the summary, so the API can still
+ * refuse a pair here; the comparison view shows that refusal.
  */
 export function previousComparable(experiment: ExperimentSummary, experiments: readonly ExperimentSummary[]): ExperimentSummary | null {
   if (experiment.status !== "completed") return null;
   return experiments
     .filter(item => item.id !== experiment.id && item.status === "completed" && item.datasetId === experiment.datasetId
       && item.datasetVersion === experiment.datasetVersion && item.datasetHash === experiment.datasetHash
+      && item.evaluationVersion === experiment.evaluationVersion && item.snapshotVersion === experiment.snapshotVersion
       && (item.createdAt < experiment.createdAt || item.createdAt === experiment.createdAt && item.id < experiment.id))
     .sort(newestFirst)[0] ?? null;
 }

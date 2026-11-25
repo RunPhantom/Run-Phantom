@@ -36,6 +36,17 @@ describe("evaluation overview model", () => {
     expect(previousComparable(experiment("live", { status: "running", createdAt: 400 }), list)).toBeNull();
   });
 
+  test("skips older experiments graded with a different evaluation or snapshot version", () => {
+    const list = [
+      experiment("a", { createdAt: 100 }),
+      experiment("old-evaluator", { createdAt: 200, evaluationVersion: 0 as unknown as 1 }),
+      experiment("old-snapshot", { createdAt: 250, snapshotVersion: 0 as unknown as 1 }),
+      experiment("c", { createdAt: 300 }),
+    ];
+    expect(previousComparable(list[3], list)?.id).toBe("a");
+    expect(previousComparable(list[1], list)).toBeNull();
+  });
+
   test("bins finished pass rates into ten buckets with 100% in the last one", () => {
     const bins = passRateBins([
       experiment("all", { summary: { total: 2, pass: 2, fail: 0, inconclusive: 0, passRate: 1 } }),

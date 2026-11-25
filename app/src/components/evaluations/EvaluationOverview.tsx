@@ -4,17 +4,25 @@ import { ago, plural, runDisplayName, runStatus } from "../../utils/helpers";
 import type { Run } from "../../utils/types";
 import { datasetRows, passRateBins, percent } from "./overview-model";
 
-/** A run picker label that tells otherwise identical runs apart: name, model, outcome, age and id prefix. */
-export function runOptionLabel(run: Run): string {
-  return [runDisplayName(run), run.model, runStatus(run).label, ago(run.started_at), run.id.slice(0, 8)].filter(Boolean).join(" · ");
+/** The run status without its "Run" prefix, so pickers read "Completed" beside "Completed · 1 tool error". */
+export function runOutcome(run: Run): string {
+  const { status, label } = runStatus(run);
+  if (status === "complete") return "Completed";
+  return label.startsWith("Run ") ? label.charAt(4).toUpperCase() + label.slice(5) : label;
 }
 
-export function PassRate({ experiment }: { experiment: ExperimentSummary | null }) {
+/** A run picker label that tells otherwise identical runs apart: name, model, outcome, age and id prefix. */
+export function runOptionLabel(run: Run): string {
+  return [runDisplayName(run), run.model, runOutcome(run), ago(run.started_at), run.id.slice(0, 8)].filter(Boolean).join(" · ");
+}
+
+export function PassRate({ experiment, latestRevision }: { experiment: ExperimentSummary | null; latestRevision?: number }) {
   if (!experiment) return <span className="evaluation-meta" title="No finished experiment uses this dataset yet.">—</span>;
   const { pass, total, passRate } = experiment.summary;
   return <span className="evaluation-pass-rate">
     <span className="evaluation-pass-rate-value">{percent(passRate)}<span className="evaluation-meta"> · {pass}/{total}</span></span>
     <CellBar value={passRate} max={1} />
+    {latestRevision !== undefined && experiment.datasetVersion !== latestRevision && <span className="evaluation-meta">On revision {experiment.datasetVersion}; revision {latestRevision} not run yet</span>}
   </span>;
 }
 
@@ -28,7 +36,7 @@ export function DatasetsTable({ datasets, experiments, selectedId, onOpen }: { d
         <th scope="row"><button type="button" className="evaluation-experiment-name" aria-label={`Open dataset ${dataset.name}`} aria-pressed={selectedId === dataset.id} onClick={() => onOpen(dataset.id)}>{dataset.name}</button><span className="evaluation-meta">Revision {dataset.latestVersion} · {plural(experimentCount, "experiment")}</span></th>
         <td className="evaluation-numeric">{dataset.caseCount}</td>
         <td>{latest ? <><span className="evaluation-dataset-name">{latest.name}</span><span className="evaluation-meta">{latest.status === "completed" ? "Finished" : latest.status === "cancelled" ? "Cancelled" : "Running"} {ago(latest.completedAt ?? latest.createdAt)}</span></> : <span className="evaluation-meta">Not run yet</span>}</td>
-        <td><PassRate experiment={latestCompleted} /></td>
+        <td><PassRate experiment={latestCompleted} latestRevision={dataset.latestVersion} /></td>
       </tr>)}</tbody>
     </table>
   </div>;
