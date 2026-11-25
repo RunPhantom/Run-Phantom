@@ -15,7 +15,7 @@ export const TRACE_KIND_LABEL: Record<TraceKind, string> = {
 export const TRACE_KIND_FILTER_LABEL: Record<TraceKind, string> = {
   llm: "Model calls",
   tool: "Tools",
-  agent: "Agents",
+  agent: "Agent steps",
   other: "Other",
 };
 
@@ -105,16 +105,29 @@ export function buildTraceModel(spans: readonly Span[], agentRootIds?: ReadonlyS
 
 const PAYLOAD_SEARCH_LIMIT = 20_000;
 
+// Keyed by the span object, so a refetch that replaces a span drops its entry
+// and the per-keystroke cost is one includes() per span, not a re-lowercase of
+// up to 40k payload characters.
+const haystacks = new WeakMap<Span, { fields: string; payload: string }>();
+
+function haystack(span: Span): { fields: string; payload: string } {
+  let entry = haystacks.get(span);
+  if (!entry) {
+    entry = {
+      fields: [span.name, span.span_type, span.model, span.id, span.status === "ERROR" ? "error" : null].filter(Boolean).join("\n").toLowerCase(),
+      payload: [span.input_payload, span.output_payload].map(payload => payload?.slice(0, PAYLOAD_SEARCH_LIMIT) ?? "").join("\n").toLowerCase(),
+    };
+    haystacks.set(span, entry);
+  }
+  return entry;
+}
+
 /** Case-insensitive match on the step name, type, model, id and the first 20k characters of each payload. */
 export function spanMatches(span: Span, query: string): boolean {
   const needle = query.trim().toLowerCase();
   if (!needle) return false;
-  const fields = [span.name, span.span_type, span.model, span.id, span.status === "ERROR" ? "error" : null];
-  if (fields.some(field => field?.toLowerCase().includes(needle))) return true;
-  for (const payload of [span.input_payload, span.output_payload]) {
-    if (payload && payload.slice(0, PAYLOAD_SEARCH_LIMIT).toLowerCase().includes(needle)) return true;
-  }
-  return false;
+  const entry = haystack(span);
+  return entry.fields.includes(needle) || entry.payload.includes(needle);
 }
 
 export interface VisibleTrace {
@@ -159,6 +172,21 @@ export function visibleTrace(model: TraceModel, options: { collapsed: ReadonlySe
 }
 
 /** Top-level model calls; a model call nested in another one is the same request seen twice. */
+/**
+ * Tool steps as both the stat strip and the trace's kind toggle count them. A
+ * tool call that started a sub-agent is drawn as that agent, so it is not also
+ * counted as a tool.
+ */
+export function countedToolSpans(spans: readonly Span[], agentRootIds?: ReadonlySet<string>): Span[] {
+  return spans.filter(span => traceKind(span, agentRootIds) === "tool");
+}
+
+/** "claude-haiku-4-5-20251001" -> "claude-haiku-4-5"; drops a provider prefix and a trailing date stamp. */
+export function shortModelName(model: string): string {
+  const bare = model.includes("/") ? model.slice(model.lastIndexOf("/") + 1) : model;
+  return bare.replace(/-(?:20\d{6}|20\d{2}-\d{2}-\d{2})$/, "");
+}
+
 export function countedLlmSpans(spans: readonly Span[]): Span[] {
   const llmIds = new Set(spans.filter(isLlmSpan).map(span => span.id));
   return spans.filter(span => isLlmSpan(span) && !(span.parent_span_id && llmIds.has(span.parent_span_id)));
@@ -183,6 +211,33 @@ export function slowestStep(model: TraceModel): TraceRow | null {
   return best;
 }
 
+const STATUS_MESSAGE_KEYS = ["otel.status.message", "exception.message", "error.message", "ai.response.error"] as const;
+
+/** The span's own error message (OTel status or exception attributes), or "" when it carries none. */
+export function spanStatusMessage(span: Pick<Span, "attributes">): string {
+  if (!span.attributes) return "";
+  try {
+    const attrs = JSON.parse(span.attributes) as Record<string, unknown>;
+    for (const key of STATUS_MESSAGE_KEYS) {
+      const value = attrs[key];
+      if (typeof value === "string" && value.trim()) return value;
+    }
+    const type = attrs["error.type"] ?? attrs["exception.type"];
+    return typeof type === "string" ? type : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Why a failed span failed. The status message wins over the output payload:
+ * a tool can return ordinary content (a markdown page) and still be marked
+ * failed, and that content is not the reason.
+ */
+export function spanErrorText(span: Pick<Span, "attributes" | "output_payload">): string {
+  return spanStatusMessage(span) || spanErrorReason(span);
+}
+
 function firstLine(text: string, limit = 120): string {
   const line = text.split(/\r?\n/).map(part => part.trim()).find(Boolean) ?? "";
   return line.length > limit ? `${line.slice(0, limit - 1).trimEnd()}…` : line;
@@ -190,7 +245,7 @@ function firstLine(text: string, limit = 120): string {
 
 /** Error text a person can read: a JSON `{message}` or `{error}` payload is unwrapped. */
 export function readableError(span: Span, limit = 120): string {
-  const raw = spanErrorReason(span);
+  const raw = spanErrorText(span);
   if (!raw) return "";
   try {
     const value: unknown = JSON.parse(raw);
@@ -208,12 +263,14 @@ export function readableError(span: Span, limit = 120): string {
 export interface FailureSentence {
   tone: "danger" | "warning";
   text: string;
+  /** The same sentence with the reason untruncated, for a tooltip or description. */
+  fullText: string;
   spanId: string;
 }
 
 /**
  * The computed headline for a run that went wrong, built from the spans alone:
- * "Failed at step 3 of 7 — run_tests: Exit code 1 after 720ms" or
+ * "Failed at step 3 of 7 — run_tests (720ms): Exit code 1" or
  * "Completed · 1 tool error in lookup_account". Null when nothing errored.
  * Steps count non-root spans in start order, which is how the timeline reads.
  */
@@ -226,15 +283,17 @@ export function failureSentence(spans: readonly Span[], outcome: "failed" | "com
   const erroredSteps = steps.filter(span => span.status === "ERROR");
   const leafFirst = (list: Span[]) => list.find(span => !(model.byId.get(span.id)?.childIds.some(id => model.byId.get(id)?.span.status === "ERROR"))) ?? list[0];
   const culprit = leafFirst(erroredSteps.length ? erroredSteps : errored)!;
+  // The duration sits next to the step name: after a long reason the header's
+  // ellipsis would hide it.
   const reason = readableError(culprit);
-  const where = culprit.name;
-  const after = Number.isFinite(culprit.duration_ms) && culprit.duration_ms >= 0 ? ` after ${fmt(culprit.duration_ms)}` : "";
+  const fullReason = readableError(culprit, 2000);
+  const where = Number.isFinite(culprit.duration_ms) && culprit.duration_ms >= 0 ? `${culprit.name} (${fmt(culprit.duration_ms)})` : culprit.name;
 
   if (outcome === "failed") {
     const index = steps.findIndex(span => span.id === culprit.id);
-    const position = index >= 0 ? `step ${index + 1} of ${steps.length}` : where;
-    const detail = reason ? `${where}: ${reason}` : `${where} returned an error`;
-    return { tone: "danger", text: `Failed at ${position} — ${detail}${after}`, spanId: culprit.id };
+    const position = index >= 0 ? `step ${index + 1} of ${steps.length}` : culprit.name;
+    const sentence = (why: string) => `Failed at ${position} — ${why ? `${where}: ${why}` : `${where} returned an error`}`;
+    return { tone: "danger", text: sentence(reason), fullText: sentence(fullReason), spanId: culprit.id };
   }
   const toolErrors = errored.filter(span => span.span_type === "TOOL_CALL");
   const allTools = toolErrors.length === errored.length;
@@ -242,6 +301,12 @@ export function failureSentence(spans: readonly Span[], outcome: "failed" | "com
   const noun = allTools ? (errored.length === 1 ? "tool error" : "tool errors") : (errored.length === 1 ? "error" : "errors");
   const place = names.length === 1 ? ` in ${names[0]}` : names.length === 2 ? ` in ${names[0]} and ${names[1]}` : ` in ${names[0]} and ${names.length - 1} other steps`;
   const prefix = outcome === "completed" ? "Completed · " : outcome === "running" ? "Running · " : "";
-  const why = errored.length === 1 && reason ? `: ${reason}` : "";
-  return { tone: "warning", text: `${prefix}${errored.length} ${noun}${place}${why}`, spanId: culprit.id };
+  const head = `${prefix}${errored.length} ${noun}${place}`;
+  const single = errored.length === 1;
+  return {
+    tone: "warning",
+    text: single && reason ? `${head}: ${reason}` : head,
+    fullText: single && fullReason ? `${head}: ${fullReason}` : head,
+    spanId: culprit.id,
+  };
 }

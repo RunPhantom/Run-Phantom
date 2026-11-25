@@ -44,7 +44,7 @@ test("waterfall: nested steps share one time axis, kinds filter, and the header 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`${runPhantom.url}/runs/${failedRunId}/spans`);
 
-  await expect(page.locator("[data-run-failure]")).toHaveText("Failed at step 3 of 4 — bun test auth/: Exit code 1 after 680ms");
+  await expect(page.locator("[data-run-failure]")).toHaveText("Failed at step 3 of 4 — bun test auth/ (680ms): Exit code 1");
   await expect(page.locator("[data-span-row]")).toHaveCount(5);
 
   const nameLeft = async (id: string) => (await row(page, failedRunId, id).getByText(id === "bun" ? "bun test auth/" : id === "tests" ? "run_tests" : "code_review_agent", { exact: true }).boundingBox())!.x;

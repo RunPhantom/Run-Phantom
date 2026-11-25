@@ -2,6 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
   buildTraceModel,
   countedLlmSpans,
+  countedToolSpans,
+  shortModelName,
+  spanErrorText,
+  spanMatches,
   distinctModels,
   failureSentence,
   readableError,
@@ -100,7 +104,8 @@ describe("failure sentence", () => {
   test("a failed run names the innermost failing step, its position, reason and duration", () => {
     expect(failureSentence(trace, "failed")).toEqual({
       tone: "danger",
-      text: "Failed at step 3 of 5 — bun test auth/: Exit code 1 after 680ms",
+      text: "Failed at step 3 of 5 — bun test auth/ (680ms): Exit code 1",
+      fullText: "Failed at step 3 of 5 — bun test auth/ (680ms): Exit code 1",
       spanId: "bun",
     });
   });
@@ -109,6 +114,7 @@ describe("failure sentence", () => {
     expect(failureSentence(trace, "completed")).toEqual({
       tone: "warning",
       text: "Completed · 2 tool errors in run_tests and bun test auth/",
+      fullText: "Completed · 2 tool errors in run_tests and bun test auth/",
       spanId: "bun",
     });
     const one = [trace[0]!, { ...trace[2]!, output_payload: "timeout" }];
@@ -124,5 +130,54 @@ describe("failure sentence", () => {
     expect(readableError(trace[2]!)).toBe("Exit code 1. 2 tests failed");
     expect(readableError(trace[3]!)).toBe("Exit code 1");
     expect(readableError(span("attr", { status: "ERROR", attributes: JSON.stringify({ "error.message": "boom" }) }))).toBe("boom");
+  });
+});
+
+describe("shared counts and labels", () => {
+  test("a tool call that started a sub-agent counts as the agent, not also as a tool", () => {
+    const spans = [
+      span("root", { span_type: "AGENT_ROOT" }),
+      span("lookup", { parent_span_id: "root", span_type: "TOOL_CALL" }),
+      span("delegate", { parent_span_id: "root", span_type: "TOOL_CALL", name: "delegate_research" }),
+      span("search", { parent_span_id: "delegate", span_type: "TOOL_CALL" }),
+    ];
+    const roots = new Set(["delegate"]);
+    expect(countedToolSpans(spans, roots).map(s => s.id)).toEqual(["lookup", "search"]);
+    const kinds = buildTraceModel(spans, roots).rows.filter(row => row.kind === "tool").map(row => row.span.id);
+    expect(kinds).toEqual(countedToolSpans(spans, roots).map(s => s.id));
+  });
+
+  test("model names drop a provider prefix and a date stamp", () => {
+    expect(shortModelName("claude-haiku-4-5-20251001")).toBe("claude-haiku-4-5");
+    expect(shortModelName("openai/gpt-4o-mini-2024-07-18")).toBe("gpt-4o-mini");
+    expect(shortModelName("gemini-3.8-flash")).toBe("gemini-3.8-flash");
+  });
+
+  test("search matches payload text and sees a replaced span's new payload", () => {
+    const first = span("s", { input_payload: "Find the Refund ledger" });
+    expect(spanMatches(first, "refund")).toBe(true);
+    expect(spanMatches({ ...first, input_payload: "nothing" }, "refund")).toBe(false);
+  });
+});
+
+describe("error text", () => {
+  test("the status message wins over ordinary output content", () => {
+    const failed = span("evil", { status: "ERROR", output_payload: "# Heading\n\nbody", attributes: JSON.stringify({ "otel.status.message": "renderer failed hard" }) });
+    expect(spanErrorText(failed)).toBe("renderer failed hard");
+    expect(readableError(failed)).toBe("renderer failed hard");
+    expect(failureSentence([failed], "completed")!.text).toBe("Completed · 1 error in evil: renderer failed hard");
+  });
+
+  test("the output is the reason when the span carries no status message", () => {
+    expect(spanErrorText(span("x", { status: "ERROR", output_payload: "Exit code 2" }))).toBe("Exit code 2");
+  });
+
+  test("a long reason is cut in the sentence but kept whole in fullText, with the duration before it", () => {
+    const reason = "Payments ledger rejected the refund because ".repeat(6).trim();
+    const failed = span("refund", { name: "issue_refund", status: "ERROR", duration_ms: 1, output_payload: reason });
+    const sentence = failureSentence([span("root", { span_type: "AGENT_ROOT" }), { ...failed, parent_span_id: "root" }], "failed")!;
+    expect(sentence.text.startsWith("Failed at step 1 of 1 — issue_refund (1ms): Payments ledger")).toBe(true);
+    expect(sentence.text.length).toBeLessThan(sentence.fullText.length);
+    expect(sentence.fullText.endsWith(reason)).toBe(true);
   });
 });

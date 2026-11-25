@@ -30,6 +30,13 @@ export function plural(count: number, singular: string, pluralForm = `${singular
   return `${count} ${count === 1 ? singular : pluralForm}`;
 }
 
+/** 950 -> "950", 1234 -> "1.2k", 45_000 -> "45k", 2_300_000 -> "2.3M". */
+export function compactTokens(value: number): string {
+  if (value < 1000) return String(value);
+  if (value < 1_000_000) return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0).replace(/\.0$/, "")}k`;
+  return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+}
+
 export function ago(t: number): string {
   const d = Date.now() - t;
   // A clock-skewed exporter can stamp a run in the future, which made every
