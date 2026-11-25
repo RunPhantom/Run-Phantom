@@ -4,11 +4,13 @@ import {
   agentCell,
   compactNumber,
   contentTracks,
+  contentTracksFor,
   costCell,
   durationCell,
   errorsCell,
   exportRowsJson,
   fitColumns,
+  widerContent,
   minTableWidth,
   modelCell,
   nextSort,
@@ -102,11 +104,14 @@ describe("runs table columns and sort", () => {
     expect(normalizeColumns("nope")).toEqual([...RUNS_TABLE_DEFAULT_COLUMNS]);
   });
 
-  test("default columns fit a 1280px window beside the sidebar by leaving out Input, then Agent", () => {
+  test("default columns fit a laptop window beside the sidebar by leaving out Agent, then Input", () => {
     const rows = [row({ primary_model: "claude-haiku-4-5-20251001", models: ["claude-haiku-4-5-20251001"] })];
     const tracks = contentTracks(rows, () => "Completed · 1 tool error");
+    const at1440 = fitColumns(RUNS_TABLE_DEFAULT_COLUMNS, 1440 - 240, tracks);
+    expect(at1440).toContain("input");
+    expect(at1440).not.toContain("agent");
     const at1280 = fitColumns(RUNS_TABLE_DEFAULT_COLUMNS, 1280 - 240, tracks);
-    expect(at1280).not.toContain("input");
+    expect(at1280).not.toContain("agent");
     expect(at1280).toEqual(expect.arrayContaining(["status", "run", "model", "duration", "tokens", "cost", "errors", "started"]));
     expect(minTableWidth(at1280, tracks)).toBeLessThanOrEqual(1280 - 240);
     expect(fitColumns(RUNS_TABLE_DEFAULT_COLUMNS, 1920 - 240, tracks)).toEqual([...RUNS_TABLE_DEFAULT_COLUMNS]);
@@ -131,6 +136,15 @@ describe("runs table columns and sort", () => {
     expect(px(odd.model)).toBe(220);
     expect(px(odd.status)).toBe(200);
     expect(contentTracks([], () => "", measure)).toEqual({});
+  });
+
+  test("measured widths only grow, so a new row cannot narrow a column under the reader", () => {
+    const wide = { status: 169, model: 135 };
+    expect(widerContent(null, wide)).toBe(wide);
+    expect(widerContent(wide, null)).toBe(wide);
+    expect(widerContent(wide, { status: 100, model: 104 })).toBe(wide);
+    expect(widerContent(wide, { status: 120, model: 180 })).toEqual({ status: 169, model: 180 });
+    expect(contentTracksFor(wide)).toEqual({ status: "169px", model: "minmax(135px, 0.8fr)" });
   });
 
   test("a header click sorts descending first, then flips", () => {

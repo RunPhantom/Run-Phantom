@@ -11,6 +11,8 @@ import { fmtCost } from "../utils/costs";
 import { fmt, plural } from "../utils/helpers";
 import type { RunListRow } from "../api/runs";
 
+export { isSampleRun } from "../../../src/sample-runs";
+
 export type RunsDensity = "comfortable" | "compact";
 export const ROW_HEIGHT: Record<RunsDensity, number> = { comfortable: 34, compact: 28 };
 
@@ -67,12 +69,14 @@ export const measureCellText: MeasureText = (text, font) => {
 
 const clampPx = (value: number, min: number, max: number) => Math.ceil(Math.min(max, Math.max(min, value)));
 
+export interface ContentWidths { status: number; model: number }
+
 /**
  * Status and Model sized to the widest value on the loaded rows, so Status stays as narrow as its labels and a model
  * id such as "claude-haiku-4-5" is not cut to "claude-haik…". The caps keep one odd value from starving Run.
  */
-export function contentTracks(rows: readonly RunListRow[], statusLabel: (row: RunListRow) => string, measure: MeasureText = measureCellText): Partial<Record<RunsTableColumn, string>> {
-  if (rows.length === 0) return {};
+export function contentWidths(rows: readonly RunListRow[], statusLabel: (row: RunListRow) => string, measure: MeasureText = measureCellText): ContentWidths | null {
+  if (rows.length === 0) return null;
   const statuses = new Set<string>(), models = new Set<string>();
   for (const row of rows) {
     statuses.add(statusLabel(row));
@@ -80,16 +84,34 @@ export function contentTracks(rows: readonly RunListRow[], statusLabel: (row: Ru
   }
   const widest = (values: Set<string>, font: string) => Math.max(...[...values].map(value => measure(value, font)));
   return {
-    status: `${clampPx(CELL_PADDING_PX + STATUS_MARK_PX + SUBPIXEL_SLACK_PX + widest(statuses, STATUS_FONT), 104, 200)}px`,
-    model: `minmax(${clampPx(CELL_PADDING_PX + SUBPIXEL_SLACK_PX + widest(models, MODEL_FONT), 104, 220)}px, 0.8fr)`,
+    status: clampPx(CELL_PADDING_PX + STATUS_MARK_PX + SUBPIXEL_SLACK_PX + widest(statuses, STATUS_FONT), 104, 200),
+    model: clampPx(CELL_PADDING_PX + SUBPIXEL_SLACK_PX + widest(models, MODEL_FONT), 104, 220),
   };
 }
 
-/** Dropped in this order when the window is too narrow for every chosen column; Run keeps its width instead. */
-const NARROW_DROP_ORDER: readonly RunsTableColumn[] = ["input", "agent"];
+/** The wider of two measurements per column, so arriving rows widen a column but never narrow it under the reader. */
+export function widerContent(previous: ContentWidths | null, next: ContentWidths | null): ContentWidths | null {
+  if (!previous || !next) return next ?? previous;
+  if (next.status <= previous.status && next.model <= previous.model) return previous;
+  return { status: Math.max(previous.status, next.status), model: Math.max(previous.model, next.model) };
+}
+
+export function contentTracksFor(widths: ContentWidths | null): Partial<Record<RunsTableColumn, string>> {
+  return widths ? { status: `${widths.status}px`, model: `minmax(${widths.model}px, 0.8fr)` } : {};
+}
+
+export function contentTracks(rows: readonly RunListRow[], statusLabel: (row: RunListRow) => string, measure: MeasureText = measureCellText): Partial<Record<RunsTableColumn, string>> {
+  return contentTracksFor(contentWidths(rows, statusLabel, measure));
+}
 
 /**
- * The chosen columns that fit `available` px. Input, then Agent, are left out while the rest would overflow. When even
+ * Dropped in this order when the window is too narrow for every chosen column; Run keeps its width instead. Agent goes
+ * first because it usually repeats the run name, while Input is the only column showing what the run was asked.
+ */
+const NARROW_DROP_ORDER: readonly RunsTableColumn[] = ["agent", "input"];
+
+/**
+ * The chosen columns that fit `available` px. Agent, then Input, are left out while the rest would overflow. When even
  * that does not fit (phones), every chosen column stays and the table scrolls sideways as before.
  */
 export function fitColumns(columns: readonly RunsTableColumn[], available: number, tracks?: Partial<Record<RunsTableColumn, string>>): RunsTableColumn[] {
@@ -243,17 +265,6 @@ export function modelCell(row: RunListRow): CellText {
   others.delete(shortModelName(model));
   const text = shortModelName(model);
   return { text: others.size > 0 ? `${text} +${others.size}` : text, title: row.models.length > 1 ? row.models.join(", ") : model };
-}
-
-export function isSampleRun(row: { id: string; metadata: string | null }): boolean {
-  if (row.id.startsWith("demo_")) return true;
-  if (!row.metadata) return false;
-  try {
-    const metadata = JSON.parse(row.metadata);
-    return metadata?.demo === true && metadata?.default === true;
-  } catch {
-    return false;
-  }
 }
 
 export function absoluteTime(ms: number): string {

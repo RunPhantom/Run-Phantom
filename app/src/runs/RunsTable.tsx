@@ -6,7 +6,7 @@ import type { RunListRow } from "../api/runs";
 import { ago, runDisplayName, runStatus, runStatusTone } from "../utils/helpers";
 import { runPath } from "../utils/navigation";
 import type { RunsTableColumn, RunsViewFilters, RunsViewSort } from "../../../src/saved-views-protocol";
-import { CHECKBOX_TRACK_PX, COLUMN_META, ROW_HEIGHT, contentTracks, fitColumns, minTableWidth, absoluteTime, agentCell, costCell, durationCell, errorsCell, isSampleRun, modelCell, tokensCell, type CellText, type RunsDensity } from "./table-model";
+import { CHECKBOX_TRACK_PX, COLUMN_META, ROW_HEIGHT, contentTracksFor, contentWidths, fitColumns, widerContent, type ContentWidths, minTableWidth, absoluteTime, agentCell, costCell, durationCell, errorsCell, isSampleRun, modelCell, tokensCell, type CellText, type RunsDensity } from "./table-model";
 
 const OVERSCAN = 12;
 const LOAD_MORE_AHEAD = 30;
@@ -78,7 +78,17 @@ export function RunsTable(props: RunsTableProps) {
   const lineHeight = ROW_HEIGHT[density];
   const rowHeight = lineHeight + (renderDetail ? detailHeight : 0);
   const [viewport, setViewport] = useState({ top: 0, height: 800, width: 0 });
-  const tracks = useMemo(() => ({ ...tableTracks, ...contentTracks(rows, row => runStatus(row).label) }), [rows, tableTracks]);
+  // Widths only grow while the same filters are shown: a live row with a longer label must not reflow the table
+  // (and hide a column) under the reader, nor flip it back when that row scrolls out of the loaded set.
+  const filtersKey = JSON.stringify(filters);
+  const grown = useRef<{ key: string; widths: ContentWidths | null }>({ key: filtersKey, widths: null });
+  const measured = useMemo(() => {
+    const previous = grown.current.key === filtersKey ? grown.current.widths : null;
+    const widths = widerContent(previous, contentWidths(rows, row => runStatus(row).label));
+    grown.current = { key: filtersKey, widths };
+    return widths;
+  }, [filtersKey, rows]);
+  const tracks = useMemo(() => ({ ...contentTracksFor(measured), ...tableTracks }), [measured, tableTracks]);
   const checkboxWidth = selectable ? 0 : CHECKBOX_TRACK_PX;
   const columns = useMemo(
     () => viewport.width > 0 ? fitColumns(chosenColumns, viewport.width + checkboxWidth, tracks) : [...chosenColumns],
@@ -320,10 +330,10 @@ function RunsTableRow({ row, index, columns, rowHeight, lineHeight, selectable, 
           case "run":
             return (
               <div key={column} role="gridcell" className="rp-run-cell flex min-w-0 items-center gap-2 overflow-hidden px-2">
-                <Link to={href} tabIndex={-1} data-run-name className="min-w-0 max-w-full shrink-0 truncate font-medium text-rp-ink hover:text-rp-blue hover:underline" onClick={event => event.stopPropagation()}>
+                <Link to={href} tabIndex={-1} data-run-name className="min-w-0 flex-[1_1_auto] truncate font-medium text-rp-ink hover:text-rp-blue hover:underline" onClick={event => event.stopPropagation()}>
                   {name}
                 </Link>
-                <span className="rp-run-short-id min-w-[3ch] max-w-[9ch] truncate font-mono text-[11px] text-rp-ink-subtle" title={row.id}>{shortId}</span>
+                <span className="rp-run-short-id min-w-[5ch] max-w-[9ch] flex-[0_4_auto] truncate font-mono text-[11px] text-rp-ink-subtle" title={row.id}>{shortId}</span>
                 {sample && <span className="shrink-0 rounded-sm border border-rp-line px-1 font-mono text-[11px] uppercase leading-4 tracking-[0.06em] text-rp-ink-subtle">Sample</span>}
               </div>
             );
