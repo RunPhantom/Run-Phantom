@@ -5,7 +5,7 @@ import {
   stateFromDraft, type PlaygroundDraftState,
 } from "../app/src/components/playground/playground-model";
 import { diffStats, wordDiff } from "../app/src/components/playground/word-diff";
-import { playgroundPathForSpan } from "../app/src/components/playground/OpenInPlaygroundButton";
+import { playgroundPathForSpan } from "../app/src/components/playground/open-in-playground";
 import { parsePlaygroundRunRequest } from "../src/playground/protocol";
 
 function draft(overrides: Partial<PlaygroundDraftState> = {}): PlaygroundDraftState {

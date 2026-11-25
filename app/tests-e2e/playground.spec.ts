@@ -201,3 +201,38 @@ test("provider failures read as plain errors with the next step", async ({ page,
   await expect(page.locator("[data-playground-problem]")).toHaveText("The Playground is already running 6 model calls. Wait for them to finish, then try again.");
   await expect(page.locator("[data-playground-column='0']")).toContainText("No result was received.");
 });
+
+test("Open in Playground fills the editor from a captured model call", async ({ page, runPhantom }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  expect((await page.request.post(`${runPhantom.url}/api/demo-traces/replay`)).ok()).toBe(true);
+  await expect.poll(async () => {
+    const detail = await (await page.request.get(`${runPhantom.url}/api/runs/detail/demo_triage`)).json().catch(() => null) as { run?: { finished?: number }; spans?: Array<{ id: string }> } | null;
+    return !!detail?.run?.finished && !!detail.spans?.some(span => span.id === "demo_triage_llm-2");
+  }, { timeout: 30_000 }).toBe(true);
+  const requests = await mockRuns(page, () => ({ body: sse([["start", { comparisonId: "o", targets: [] }], ["done", { comparisonId: "o" }]]) }));
+  await page.goto(`${runPhantom.url}/runs/demo_triage/span/demo_triage_tool-1`);
+  await expect(page.getByText("lookup_account").first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("button", { name: "Open in Playground" })).toHaveCount(0);
+
+  await page.goto(`${runPhantom.url}/runs/demo_triage/span/demo_triage_llm-2`);
+  const open = page.getByRole("button", { name: "Open in Playground" });
+  await expect(open).toHaveAttribute("data-span-action", "playground:open-span", { timeout: 20_000 });
+  await open.click();
+
+  const banner = page.locator("[data-playground-opened-from]");
+  await expect(banner).toContainText("Opened from Customer support triage › ai.generateText");
+  await expect(banner).toContainText("claude-sonnet-4-5 is not available in the Playground, so claude-haiku-4-5-20251001 was selected instead.");
+  await expect(banner.getByRole("link")).toHaveAttribute("href", "/runs/demo_triage/span/demo_triage_llm-2");
+  await expect(page).toHaveURL(/\/playground$/);
+  await expect(page.getByRole("combobox", { name: "Model", exact: true })).toHaveValue("anthropic/claude-haiku-4-5-20251001");
+  await expect(page.getByLabel("System")).toHaveValue(/^You triage incoming support tickets\./);
+  await expect(page.getByRole("textbox", { name: "Content of message 1" })).toHaveValue(/export keeps timing out/);
+  await expect(page.getByText("3 messages")).toBeVisible();
+
+  await page.getByRole("button", { name: "Run", exact: true }).click();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0]!.source).toEqual({ runId: "demo_triage", spanId: "demo_triage_llm-2" });
+
+  await page.goto(`${runPhantom.url}/playground?span=demo_triage_tool-1&run=demo_triage`);
+  await expect(page.getByRole("alert").filter({ hasText: "Could not open that step: Only model call spans can be opened in the Playground." })).toBeVisible();
+});
