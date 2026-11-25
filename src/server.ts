@@ -18,6 +18,8 @@ import { normalizeStoredSpan } from "./spans/normalize";
 import { withholdAgentDefinitionCapture } from "./agent-definitions";
 import { guardSpanForPersistence, projectCapturedGuardSpan } from "./guard-evidence";
 import { parseOtlpRequest } from "./parse";
+import { createPlaygroundRouter } from "./playground/router";
+import type { PlaygroundFetch } from "./playground/execute";
 import { observeOtlpTagSource, ambiguousOtlpTagSpans, unavailableOtlpTagSource, type OtlpTagSourceEvidence } from "./otlp-tag-source";
 import { decodeOtlpProtobuf } from "./otlp-protobuf";
 import {
@@ -38,6 +40,7 @@ import {
   deleteCachedRun,
   deleteRun,
   getSpanMeta,
+  getSpanById,
   getSpanPayloadColumn,
   getSpanContext,
   getMostRecentlyTouchedRun,
@@ -728,7 +731,7 @@ function demoChatHtml(): string {
 </html>`;
 }
 
-export async function createServer(port: number, options: { comparisons?: ComparisonRuntimeOptions } = {}) {
+export async function createServer(port: number, options: { comparisons?: ComparisonRuntimeOptions; playgroundFetch?: PlaygroundFetch } = {}) {
   const app = express();
   // Express 4 ignores a rejected async handler, so the request was never
   // answered (seen with /api/models/anthropic when the secret store threw).
@@ -1144,6 +1147,21 @@ export async function createServer(port: number, options: { comparisons?: Compar
 
   // Keep the bounded review parser behind local access guards and ahead of the global JSON parser.
   app.use("/api/review-queues", createReviewQueueRouter());
+  app.use("/api/playground", createPlaygroundRouter({
+    resolveKey: provider => getEffectiveSecret(provider),
+    keySource: provider => getSecretStatus(provider).source,
+    recordOtlp: body => {
+      const spans = parseOtlpRequest(body);
+      const { updatedRunIds, spansPersisted } = persistParsedSpans(spans);
+      broadcast("spans", { runIds: updatedRunIds, count: spansPersisted });
+    },
+    getSpan: (spanId, runId) => getSpanById(spanId, runId),
+    getRunName: runId => {
+      const run = getRunById(runId) as { display_name?: string | null; name?: string | null } | null | undefined;
+      return run?.display_name ?? run?.name ?? null;
+    },
+    fetch: options.playgroundFetch,
+  }));
   app.post(["/api/coding-hooks/claude/admission", "/api/coding-hooks/claude/publication", "/api/coding-hooks/claude/transport"], (req, res) => { void hookController.handle(req, res); });
   app.post("/api/coding-hooks/claude/manage", express.raw({ type: "application/json", limit: 16384 }), (req, res) => {
     if (clearingHooks || !hookOwner.store.isOwnerActive() || hookManagementWork.size >= 2) { res.status(503).json({ status: "unavailable", reason: "unavailable" }); return; }
