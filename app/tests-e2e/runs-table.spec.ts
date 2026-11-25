@@ -284,7 +284,7 @@ test("live tail catches up when the reader scrolls back to the top", async ({ pa
       inputTokens: 10, outputTokens: 2, durationMs: 200, startedAgoMs: HOUR + index * 1000 });
   }
   await page.goto(`${runPhantom.url}/runs`);
-  await expect(page.getByText("30 runs", { exact: true })).toBeVisible();
+  await expect(page.locator("#runphantom-main").getByText("30 runs", { exact: true })).toBeVisible();
   const grid = page.getByRole("grid", { name: "Runs" });
   await grid.evaluate(element => { element.parentElement!.scrollTop = 400; element.parentElement!.dispatchEvent(new Event("scroll")); });
   await expect(page.getByText("Paused", { exact: true })).toBeVisible();
