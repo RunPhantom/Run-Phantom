@@ -167,8 +167,9 @@ export async function evaluateRubric(
         const body = rule.provider === "openai" ? {
           model: rule.model,
           ...(/^(?:gpt-[56](?:[.-]|$)|o[1-9](?:[.-]|$))/.test(rule.model)
-            // Reasoning tokens count against max_completion_tokens; at medium effort 512 can end with empty content.
-            ? { max_completion_tokens: reasoningEffort ? 4096 : 512, ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}) } : { max_tokens: 512, temperature: 0 }),
+            // Reasoning tokens count against max_completion_tokens. These models reason at medium effort unless told
+            // otherwise, and a live gpt-5-nano judgment spent all 512 tokens reasoning and returned empty content.
+            ? { max_completion_tokens: 4096, ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}) } : { max_tokens: 512, temperature: 0 }),
           response_format: { type: "json_object" },
           messages: [{ role: "system", content: system }, { role: "user", content: userData }],
         } : {

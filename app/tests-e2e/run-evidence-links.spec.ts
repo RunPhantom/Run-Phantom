@@ -14,7 +14,7 @@ test("Evaluate run opens Evaluations with that run preselected as the source of 
   await expect(page.getByRole("menuitem", { name: "Evaluate run", exact: true })).toBeVisible();
   await page.getByRole("menuitem", { name: "Evaluate run", exact: true }).click();
   const linked = page.getByRole("region", { name: "Run to evaluate", exact: true });
-  await expect(linked).toContainText("as a regression case");
+  await expect(linked).toContainText("as a test case");
   await expect(linked).toContainText("Create a dataset first");
   const name = page.getByRole("textbox", { name: "Dataset name", exact: true });
   await expect(name).toHaveValue(/ regression cases$/);
@@ -22,7 +22,7 @@ test("Evaluate run opens Evaluations with that run preselected as the source of 
   await page.getByRole("button", { name: "Create dataset", exact: true }).click();
   await expect(linked).toContainText("preselected as the source run");
   await expect(page.getByRole("combobox", { name: "Dataset", exact: true }).locator("option", { hasText: defaultName })).toHaveCount(1);
-  await expect(name).toHaveValue("");
+  await expect(name).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: "Source run", exact: true })).toHaveValue(EVALUATION_RUNS.baseline);
   await expect(page.getByRole("region", { name: "Source snapshot", exact: true })).toBeVisible();
   await page.getByRole("textbox", { name: "Case name", exact: true }).fill("Linked run case");

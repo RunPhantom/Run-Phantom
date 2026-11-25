@@ -95,14 +95,16 @@ test("g-sequences and ? navigate and open the shortcut sheet, but never while ty
   await page.keyboard.press("e");
   await expect(page).toHaveURL(`${runPhantom.url}/evaluations`);
 
+  await page.getByRole("button", { name: "Create a dataset", exact: true }).click();
   const name = page.getByRole("textbox", { name: "Dataset name", exact: true });
   await name.click();
   await page.keyboard.type("g s ?");
   await expect(name).toHaveValue("g s ?");
   await expect(page).toHaveURL(`${runPhantom.url}/evaluations`);
-  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
 
-  await name.blur();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.keyboard.press("Control+g");
   await page.keyboard.press("s");
   await expect(page).toHaveURL(`${runPhantom.url}/evaluations`);

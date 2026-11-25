@@ -37,8 +37,8 @@ test("precise check distributions reconcile real frozen outcomes and the display
     await page.screenshot({path:testInfo.outputPath(`distribution-${width}.png`)});
     if(width===320){const scroll=result.getByRole("region",{name:"Per-experiment statistics, scroll horizontally"});await scroll.focus();await page.keyboard.press("ArrowRight");await expect.poll(()=>scroll.evaluate(node=>node.scrollLeft)).toBeGreaterThan(0);}
   }
-  await panel.getByRole("combobox",{name:"Numeric preference"}).selectOption("lower");await expect(result).toHaveCount(0);await expect(panel.getByRole("button",{name:"Download distribution JSON"})).toHaveCount(0);
-  await panel.getByRole("button",{name:"Analyze distribution",exact:true}).click();await expect(result.getByLabel("Adjacent numeric trends")).toContainText("improved for the chosen numeric preference");
+  await panel.getByRole("combobox",{name:"Better direction"}).selectOption("lower");await expect(result).toHaveCount(0);await expect(panel.getByRole("button",{name:"Download distribution JSON"})).toHaveCount(0);
+  await panel.getByRole("button",{name:"Analyze distribution",exact:true}).click();await expect(result.getByLabel("Adjacent numeric trends")).toContainText("improved for the chosen direction");
   await panel.getByRole("combobox",{name:"Distribution source"}).selectOption("snapshot_metric");
   await panel.getByRole("combobox",{name:"Captured metric"}).selectOption("totalTokens");await panel.getByRole("button",{name:"Analyze distribution",exact:true}).click();
   await expect(result).toContainText("3 known / 3 observations · 0 excluded · 0 zero · tokens");await expect(result.locator("dl > div").filter({has:page.getByText("Mean",{exact:true})}).locator("dd")).toHaveText("100");
@@ -84,21 +84,21 @@ test("a late real analysis cannot restore results after the selected preference 
   await page.goto(runPhantom.url+"/evaluations");const panel=page.getByRole("region",{name:"Score distribution analysis"});await panel.getByRole("checkbox",{name:/^Late result ·/}).check();await panel.getByRole("combobox",{name:"Distribution source"}).selectOption("snapshot_metric");
   let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve);let acquired!:()=>void;const fetched=new Promise<void>(resolve=>acquired=resolve);let finished!:()=>void;const delivered=new Promise<void>(resolve=>finished=resolve);
   await page.route("**/analyses/score-distributions",async route=>{const response=await route.fetch();expect(response.status()).toBe(200);acquired();await gate;try{await route.fulfill({response});}catch{/* Selection change can abort this real response. */}finally{finished();}});
-  try{await panel.getByRole("button",{name:"Analyze distribution",exact:true}).click();await fetched;await panel.getByRole("combobox",{name:"Numeric preference"}).selectOption("higher");release();await delivered;await expect(panel.getByLabel("Distribution results")).toHaveCount(0);await expect(panel.getByRole("button",{name:"Download distribution JSON"})).toHaveCount(0);await expect(panel.getByRole("button",{name:"Analyze distribution",exact:true})).toBeEnabled();}
+  try{await panel.getByRole("button",{name:"Analyze distribution",exact:true}).click();await fetched;await panel.getByRole("combobox",{name:"Better direction"}).selectOption("higher");release();await delivered;await expect(panel.getByLabel("Distribution results")).toHaveCount(0);await expect(panel.getByRole("button",{name:"Download distribution JSON"})).toHaveCount(0);await expect(panel.getByRole("button",{name:"Analyze distribution",exact:true})).toBeEnabled();}
   finally{release();await page.unroute("**/analyses/score-distributions");}
 });
 
 test("empty, keyboard, retained-ID and real compatibility errors leave no downloadable stale result",async({page,request,runPhantom},testInfo)=>{
   await page.goto(runPhantom.url+"/evaluations");const panel=page.getByRole("region",{name:"Score distribution analysis"});
-  await expect(panel.getByRole("button",{name:"Analyze distribution",exact:true})).toBeDisabled();await expect(panel).toContainText("Start an experiment to retain frozen results");
-  await panel.scrollIntoViewIfNeeded();await page.screenshot({path:testInfo.outputPath("distribution-empty.png")});
+  await expect(page.getByRole("heading",{name:"Check every change against runs you already captured.",exact:true})).toBeVisible();await expect(panel).toHaveCount(0);
+  await page.screenshot({path:testInfo.outputPath("distribution-empty.png")});
   await seedEvaluationRuns(request,runPhantom.url);
   const first=await createEvaluationDataset(request,runPhantom.url,[{kind:"json"}],"First definition"),second=await createEvaluationDataset(request,runPhantom.url,[{kind:"json"}],"Second definition");
   const a=await startEvaluation(request,runPhantom.url,first,EVALUATION_RUNS.baseline,"Compatible one"),b=await startEvaluation(request,runPhantom.url,second,EVALUATION_RUNS.rejected,"Different definition");
   await page.reload();const checkbox=panel.getByRole("checkbox",{name:/^Compatible one ·/});await checkbox.focus();await page.keyboard.press("Space");await expect(checkbox).toBeChecked();
   await panel.getByRole("combobox",{name:"Distribution source"}).selectOption("snapshot_metric");await panel.getByRole("button",{name:"Analyze distribution",exact:true}).focus();await page.keyboard.press("Enter");await expect(panel.getByLabel("Distribution results")).toContainText("1 selected experiments");
-  if(!await panel.getByRole("textbox",{name:"Retained experiment ID"}).isVisible())await panel.getByText(/Choose experiments ·/).click();
-  await panel.getByRole("textbox",{name:"Retained experiment ID"}).fill(b.id);await panel.getByRole("button",{name:"Add experiment ID"}).click();
+  if(!await panel.getByRole("textbox",{name:"Experiment ID"}).isVisible())await panel.getByText(/Choose experiments ·/).click();
+  await panel.getByRole("textbox",{name:"Experiment ID"}).fill(b.id);await panel.getByRole("button",{name:"Add experiment ID"}).click();
   await expect(panel.getByLabel("Distribution results")).toHaveCount(0);const responsePromise=page.waitForResponse(response=>response.url().endsWith("/analyses/score-distributions"));await panel.getByRole("button",{name:"Analyze distribution",exact:true}).click();expect((await responsePromise).status()).toBe(409);
   await expect(panel.getByRole("alert")).toContainText("identical dataset revisions");await expect(panel.getByRole("button",{name:"Download distribution JSON"})).toHaveCount(0);
   await panel.scrollIntoViewIfNeeded();await page.screenshot({path:testInfo.outputPath("distribution-incompatible.png")});

@@ -36,10 +36,18 @@ test("evaluations: user creates a regression case, compares frozen candidates, r
   await page.getByRole("button", { name: "Save new revision", exact: true }).click();
   const revision = page.getByRole("combobox", { name: "Revision", exact: true });
   await expect(revision).toHaveValue("2");
+  const newDataset = page.getByRole("button", { name: "New dataset", exact: true });
+  await newDataset.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog", { name: "New dataset" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "New dataset" })).toHaveCount(0);
+  await expect(newDataset).toBeFocused();
 
   const results = page.getByRole("region", { name: "Experiment results", exact: true });
   const startFromUi = async (name: string, runId: string, outcome: "pass" | "fail" | "inconclusive") => {
-    const controls = page.getByRole("region", { name: "Start experiment", exact: true });
+    await page.getByRole("button", { name: "New experiment", exact: true }).click();
+    const controls = page.getByRole("dialog", { name: "New experiment" }).getByRole("region", { name: "Start experiment", exact: true });
     await controls.getByRole("textbox", { name: "Experiment name", exact: true }).fill(name);
     await controls.getByRole("combobox", { name: "Candidate run for Checkout result", exact: true }).selectOption(runId);
     const start = controls.getByRole("button", { name: "Start experiment", exact: true });
@@ -54,9 +62,23 @@ test("evaluations: user creates a regression case, compares frozen candidates, r
   await expect(results).toContainText("1 / 1 case passed");
   const rejected = await startFromUi("UI rejected candidate", EVALUATION_RUNS.rejected, "fail");
   const repaired = await startFromUi("UI repaired candidate", EVALUATION_RUNS.repaired, "pass");
+  await expect(page.getByLabel("Evaluation summary", { exact: true }).locator(".evaluation-kpi").filter({ hasText: "Experiments" })).toContainText("3 finished");
+  const datasetRow = page.getByRole("region", { name: "Dataset list", exact: true }).getByRole("row").filter({ has: page.getByRole("button", { name: "Open dataset UI checkout dataset", exact: true }) });
+  await expect(datasetRow).toContainText("Revision 2 · 3 experiments");
+  await expect(datasetRow).toContainText("100% · 1/1");
+  const experimentRow = (name: string) => page.getByRole("region", { name: "Experiment list", exact: true }).getByRole("row").filter({ has: page.getByRole("button", { name: `Open experiment ${name}`, exact: true }) });
+  await expect(experimentRow("UI rejected candidate")).toContainText("1 regression");
+  await expect(experimentRow("UI repaired candidate")).toContainText("1 improvement");
+  await experimentRow("UI repaired candidate").getByRole("button", { name: "Show 1 improvement against UI rejected candidate", exact: true }).click();
+  const changes = page.getByRole("region", { name: "Experiment comparison", exact: true });
+  await expect(changes.getByRole("combobox", { name: "Compare baseline", exact: true })).toHaveValue(rejected);
+  await expect(changes.getByRole("combobox", { name: "Compare candidate", exact: true })).toHaveValue(repaired);
+  await expect(changes.getByRole("group", { name: "Show cases", exact: true }).getByRole("button", { name: "Improvements 1", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(changes.getByLabel("Comparison results", { exact: true }).getByRole("listitem")).toHaveCount(1);
+  await expect(changes.getByLabel("Comparison results", { exact: true }).getByRole("listitem")).toContainText("Checkout result: improvement");
   await startFromUi("UI missing measurements", EVALUATION_RUNS.missing, "inconclusive");
-  await results.locator("summary").filter({ hasText: /^Frozen candidate snapshot$/ }).click();
-  const missing = results.getByRole("region", { name: "Frozen candidate snapshot", exact: true });
+  await results.locator("summary").filter({ hasText: /^Candidate run details$/ }).click();
+  const missing = results.getByRole("region", { name: "Candidate run details", exact: true });
   await expect(missing.getByText("Total tokens", { exact: true }).locator("..").getByText("Unavailable", { exact: true })).toBeVisible();
   await startFromUi("UI different request", EVALUATION_RUNS.mismatch, "inconclusive");
   await expect(results.getByText(/^Input mismatch:/)).toBeVisible();
@@ -93,7 +115,6 @@ test("evaluations: user creates a regression case, compares frozen candidates, r
   await revision.selectOption("2");
   await expect(page.getByText(/This is an immutable historical revision/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Edit case Checkout result", exact: true })).toBeDisabled();
-  await page.getByText("Import and export datasets", { exact: true }).click();
   const downloaded = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export selected revision", exact: true }).click();
   const downloadPath = await (await downloaded).path();
@@ -102,6 +123,8 @@ test("evaluations: user creates a regression case, compares frozen candidates, r
   expect(portable.format).toBe("runphantom-evaluations/v1");
   expect(portable.cases).toHaveLength(1);
   expect(portable.cases[0]).not.toHaveProperty("sourceRunId");
+  await page.getByRole("button", { name: "New dataset", exact: true }).click();
+  await page.getByRole("dialog", { name: "New dataset" }).getByText("Import a dataset file instead", { exact: true }).click();
   await page.getByRole("textbox", { name: "Dataset JSON", exact: true }).fill(JSON.stringify({ ...portable, name: "Imported UI checkout" }));
   await page.getByRole("button", { name: "Import JSON", exact: true }).click();
   await expect(dataset).not.toHaveValue(originalDataset);
@@ -144,6 +167,7 @@ test("evaluations: user resolves ambiguous response selection and sees explicit 
   }], "Visible judge consent");
   await page.goto(`${runPhantom.url}/evaluations`);
   await page.getByRole("combobox", { name: "Dataset", exact: true }).selectOption(reference.datasetId);
+  await page.getByRole("button", { name: "New experiment", exact: true }).click();
   const controls = page.getByRole("region", { name: "Start experiment", exact: true });
   await controls.getByRole("textbox", { name: "Experiment name", exact: true }).fill("Explicit response selection");
   await controls.getByRole("combobox", { name: "Candidate run for Checkout result", exact: true }).selectOption(EVALUATION_RUNS.ambiguous);
@@ -160,12 +184,14 @@ test("evaluations: user resolves ambiguous response selection and sees explicit 
   const results = page.getByRole("region", { name: "Experiment results", exact: true });
   await expect(results.getByRole("article", { name: "Checkout result: pass", exact: true })).toBeVisible();
   await page.getByRole("combobox", { name: "Dataset", exact: true }).selectOption(rubric.datasetId);
+  await page.getByRole("button", { name: "New experiment", exact: true }).click();
   await controls.getByRole("textbox", { name: "Experiment name", exact: true }).fill("Consent must be deliberate");
   await controls.getByRole("combobox", { name: "Candidate run for Checkout result", exact: true }).selectOption(EVALUATION_RUNS.baseline);
   const consent = controls.getByRole("checkbox", { name: /^Allow model judges to send selected trace data/ });
   const start = controls.getByRole("button", { name: "Start experiment", exact: true });
   await expect(consent).not.toBeChecked();
   await expect(start).toBeDisabled();
+  await expect(start).toHaveAccessibleDescription(/Allow the model grader/);
   await consent.check();
   await expect(start).toBeEnabled();
   await consent.uncheck();

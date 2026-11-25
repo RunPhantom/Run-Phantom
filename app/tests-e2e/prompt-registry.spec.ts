@@ -14,7 +14,7 @@ async function mutate<T>(request: APIRequestContext, url: string, endpoint: stri
 async function setup(page: Page, team: TeamFixture) {
   await page.goto(`${team.url}/team`); await page.getByLabel("Setup code").fill(team.setupCode); await page.getByLabel("Email", { exact: true }).fill("owner@example.test"); await page.getByLabel("Password").fill(password); await page.getByRole("button", { name: "Create owner account", exact: true }).click();
   await page.getByLabel("Project name", { exact: true }).fill("Prompt review"); await page.getByRole("button", { name: "Create project", exact: true }).click(); await expect(page).toHaveURL(/\/team\/projects\/[^/]+$/); const project = new URL(page.url()).pathname.split("/")[3];
-  await page.getByRole("link", { name: "Prompts", exact: true }).click(); await expect(page.getByRole("button", { name: "New prompt", exact: true })).toBeEnabled(); return project;
+  await page.getByRole("link", { name: "Prompts", exact: true }).click(); await expect(page.getByLabel("Prompt name", { exact: true })).toBeEnabled(); return project;
 }
 async function accept(page: Page, team: TeamFixture, token: string, email: string) {
   await page.goto(`${team.url}/team/invite`); await page.getByLabel("Invitation code").fill(token); await page.getByLabel("Email", { exact: true }).fill(email); await page.getByLabel("Password").fill(password); await page.getByRole("button", { name: "Accept invitation", exact: true }).click(); await expect(page).toHaveURL(/\/team\/projects\/[^/]+$/); await page.getByRole("link", { name: "Prompts", exact: true }).click();

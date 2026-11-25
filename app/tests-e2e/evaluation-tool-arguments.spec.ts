@@ -26,6 +26,7 @@ async function seed(request: APIRequestContext, daemon: string) {
 test("tool arguments: user declares every/any, detects wrong calls and downloads frozen evidence reports", async ({ page, request, runPhantom }, testInfo) => {
   await seed(request, runPhantom.url);
   await page.goto(`${runPhantom.url}/evaluations`);
+  await page.getByRole("button", { name: "Create a dataset", exact: true }).click();
   await page.getByRole("textbox", { name: "Dataset name", exact: true }).fill("Refund argument regression");
   await page.getByRole("button", { name: "Create dataset", exact: true }).click();
   const dataset = page.getByRole("combobox", { name: "Dataset", exact: true });
@@ -54,6 +55,7 @@ test("tool arguments: user declares every/any, detects wrong calls and downloads
   expect(saved.cases[0].rules).toEqual([{ kind: "toolArgument", name: "refund", path: "customer.id", equals: "customer-1", match: "all" }]);
   const results = page.getByRole("region", { name: "Experiment results", exact: true });
   const start = async (kind: keyof typeof runs, outcome: "pass" | "fail" | "inconclusive", name = kind) => {
+    await page.getByRole("button", { name: "New experiment", exact: true }).click();
     const controls = page.getByRole("region", { name: "Start experiment", exact: true });
     await controls.getByRole("textbox", { name: "Experiment name", exact: true }).fill(name);
     await controls.getByRole("combobox", { name: "Candidate run for Correct refund recipient", exact: true }).selectOption(runs[kind]);
@@ -104,12 +106,14 @@ test("tool arguments: user declares every/any, detects wrong calls and downloads
   await page.getByRole("button", { name: "Edit case Correct refund recipient", exact: true }).click();
   await expect(rule.getByRole("combobox", { name: /^Matching calls/ })).toHaveValue("any");
   const datasetsBefore = await (await request.get(`${runPhantom.url}/api/evaluations/datasets`)).json();
-  await page.getByText("Import and export datasets", { exact: true }).click();
+  await page.getByRole("button", { name: "New dataset", exact: true }).click();
+  await page.getByText("Import a dataset file instead", { exact: true }).click();
   for (const invalid of ["1e400", "9007199254740993", "1e-400"]) {
     await page.getByRole("textbox", { name: "Dataset JSON", exact: true }).fill(`{"format":"runphantom-evaluations/v1","name":"Lossy import","cases":[{"name":"Refund","input":"Refund","rules":[{"kind":"toolArgument","name":"refund","path":"amount","equals":${invalid},"match":"all"}]}]}`);
     await page.getByRole("button", { name: "Import JSON", exact: true }).click();
     await expect(page.getByRole("alert").filter({ hasText: "JSON numbers must be representable without rounding, underflow or overflow." })).toBeVisible();
   }
   expect(await (await request.get(`${runPhantom.url}/api/evaluations/datasets`)).json()).toEqual(datasetsBefore);
+  await page.keyboard.press("Escape");
   await expect(dataset).toHaveValue(datasetId);
 });

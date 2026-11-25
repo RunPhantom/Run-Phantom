@@ -89,7 +89,7 @@ describe.serial("bounded optional model judges", () => {
     expect(result.score).toBe(0.2);
   });
 
-  test("reasoning model requests respect the provider token budget without unsupported sampling parameters", async () => {
+  test("reasoning model requests leave room for reasoning tokens without unsupported sampling parameters", async () => {
     for (const model of ["gpt-5.6-sol", "gpt-5", "o3"]) {
       let calls = 0;
       const result = await evaluateRubric({ ...openaiRule, model }, snapshot(), snapshot().input, { fetch: fetchStub((url, init) => {
@@ -97,7 +97,7 @@ describe.serial("bounded optional model judges", () => {
         expect(url).toBe("https://api.openai.com/v1/chat/completions");
         const body = JSON.parse(String(init.body));
         if (Object.hasOwn(body, "max_tokens") || Object.hasOwn(body, "temperature")) return Response.json({ error: { code: "unsupported_parameter" } }, { status: 400 });
-        expect(body.max_completion_tokens).toBe(512);
+        expect(body.max_completion_tokens).toBe(4096);
         expect(body.tools).toBeUndefined();
         expect(body.response_format).toEqual({ type: "json_object" });
         expect(String(init.body)).not.toContain(fakeKey);

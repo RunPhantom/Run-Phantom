@@ -84,6 +84,7 @@ for (const [provider, model] of [
     }], `Live ${provider} checkout rubric`);
     await page.goto(`${liveUrl}/evaluations`);
     await page.getByRole("combobox", { name: "Dataset", exact: true }).selectOption(revision.datasetId);
+    await page.getByRole("button", { name: "New experiment", exact: true }).click();
     await page.getByLabel("Experiment name", { exact: true }).fill(`Live ${provider} accepted checkout`);
     await page.getByRole("combobox", { name: "Candidate run for Checkout result", exact: true }).selectOption(EVALUATION_RUNS.baseline);
     const consent = page.getByRole("checkbox", { name: /^Allow model judges to send selected trace data to the chosen providers/ });
@@ -134,6 +135,7 @@ test("live providers: cancelling model grading in the UI retains an interrupted 
   })), "Live cancellable grading");
   await page.goto(`${liveUrl}/evaluations`);
   await page.getByRole("combobox", { name: "Dataset", exact: true }).selectOption(revision.datasetId);
+  await page.getByRole("button", { name: "New experiment", exact: true }).click();
   await page.getByLabel("Experiment name", { exact: true }).fill("Live interrupted grading");
   await page.getByRole("combobox", { name: "Candidate run for Checkout result", exact: true }).selectOption(EVALUATION_RUNS.baseline);
   await page.getByRole("checkbox", { name: /^Allow model judges to send selected trace data to the chosen providers/ }).check();

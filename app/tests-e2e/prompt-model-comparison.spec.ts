@@ -11,7 +11,7 @@ async function source(page: Page, fixture: Awaited<ReturnType<typeof startCompar
     await page.getByLabel("Setup code").fill(fixture.setupCode); await page.getByLabel("Email", { exact: true }).fill("owner@example.test"); await page.getByLabel("Password").fill("Browser comparison password 2026"); await page.getByRole("button", { name: "Create owner account", exact: true }).click();
     await page.getByLabel("Project name", { exact: true }).fill("Model review"); await page.getByRole("button", { name: "Create project", exact: true }).click(); await expect(page).toHaveURL(/\/team\/projects\/[^/]+$/); await page.getByRole("link", { name: "Prompts", exact: true }).click();
   }
-  await expect(page.getByRole("button", { name: "New prompt", exact: true })).toBeEnabled();
+  await expect(page.getByLabel("Prompt name", { exact: true })).toBeEnabled();
   await page.getByLabel("Prompt name", { exact: true }).fill("Release comparison"); await page.getByLabel("Template", { exact: true }).fill("Review {{topic}}."); await page.getByRole("button", { name: "Save prompt", exact: true }).click();
   await expect(page.getByRole("button", { name: "Compile revision 1", exact: true })).toBeEnabled(); await page.getByLabel("topic", { exact: true }).fill("Literal $& {{next}} <img src='https://untrusted.invalid/pixel'>");
   await page.getByRole("button", { name: "Compare models", exact: true }).click(); await expect(page.getByTestId("comparison-workspace").getByLabel("gpt-4.1", { exact: false })).toBeVisible();

@@ -273,10 +273,18 @@ test.describe("reference shell touch primitives", () => {
     const name = page.getByRole("textbox", { name: "Dataset name", exact: true });
     const dataset = page.getByRole("combobox", { name: "Dataset", exact: true });
     await expect(dataset).toHaveValue(existing.datasetId);
-    await page.getByText("Import and export datasets", { exact: true }).tap();
+    const datasetMetric = await dataset.evaluate(element => ({ tag: element.tagName, fontSize: getComputedStyle(element).fontSize, height: element.getBoundingClientRect().height }));
+    await page.getByRole("button", { name: "New dataset", exact: true }).tap();
+    await page.getByText("Import a dataset file instead", { exact: true }).tap();
     const json = page.getByRole("textbox", { name: "Dataset JSON", exact: true });
     const metrics = [];
-    for (const [label, control] of [["Dataset name", name], ["Dataset", dataset], ["Dataset JSON", json]] as const) {
+    for (const [label, control] of [["Dataset name", name], ["Dataset", null], ["Dataset JSON", json]] as const) {
+      if (!control) {
+        expect(datasetMetric.fontSize, `${label} must stay legible without mobile text zoom`).toBe("16px");
+        expect(datasetMetric.height, `${label} touch target`).toBeGreaterThanOrEqual(44);
+        metrics.push({ label, ...datasetMetric });
+        continue;
+      }
       await expect(control).toBeVisible();
       const metric = await control.evaluate(element => ({
         tag: element.tagName,
@@ -326,6 +334,7 @@ test("reference shell: keyboard focus contrasts on primary and outline controls 
   await seedRunPhantomFixtures(runPhantom.url);
   await page.goto(`${runPhantom.url}/evaluations`);
   await expectHeader(page, "Evaluations");
+  await page.getByRole("button", { name: "Create a dataset", exact: true }).click();
   const name = page.getByRole("textbox", { name: "Dataset name", exact: true });
   await name.fill("Keyboard-focused dataset");
   await name.press("Tab");
@@ -349,14 +358,10 @@ test("reference shell: keyboard focus contrasts on primary and outline controls 
   expect(created.status()).toBe(201);
   const saved = await created.json() as DatasetRevision;
   await expect(page.getByRole("combobox", { name: "Dataset", exact: true })).toHaveValue(saved.datasetId);
-  const disclosure = page.getByText("Import and export datasets", { exact: true });
-  await disclosure.focus();
-  await page.keyboard.press("Enter");
-  await page.keyboard.press("Tab");
-  await expect(page.getByRole("textbox", { name: "Dataset JSON", exact: true })).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(page.getByLabel("Import dataset file", { exact: true })).toBeFocused();
-  await page.keyboard.press("Tab");
+  // The dialog scrim fades out after the dialog closes; it still takes the pointer until it unmounts.
+  await expect(page.locator(".fixed.inset-0[data-state]")).toHaveCount(0);
+  await page.getByRole("combobox", { name: "Dataset", exact: true }).focus();
+  await page.keyboard.press("Shift+Tab");
   const outline = page.getByRole("button", { name: "Export selected revision", exact: true });
   await expect(outline).toBeFocused();
   expect(await outline.evaluate(element => element.matches(":focus-visible"))).toBe(true);
@@ -378,6 +383,21 @@ test("reference shell: keyboard focus contrasts on primary and outline controls 
   const persisted = await request.get(`${runPhantom.url}/api/evaluations/datasets/${saved.datasetId}/export?version=1`);
   expect(persisted.status()).toBe(200);
   expect(await persisted.json()).toEqual(exported);
-  await expect(page.getByRole("textbox", { name: "Dataset JSON", exact: true })).toHaveValue(JSON.stringify(exported, null, 2));
+  await expect(page.getByText(/^Dataset exported\./)).toBeVisible();
+  const opener = page.getByRole("button", { name: "New dataset", exact: true });
+  await opener.focus();
+  await page.keyboard.press("Enter");
+  const createDialog = page.getByRole("dialog", { name: "New dataset" });
+  await expect(createDialog.getByRole("textbox", { name: "Dataset name", exact: true })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(createDialog.locator("summary")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Tab");
+  await expect(createDialog.getByLabel("Import dataset file", { exact: true })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(createDialog.getByRole("textbox", { name: "Dataset JSON", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(createDialog).toHaveCount(0);
+  await expect(opener).toBeFocused();
   await testInfo.attach("keyboard-control-focus-styles", { body: JSON.stringify({ primary: primaryStyle, outline: outlineStyle }), contentType: "application/json" });
 });

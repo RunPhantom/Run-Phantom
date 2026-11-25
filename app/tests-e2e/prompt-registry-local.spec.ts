@@ -10,7 +10,7 @@ test("actual local workspace saves immutable history, exports literal text and c
   page.on("pageerror", error => errors.push(error.message)); page.on("request", event => { if (new URL(event.url()).origin !== runPhantom.url && !event.url().startsWith("blob:")) foreign.push(event.url()); });
   const health = await (await request.get(runPhantom.url + "/health")).json(); expect(health).toMatchObject({ ok: true, port: runPhantom.port }); expect(health.pid).toBeGreaterThan(0);
   await page.goto(runPhantom.url); await page.getByRole("link", { name: "Prompts", exact: true }).click(); await expect(page).toHaveURL(/\/prompts$/);
-  await expect(page.getByRole("button", { name: "New prompt", exact: true })).toBeEnabled();
+  await expect(page.getByLabel("Prompt name", { exact: true })).toBeEnabled();
   const template = 'Local {{topic}}.\n{"outer":{"literal":true}}', literal = '$& $$ {{later}} <img src="https://untrusted.invalid/pixel">';
   await page.getByLabel("Prompt name", { exact: true }).fill("Local immutable review"); await page.getByLabel("Template", { exact: true }).fill(template);
   await page.getByRole("button", { name: "Save prompt", exact: true }).click(); await expect(page.getByRole("button", { name: "Compile revision 1", exact: true })).toBeEnabled();
