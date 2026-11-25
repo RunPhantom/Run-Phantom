@@ -355,3 +355,5 @@ Run Phantom is owned and maintained by **Divyam Talwar** and released under the
 [MIT license](./LICENSE). Retain its copyright and permission notice in copies
 and substantial portions of the software. See
 [third-party notices](./THIRD_PARTY_NOTICES.md) for dependency and trademark notes.
+[Credits](./CREDITS.md) names the open-source projects whose ideas shaped
+recent features, and the [changelog](./CHANGELOG.md) lists unreleased changes.
