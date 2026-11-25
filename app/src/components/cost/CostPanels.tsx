@@ -170,7 +170,7 @@ export function CostKpis({ report, previous, source, window }: { report: CostAna
                 {tile.value}{tile.valueTitle && <span className="sr-only"> ({tile.valueTitle})</span>}
               </span>
               {tile.series.length > 0 && (
-                <Sparkline className="mb-1 w-[72px] shrink-0 max-sm:hidden 2xl:w-[96px]" values={tile.series} partial={tile.partial}
+                <Sparkline className="mb-1 w-[72px] shrink-0 max-sm:hidden 2xl:w-[96px]" values={tile.series} partial={tile.partial} cumulative
                   label={`${tile.label} ${COST_WINDOW_COPY[window].phrase}: ${word ?? "not enough data for a trend"}`} />
               )}
             </span>

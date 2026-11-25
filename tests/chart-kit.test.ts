@@ -265,10 +265,19 @@ describe("sparkline gaps and partial buckets", () => {
     expect(html).not.toContain("<path");
   });
 
-  test("a quiet history keeps the emphasis on the last full bucket even at zero", () => {
-    const html = render(Sparkline, { values: [0, 3, 0, 5], partial: [false, false, false, true], label: "Runs", width: 100 });
+  test("a rate keeps the emphasis on the last full bucket, since its partial value can still fall", () => {
+    const html = render(Sparkline, { values: [0, 0.3, 0, 0.5], partial: [false, false, false, true], label: "Error rate", width: 100 });
     expect(html).not.toContain("data-sparkline-end-partial");
     expect(count(html, "data-partial-point")).toBe(1);
+  });
+
+  test("a cumulative partial bucket at or above the last full one carries the emphasis; a lower one does not", () => {
+    const rising = render(Sparkline, { values: [0, 3, 0, 5], partial: [false, false, false, true], cumulative: true, label: "Runs", width: 100 });
+    expect(rising).toContain('data-sparkline-end-partial="true"');
+    expect(count(rising, "data-partial-point")).toBe(0);
+    const early = render(Sparkline, { values: [0, 3, 4, 1], partial: [false, false, false, true], cumulative: true, label: "Runs", width: 100 });
+    expect(early).not.toContain("data-sparkline-end-partial");
+    expect(count(early, "data-partial-point")).toBe(1);
   });
 });
 

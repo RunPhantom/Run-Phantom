@@ -19,6 +19,7 @@ interface Tile {
   series: readonly (number | null)[];
   partial: readonly boolean[];
   sparkTone?: "accent" | "danger";
+  cumulative?: boolean;
   title?: string;
 }
 
@@ -61,6 +62,7 @@ export function buildTiles(overview: Overview): Tile[] {
       href: runsLink({ window }),
       series: series.runs,
       partial: series.partial,
+      cumulative: true,
       title: `Runs that started ${copy.phrase}`,
     },
     {
@@ -96,6 +98,7 @@ export function buildTiles(overview: Overview): Tile[] {
       href: runsLink({ window, sort: "tokens" }),
       series: series.tokens,
       partial: series.partial,
+      cumulative: true,
       title: "Input plus output tokens of every model call",
     },
     {
@@ -110,6 +113,7 @@ export function buildTiles(overview: Overview): Tile[] {
       href: runsLink({ window, sort: "cost" }),
       series: series.cost,
       partial: series.partial,
+      cumulative: true,
       title: cost.estimatedCalls
         ? `Estimated from the bundled list prices (${overview.pricing.revision}); reported costs are used where a call carried one. Cache storage, audio, image and tool fees are not included.`
         : "Costs reported by the model calls",
@@ -148,7 +152,7 @@ export function KpiStrip({ overview, interactive = true }: { overview: Overview;
                 <span className="rp-type-kpi" data-kpi-value>{tile.value}</span>
                 {tile.unit && <span className="text-14 font-medium text-rp-ink-muted">{tile.unit}</span>}
               </span>
-              <Sparkline className={cn("mb-1 w-[64px] shrink-0 2xl:w-[88px]", index > 0 && "max-sm:hidden")} values={tile.series} partial={tile.partial} tone={tile.sparkTone} label={sparkLabel(tile.label, tile.series, tile.partial, WINDOW_COPY[overview.window.selection].phrase)} />
+              <Sparkline className={cn("mb-1 w-[64px] shrink-0 2xl:w-[88px]", index > 0 && "max-sm:hidden")} values={tile.series} partial={tile.partial} cumulative={tile.cumulative} tone={tile.sparkTone} label={sparkLabel(tile.label, tile.series, tile.partial, WINDOW_COPY[overview.window.selection].phrase)} />
             </span>
             <span className="mt-1.5 flex min-h-5 flex-wrap items-center gap-x-1 text-12"><DeltaBadge delta={tile.delta} window={window} /></span>
             <span className="mt-0.5 truncate text-12 text-rp-ink-subtle" title={typeof tile.detail === "string" ? tile.detail : undefined}>{tile.detail}</span>

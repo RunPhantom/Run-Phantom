@@ -8,14 +8,16 @@ import { useElementSize } from "./use-element-size";
  * Null values break the line rather than reading as zero. Points flagged in
  * `partial` cover only part of their span, so they are joined with a dashed line
  * and a hollow dot and never carry the emphasis: a half-finished bucket would
- * otherwise read as a dip. The one exception: when every complete point is zero
- * or unknown and the trailing partial point holds the only activity, that point
- * carries the emphasis, because an accent dot on the empty history would read as
- * a drop to zero. With fewer than two known points there is no trend to draw.
+ * otherwise read as a dip. The trailing partial point carries the emphasis only
+ * when it cannot mislead: when every complete point is zero or unknown, or, for a
+ * `cumulative` series, when it already matches or exceeds the last complete point.
+ * With fewer than two known points there is no trend to draw.
  */
-export function Sparkline({ values, partial, label, tone = "accent", width: fixedWidth, height = 28, className }: {
+export function Sparkline({ values, partial, cumulative = false, label, tone = "accent", width: fixedWidth, height = 28, className }: {
   values: readonly (number | null)[];
   partial?: readonly boolean[];
+  /** Counts and sums, which only grow as a bucket fills, so a partial value is a lower bound. */
+  cumulative?: boolean;
   label: string;
   tone?: "accent" | "danger";
   /** Fixed width in pixels; omit to fill the parent. */
@@ -44,7 +46,10 @@ export function Sparkline({ values, partial, label, tone = "accent", width: fixe
   for (let index = points.length - 1; index >= 0; index--) if (points[index]) { lastKnown = index; break; }
   const drawable = known.length >= 2;
   const completeActivity = values.some((value, index) => !isPartial(index) && value !== null && Number.isFinite(value) && value !== 0);
-  const partialLeads = lastKnown > lastIndex && isPartial(lastKnown) && values[lastKnown] !== 0 && !completeActivity;
+  const partialValue = lastKnown > lastIndex && isPartial(lastKnown) ? values[lastKnown] : null;
+  const lastCompleteValue = lastIndex >= 0 ? values[lastIndex] : null;
+  const partialLeads = partialValue !== null && partialValue !== 0
+    && (!completeActivity || (cumulative && lastCompleteValue !== null && partialValue >= lastCompleteValue));
   const emphasis = !drawable ? null : partialLeads ? points[lastKnown] : lastIndex >= 0 ? complete[lastIndex] : null;
   const last = !drawable || partialLeads ? null : emphasis;
   const previous = last && lastIndex > 0 ? complete[lastIndex - 1] : null;
