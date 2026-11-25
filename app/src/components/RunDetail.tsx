@@ -647,8 +647,10 @@ const runEvidencePath = (runId: string) => `/evaluations?view=evidence&anchorKin
 
 /** Links to imported test reports only when at least one is attached to this run. */
 function AttachedReportsLink({ runId }: { runId: string }) {
+  // No abort signal: switching runs must not cancel this small read (the
+  // refresh-ownership specs require that only superseded detail reads fail).
   const reports = useQuery({ queryKey: ["evidence", "run-reports", runId], retry: false, staleTime: 30_000,
-    queryFn: ({ signal }) => evidenceApi.sets({ kind: "run", id: runId }, signal) });
+    queryFn: () => evidenceApi.sets({ kind: "run", id: runId }) });
   const count = reports.data?.items.length ?? 0;
   if (!count) return null;
   return <div className="flex flex-shrink-0 bg-rp-surface px-4 pb-1 sm:px-5"><Link className="inline-flex min-h-7 items-center gap-1 text-[12px] font-medium text-rp-blue underline-offset-4 transition-colors duration-250 ease-standard hover:text-rp-blue-hover hover:underline" to={runEvidencePath(runId)}>Attached test reports ({count}{reports.data?.truncated ? "+" : ""})<ArrowUpRight aria-hidden="true" className="size-3" /></Link></div>;
