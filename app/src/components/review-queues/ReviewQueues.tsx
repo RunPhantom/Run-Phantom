@@ -135,6 +135,7 @@ function QueueWorkspace({ queue, initialItemId, onDirty, onBusy, onChanged, onCo
   const [pages, setPages] = useState<Array<{ cursor: ReviewCursor; data: ReviewPage }>>([]), [cursor, setCursor] = useState<ReviewCursor>({ limit: 50 });
   const [history, setHistory] = useState<ReviewCursor[]>([]), [windowItems, setWindow] = useState<ReviewItem[]>([]), [centerId, setCenter] = useState(initialItemId);
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState(""), [refreshTick, setRefreshTick] = useState(0);
+  const runSearchId = useId();
   const [runs, setRuns] = useState<Array<{ id: string; name: string }>>([]), [runQuery, setRunQuery] = useState(""), [runId, setRunId] = useState(""), [spans, setSpans] = useState<Array<{ id: string; name: string }>>([]), [spanId, setSpanId] = useState("");
   const [datasets, setDatasets] = useState<Dataset[]>([]), [datasetId, setDataset] = useState(""), [selection, setSelection] = useState<Map<string, number>>(new Map()), [receipt, setReceipt] = useState<PromotionReceipt | null>(null);
   const pendingPromotion = useRef<PromotionRequest | null>(null), windowRequest = useRef(0), [, forceRender] = useState(0);
@@ -172,9 +173,9 @@ function QueueWorkspace({ queue, initialItemId, onDirty, onBusy, onChanged, onCo
     <section className={panel} aria-label="Add captured source">
     <h2 className="mb-3 text-14 font-semibold text-rp-ink">Add a run to {queue.name}</h2>
     <div className="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-4">
-    <Field label="Find a source run">
+    <Field label="Find a source run" htmlFor={runSearchId}>
     <div className="flex gap-2">
-    <Input className="min-h-10" value={runQuery} maxLength={128} onChange={event => setRunQuery(event.target.value)} placeholder="Search captured runs" />
+    <Input id={runSearchId} className="min-h-10" value={runQuery} maxLength={128} onChange={event => setRunQuery(event.target.value)} placeholder="Search captured runs" />
     <Button className="min-h-10" variant="outline" disabled={busy} onClick={() => void perform(async () => { const result = await searchRuns({ q: runQuery, limit: 50 }); setRuns(result.runs.slice(0,50).map(run => ({ id: run.id, name: runOptionLabel(run) }))); })}>Search</Button>
     </div>
     </Field>
