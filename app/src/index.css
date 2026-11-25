@@ -1227,7 +1227,7 @@ html[data-nav="key"] {
     font-size: 16px !important;
   }
 
-  button:not(.timeline-bar),
+  button:not(.timeline-bar):not(.timeline-marker),
   [role="tab"],
   [role="menuitem"],
   summary,
@@ -1249,5 +1249,19 @@ html[data-nav="key"] {
   /* Toggle chips in segmented groups (Formatted/Raw, compare counts) are narrower than a fingertip. */
   button[aria-pressed]:not(.timeline-bar) {
     min-width: 44px;
+  }
+
+  /* Timeline bars keep their drawn size because width encodes duration. Rows are 44px
+     tall on coarse pointers (FlameTimeline), so a full-row hit strip cannot reach a
+     neighbouring row. Not widened: same-row bars can sit a few pixels apart. */
+  .timeline-bar::before,
+  .timeline-marker::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 44px;
+    transform: translateY(-50%);
   }
 }

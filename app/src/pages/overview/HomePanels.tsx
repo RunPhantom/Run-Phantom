@@ -188,7 +188,7 @@ export function AgentsPanel({ overview }: { overview: Overview }) {
       id="home-agents"
       title="Agents"
       meta={`${overview.kpis.activeAgents.value ?? 0} active`}
-      footer={total > rows.length || overview.truncated.byAgent ? <>Top {rows.length} of {overview.truncated.byAgent ? `${total}+` : total} by runs · <Link className="rp-touch-target text-rp-blue underline-offset-4 hover:underline" to={runsLink({ window })}>All runs</Link></> : undefined}
+      footer={total > rows.length || overview.truncated.byAgent ? <>Top {rows.length} of {overview.truncated.byAgent ? `${total}+` : total} by runs · <Link className="rp-touch-target min-w-11 justify-center text-rp-blue underline-offset-4 hover:underline" to={runsLink({ window })}>All runs</Link></> : undefined}
     >
       <BarList
         caption={`Agents ${WINDOW_COPY[window].phrase}, by runs`}
