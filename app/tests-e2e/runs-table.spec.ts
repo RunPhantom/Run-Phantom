@@ -157,6 +157,8 @@ test("saved views keep filters and columns, list in the sidebar with a live coun
   await confirm.getByRole("button", { name: "Delete view" }).click();
   await expect(navigation.getByRole("link", { name: "Billing", exact: true })).toHaveCount(0);
   await expect(page).not.toHaveURL(/view=/);
+  // The view's columns applied only while it was open; the reader's own choice comes back.
+  await expect(page.getByRole("columnheader", { name: "Input" })).toBeVisible();
   expect(await (await fetch(`${runPhantom.url}/api/saved-views`)).json()).toEqual({ views: [] });
 });
 

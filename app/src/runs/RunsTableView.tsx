@@ -47,7 +47,10 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
   const activeView = viewId ? savedViews.data?.find(view => view.id === viewId) ?? null : null;
   const isMobile = useIsMobile();
 
-  const [columns, setColumns] = useState<RunsTableColumn[]>(loadColumns);
+  const [ownColumns, setOwnColumns] = useState<RunsTableColumn[]>(loadColumns);
+  /** A saved view's own columns, applied only while that view is open; the reader's choice stays in `ownColumns`. */
+  const [viewColumns, setViewColumns] = useState<RunsTableColumn[] | null>(null);
+  const columns = viewColumns ?? ownColumns;
   const [density, setDensity] = useState<RunsDensity>(loadDensity);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -77,9 +80,13 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
   useEffect(() => {
     if (!activeView || appliedView.current === activeView.id) return;
     appliedView.current = activeView.id;
-    if (activeView.columns) { setColumns(activeView.columns); saveColumns(activeView.columns); }
+    setViewColumns(activeView.columns);
   }, [activeView]);
-  useEffect(() => { if (!viewId) appliedView.current = null; }, [viewId]);
+  useEffect(() => {
+    if (viewId) return;
+    appliedView.current = null;
+    setViewColumns(null);
+  }, [viewId]);
 
   const allRuns = useRuns();
   const facets = useMemo(() => {
@@ -186,11 +193,12 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
 
   const selectedRows = useMemo(() => rows.filter(row => selected.has(row.id)), [rows, selected]);
 
-  const changeColumns = (column: RunsTableColumn) => setColumns(previous => {
-    const next = toggleColumn(previous, column);
+  const changeColumns = (column: RunsTableColumn) => {
+    if (viewColumns) { setViewColumns(toggleColumn(viewColumns, column)); return; }
+    const next = toggleColumn(ownColumns, column);
+    setOwnColumns(next);
     saveColumns(next);
-    return next;
-  });
+  };
   const changeDensity = (next: RunsDensity) => { setDensity(next); saveDensity(next); };
 
   // Leaving pause is enough: useRunsTable reloads the head and highlights the waiting runs.
@@ -363,6 +371,7 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
           const search = filtersToSearchParams(filters);
           search.set("view", view.id);
           appliedView.current = view.id;
+          setViewColumns(view.columns);
           setParams(search, { replace: true });
           setMessage(`Saved view ${view.name}`);
         }}
