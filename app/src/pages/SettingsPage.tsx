@@ -22,7 +22,7 @@ import {
   type SecretStatus,
   type SecretStatuses,
 } from "../api/secrets";
-import { DATABASE_BACKUP_URL, getDataSummary, type DataSummary } from "../api/data";
+import { downloadDatabaseBackup, getDataSummary, type DataSummary } from "../api/data";
 import { clearRuns } from "../api/runs";
 import { useRunPhantomEvent } from "../hooks/use-runphantom-ws";
 import { Button } from "@/components/ui/button";
@@ -698,6 +698,7 @@ function DataAndDebugSection() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const [reset, setReset] = useState(false);
+  const [backingUp, setBackingUp] = useState(false);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const deleteButton = useRef<HTMLButtonElement>(null);
   const noticeRef = useRef<HTMLParagraphElement>(null);
@@ -730,6 +731,17 @@ function DataAndDebugSection() {
     clearTimeout(resetTimer.current);
     resetTimer.current = setTimeout(() => setReset(false), 1400);
   }, []);
+
+  const downloadBackup = async () => {
+    setBackingUp(true);
+    try {
+      await downloadDatabaseBackup();
+    } catch (error) {
+      if (mounted.current) setNotice(error instanceof Error ? error.message : "The backup could not be downloaded.");
+    } finally {
+      if (mounted.current) setBackingUp(false);
+    }
+  };
 
   const deleteAll = async () => {
     await clearRuns();
@@ -787,8 +799,8 @@ function DataAndDebugSection() {
               <p className="text-[14px] font-medium text-rp-ink">Download a backup</p>
               <p className="mt-1 text-[13px] leading-5 text-rp-ink-muted">One SQLite file with every run, saved run, note and result. Open it with any SQLite tool.</p>
             </div>
-            <Button asChild variant="outline" className="self-start">
-              <a href={DATABASE_BACKUP_URL} download><Download aria-hidden="true" />Download backup</a>
+            <Button type="button" variant="outline" className="self-start" disabled={backingUp} aria-busy={backingUp} onClick={() => { void downloadBackup(); }}>
+              <Download aria-hidden="true" />Download backup
             </Button>
           </div>
           <div className="flex flex-col justify-between gap-3 rounded-lg border border-rp-danger-border bg-rp-surface p-4">

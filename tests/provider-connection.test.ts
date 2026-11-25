@@ -83,6 +83,15 @@ describe.serial("provider connection check", () => {
     expect(JSON.stringify(result)).not.toContain(key);
   });
 
+  test("does not echo the provider's text for a rejected key, which can carry a masked key fragment", async () => {
+    setStoredSecret("openai", "sk-proj-bogus-key-WXYZ");
+    const result = await checkProviderConnection("openai", {
+      fetch: async () => json(401, { error: { message: "Incorrect API key provided: zzBOGUSK********************WXYZ.", type: "invalid_request_error", code: "invalid_api_key" } }),
+    });
+    expect(result).toMatchObject({ ok: false, failure: "auth", providerMessage: null });
+    expect(JSON.stringify(result)).not.toContain("WXYZ");
+  });
+
   test("maps quota, rate limits, outages, timeouts and network failures to plain answers", async () => {
     setStoredSecret("gemini", "AIza-stored-gemini-fixture-0003");
     const quota = await checkProviderConnection("gemini", { fetch: async () => json(429, { error: { status: "RESOURCE_EXHAUSTED", message: "You exceeded your current quota" } }) });

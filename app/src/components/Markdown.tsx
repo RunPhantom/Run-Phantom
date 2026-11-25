@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
@@ -10,13 +10,10 @@ const plugins = { cjk, code, math };
 
 function CodeBlock({ children, ...props }: React.HTMLAttributes<HTMLPreElement>) {
   const [copied, setCopied] = useState(false);
-  const text = typeof children === "string" ? children : "";
+  const pre = useRef<HTMLPreElement>(null);
 
   const handleCopy = () => {
-    const el = document.createElement("div");
-    el.innerHTML = typeof children === "string" ? children : "";
-    const raw = el.textContent ?? text;
-    navigator.clipboard.writeText(raw);
+    navigator.clipboard.writeText(pre.current?.textContent ?? "");
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
@@ -31,7 +28,7 @@ function CodeBlock({ children, ...props }: React.HTMLAttributes<HTMLPreElement>)
       >
         {copied ? <Check aria-hidden="true" className="size-3 text-rp-success" /> : <Copy aria-hidden="true" className="size-3 text-rp-ink-muted" />}
       </button>
-      <pre className="sb overflow-auto p-3 font-mono text-[12px] leading-5 text-rp-ink" {...props}>
+      <pre ref={pre} className="sb overflow-auto p-3 font-mono text-[12px] leading-5 text-rp-ink" {...props}>
         {children}
       </pre>
     </div>

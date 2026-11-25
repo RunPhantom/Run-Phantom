@@ -75,7 +75,7 @@ export async function checkProviderConnection(provider: ProviderId, options: { f
     return {
       ...base, ok: false, latencyMs, failure, httpStatus: response.status,
       message: failureMessage(provider, failure, response.status),
-      providerMessage: sanitizeProviderMessage(classified.providerMessage, key),
+      providerMessage: failure === "auth" ? null : sanitizeProviderMessage(classified.providerMessage, key),
     };
   }
   let body: unknown = null;

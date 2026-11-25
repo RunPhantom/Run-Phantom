@@ -1140,6 +1140,15 @@ export async function createServer(port: number, options: { comparisons?: Compar
     next();
   });
 
+  // Fetch metadata closes the originless-request gap the Origin/Referer guard leaves open: a cross-site navigation or
+  // no-cors fetch sends neither header, but browsers always label it here. The UI (built or through the Vite proxy) is
+  // same-origin; CLI, MCP and SDK callers send no Sec-Fetch-Site; OTLP ingest lives outside /api.
+  app.use("/api", (req, res, next) => {
+    const site = firstHeader(req.headers["sec-fetch-site"]);
+    if (site === "cross-site" || site === "same-site") return res.status(403).json({ error: "forbidden" });
+    next();
+  });
+
   app.use("/api", (req, res, next) => {
     if (req.method === "POST" || req.method === "PUT" || req.method === "PATCH" || req.method === "DELETE") {
       return localOriginGuard(req, res, next);
@@ -1679,20 +1688,39 @@ export async function createServer(port: number, options: { comparisons?: Compar
     }
   });
 
-  app.get("/api/data/backup", localOriginGuard, (_req, res) => {
+  // POST so the Origin guard always applies, and one at a time because VACUUM INTO blocks the event loop.
+  let backupInFlight = false;
+  app.post("/api/data/backup", localOriginGuard, (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const site = firstHeader(req.headers["sec-fetch-site"]);
+    if (site && site !== "same-origin" && site !== "none") {
+      res.status(403).json({ error: "forbidden" });
+      return;
+    }
+    if (backupInFlight) {
+      res.status(429).json({ error: "A backup is already being written. Try again when it finishes." });
+      return;
+    }
+    backupInFlight = true;
     let backup: ReturnType<typeof writeDatabaseBackup>;
     try {
       backup = writeDatabaseBackup();
     } catch (err) {
+      backupInFlight = false;
       console.error("[runphantom] database backup failed:", err);
       res.status(500).json({ error: "The database copy could not be written." });
       return;
     }
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-    res.set("Cache-Control", "no-store");
-    res.download(backup.file, `runphantom-backup-${stamp}.db`, () => {
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      backupInFlight = false;
       fs.rmSync(backup.directory, { recursive: true, force: true });
-    });
+    };
+    res.once("close", finish);
+    res.download(backup.file, `runphantom-backup-${stamp}.db`, finish);
   });
 
   app.put("/api/secrets/:key", localOriginGuard, (req, res) => {
