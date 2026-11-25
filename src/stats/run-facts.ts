@@ -5,7 +5,7 @@ import { generationCost, requestModel } from "../pricing/span-cost";
 import { normalizeUsage } from "../pricing/usage";
 import { normalizeStoredSpan } from "../spans/normalize";
 import { captureCompletion } from "../spans/normalized";
-import { deriveRunStatus, rootFailed, type RunStatusSummary } from "../run-status";
+import { countedErrors, deriveRunStatus, rootFailed, type RunStatusSummary } from "../run-status";
 import { selectRootAgentHints, type RootAgentHints } from "../run-agent";
 
 export type CostSource = "reported" | "estimated" | "unknown";
@@ -286,7 +286,7 @@ function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[], agentH
   for (const [name, tool] of toolFailureSpans) toolFailures[name] = Object.freeze({ failures: tool.failures, last: errorFact(tool.last) });
   const root = spans.find(span => span.parent_span_id === null && span.span_type === "AGENT_ROOT") ?? null;
   return Object.freeze({
-    spanCount: aggregate.span_count, errorCount: aggregate.error_count, toolErrorCount: aggregate.tool_error_count, rootFailed: runRootFailed, toolCount: aggregate.tool_count, finished, durationMs,
+    spanCount: aggregate.span_count, errorCount: countedErrors(aggregate.error_count, aggregate.agent_root_error_count), toolErrorCount: aggregate.tool_error_count, rootFailed: runRootFailed, toolCount: aggregate.tool_count, finished, durationMs,
     inputTokens, outputTokens, costUsd, costSource,
     llmCalls: generations.length,
     knownInputTokens: partial(generations.map(item => item.inputTokens)), knownOutputTokens: partial(generations.map(item => item.outputTokens)),

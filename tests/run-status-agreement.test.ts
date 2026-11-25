@@ -37,10 +37,10 @@ function run(id: string, lastUpdatedAgo: number, metadata: string | null = null)
   const now = Date.now();
   db().query("INSERT INTO runs(id,name,started_at,last_updated_at,metadata) VALUES(?,?,?,?,?)").run(id, id, now - 3 * 60 * MINUTE, now - lastUpdatedAgo, metadata);
 }
-function span(runId: string, id: string, type: string, status: string, parent: string | null = null) {
+function span(runId: string, id: string, type: string, status: string, parent: string | null = null, attributes: string | null = null) {
   const start = Date.now() - 3 * 60 * MINUTE;
-  db().query("INSERT INTO spans(run_id,id,parent_span_id,name,span_type,status,start_time_ms,end_time_ms,duration_ms) VALUES(?,?,?,?,?,?,?,?,?)")
-    .run(runId, id, parent, id, type, status, start, start + 1000, 1000);
+  db().query("INSERT INTO spans(run_id,id,parent_span_id,name,span_type,status,start_time_ms,end_time_ms,duration_ms,attributes) VALUES(?,?,?,?,?,?,?,?,?,?)")
+    .run(runId, id, parent, id, type, status, start, start + 1000, 1000, attributes);
 }
 
 /** One run per RunStatus, built the way each status arises, plus a failed replay placeholder. */
@@ -49,7 +49,7 @@ function seedEveryStatus(): Record<string, RunStatus> {
   run("quiet", 2 * MINUTE); span("quiet", "root", "AGENT_ROOT", "UNSET"); span("quiet", "llm", "LLM_GENERATION", "OK", "root");
   run("complete", 60 * MINUTE); span("complete", "root", "AGENT_ROOT", "OK"); span("complete", "llm", "LLM_GENERATION", "OK", "root");
   run("with-errors", 60 * MINUTE); span("with-errors", "root", "AGENT_ROOT", "OK"); span("with-errors", "tool", "TOOL_CALL", "ERROR", "root");
-  run("failed", 60 * MINUTE); span("failed", "root", "AGENT_ROOT", "ERROR"); span("failed", "tool", "TOOL_CALL", "OK", "root");
+  run("failed", 60 * MINUTE); span("failed", "root", "AGENT_ROOT", "ERROR"); span("failed", "tool", "TOOL_CALL", "ERROR", "root");
   run("replay-failed", 60 * MINUTE, JSON.stringify({ replay: { error: { code: "provider_error", message: "boom" } } }));
   run("replay-cancelled", 60 * MINUTE, JSON.stringify({ replay: { error: { code: "replay_cancelled" } } }));
   run("interrupted", 120 * MINUTE); span("interrupted", "orphan", "LLM_GENERATION", "OK", "missing-parent");
@@ -78,6 +78,9 @@ describe("one run status model", () => {
     const searched = (await searchRuns({ limit: 50 })).runs;
     expect(Object.fromEntries(searched.map(row => [row.id, row.status]))).toEqual(expected);
     for (const row of searched) expect(deriveRunStatus(row).status).toBe(row.status as RunStatus);
+    const errorCounts = Object.fromEntries(rows.map(row => [row.id, row.error_count]));
+    expect(Object.fromEntries(searched.map(row => [row.id, row.error_count]))).toEqual(errorCounts);
+    expect(errorCounts).toMatchObject({ failed: 1, "with-errors": 1, complete: 0 });
 
     for (const value of RUN_STATUS_FILTER_VALUES) {
       const members = runStatusFilterMembers(value);
@@ -96,6 +99,17 @@ describe("one run status model", () => {
     expect(sorted(overview.liveRuns.map(item => item.runId))).toEqual(["live", "quiet"]);
     expect(sorted(overview.recentFailures.map(item => item.runId))).toEqual(["failed", "replay-failed", "with-errors"]);
     expect(overview.timeseries.reduce((sum, bucket) => sum + bucket.finished, 0)).toBe(4);
+  });
+
+  test("a partial hook capture: the run list says unknown, search classifies it by span evidence", async () => {
+    const session = JSON.stringify({ captureContract: "runphantom.codex-hook.observation/v1", source: "codex_hook", entityKind: "session", coverage: "partial", producerVerified: false, runtimeVerified: false, reportedPhase: "unknown" });
+    run("hook", 120 * MINUTE); span("hook", "root", "AGENT_ROOT", "UNSET", null, session);
+    const store = db(), dbPath = getDbPath();
+    const [row] = listRuns(store, dbPath, { envelope: "1" }).runs;
+    expect([row.run_status, row.capture_completion, deriveRunStatus(row).label]).toEqual(["unknown", "unavailable", "Completion unavailable"]);
+    expect(countRuns(store, dbPath, [{ status: "unknown" }, { status: "interrupted" }])).toEqual([1, 0]);
+    // Documented gap (run-status-sql.ts): SQL cannot run the hook-capture validation, so search sees an open root gone quiet.
+    expect((await searchRuns({ limit: 5 })).runs.map(item => [item.id, item.status])).toEqual([["hook", "interrupted"]]);
   });
 
   test("a run that stops sending spans leaves running for interrupted everywhere", async () => {

@@ -57,6 +57,15 @@ export function rootFailed(counts: RootSpanCounts): boolean {
   return counts.roots > 0 && counts.rootErrors === counts.roots;
 }
 
+/**
+ * Errors shown for a run. An errored AGENT_ROOT stands for the run's outcome ("Run failed"); when an errored
+ * span beneath it explains the failure, counting the root as well would report one rejected call as 2 errors.
+ * run-status-sql.ts errorCountSql mirrors this for search.
+ */
+export function countedErrors(errors: number, agentRootErrors: number): number {
+  return agentRootErrors > 0 && errors > agentRootErrors ? errors - agentRootErrors : errors;
+}
+
 /** Error evidence from spans already in memory; db.ts derives the same counts in SQL for run lists. */
 export function runErrorEvidenceFromSpans(spans: readonly { parent_span_id?: string | null; span_type?: string | null; status?: string | null }[]) {
   let errors = 0, toolErrors = 0, roots = 0, rootErrors = 0, agentRoots = 0, agentRootErrors = 0;
@@ -69,7 +78,7 @@ export function runErrorEvidenceFromSpans(spans: readonly { parent_span_id?: str
     if (errored) rootErrors++;
     if (span.span_type === "AGENT_ROOT") { agentRoots++; if (errored) agentRootErrors++; }
   }
-  return { error_count: errors, tool_error_count: toolErrors, root_failed: rootFailed({ roots, rootErrors, agentRoots, agentRootErrors }) };
+  return { error_count: countedErrors(errors, agentRootErrors), tool_error_count: toolErrors, root_failed: rootFailed({ roots, rootErrors, agentRoots, agentRootErrors }) };
 }
 
 /**

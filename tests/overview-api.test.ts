@@ -72,7 +72,7 @@ describe("GET /api/overview computation", () => {
     ]);
     expect(result.recentFailures).toEqual([
       { runId: "r-tool-err", name: "alpha", agent: "alpha", status: "completed_with_errors", startedAt: FIXTURE_NOW - 2 * HOUR, errorCount: 1, error: { spanId: "tests", step: "run_tests", message: "Expected status 401, got 200." } },
-      { runId: "r-failed", name: "beta", agent: "beta", status: "failed", startedAt: FIXTURE_NOW - 3 * HOUR, errorCount: 2, error: { spanId: "tests", step: "run_tests", message: "FAIL suite auth" } },
+      { runId: "r-failed", name: "beta", agent: "beta", status: "failed", startedAt: FIXTURE_NOW - 3 * HOUR, errorCount: 1, error: { spanId: "tests", step: "run_tests", message: "FAIL suite auth" } },
     ]);
     expect(result.liveRuns).toEqual([
       { runId: "r-running", name: "beta", agent: "beta", startedAt: FIXTURE_NOW - 5 * 60_000, lastUpdatedAt: FIXTURE_NOW - 60_000, spanCount: 2, model: "gpt-4o-mini" },

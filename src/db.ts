@@ -8,7 +8,7 @@ import { detectSubAgents } from "./agents";
 import { deriveRunAgent, selectRootAgentHints } from "./run-agent";
 import { normalizeStoredSpan } from "./spans/normalize";
 import { captureCompletion, type NormalizedSpan } from "./spans/normalized";
-import { deriveRunStatus, rootFailed, runErrorEvidenceFromSpans } from "./run-status";
+import { countedErrors, deriveRunStatus, rootFailed, runErrorEvidenceFromSpans } from "./run-status";
 import * as schema from "./db/schema";
 import { embeddedMigrationFiles, embeddedMigrationJournal } from "./db/migration-assets";
 import { SOURCE_MIGRATIONS_DIR } from "./source-paths";
@@ -842,7 +842,7 @@ function runErrorEvidence(ids: readonly string[]): Map<string, { error_count: nu
     .all();
   for (const row of rows) {
     result.set(row.run_id, {
-      error_count: Number(row.errors) || 0,
+      error_count: countedErrors(Number(row.errors) || 0, Number(row.agentRootErrors) || 0),
       tool_error_count: Number(row.toolErrors) || 0,
       root_failed: rootFailed({ roots: Number(row.roots) || 0, rootErrors: Number(row.rootErrors) || 0, agentRoots: Number(row.agentRoots) || 0, agentRootErrors: Number(row.agentRootErrors) || 0 }),
     });
