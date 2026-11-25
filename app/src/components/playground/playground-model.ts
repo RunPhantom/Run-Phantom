@@ -1,6 +1,6 @@
 import { estimateListPriceCost, PRICE_TABLE_AS_OF, type ListPriceEstimate } from "../../../../src/pricing/list-prices";
 import type {
-  PlaygroundCallResult, PlaygroundDraft, PlaygroundHistoryRun, PlaygroundErrorKind, PlaygroundMessage, PlaygroundProvider, PlaygroundRunBody, PlaygroundTool,
+  PlaygroundCallResult, PlaygroundDraft, PlaygroundHistoryRun, PlaygroundErrorKind, PlaygroundMessage, PlaygroundProvider, PlaygroundProviderInfo, PlaygroundRunBody, PlaygroundTool,
   PlaygroundToolCall, ReasoningEffort,
 } from "../../api/playground";
 
@@ -180,6 +180,23 @@ function openedFromDraft(draft: PlaygroundDraft): OpenedFrom {
     capturedModel: draft.capturedModel, substitutedModel: substituted ? draft.model : null,
     warnings: repeat ? draft.warnings.filter(warning => !warning.startsWith(repeat)) : draft.warnings,
   };
+}
+
+/**
+ * The model a new compare column starts on: another keyed provider's default first, then any other keyed model, and a
+ * provider without a key only when every keyed model is already shown.
+ */
+export function nextTarget(existing: readonly PlaygroundTarget[], providers: readonly PlaygroundProviderInfo[] | undefined): PlaygroundTarget {
+  const used = new Set(existing.map(target => `${target.provider}/${target.model}`));
+  const free = (provider: PlaygroundProviderInfo, model: string) => !used.has(`${provider.id}/${model}`);
+  for (const configured of [true, false]) {
+    const group = (providers ?? []).filter(provider => provider.configured === configured);
+    const shown = new Set(existing.map(target => target.provider));
+    const ordered = [...group.filter(provider => !shown.has(provider.id)), ...group.filter(provider => shown.has(provider.id))];
+    for (const provider of ordered) if (free(provider, provider.defaultModel)) return { provider: provider.id, model: provider.defaultModel };
+    for (const provider of ordered) for (const model of provider.models) if (free(provider, model.id)) return { provider: provider.id, model: model.id };
+  }
+  return existing[0] ?? { provider: "openai", model: "gpt-5-nano" };
 }
 
 export type ToolsParse = { ok: true; tools: PlaygroundTool[] } | { ok: false; error: string };

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { createSseParser, toStreamEvent, type PlaygroundCallResult, type PlaygroundDraft } from "../app/src/api/playground";
+import { createSseParser, toStreamEvent, type PlaygroundCallResult, type PlaygroundDraft, type PlaygroundProviderInfo } from "../app/src/api/playground";
 import {
-  appendToolRound, buildRunBody, defaultDraft, draftHasContent, errorHelp, estimateResultCost, groupHistory, metricLeaders, orderByColumn,
+  appendToolRound, buildRunBody, defaultDraft, draftHasContent, errorHelp, estimateResultCost, groupHistory, metricLeaders, nextTarget, orderByColumn,
   parseStoredDraft, parseToolsText, recordedCostUsd, stateFromDraft, targetIndexOf, type PlaygroundDraftState,
 } from "../app/src/components/playground/playground-model";
 import { diffStats, wordDiff } from "../app/src/components/playground/word-diff";
@@ -177,6 +177,32 @@ describe("result facts", () => {
     }
     expect(errorHelp("auth").settings).toBe(true);
     expect(errorHelp("quota").settings).toBe(false);
+  });
+});
+
+describe("nextTarget", () => {
+  const provider = (id: PlaygroundProviderInfo["id"], configured: boolean, models: string[]): PlaygroundProviderInfo => ({
+    id, label: id, configured, keySource: configured ? "store" : null, defaultModel: models[0]!,
+    models: models.map(model => ({ id: model, label: model, temperature: true, maxTemperature: 2, reasoningEffort: false })),
+  });
+  const openai = (configured: boolean) => provider("openai", configured, ["gpt-5-nano", "gpt-5-mini", "gpt-4.1-mini"]);
+  const anthropic = (configured: boolean) => provider("anthropic", configured, ["claude-haiku-4-5-20251001", "claude-haiku-5-5"]);
+  const gemini = (configured: boolean) => provider("gemini", configured, ["gemini-3.8-flash"]);
+
+  test("stays on keyed models before offering a provider without a key", () => {
+    const providers = [openai(true), anthropic(false), gemini(false)];
+    expect(nextTarget([{ provider: "openai", model: "gpt-5-nano" }], providers)).toEqual({ provider: "openai", model: "gpt-5-mini" });
+    expect(nextTarget([{ provider: "openai", model: "gpt-5-nano" }, { provider: "openai", model: "gpt-5-mini" }], providers)).toEqual({ provider: "openai", model: "gpt-4.1-mini" });
+    expect(nextTarget([{ provider: "openai", model: "gpt-5-nano" }, { provider: "openai", model: "gpt-5-mini" }, { provider: "openai", model: "gpt-4.1-mini" }], providers))
+      .toEqual({ provider: "anthropic", model: "claude-haiku-4-5-20251001" });
+  });
+
+  test("prefers another keyed provider's default for a cross-provider compare", () => {
+    const providers = [openai(true), anthropic(true), gemini(true)];
+    expect(nextTarget([{ provider: "openai", model: "gpt-5-nano" }], providers)).toEqual({ provider: "anthropic", model: "claude-haiku-4-5-20251001" });
+    expect(nextTarget([{ provider: "openai", model: "gpt-5-nano" }, { provider: "anthropic", model: "claude-haiku-4-5-20251001" }], providers)).toEqual({ provider: "gemini", model: "gemini-3.8-flash" });
+    expect(nextTarget([{ provider: "anthropic", model: "claude-haiku-5-5" }], [openai(false), anthropic(true), gemini(true)])).toEqual({ provider: "gemini", model: "gemini-3.8-flash" });
+    expect(nextTarget([{ provider: "openai", model: "gpt-5-nano" }], undefined)).toEqual({ provider: "openai", model: "gpt-5-nano" });
   });
 });
 

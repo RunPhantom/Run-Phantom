@@ -14,26 +14,13 @@ import { effectiveMaxTemperature, ModelPicker, modelLabel, PlaygroundEditor } fr
 import { ResultColumn, type ColumnState } from "../components/playground/PlaygroundOutput";
 import { PLAYGROUND_HISTORY_KEY, PlaygroundHistory } from "../components/playground/PlaygroundHistory";
 import {
-  appendToolRound, buildRunBody, draftHasContent, loadDraft, MAX_COMPARE_COLUMNS, metricLeaders, saveDraft, stateFromDraft,
+  appendToolRound, buildRunBody, draftHasContent, loadDraft, MAX_COMPARE_COLUMNS, metricLeaders, nextTarget, saveDraft, stateFromDraft,
   type BuildResult, type PlaygroundDraftState, type PlaygroundTarget,
 } from "../components/playground/playground-model";
 import { useRegisterShortcuts } from "../shell/commands";
 import { ariaKeyShortcuts, formatKeys, isMacPlatform } from "../shell/keyboard";
 
 const RUN_KEYS = "mod+enter";
-
-function nextTarget(existing: readonly PlaygroundTarget[], providers: readonly PlaygroundProviderInfo[] | undefined): PlaygroundTarget {
-  const used = new Set(existing.map(target => `${target.provider}/${target.model}`));
-  const ordered = [...(providers ?? [])].sort((a, b) => Number(b.configured) - Number(a.configured));
-  for (const provider of ordered) {
-    const candidate = { provider: provider.id, model: provider.defaultModel };
-    if (!used.has(`${candidate.provider}/${candidate.model}`)) return candidate;
-  }
-  for (const provider of ordered) for (const model of provider.models) {
-    if (!used.has(`${provider.id}/${model.id}`)) return { provider: provider.id, model: model.id };
-  }
-  return existing[0] ?? { provider: "openai", model: "gpt-5-nano" };
-}
 
 const BUILD_FIELD_SELECTOR: Record<Exclude<BuildResult, { ok: true }>["field"], string> = {
   messages: "[data-playground-message] textarea",
