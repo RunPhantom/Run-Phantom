@@ -1,7 +1,7 @@
 import { calculateCost } from "./calculator";
-import { PRICING_VERSION, TOKEN_CATEGORIES, type CategoryRate, type FrozenRateRevision, type TokenCategory } from "./protocol";
+import { PRICING_VERSION, TOKEN_CATEGORIES, type CategoryRate, type FrozenRateRevision, type NormalizedUsage, type TokenCategory } from "./protocol";
 import { freezeRateRevision } from "./rates";
-import { normalizeUsage, validTokenCount } from "./usage";
+import { normalizeUsage, providerIdentity, validTokenCount } from "./usage";
 
 /**
  * Bundled, offline list prices for first-party OpenAI, Anthropic and Google
@@ -253,14 +253,14 @@ export interface ListPriceUsage {
  * (src/coding-hooks/projection.ts). Other spans use the captured gen_ai
  * cache attributes and the exporter's runphantom.usage.input_includes_cache.
  */
-export function spanCacheUsage(values: Record<string, unknown>): Pick<ListPriceUsage, "cacheReadTokens" | "cacheWriteTokens" | "cacheWrite5mTokens" | "cacheWrite1hTokens" | "inputIncludesCache"> {
+export function spanCacheUsage(values: Record<string, unknown>, normalized?: NormalizedUsage): Pick<ListPriceUsage, "cacheReadTokens" | "cacheWriteTokens" | "cacheWrite5mTokens" | "cacheWrite1hTokens" | "inputIncludesCache"> {
   const hook = values.usage;
   if ((values.source === "claude_hook" || values.source === "cursor_hook") && hook && typeof hook === "object" && !Array.isArray(hook)) {
     const usage = hook as Record<string, unknown>;
     const count = (value: unknown) => typeof value === "number" ? value : null;
     return { cacheReadTokens: count(usage.cacheReadInputTokens), cacheWriteTokens: count(usage.cacheCreatedInputTokens), inputIncludesCache: false };
   }
-  const usage = normalizeUsage(values, null);
+  const usage = normalized ?? normalizeUsage(values, null);
   const inclusion = usage.inclusion.cache_read;
   return {
     cacheReadTokens: usage.categories.cache_read.count, cacheWriteTokens: usage.categories.cache_write.count,
@@ -271,7 +271,7 @@ export function spanCacheUsage(values: Record<string, unknown>): Pick<ListPriceU
 
 export type ListPriceEstimate =
   | { readonly kind: "estimated"; readonly totalUsd: number; readonly inputUsd: number; readonly outputUsd: number; readonly cacheUsd: number; readonly cacheTokens: number; readonly inputUsdPerMillion: number; readonly outputUsdPerMillion: number; readonly model: string; readonly family: PriceFamily; readonly revision: FrozenRateRevision }
-  | { readonly kind: "unavailable"; readonly reason: "model_unpriced" | "usage_unavailable" | "cache_usage_ambiguous" | "estimate_failed" };
+  | { readonly kind: "unavailable"; readonly reason: "model_unpriced" | "provider_unresolved" | "usage_unavailable" | "cache_usage_ambiguous" | "estimate_failed" };
 
 export function estimateListPriceCost(usage: ListPriceUsage): ListPriceEstimate {
   const match = lookupListPrice(usage.model, { provider: usage.provider, at: usage.at });
@@ -305,4 +305,45 @@ export function estimateListPriceCost(usage: ListPriceUsage): ListPriceEstimate 
   const cacheUsd = (["cache_read", "cache_write", "cache_write_5m", "cache_write_1h"] as const).reduce((sum, name) => sum + (category(name).costUsd ?? 0), 0);
   return { kind: "estimated", totalUsd: estimate.totalUsd, inputUsd: input.costUsd!, outputUsd: output.costUsd!, cacheUsd, cacheTokens,
     inputUsdPerMillion: input.rateUsdPerMillionTokens!, outputUsdPerMillion: output.rateUsdPerMillionTokens!, model: match.revision.model, family: match.entry.family, revision: match.revision };
+}
+
+export function requestModel(values: Record<string, unknown> | null): string | null {
+  const value = values?.["gen_ai.request.model"];
+  return typeof value === "string" && value ? value : null;
+}
+
+export interface CallListPriceInput {
+  /** Parsed span attributes; null when they could not be read. */
+  readonly values: Record<string, unknown> | null;
+  /** Model ids to price, in order of preference; the first one the table knows is used. */
+  readonly models: readonly (string | null | undefined)[];
+  /** The stored provider column, before it is reconciled with the captured attributes. */
+  readonly provider: string | null;
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly at: number | null;
+  /** normalizeUsage(values, provider) when the caller already has it; must come from the same values and provider. */
+  readonly normalized?: NormalizedUsage;
+}
+
+/**
+ * List-price estimate for one model call, shared by the run header, the run
+ * list, the overview and the Cost page. A provider that is invalid or
+ * disagrees between the column and the attributes (for example anthropic
+ * against aws.bedrock) may be a proxy or cloud vendor with its own prices, so
+ * the call stays unpriced.
+ */
+export function estimateCallListPrice(input: CallListPriceInput): ListPriceEstimate {
+  const values = input.values ?? {};
+  const identity = input.normalized
+    ? { provider: input.normalized.provider, issues: input.normalized.issues.filter(issue => issue.endsWith("provider")) }
+    : providerIdentity(values, input.provider);
+  if (identity.issues.length) return { kind: "unavailable", reason: "provider_unresolved" };
+  const cache = input.values ? spanCacheUsage(values, input.normalized) : {};
+  let estimate: ListPriceEstimate = { kind: "unavailable", reason: "model_unpriced" };
+  for (const model of new Set(input.models.filter((value): value is string => !!value))) {
+    estimate = estimateListPriceCost({ model, provider: identity.provider, inputTokens: input.inputTokens, outputTokens: input.outputTokens, ...cache, at: input.at });
+    if (estimate.kind === "estimated" || estimate.reason !== "model_unpriced") break;
+  }
+  return estimate;
 }

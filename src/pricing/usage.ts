@@ -48,6 +48,23 @@ function inclusion(attributes: Record<string, unknown>, key: string): Inclusion 
   return value === true ? "included" : value === false ? "additional" : "unknown";
 }
 
+const PROVIDER_KEYS = ["gen_ai.provider.name", "gen_ai.system", "ai.model.provider"] as const;
+
+/**
+ * The provider a call names through its captured attributes and the stored
+ * provider column. Any issue (an invalid value, or the two disagreeing) makes
+ * the identity null rather than letting one side win.
+ */
+export function providerIdentity(attributes: Record<string, unknown>, provider: string | null = null): { provider: string | null; issues: readonly string[] } {
+  const issues: string[] = [];
+  const capturedProvider = identity(attributes, PROVIDER_KEYS);
+  const suppliedProvider = provider === null ? null : identity({ provider }, ["provider"]);
+  if (capturedProvider === null && PROVIDER_KEYS.some(key => ownValue(attributes, key).present)) issues.push("invalid_or_conflicting_provider");
+  if (provider !== null && suppliedProvider === null) issues.push("invalid_provider");
+  if (capturedProvider !== null && suppliedProvider !== null && capturedProvider !== suppliedProvider) issues.push("conflicting_provider");
+  return { provider: issues.length ? null : suppliedProvider ?? capturedProvider, issues };
+}
+
 /** Provider names are identity only: an absent exporter declaration never implies cache semantics. */
 export function normalizeUsage(attributes: Record<string, unknown>, provider: string | null = null): NormalizedUsage {
   const categories = Object.fromEntries(TOKEN_CATEGORIES.map(category => [category, measure(attributes, COUNT_ATTRIBUTES[category])])) as Record<TokenCategory, TokenMeasure>;
@@ -57,11 +74,8 @@ export function normalizeUsage(attributes: Record<string, unknown>, provider: st
     issues.push("invalid_usage_unit");
     for (const category of TOKEN_CATEGORIES) categories[category] = { ...categories[category], count: null, state: "invalid" };
   }
-  const capturedProvider = identity(attributes, ["gen_ai.provider.name", "gen_ai.system", "ai.model.provider"]);
-  const suppliedProvider = provider === null ? null : identity({ provider }, ["provider"]);
-  if (capturedProvider === null && ["gen_ai.provider.name", "gen_ai.system", "ai.model.provider"].some(key => ownValue(attributes, key).present)) issues.push("invalid_or_conflicting_provider");
-  if (provider !== null && suppliedProvider === null) issues.push("invalid_provider");
-  if (capturedProvider !== null && suppliedProvider !== null && capturedProvider !== suppliedProvider) issues.push("conflicting_provider");
+  const providerResult = providerIdentity(attributes, provider);
+  issues.push(...providerResult.issues);
   const responseKeys = ["gen_ai.response.model", "ai.response.model", "llm.response.model_name"];
   const hasResponseModel = responseKeys.some(key => ownValue(attributes, key).present);
   const relations: Record<DetailCategory, Inclusion> = {
@@ -82,7 +96,7 @@ export function normalizeUsage(attributes: Record<string, unknown>, provider: st
   Object.freeze(contextTokens);
   return Object.freeze({
     version: PRICING_VERSION,
-    provider: issues.some(issue => issue.endsWith("provider")) ? null : suppliedProvider ?? capturedProvider,
+    provider: providerResult.provider,
     model: identity(attributes, hasResponseModel ? responseKeys : ["gen_ai.request.model", "ai.model.id", "llm.request.model", "llm.model_name"]),
     tier: identity(attributes, ["runphantom.usage.tier", "gen_ai.request.service_tier"]),
     contextTokens,

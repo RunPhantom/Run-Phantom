@@ -208,6 +208,7 @@ function unavailableReason(span: Span, reason: string | null, pricing: PricingSn
   if (reason === "cache_usage_ambiguous") return "The capture does not say whether input tokens include cached tokens.";
   if (!span.model) return "Model identity was not captured.";
   if (!validTokenCount(span.input_tokens) || !validTokenCount(span.output_tokens)) return "Input or output token capture is unavailable.";
+  if (reason === "provider_unresolved") return "The span names conflicting or invalid providers, so the call may have gone through a vendor with its own prices.";
   if (pricing.status === "disabled") return "No list price. Enable public pricing in Settings.";
   if (pricing.status === "loading" || pricing.status === "idle") return "No list price. Public pricing is loading.";
   if (pricing.status === "error") return pricing.error ?? "Public pricing is unavailable.";
@@ -238,7 +239,7 @@ export function getRunCostRows(spans: Span[], pricing: PricingSnapshot = getPric
       row.listPriceCacheUsd += cost.estimate.cacheUsd; row.listPriceCacheTokens += cost.estimate.cacheTokens;
       const family = cost.estimate.family;
       row.listPrice ??= { inRate: cost.estimate.inputUsdPerMillion, outRate: cost.estimate.outputUsdPerMillion, sourceName: PRICE_SOURCES[family].name, sourceUrl: PRICE_SOURCES[family].url, asOf: PRICE_TABLE_AS_OF, priceModel: cost.estimate.model };
-    } else if (cost.reason !== "reported_cost_invalid" && pricing.catalogue) {
+    } else if (cost.reason !== "reported_cost_invalid" && cost.reason !== "provider_unresolved" && pricing.catalogue) {
       const quote = getCostBreakdown(span.model, span.input_tokens, span.output_tokens);
       if (quote) { amount = quote.totalCost; row.catalogueUsd += quote.totalCost; row.catalogue ??= quote; row.sources.catalogue++; }
     }

@@ -321,7 +321,7 @@ function evaluateGeneration(span: SpanRow, byId: ReadonlyMap<string, SpanRow>): 
   const durationMs = typeof span.duration_ms === "number" && Number.isFinite(span.duration_ms) && span.duration_ms >= 0 ? span.duration_ms : null;
   if (structure === "unavailable") return { model, provider, durationMs, inputTokens: null, outputTokens: null, costUsd: null, costSource: "unknown" };
   const inputTokens = usage.categories.input.count, outputTokens = usage.categories.output.count;
-  const cost = generationCost({ values: captured.unavailable ? null : values, models: [model, requestModel(values)], provider, inputTokens, outputTokens, at: span.start_time_ms });
+  const cost = generationCost({ values: captured.unavailable ? null : values, models: [model, requestModel(values)], provider: span.provider, inputTokens, outputTokens, at: span.start_time_ms, normalized: captured.unavailable ? undefined : usage });
   return { model, provider, durationMs, inputTokens, outputTokens, costUsd: cost.usd, costSource: cost.source === "reported" ? "reported" : cost.source === "list-price" ? "estimated" : "unknown" };
 }
 

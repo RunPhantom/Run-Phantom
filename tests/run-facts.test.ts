@@ -63,6 +63,15 @@ describe("run cost and tokens agree with the Cost page aggregation", () => {
     run("edge-nested"); span("edge-nested", "root", { type: "AGENT_ROOT" }); span("edge-nested", "outer", { parent: "root", model: "gemini-2.5-flash", provider: "google", input: 40, output: 4 });
     span("edge-nested", "inner", { parent: "outer", model: "gemini-2.5-flash", provider: "google", input: 30, output: 3 });
     run("edge-columns"); span("edge-columns", "root", { type: "AGENT_ROOT" }); span("edge-columns", "llm", { parent: "root", model: "gemini-2.5-flash", input: 11, output: 12 });
+    run("edge-request"); span("edge-request", "root", { type: "AGENT_ROOT" });
+    span("edge-request", "llm", { parent: "root", model: "gemini-flash-house", provider: "google", input: 1_000, output: 1_000,
+      attributes: JSON.stringify({ "gen_ai.request.model": "gemini-2.5-flash-lite", "gen_ai.response.model": "gemini-flash-house" }) });
+    run("edge-conflict"); span("edge-conflict", "root", { type: "AGENT_ROOT" });
+    span("edge-conflict", "llm", { parent: "root", model: "claude-haiku-4-5-20251001", provider: "anthropic", input: 1_000, output: 1_000, attributes: JSON.stringify({ "gen_ai.system": "aws.bedrock" }) });
+    run("edge-bedrock"); span("edge-bedrock", "root", { type: "AGENT_ROOT" });
+    span("edge-bedrock", "llm", { parent: "root", model: "claude-haiku-4-5-20251001", provider: null, input: 1_000, output: 1_000, attributes: JSON.stringify({ "gen_ai.system": "aws.bedrock" }) });
+    run("edge-azure"); span("edge-azure", "root", { type: "AGENT_ROOT" });
+    span("edge-azure", "llm", { parent: "root", model: "gpt-5-nano", provider: null, input: 1_000, output: 1_000, attributes: JSON.stringify({ "gen_ai.system": "azure.ai.openai" }) });
   }
 
   test("per-run totals match aggregateCostAnalytics with the bundled list prices", () => {
@@ -92,7 +101,7 @@ describe("run cost and tokens agree with the Cost page aggregation", () => {
       }
       compared++;
     }
-    expect(compared).toBe(304);
+    expect(compared).toBe(308);
     expect(estimatedCalls).toBeGreaterThan(400);
     expect(reference.population.nestedExcluded).toBe(1);
     expect(facts("edge-orphan")).toMatchObject({ inputTokens: null, costUsd: null, costSource: "unknown" });
@@ -101,6 +110,15 @@ describe("run cost and tokens agree with the Cost page aggregation", () => {
     expect(facts("edge-nested").costUsd).toBeCloseTo(40 * 0.3 / 1e6 + 4 * 2.5 / 1e6, 15);
     // gemini-2.5-flash reported by a span whose provider column says openai is not a first-party Google call.
     expect(facts("edge-columns")).toMatchObject({ inputTokens: 11, costUsd: null, costSource: "unknown" });
+    // An unpriced response model falls back to the priced request model on both surfaces: 1,000 × $0.10 + 1,000 × $0.40 per million.
+    expect(facts("edge-request")).toMatchObject({ costSource: "estimated", costUnknownCalls: 0 });
+    expect(facts("edge-request").costUsd).toBeCloseTo(0.0005, 15);
+    expect(byRun.get("edge-request")!.estimatedUsd).toMatchObject({ knownCount: 1, unavailableCount: 0 });
+    // A provider column that disagrees with gen_ai.system, or a cloud vendor named only in the attributes, is not a first-party call.
+    for (const id of ["edge-conflict", "edge-bedrock", "edge-azure"]) {
+      expect({ id, ...facts(id) }).toMatchObject({ id, inputTokens: 1_000, costUsd: null, costSource: "unknown", costUnknownCalls: 1 });
+      expect({ id, ...byRun.get(id)!.estimatedUsd }).toMatchObject({ id, knownCount: 0, unavailableCount: 1 });
+    }
   });
 });
 
