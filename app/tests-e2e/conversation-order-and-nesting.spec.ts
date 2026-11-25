@@ -7,8 +7,10 @@ type SeedSpan = { id: string; parent?: string; name: string; start: number; end:
 
 const LEDGER_TRACE = "c0de0000000000000000000000000a01";
 const NESTED_TRACE = "c0de0000000000000000000000000a02";
+const STRESS_TRACE = "c0de0000000000000000000000000a03";
 const ledgerSpan = (slot: number) => `c0dea001${slot.toString(16).padStart(8, "0")}`;
 const nestedSpan = (slot: number) => `c0dea002${slot.toString(16).padStart(8, "0")}`;
+const stressSpan = (slot: number) => `c0dea003${slot.toString(16).padStart(8, "0")}`;
 
 async function seed(url: string, traceId: string, spans: SeedSpan[]): Promise<void> {
   const t0 = Date.now() - 60_000;
@@ -45,7 +47,7 @@ const agent = (name: string, input: string, extra: Record<string, Value> = {}): 
 async function seedLedgerRun(url: string): Promise<void> {
   await seed(url, LEDGER_TRACE, [
     { id: ledgerSpan(1), name: "invoke_agent support-agent", start: 0, end: 2849, error: "ledger conflict",
-      attrs: agent("support-agent", "My speakers were lost by the courier. Please refund me.", { "runphantom.span.kind": "agent_root", "runphantom.event.name": "Refund stopped by a ledger conflict", "gen_ai.request.model": "claude-haiku-4-5-20251001" }) },
+      attrs: agent("support-agent", "My speakers were lost by the courier. Please refund me.", { "runphantom.span.kind": "agent_root", "runphantom.event.name": "Refund stopped by a ledger conflict", "runphantom.conversation.id": "conv-ledger", "gen_ai.request.model": "claude-haiku-4-5-20251001" }) },
     { id: ledgerSpan(2), parent: ledgerSpan(1), name: "chat claude-haiku-4-5-20251001", start: 0, end: 1282,
       attrs: chat("My speakers were lost by the courier. Please refund me.", "I'll look up your order and check the refund policy.", ["lookup_order", "search_kb"]) },
     { id: ledgerSpan(3), parent: ledgerSpan(1), name: "execute_tool lookup_order", start: 1282, end: 1282, attrs: tool("lookup_order", "{\"status\":\"lost\"}") },
@@ -89,22 +91,25 @@ test.beforeEach(async ({ runPhantom }) => {
   await clearRunPhantom(runPhantom.url);
 });
 
-test("overview conversation: each reply comes before the tools it requested, so the failed tool is last", async ({ page, runPhantom }, testInfo) => {
-  await seedLedgerRun(runPhantom.url);
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto(`${runPhantom.url}/runs/${LEDGER_TRACE}`);
-  const panel = page.getByRole("tabpanel", { name: "Overview" });
-  const firstReply = panel.getByText("I'll look up your order and check the refund policy.");
-  const lookup = panel.getByRole("button", { name: "Expand tool call lookup_order" });
-  const secondReply = panel.getByText("Your order qualifies. I'm issuing your $249 refund now.");
-  const refund = panel.getByRole("button", { name: "Expand tool call issue_refund" });
-  await expect(refund).toBeVisible();
-  const [a, b, c, d] = await tops([firstReply, lookup, secondReply, refund]);
-  expect(a).toBeLessThan(b);
-  expect(b).toBeLessThan(c);
-  expect(c).toBeLessThan(d);
-  await testInfo.attach("overview-causal-order", { body: await page.screenshot({ animations: "disabled" }), contentType: "image/png" });
-});
+for (const route of ["", "/convo"]) {
+  test(`${route ? "conversation tab" : "overview"}: each reply comes before the tools it requested, so the failed tool is last`, async ({ page, runPhantom }, testInfo) => {
+    await seedLedgerRun(runPhantom.url);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${runPhantom.url}/runs/${LEDGER_TRACE}${route}`);
+    const panel = page.getByRole("tabpanel");
+    const firstReply = panel.getByText("I'll look up your order and check the refund policy.");
+    const lookup = panel.getByRole("button", { name: "Expand tool call lookup_order" });
+    const secondReply = panel.getByText("Your order qualifies. I'm issuing your $249 refund now.");
+    const refund = panel.getByRole("button", { name: "Expand tool call issue_refund" });
+    await expect(refund).toBeVisible();
+    await expect(firstReply).toBeVisible();
+    const [a, b, c, d] = await tops([firstReply, lookup, secondReply, refund]);
+    expect(a).toBeLessThan(b);
+    expect(b).toBeLessThan(c);
+    expect(c).toBeLessThan(d);
+    await testInfo.attach(`causal-order${route || "-overview"}`, { body: await page.screenshot({ animations: "disabled" }), contentType: "image/png" });
+  });
+}
 
 test("span tree: an instant failure at the end of the trace keeps a visible bar inside its track", async ({ page, runPhantom }) => {
   await seedLedgerRun(runPhantom.url);
@@ -116,6 +121,26 @@ test("span tree: an instant failure at the end of the trace keeps a visible bar 
   expect(inside, "failed bar inside the track").toBe(true);
   expect(width).toBeGreaterThanOrEqual(6);
   expect((await insideTrack(page.locator(`[data-span-row="${ledgerSpan(3)}"] [data-trace-bar]`))).inside).toBe(true);
+});
+
+test("span tree: zoomed to the start, a step that begins after the window is not drawn at its edge", async ({ page, runPhantom }) => {
+  await seedLedgerRun(runPhantom.url);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${runPhantom.url}/runs/${LEDGER_TRACE}/spans`);
+  const track = page.locator(`[data-span-row="${ledgerSpan(2)}"] [data-trace-track]`);
+  await expect(track).toBeVisible();
+  const box = (await track.boundingBox())!;
+  // Drag across the first ~30% of the trace (0 to ~850ms): issue_refund starts at 2849ms.
+  await page.mouse.move(box.x + 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.15, box.y + box.height / 2, { steps: 4 });
+  await page.mouse.move(box.x + box.width * 0.3, box.y + box.height / 2, { steps: 4 });
+  await page.mouse.up();
+  const failed = page.locator(`[data-span-row="${ledgerSpan(6)}"] [data-trace-bar]`);
+  await expect.poll(() => failed.evaluate(element => {
+    const trackBox = element.closest("[data-trace-track]")!.getBoundingClientRect();
+    return element.getBoundingClientRect().left >= trackBox.right - 0.5;
+  })).toBe(true);
 });
 
 test("span tree: a step's name keeps its room and the model chip gives way first", async ({ page, runPhantom }) => {
@@ -182,5 +207,43 @@ test("nested hand-offs: each sub-agent is a card inside its parent and no sub-ag
     await expect(readerBody.getByRole("button", { name: "Expand tool call open_file" })).toBeVisible();
     await expect(readerBody).toContainText(/1 LLM call · 1 tool/);
     await testInfo.attach(`nested-cards${route || "-overview"}`, { body: await page.screenshot({ animations: "disabled" }), contentType: "image/png" });
+  }
+});
+
+// The 321-span stress run: an orchestrator hands off to 5 agents, each hands
+// off to 3, and each of those makes 10 model calls with a tool call apiece.
+async function seedStressRun(url: string): Promise<void> {
+  const spans: SeedSpan[] = [{ id: stressSpan(0), name: "invoke_agent orchestrator", start: 0, end: 20_000,
+    attrs: agent("orchestrator", "Find the needle across 15 shards.", { "runphantom.span.kind": "agent_root", "runphantom.event.name": "Fifteen sub-agents", "runphantom.conversation.id": "conv-stress" }) }];
+  let slot = 1;
+  let t = 10;
+  for (let n = 0; n < 5; n++) {
+    const group = stressSpan(slot++);
+    spans.push({ id: group, parent: stressSpan(0), name: `invoke_agent group-${n}`, start: t, end: t + 3900, attrs: agent(`group-${n}`, `Search shard group ${n}`) });
+    for (let m = 0; m < 3; m++) {
+      const leaf = stressSpan(slot++);
+      spans.push({ id: leaf, parent: group, name: `invoke_agent shard-${n}-${m}`, start: t, end: t + 1300, attrs: agent(`shard-${n}-${m}`, `Search shard ${n}-${m}`) });
+      for (let k = 0; k < 10; k++) {
+        spans.push({ id: stressSpan(slot++), parent: leaf, name: "chat claude-haiku-4-5-20251001", start: t, end: t + 60, attrs: chat(`Search shard ${n}-${m}`, `Checking item ${k}.`, ["lookup"]) });
+        spans.push({ id: stressSpan(slot++), parent: leaf, name: "execute_tool lookup", start: t + 60, end: t + 120, attrs: tool("lookup", "{}") });
+        t += 130;
+      }
+    }
+  }
+  expect(spans).toHaveLength(321);
+  await seed(url, STRESS_TRACE, spans);
+}
+
+test("stress run: 15 nested sub-agents render as 5 outer cards with no flattened tool calls", async ({ page, runPhantom }) => {
+  await seedStressRun(runPhantom.url);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  for (const route of ["", "/convo"]) {
+    await page.goto(`${runPhantom.url}/runs/${STRESS_TRACE}${route}`);
+    const panel = page.getByRole("tabpanel");
+    await expect(panel.getByText("Find the needle across 15 shards.", { exact: true })).toBeVisible();
+    const cards = panel.locator("[data-sub-agent]");
+    await expect(cards).toHaveCount(5);
+    await expect(panel.getByRole("button", { name: "Expand tool call lookup" })).toHaveCount(0);
+    await expect(panel.getByText("Search shard group 0", { exact: true })).toHaveCount(0);
   }
 });
