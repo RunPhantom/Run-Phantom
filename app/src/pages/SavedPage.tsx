@@ -14,7 +14,9 @@ import {
   getSavedEvents,
   removeFolder,
   savedSummarySource,
+  mapLimited,
   removeSavedEvent,
+  removeSavedEvents,
   SAVED_RUNS_REFRESH_EVENT,
   type SavedAnnotationPreview,
   type SavedEvent,
@@ -185,8 +187,9 @@ function FolderPills({ folders, selected, onSelect, onCreate, onDelete }: {
   );
 }
 
-function FilterBar({ filters, agents, onUpdate, onResetSecondary }: {
+function FilterBar({ filters, agents, statusReady, onUpdate, onResetSecondary }: {
   filters: SavedFilters;
+  statusReady: boolean;
   agents: string[];
   onUpdate: (patch: Partial<SavedFilters>) => void;
   onResetSecondary: () => void;
@@ -210,6 +213,7 @@ function FilterBar({ filters, agents, onUpdate, onResetSecondary }: {
       <div className="relative min-w-0 flex-1">
         <Search aria-hidden="true" className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-rp-ink-muted" />
         <input
+          id="saved-search"
           aria-label="Search saved runs"
           className={`${fieldClassName} h-8 pl-8 pr-8 text-[13px]`}
           placeholder="Search saved runs"
@@ -261,12 +265,15 @@ function FilterBar({ filters, agents, onUpdate, onResetSecondary }: {
             <span className="rp-field-label">Status</span>
             <Select
               aria-label="Filter by status"
+              aria-describedby={statusReady ? undefined : "saved-status-pending"}
+              disabled={!statusReady}
               className="h-8 text-[13px]"
               value={filters.status}
               onChange={e => onUpdate({ status: e.target.value as SavedFilters["status"] })}
             >
               {(Object.keys(STATUS_FILTER_LABEL) as SavedFilters["status"][]).map(value => <option key={value} value={value}>{STATUS_FILTER_LABEL[value]}</option>)}
             </Select>
+            {!statusReady && <span id="saved-status-pending" className="text-12 text-rp-ink-muted">Available once the run list has loaded.</span>}
           </label>
           {activeCount > 0 && (
             <Button type="button" variant="outline" size="sm" className="w-full" onClick={onResetSecondary}>Reset</Button>
@@ -309,9 +316,30 @@ type SavedStatusFilter = SavedFilters["status"];
 
 const PROBLEM_STATUSES = new Set(["failed", "completed_with_errors", "interrupted", "cancelled"]);
 
-function statusGroup(row: SavedRunRow | undefined): Exclude<SavedStatusFilter, "all"> {
-  if (!row) return "missing";
-  return PROBLEM_STATUSES.has(runStatus(row).status) ? "problems" : "clean";
+/**
+ * GET /api/runs returns at most this many rows (RUN_LIST_LIMITS.defaultLimit in src/stats/runs-list.ts, which the
+ * app cannot import because it pulls in server-only modules). A list that long may be cut off, so a saved run
+ * missing from it is not proof that the run was deleted.
+ */
+const RUN_LIST_ROW_CAP = 5000;
+
+type RunLookup = { rows: ReadonlyMap<string, SavedRunRow>; state: "loading" | "error" | "complete" | "capped" };
+type RunPresence = { kind: "row"; row: SavedRunRow } | { kind: "missing" } | { kind: "unknown"; reason: string };
+
+function runPresence(lookup: RunLookup, id: string): RunPresence {
+  const row = lookup.rows.get(id);
+  if (row) return { kind: "row", row };
+  if (lookup.state === "complete") return { kind: "missing" };
+  const reason = lookup.state === "loading" ? "Loading run status…"
+    : lookup.state === "error" ? "The run list could not be loaded, so this run's status is unknown."
+    : `Only the newest ${RUN_LIST_ROW_CAP.toLocaleString()} runs are listed. Open this run to see its status.`;
+  return { kind: "unknown", reason };
+}
+
+function statusGroup(presence: RunPresence): Exclude<SavedStatusFilter, "all"> | null {
+  if (presence.kind === "unknown") return null;
+  if (presence.kind === "missing") return "missing";
+  return PROBLEM_STATUSES.has(runStatus(presence.row).status) ? "problems" : "clean";
 }
 
 const STATUS_FILTER_LABEL: Record<SavedStatusFilter, string> = {
@@ -323,8 +351,16 @@ const STATUS_FILTER_LABEL: Record<SavedStatusFilter, string> = {
 
 const STATUS_TONE_TEXT = { success: "text-rp-ink", warning: "text-rp-warning", danger: "text-rp-danger", neutral: "text-rp-ink-muted" } as const;
 
-function SavedStatus({ row, compact = false }: { row: SavedRunRow | undefined; compact?: boolean }) {
-  if (!row) {
+function SavedStatus({ presence, compact = false }: { presence: RunPresence; compact?: boolean }) {
+  if (presence.kind === "unknown") {
+    return (
+      <span className="flex min-w-0 items-center gap-2" title={presence.reason} data-saved-status="unknown">
+        <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-rp-line" />
+        <span className="truncate text-12 text-rp-ink-muted">{compact ? "Unknown" : "Status unavailable"}</span>
+      </span>
+    );
+  }
+  if (presence.kind === "missing") {
     return (
       <span className="flex min-w-0 items-center gap-2" title="This run was deleted from Runs. The saved summary and any cached copy remain.">
         <span aria-hidden="true" className="size-2 shrink-0 rounded-full border border-rp-ink-faint" />
@@ -332,7 +368,7 @@ function SavedStatus({ row, compact = false }: { row: SavedRunRow | undefined; c
       </span>
     );
   }
-  const status = runStatus(row);
+  const status = runStatus(presence.row);
   const tone = runStatusTone(status.status);
   return (
     <span className="flex min-w-0 items-center gap-2" title={status.detail} data-saved-status={status.status}>
@@ -348,12 +384,21 @@ function savedTitle(event: SavedEvent): string {
   return event.summary || event.user_input || "No summary yet";
 }
 
-function useRunRows(): ReadonlyMap<string, SavedRunRow> {
+function useRunRows(): RunLookup {
   const queryClient = useQueryClient();
   const runs = useRuns();
   const refresh = useCallback(() => { void queryClient.invalidateQueries({ queryKey: ["runs"], exact: true }); }, [queryClient]);
   useRunPhantomEvent("clear", refresh);
-  return useMemo(() => new Map((runs.data as SavedRunRow[] | undefined ?? []).map(row => [row.id, row])), [runs.data]);
+  useEffect(() => {
+    window.addEventListener("runphantom:run-removed", refresh);
+    return () => window.removeEventListener("runphantom:run-removed", refresh);
+  }, [refresh]);
+  const data = runs.data as SavedRunRow[] | undefined;
+  const rows = useMemo(() => new Map((data ?? []).map(row => [row.id, row])), [data]);
+  const state: RunLookup["state"] = runs.isSuccess && data
+    ? data.length >= RUN_LIST_ROW_CAP ? "capped" : "complete"
+    : runs.isError ? "error" : "loading";
+  return useMemo(() => ({ rows, state }), [rows, state]);
 }
 
 function downloadJson(text: string, filename: string) {
@@ -367,58 +412,98 @@ function downloadJson(text: string, filename: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** Above this many runs the file is written without indentation; large traces would otherwise double in size. */
+const PRETTY_EXPORT_LIMIT = 25;
+
 /** One file per export: each saved entry with the portable trace when the run still exists, else its cached copy. */
-async function exportSavedRuns(events: readonly SavedEvent[]): Promise<{ text: string; withTrace: number }> {
-  let withTrace = 0;
-  const entries = [];
-  for (const event of events) {
+async function exportSavedRuns(events: readonly SavedEvent[], onProgress: (done: number) => void, signal: AbortSignal): Promise<{ text: string; withTrace: number }> {
+  let done = 0;
+  const entries = await mapLimited(events, 4, async event => {
     const id = encodeURIComponent(event.id);
     let trace: unknown = null;
     let traceSource: "local" | "saved-cache" | "unavailable" = "unavailable";
-    const live = await fetch(`/api/runs/${id}/export`).catch(() => null);
+    const live = await fetch(`/api/runs/${id}/export`, { signal }).catch(() => null);
     if (live?.ok) { trace = await live.json(); traceSource = "local"; }
     else {
-      const cached = await fetch(`/api/saved-runs/cache/${id}`).catch(() => null);
+      const cached = await fetch(`/api/saved-runs/cache/${id}`, { signal }).catch(() => null);
       if (cached?.ok) { trace = await cached.json(); traceSource = "saved-cache"; }
     }
-    if (trace) withTrace++;
-    entries.push({ saved: event, traceSource, trace });
-  }
-  return { text: `${JSON.stringify({ format: "runphantom-saved-runs/v1", exportedAt: new Date().toISOString(), savedRuns: entries }, null, 2)}\n`, withTrace };
+    signal.throwIfAborted();
+    onProgress(++done);
+    return { saved: event, traceSource, trace };
+  }, signal);
+  const withTrace = entries.filter(entry => entry.trace).length;
+  const bundle = { format: "runphantom-saved-runs/v1", exportedAt: new Date().toISOString(), savedRuns: entries };
+  return { text: `${JSON.stringify(bundle, null, events.length > PRETTY_EXPORT_LIMIT ? undefined : 2)}\n`, withTrace };
+}
+
+function focusSavedLandmark() {
+  window.requestAnimationFrame(() => {
+    const target = document.getElementById("saved-search") ?? document.getElementById("saved-empty-heading");
+    target?.focus({ preventScroll: true });
+  });
 }
 
 function SavedBulkBar({ events, onClear, onRemoved, announce }: {
   events: readonly SavedEvent[];
   onClear: () => void;
-  onRemoved: (ids: string[]) => void;
+  onRemoved: (allRemoved: boolean) => void;
   announce: (message: string) => void;
 }) {
-  const [exporting, setExporting] = useState(false);
+  const [progress, setProgress] = useState<number | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [moveOpen, setMoveOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const moveRef = useRef<HTMLButtonElement>(null);
+  const exportAbort = useRef<AbortController | null>(null);
+  useEffect(() => () => exportAbort.current?.abort(), []);
   const count = events.length;
+  const exporting = progress !== null;
+  const folders = new Set(events.map(event => event.folder ?? null));
+  const currentFolder = folders.size === 1 ? [...folders][0] ?? null : "";
   const exportSelected = async () => {
     if (exporting) return;
-    setExporting(true);
+    const controller = new AbortController();
+    exportAbort.current = controller;
+    setProgress(0);
     setError(null);
     try {
-      const { text, withTrace } = await exportSavedRuns(events);
+      const { text, withTrace } = await exportSavedRuns(events, setProgress, controller.signal);
       downloadJson(text, `runphantom-saved-runs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`);
       announce(`Exported ${plural(count, "saved run")}${withTrace < count ? `; ${plural(count - withTrace, "run")} had no trace left to include` : ""}`);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The export could not be written.");
+      if (controller.signal.aborted) announce("Export cancelled");
+      else setError(cause instanceof Error ? cause.message : "The export could not be written.");
     } finally {
-      setExporting(false);
+      if (exportAbort.current === controller) exportAbort.current = null;
+      setProgress(null);
     }
   };
   return (
     <div role="region" aria-label="Selected saved runs" className="flex flex-wrap items-center gap-2 border-b border-rp-line bg-rp-canvas-blue px-4 py-2 sm:px-6">
       <span className="text-[13px] font-medium text-rp-ink">{plural(count, "saved run")} selected</span>
       <span aria-hidden="true" className="text-rp-ink-faint">·</span>
-      <Button type="button" size="sm" variant="secondary" loading={exporting} onClick={() => void exportSelected()}><Download aria-hidden="true" />{exporting ? "Exporting…" : "Export JSON"}</Button>
+      <Button type="button" size="sm" variant="secondary" loading={exporting} onClick={() => void exportSelected()}>
+        {!exporting && <Download aria-hidden="true" />}
+        {exporting ? `Exporting ${Math.min(progress + 1, count)} of ${count}…` : "Export JSON"}
+      </Button>
+      {exporting && <Button type="button" size="sm" variant="ghost" onClick={() => exportAbort.current?.abort()}>Cancel export</Button>}
+      <Button ref={moveRef} type="button" size="sm" variant="secondary" aria-expanded={moveOpen} onClick={() => setMoveOpen(open => !open)}><Folder aria-hidden="true" />Move to folder</Button>
       <Button type="button" size="sm" variant="destructive-outline" onClick={() => setConfirmRemove(true)}><Trash2 aria-hidden="true" />Remove from Saved</Button>
       <Button type="button" size="sm" variant="ghost" className="ml-auto" onClick={onClear}><X aria-hidden="true" />Clear selection</Button>
       {error && <p role="alert" className="w-full text-12 text-rp-danger">{error}</p>}
+      {moveOpen && (
+        <SavePopover
+          anchorRef={moveRef as React.RefObject<HTMLElement | null>}
+          onClose={() => { setMoveOpen(false); moveRef.current?.focus(); }}
+          currentFolder={currentFolder}
+          onSave={folder => {
+            for (const event of events) updateSavedEvent(event.id, { folder });
+            if (folder) addFolder(folder);
+            announce(`Moved ${plural(count, "saved run")} to ${folder ?? "Unfiled"}`);
+          }}
+        />
+      )}
       <ConfirmDialog
         open={confirmRemove}
         onOpenChange={setConfirmRemove}
@@ -426,20 +511,25 @@ function SavedBulkBar({ events, onClear, onRemoved, announce }: {
         description="Only the bookmarks are removed. The runs stay in Runs until you delete them there."
         confirmLabel={`Remove ${plural(count, "saved run")}`}
         busyLabel="Removing…"
-        onConfirm={() => {
-          const ids = events.map(event => event.id);
-          for (const id of ids) removeSavedEvent(id);
-          onRemoved(ids);
+        returnFocus={() => document.getElementById("saved-search") ?? document.getElementById("saved-empty-heading")}
+        onConfirm={async () => {
+          try {
+            await removeSavedEvents(events.map(event => event.id));
+          } catch (cause) {
+            onRemoved(false);
+            throw cause;
+          }
           announce(`Removed ${plural(count, "saved run")}`);
+          onRemoved(true);
         }}
       />
     </div>
   );
 }
 
-function SavedTable({ events, rows, selected, onToggle, onToggleAll, onOpen }: {
+function SavedTable({ events, lookup, selected, onToggle, onToggleAll, onOpen }: {
   events: readonly SavedEvent[];
-  rows: ReadonlyMap<string, SavedRunRow>;
+  lookup: RunLookup;
   selected: ReadonlySet<string>;
   onToggle: (id: string) => void;
   onToggleAll: () => void;
@@ -470,7 +560,9 @@ function SavedTable({ events, rows, selected, onToggle, onToggleAll, onOpen }: {
       </thead>
       <tbody>
         {events.map(event => {
-          const row = rows.get(event.id);
+          const presence = runPresence(lookup, event.id);
+          const row = presence.kind === "row" ? presence.row : undefined;
+          const absentTitle = presence.kind === "unknown" ? presence.reason : "the run is no longer in Runs";
           const note = getSavedAnnotationPreview(event);
           const model = row ? modelCell(row) : null;
           const cost = row ? costCell(row) : null;
@@ -484,7 +576,7 @@ function SavedTable({ events, rows, selected, onToggle, onToggleAll, onOpen }: {
               onClick={clickEvent => { if (!(clickEvent.target as HTMLElement).closest("input,a,button")) onOpen(event.id); }}
             >
               <td className={cn(td, "pl-5")}><input type="checkbox" className="size-4 accent-rp-blue" aria-label={`Select ${savedTitle(event)}`} checked={isSelected} onChange={() => onToggle(event.id)} /></td>
-              <td className={td}><SavedStatus row={row} /></td>
+              <td className={td}><SavedStatus presence={presence} /></td>
               <td className={cn(td, "min-w-0")}>
                 <Link to={tracePath("/saved", event.id)} className="block min-w-0 rounded-control focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-rp-blue">
                   <span title={event.summary || savedTitle(event)} className="block truncate font-medium text-rp-ink">{savedTitle(event)}</span>
@@ -495,8 +587,8 @@ function SavedTable({ events, rows, selected, onToggle, onToggleAll, onOpen }: {
                   </span>
                 </Link>
               </td>
-              <td className={td}>{model ? <span title={model.title} className={cn("block truncate font-mono text-12", model.unknown ? "text-rp-ink-subtle" : "text-rp-ink")}>{model.text}</span> : <span title="Model unknown: the run is no longer in Runs" className="text-rp-ink-subtle">—</span>}</td>
-              <td className={cn(td, "text-right")}>{cost ? <span title={cost.title} className={cn("whitespace-nowrap font-mono text-12 tabular-nums", cost.unknown ? "text-rp-ink-subtle" : "text-rp-ink")}>{cost.text}{cost.marker && <span className="ml-1 font-sans text-[11px] text-rp-ink-subtle">{cost.marker}</span>}</span> : <span title="Cost unknown: the run is no longer in Runs" className="text-rp-ink-subtle">—</span>}</td>
+              <td className={td}>{model ? <span title={model.title} className={cn("block truncate font-mono text-12", model.unknown ? "text-rp-ink-subtle" : "text-rp-ink")}>{model.text}</span> : <span title={`Model unknown: ${absentTitle}`} className="text-rp-ink-subtle">—</span>}</td>
+              <td className={cn(td, "text-right")}>{cost ? <span title={cost.title} className={cn("whitespace-nowrap font-mono text-12 tabular-nums", cost.unknown ? "text-rp-ink-subtle" : "text-rp-ink")}>{cost.text}{cost.marker && <span className="ml-1 font-sans text-[11px] text-rp-ink-subtle">{cost.marker}</span>}</span> : <span title={`Cost unknown: ${absentTitle}`} className="text-rp-ink-subtle">—</span>}</td>
               <td className={td}>{note ? <span title={note.note ?? undefined} className="flex min-w-0 items-center gap-1.5 text-12 text-rp-ink-soft"><MessageSquareText aria-hidden="true" className="size-3 shrink-0 text-rp-ink-muted" /><span className="truncate">{note.note ? `${annotationKindLabel(note.kind)}: ${note.note}` : `${annotationKindLabel(note.kind)} note`}</span></span> : <span className="text-rp-ink-subtle">—</span>}</td>
               <td className={td}>{event.folder ? <span className="inline-flex max-w-full items-center gap-1 rounded-sm border border-rp-line bg-rp-surface px-1.5 py-px text-[11px] font-medium text-rp-ink-soft"><span aria-hidden="true" className="size-1.5 shrink-0 rounded-[1px]" style={{ background: getFolderColor(event.folder) }} /><span className="truncate">{event.folder}</span></span> : <span className="text-rp-ink-subtle">—</span>}</td>
               <td className={cn(td, "pr-6 text-right")}><span className="whitespace-nowrap text-12 text-rp-ink-muted" title={new Date(event.saved_at).toLocaleString()}>{ago(event.saved_at)}</span></td>
@@ -517,7 +609,7 @@ function SavedEmptyState({ hasRuns }: { hasRuns: boolean }) {
   return (
     <div className="w-full max-w-2xl animate-fade-rise rounded-lg border border-rp-line bg-rp-surface p-6 sm:p-8">
       <Eyebrow marker tone="accent">Saved / Get started</Eyebrow>
-      <h2 className="rp-section-title mt-3">Keep the runs worth coming back to.</h2>
+      <h2 id="saved-empty-heading" tabIndex={-1} className="rp-section-title mt-3 focus:outline-none">Keep the runs worth coming back to.</h2>
       <ol className="mt-6 grid gap-px overflow-hidden rounded-md border border-rp-line bg-rp-line sm:grid-cols-3">
         {steps.map((step, index) => (
           <li key={step.title} className="bg-rp-surface p-4">
@@ -546,6 +638,7 @@ export function SavedPage() {
   const [folders, setFolders] = useState<string[]>([]);
   const { filters, update, resetSecondary } = useFilters();
   const runRows = useRunRows();
+  const statusReady = runRows.state === "complete" || runRows.state === "capped";
   const [checked, setChecked] = useState<ReadonlySet<string>>(new Set());
   const [announcement, setAnnouncement] = useState("");
 
@@ -568,7 +661,7 @@ export function SavedPage() {
     let result = events;
     if (filters.folder !== null) result = result.filter(e => (e.folder ?? "") === filters.folder);
     if (filters.agent) result = result.filter(e => e.event_name === filters.agent);
-    if (filters.status !== "all") result = result.filter(e => statusGroup(runRows.get(e.id)) === filters.status);
+    if (filters.status !== "all" && statusReady) result = result.filter(e => statusGroup(runPresence(runRows, e.id)) === filters.status);
     if (filters.search) {
       const q = filters.search.toLowerCase();
       result = result.filter(e =>
@@ -580,7 +673,7 @@ export function SavedPage() {
       );
     }
     return result;
-  }, [events, filters, runRows]);
+  }, [events, filters, runRows, statusReady]);
 
   useEffect(() => {
     setChecked(current => {
@@ -619,7 +712,7 @@ export function SavedPage() {
   );
   const controls = (
     <>
-      <FilterBar filters={filters} agents={agentNames} onUpdate={update} onResetSecondary={resetSecondary} />
+      <FilterBar filters={filters} agents={agentNames} statusReady={statusReady} onUpdate={update} onResetSecondary={resetSecondary} />
       <FolderPills folders={folders} selected={filters.folder} onSelect={(f) => update({ folder: f })} onCreate={handleCreateFolder} onDelete={handleDeleteFolder} />
       <ActiveFilterChips filters={filters} onUpdate={update} />
     </>
@@ -634,12 +727,12 @@ export function SavedPage() {
       description="Open a run and choose Save in its header to keep it here, with its summary, notes and a cached copy."
       action={<Button asChild size="sm"><Link to="/runs">Open Runs</Link></Button>}
     />
-  ) : <SavedEmptyState hasRuns={runRows.size > 0} />;
+  ) : <SavedEmptyState hasRuns={runRows.rows.size > 0} />;
 
   if (tableMode) {
     const checkedEvents = filtered.filter(event => checked.has(event.id));
-    const problems = events.filter(event => statusGroup(runRows.get(event.id)) === "problems").length;
-    const missing = events.filter(event => !runRows.has(event.id)).length;
+    const problems = statusReady ? events.filter(event => statusGroup(runPresence(runRows, event.id)) === "problems").length : 0;
+    const missing = statusReady ? events.filter(event => runPresence(runRows, event.id).kind === "missing").length : 0;
     return (
       <div className="flex h-full min-h-0 flex-col bg-rp-canvas">
         <div className="sr-only" role="status" aria-live="polite">{announcement}</div>
@@ -660,7 +753,7 @@ export function SavedPage() {
           {!isEmpty && (
             <div className="space-y-2">
               <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                <div className="w-full max-w-[420px]"><FilterBar filters={filters} agents={agentNames} onUpdate={update} onResetSecondary={resetSecondary} /></div>
+                <div className="w-full max-w-[420px]"><FilterBar filters={filters} agents={agentNames} statusReady={statusReady} onUpdate={update} onResetSecondary={resetSecondary} /></div>
                 <div className="min-w-0 flex-1"><FolderPills folders={folders} selected={filters.folder} onSelect={(f) => update({ folder: f })} onCreate={handleCreateFolder} onDelete={handleDeleteFolder} /></div>
               </div>
               <ActiveFilterChips filters={filters} onUpdate={update} />
@@ -671,7 +764,7 @@ export function SavedPage() {
           <SavedBulkBar
             events={checkedEvents}
             onClear={() => setChecked(new Set())}
-            onRemoved={ids => { setChecked(current => new Set([...current].filter(id => !ids.includes(id)))); reload(); }}
+            onRemoved={allRemoved => { reload(); if (allRemoved) focusSavedLandmark(); }}
             announce={setAnnouncement}
           />
         )}
@@ -685,7 +778,7 @@ export function SavedPage() {
           ) : (
             <SavedTable
               events={filtered}
-              rows={runRows}
+              lookup={runRows}
               selected={checked}
               onToggle={id => setChecked(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })}
               onToggleAll={() => setChecked(current => filtered.every(event => current.has(event.id)) ? new Set() : new Set(filtered.map(event => event.id)))}
@@ -725,7 +818,7 @@ export function SavedPage() {
             <SavedListItem
               key={evt.id}
               event={evt}
-              row={runRows.get(evt.id)}
+              presence={runPresence(runRows, evt.id)}
               selected={selectedId === evt.id}
               onClick={() => navigate(tracePath("/saved", evt.id))}
               onRemove={() => handleRemove(evt.id)}
@@ -767,8 +860,8 @@ export function SavedPage() {
   );
 }
 
-function SavedListItem({ event, row, selected, onClick, onRemove, onMove }: {
-  event: SavedEvent; row: SavedRunRow | undefined; selected: boolean; onClick: () => void; onRemove: () => void; onMove: (folder: string | undefined) => void;
+function SavedListItem({ event, presence, selected, onClick, onRemove, onMove }: {
+  event: SavedEvent; presence: RunPresence; selected: boolean; onClick: () => void; onRemove: () => void; onMove: (folder: string | undefined) => void;
 }) {
   const ts = new Date(event.timestamp);
   const timeStr = ts.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " " +
@@ -785,6 +878,7 @@ function SavedListItem({ event, row, selected, onClick, onRemove, onMove }: {
     return () => { if (confirmTimerRef.current) window.clearTimeout(confirmTimerRef.current); };
   }, [confirmRemove]);
 
+  const row = presence.kind === "row" ? presence.row : undefined;
   const folderColor = event.folder ? getFolderColor(event.folder) : null;
   const annotationPreview = getSavedAnnotationPreview(event);
   const titleText = savedTitle(event);
@@ -799,7 +893,7 @@ function SavedListItem({ event, row, selected, onClick, onRemove, onMove }: {
       >
         <div className="min-w-0 overflow-hidden">
           <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2">
-            <SavedStatus row={row} compact />
+            <SavedStatus presence={presence} compact />
             {row && <span className="shrink-0 font-mono text-[11px] text-rp-ink-muted" title={costCell(row).title}>{costCell(row).text}</span>}
           </div>
           <div title={event.summary || titleText} className={`line-clamp-2 min-h-[36px] text-[13px] leading-[18px] ${event.summary || event.user_input ? "font-medium text-rp-ink" : "text-rp-ink-muted"}`}>

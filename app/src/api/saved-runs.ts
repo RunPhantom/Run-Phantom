@@ -249,6 +249,36 @@ export function removeSavedEvent(id: string) {
   apiJsonOrNull(`/api/saved-runs/cache/${encodeURIComponent(id)}`, jsonInit("DELETE")).catch(() => {});
 }
 
+/** Runs `work` over `items` with at most `limit` in flight, keeping results in input order. */
+export async function mapLimited<T, R>(items: readonly T[], limit: number, work: (item: T, index: number) => Promise<R>, signal?: AbortSignal): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      signal?.throwIfAborted();
+      const index = next++;
+      results[index] = await work(items[index]!, index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+/** Removes each bookmark on the server and only then locally; throws with a count when any removal fails. */
+export async function removeSavedEvents(ids: readonly string[]): Promise<void> {
+  const outcomes = await mapLimited(ids, 4, id =>
+    apiJson(`/api/saved-runs/events/${encodeURIComponent(id)}`, jsonInit("DELETE")).then(() => true, () => false));
+  const removed = new Set(ids.filter((_, index) => outcomes[index]));
+  state.events = state.events.filter(event => !removed.has(event.id));
+  emitSavedRunsChanged();
+  await loadFromServer();
+  emitSavedRunsChanged();
+  const failed = ids.length - removed.size;
+  if (failed > 0) {
+    throw new Error(`${failed} of ${ids.length} saved ${ids.length === 1 ? "run" : "runs"} could not be removed. They are still saved; try again.`);
+  }
+}
+
 export function updateSavedEvent(id: string, patch: Partial<SavedEvent>) {
   const idx = state.events.findIndex(e => e.id === id);
   if (idx === -1) return;

@@ -75,8 +75,62 @@ test("saved runs: bulk export bundles traces and bulk removal asks first and kee
   await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
   await dialog.getByRole("button", { name: "Remove 2 saved runs", exact: true }).click();
   await expect(table.locator("tbody tr")).toHaveCount(1);
+  await expect(page.getByRole("textbox", { name: "Search saved runs" })).toBeFocused();
   await expect.poll(async () => (await (await request.get(`${runPhantom.url}/api/saved-runs`)).json()).events.map((event: { id: string }) => event.id)).toEqual([MISSING_ID]);
   expect((await request.get(`${runPhantom.url}/api/runs/detail/${FIXTURE_PRIMARY_RUN_ID}`)).ok()).toBe(true);
+});
+
+test("saved runs: status stays unknown until the run list loads instead of calling runs deleted", async ({ page, request, runPhantom }) => {
+  await seedSaved(runPhantom.url, request);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route(/\/api\/runs$/, async route => { await held; await route.continue(); });
+  await page.goto(`${runPhantom.url}/saved`);
+  const table = page.getByRole("table", { name: "Saved runs", exact: true });
+  await expect(table.locator("tbody tr")).toHaveCount(3);
+  await expect(table.locator('[data-saved-status="unknown"]')).toHaveCount(3);
+  await expect(page.getByText("No longer in Runs", { exact: true })).toHaveCount(0);
+  await expect(page.locator("p", { hasText: "3 saved runs" })).not.toContainText("no longer in Runs");
+  await page.getByRole("button", { name: "Open filters" }).click();
+  await expect(page.getByRole("combobox", { name: "Filter by status" })).toBeDisabled();
+  await page.getByRole("button", { name: "Open filters" }).click();
+  release();
+  await expect(table.locator(`tr[data-saved-id="${MISSING_ID}"]`)).toContainText("No longer in Runs");
+  await expect(table.locator('[data-saved-status="unknown"]')).toHaveCount(0);
+});
+
+test("saved runs: a failed removal keeps the dialog open and bulk move files the selection", async ({ page, request, runPhantom }) => {
+  await seedSaved(runPhantom.url, request);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${runPhantom.url}/saved`);
+  const table = page.getByRole("table", { name: "Saved runs", exact: true });
+  await expect(table.locator("tbody tr")).toHaveCount(3);
+  await table.locator(`tr[data-saved-id="${FIXTURE_PRIMARY_RUN_ID}"]`).getByRole("checkbox").check();
+  await table.locator(`tr[data-saved-id="${FIXTURE_SAVED_SIBLING_RUN_ID}"]`).getByRole("checkbox").check();
+  const bar = page.getByRole("region", { name: "Selected saved runs", exact: true });
+
+  await bar.getByRole("button", { name: "Move to folder", exact: true }).click();
+  const popover = page.getByRole("dialog", { name: "Move saved run to folder" });
+  await popover.getByRole("button", { name: "New folder…" }).click();
+  await popover.getByRole("textbox", { name: "New folder name" }).fill("Regressions");
+  await popover.getByRole("button", { name: "Move", exact: true }).click();
+  await expect(table.locator(`tr[data-saved-id="${FIXTURE_PRIMARY_RUN_ID}"]`)).toContainText("Regressions");
+  await expect(table.locator(`tr[data-saved-id="${FIXTURE_SAVED_SIBLING_RUN_ID}"]`)).toContainText("Regressions");
+  await expect.poll(async () => ((await (await request.get(`${runPhantom.url}/api/saved-runs`)).json()).events as Array<{ id: string; folder?: string | null }>)
+    .filter(event => event.folder === "Regressions").map(event => event.id).sort()).toEqual([FIXTURE_PRIMARY_RUN_ID, FIXTURE_SAVED_SIBLING_RUN_ID].sort());
+
+  await page.route(new RegExp(`/api/saved-runs/events/${FIXTURE_SAVED_SIBLING_RUN_ID}$`), route =>
+    route.request().method() === "DELETE" ? route.fulfill({ status: 500, json: { error: "disk full" } }) : route.continue());
+  await bar.getByRole("button", { name: "Remove from Saved", exact: true }).click();
+  const dialog = page.getByRole("alertdialog", { name: "Remove 2 saved runs?", exact: true });
+  await dialog.getByRole("button", { name: "Remove 2 saved runs", exact: true }).click();
+  const stillOpen = page.getByRole("alertdialog", { name: "Remove 1 saved run?", exact: true });
+  await expect(stillOpen.getByRole("alert")).toHaveText("1 of 2 saved runs could not be removed. They are still saved; try again.");
+  await stillOpen.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(table.locator(`tr[data-saved-id="${FIXTURE_SAVED_SIBLING_RUN_ID}"]`)).toHaveCount(1);
+  await expect(table.locator(`tr[data-saved-id="${FIXTURE_PRIMARY_RUN_ID}"]`)).toHaveCount(0);
+  await expect(bar).toContainText("1 saved run selected");
 });
 
 test("saved runs: the empty page teaches how to save and links to Runs", async ({ page, runPhantom }) => {
