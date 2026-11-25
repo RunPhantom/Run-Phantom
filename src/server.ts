@@ -1272,6 +1272,72 @@ export async function createServer(port: number, options: { comparisons?: Compar
     }
   });
 
+  // Shared by OTLP ingest and Playground recording so both persist spans identically.
+  function persistParsedSpans(spans: ReturnType<typeof parseOtlpRequest>): { updatedRunIds: string[]; spansPersisted: number } {
+    // Deduplicated per trace before insert. A batch that repeats a span id
+    // upserts the same row twice, so counting parsed spans reported more
+    // ingested than were stored and an exporter had no way to notice it had
+    // sent a duplicate.
+    const byTrace = new Map<string, typeof spans>();
+    for (const s of spans) { const a = byTrace.get(s.traceId) ?? []; a.push(s); byTrace.set(s.traceId, a); }
+
+    const updatedRunIds: string[] = [];
+    let spansPersisted = 0;
+    // All-or-nothing: a throw here rolls the whole batch back, so a retry cannot
+    // duplicate the traces that had already been written.
+    runInTransaction(() => {
+    for (const [traceId, traceSpans] of byTrace) {
+      const now = Date.now();
+      const minStart = Math.min(...traceSpans.map(s => s.startTimeMs));
+      const maxEnd = Math.max(...traceSpans.map(s => s.endTimeMs));
+      // Only a genuine root names the run. Falling back to traceSpans[0] meant a
+      // later batch carrying just child spans renamed the run after whichever
+      // leaf happened to be first — a run called "code_review_agent" would
+      // silently become "read_file" as more spans arrived.
+      const root = traceSpans.find(s => !s.parentSpanId);
+
+      // Record mapping if this trace carries a replayRunId so the
+      // replay system can find this run by its replayRunId
+      const replayRunId = traceSpans.find(s => s.replayRunId)?.replayRunId;
+      if (replayRunId) {
+        setReplayTrace(replayRunId, traceId);
+      }
+
+      const eventId = traceSpans.find(s => s.eventId)?.eventId;
+
+      upsertRun({
+        id: traceId, event_id: eventId,
+        // undefined leaves the stored name alone (upsertRun COALESCEs it); the
+        // short-id fallback is only for a run that does not exist yet.
+        name: root?.name ?? (getRunById(traceId) ? undefined : traceId.slice(0, 8)),
+        event_name: traceSpans.find(s => s.eventName)?.eventName,
+        user_id: traceSpans.find(s => s.userId)?.userId,
+        convo_id: traceSpans.find(s => s.convoId)?.convoId,
+        started_at: minStart || now, last_updated_at: maxEnd || now,
+      });
+      const seenSpanIds = new Set<string>();
+      for (const s of traceSpans) {
+        if (seenSpanIds.has(s.spanId)) continue;
+        seenSpanIds.add(s.spanId);
+        spansPersisted++;
+        insertSpan({
+          id: s.spanId, run_id: traceId, parent_span_id: s.parentSpanId,
+          name: s.name, span_type: s.spanType, status: s.status,
+          input_payload: s.inputPayload, output_payload: s.outputPayload,
+          start_time_ms: s.startTimeMs, end_time_ms: s.endTimeMs, duration_ms: s.durationMs,
+          model: s.model, provider: s.provider,
+          input_tokens: s.inputTokens, output_tokens: s.outputTokens,
+          attributes: JSON.stringify(s.attributes),
+          otlp_evidence: JSON.stringify(s.otlpEvidence),
+        });
+      }
+
+      updatedRunIds.push(traceId);
+    }
+    });
+    return { updatedRunIds, spansPersisted };
+  }
+
   // Shared OTLP trace ingestion handler
   function ingestTraces(req: any, res: any) {
     try {
@@ -1331,68 +1397,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
         return;
       }
 
-      // Deduplicated per trace before insert. A batch that repeats a span id
-      // upserts the same row twice, so counting parsed spans reported more
-      // ingested than were stored and an exporter had no way to notice it had
-      // sent a duplicate.
-      const byTrace = new Map<string, typeof spans>();
-      for (const s of spans) { const a = byTrace.get(s.traceId) ?? []; a.push(s); byTrace.set(s.traceId, a); }
-
-      const updatedRunIds: string[] = [];
-      let spansPersisted = 0;
-      // All-or-nothing: a throw here rolls the whole batch back, so a retry cannot
-      // duplicate the traces that had already been written.
-      runInTransaction(() => {
-      for (const [traceId, traceSpans] of byTrace) {
-        const now = Date.now();
-        const minStart = Math.min(...traceSpans.map(s => s.startTimeMs));
-        const maxEnd = Math.max(...traceSpans.map(s => s.endTimeMs));
-        // Only a genuine root names the run. Falling back to traceSpans[0] meant a
-        // later batch carrying just child spans renamed the run after whichever
-        // leaf happened to be first — a run called "code_review_agent" would
-        // silently become "read_file" as more spans arrived.
-        const root = traceSpans.find(s => !s.parentSpanId);
-
-        // Record mapping if this trace carries a replayRunId so the
-        // replay system can find this run by its replayRunId
-        const replayRunId = traceSpans.find(s => s.replayRunId)?.replayRunId;
-        if (replayRunId) {
-          setReplayTrace(replayRunId, traceId);
-        }
-
-        const eventId = traceSpans.find(s => s.eventId)?.eventId;
-
-        upsertRun({
-          id: traceId, event_id: eventId,
-          // undefined leaves the stored name alone (upsertRun COALESCEs it); the
-          // short-id fallback is only for a run that does not exist yet.
-          name: root?.name ?? (getRunById(traceId) ? undefined : traceId.slice(0, 8)),
-          event_name: traceSpans.find(s => s.eventName)?.eventName,
-          user_id: traceSpans.find(s => s.userId)?.userId,
-          convo_id: traceSpans.find(s => s.convoId)?.convoId,
-          started_at: minStart || now, last_updated_at: maxEnd || now,
-        });
-        const seenSpanIds = new Set<string>();
-        for (const s of traceSpans) {
-          if (seenSpanIds.has(s.spanId)) continue;
-          seenSpanIds.add(s.spanId);
-          spansPersisted++;
-          insertSpan({
-            id: s.spanId, run_id: traceId, parent_span_id: s.parentSpanId,
-            name: s.name, span_type: s.spanType, status: s.status,
-            input_payload: s.inputPayload, output_payload: s.outputPayload,
-            start_time_ms: s.startTimeMs, end_time_ms: s.endTimeMs, duration_ms: s.durationMs,
-            model: s.model, provider: s.provider,
-            input_tokens: s.inputTokens, output_tokens: s.outputTokens,
-            attributes: JSON.stringify(s.attributes),
-            otlp_evidence: JSON.stringify(s.otlpEvidence),
-          });
-        }
-
-        updatedRunIds.push(traceId);
-      }
-      });
-
+      const { updatedRunIds, spansPersisted } = persistParsedSpans(spans);
       broadcast("spans", { runIds: updatedRunIds, count: spansPersisted });
       ok({
         ok: true,
