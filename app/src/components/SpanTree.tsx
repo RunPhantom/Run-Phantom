@@ -109,6 +109,15 @@ export function SpanTree({
     return () => observer.disconnect();
   }, []);
 
+  // Uncontrolled (the sub-agent view): on desktop the drawer opens on the first
+  // step, as the detail pane did before, so the view never starts half empty.
+  const autoSelectedRunRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (controlled || isMobile || !runId || autoSelectedRunRef.current === runId) return;
+    autoSelectedRunRef.current = runId;
+    setInternalSelectedId(current => current ?? buildTraceModel(spans).rows[0]?.span.id ?? null);
+  }, [controlled, isMobile, runId, spans]);
+
   useEffect(() => {
     if (!runId) return;
     sendRunPhantomMessage({ type: "ui_view", run_id: runId, span_id: reportedSelectedId });

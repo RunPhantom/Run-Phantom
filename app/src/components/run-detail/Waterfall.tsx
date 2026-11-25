@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, ChevronDown, ChevronRight, ChevronUp, FileSearch, Search, Timer, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { fmt } from "../../utils/helpers";
+import { compactTokens, fmt } from "../../utils/helpers";
 import { setMeridian, clearMeridian } from "../../utils/meridian";
 import type { Span } from "../../utils/types";
 import type { Annotation } from "../../hooks/use-annotations";
@@ -13,6 +13,7 @@ import { fmtCost } from "../../utils/costs";
 import {
   buildTraceModel,
   countedLlmSpans,
+  shortModelName,
   slowestStep,
   visibleTrace,
   TRACE_KINDS,
@@ -26,6 +27,11 @@ import "./run-detail.css";
 const ROW_HEIGHT = 28;
 const INDENT = 14;
 const MIN_WINDOW_MS = 1;
+/** Height of the sticky axis header inside the scroll body. */
+const AXIS_HEIGHT = 32;
+/** design-direction.md section 6: window the rows past about 2,000 steps. */
+const WINDOW_THRESHOLD = 2000;
+const OVERSCAN = 30;
 
 const KIND_COLOR: Record<TraceKind, string> = {
   llm: "var(--rp-trace-llm)",
@@ -33,12 +39,6 @@ const KIND_COLOR: Record<TraceKind, string> = {
   agent: "var(--rp-trace-agent)",
   other: "var(--rp-trace-other)",
 };
-
-export function compactTokens(value: number): string {
-  if (value < 1000) return String(value);
-  if (value < 1_000_000) return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0).replace(/\.0$/, "")}k`;
-  return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-}
 
 interface Viewport { from: number; to: number }
 
@@ -65,7 +65,7 @@ export interface WaterfallProps {
   onRowContextMenu?: (event: React.MouseEvent, span: Span) => void;
   onRowOpenContextMenu?: (element: HTMLElement, span: Span) => void;
   renderAfterRow?: (span: Span, depth: number) => ReactNode;
-  /** Narrow layouts drop the model, token and cost columns. */
+  /** Narrow layouts fold the model, token and cost columns into a chip beside the name. */
   width: number;
 }
 
@@ -81,6 +81,11 @@ export function Waterfall({
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [kinds, setKinds] = useState<Set<TraceKind>>(() => new Set(TRACE_KINDS));
   const [query, setQuery] = useState("");
+  // Filtering and highlighting follow the deferred value, so typing stays
+  // responsive on a large trace while the rows catch up.
+  const deferredQuery = useDeferredValue(query);
+  const [cursorId, setCursorId] = useState<string | null>(null);
+  const [scroll, setScroll] = useState({ top: 0, height: 900 });
   const [activeMatch, setActiveMatch] = useState(0);
   const [viewport, setViewport] = useState<Viewport | null>(null);
   const [brush, setBrush] = useState<{ from: number; to: number } | null>(null);
@@ -94,7 +99,9 @@ export function Waterfall({
     setQuery("");
   }, [runKey]);
 
-  const { rows, matches, context } = useMemo(() => visibleTrace(model, { collapsed, kinds, query }), [model, collapsed, kinds, query]);
+  const { rows, matches, context } = useMemo(() => visibleTrace(model, { collapsed, kinds, query: deferredQuery }), [model, collapsed, kinds, deferredQuery]);
+  const windowed = rows.length > WINDOW_THRESHOLD;
+  const rowIndex = useMemo(() => new Map(rows.map((row, index) => [row.span.id, index])), [rows]);
   const counted = useMemo(() => new Set(countedLlmSpans(spans).map(span => span.id)), [spans]);
   const costs = useMemo(() => {
     const map = new Map<string, ReturnType<typeof spanCost>>();
@@ -109,12 +116,16 @@ export function Waterfall({
     return counts;
   }, [model]);
 
-  const showModel = width >= 1040;
-  const showUsage = width >= 700;
+  // The list-plus-trace layout leaves the pane about 936px at 1440 wide and
+  // about 536px with the drawer open; below these the values move into a chip
+  // beside the step name instead of disappearing.
+  const showModel = width >= 880;
+  const showUsage = width >= 600;
   const narrow = width < 640;
   // Below this the bars would be a few pixels wide; the list keeps names and durations.
   const showTrack = width >= 380;
-  const nameWidth = !showTrack ? Math.max(120, width - 64) : narrow ? Math.max(150, Math.round(width * 0.46)) : width < 900 ? 280 : 320;
+  // Without the usage columns the name cell also carries the model/usage chip.
+  const nameWidth = !showTrack ? Math.max(120, width - 64) : narrow ? Math.max(150, Math.round(width * (showUsage ? 0.46 : 0.58))) : width < 900 ? 280 : 320;
   const trackWidth = width - nameWidth - 64 - (showUsage ? 152 : 0) - (showModel ? 128 : 0);
 
   const view: Viewport = viewport ?? { from: 0, to: model.span };
@@ -192,11 +203,38 @@ export function Waterfall({
     window.addEventListener("pointerup", up);
   };
 
-  const focusRow = useCallback((spanId: string) => {
-    const row = rootRef.current?.querySelector<HTMLElement>(`[data-span-row="${CSS.escape(spanId)}"]`);
-    row?.focus({ preventScroll: true });
-    row?.scrollIntoView({ block: "nearest" });
+  // A row asked for while it is not rendered yet (collapsed, filtered or
+  // outside the window) is revealed after the next commit.
+  const pendingRef = useRef<{ id: string; focus: boolean } | null>(null);
+  const [revealTick, setRevealTick] = useState(0);
+  const showRow = useCallback((spanId: string, focus: boolean) => {
+    const element = rootRef.current?.querySelector<HTMLElement>(`[data-span-row="${CSS.escape(spanId)}"]`);
+    if (element) {
+      if (focus) element.focus({ preventScroll: true });
+      element.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    pendingRef.current = { id: spanId, focus };
+    setRevealTick(tick => tick + 1);
   }, []);
+  const focusRow = useCallback((spanId: string) => showRow(spanId, true), [showRow]);
+
+  useLayoutEffect(() => {
+    const pending = pendingRef.current;
+    if (!pending) return;
+    const element = rootRef.current?.querySelector<HTMLElement>(`[data-span-row="${CSS.escape(pending.id)}"]`);
+    if (element) {
+      pendingRef.current = null;
+      if (pending.focus) element.focus({ preventScroll: true });
+      element.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    const index = rowIndex.get(pending.id);
+    const body = bodyRef.current;
+    if (index === undefined || !body || !windowed) return;
+    body.scrollTop = Math.max(0, AXIS_HEIGHT + index * ROW_HEIGHT - body.clientHeight / 2);
+    setScroll({ top: body.scrollTop, height: body.clientHeight });
+  }, [revealTick, rowIndex, windowed, scroll.top]);
 
   const currentRowId = useCallback((): string | null => {
     const active = document.activeElement as HTMLElement | null;
@@ -240,10 +278,10 @@ export function Waterfall({
     setActiveMatch(previous => {
       const next = (previous + delta + matches.length) % matches.length;
       const id = matches[next]!;
-      requestAnimationFrame(() => rootRef.current?.querySelector(`[data-span-row="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest" }));
+      requestAnimationFrame(() => showRow(id, false));
       return next;
     });
-  }, [matches]);
+  }, [matches, showRow]);
 
   useEffect(() => { setActiveMatch(0); }, [query]);
 
@@ -264,7 +302,9 @@ export function Waterfall({
 
   const inTrace = () => !!rootRef.current && (rootRef.current.contains(document.activeElement) || document.activeElement === document.body);
   useRegisterShortcuts([
-    { id: "trace:find", keys: "mod+f", scope: "Run detail", description: "Find a step in the trace", allowInInputs: true,
+    // Only from inside the trace (or with nothing focused): elsewhere, such as
+    // the step drawer or the debug chat, the browser's own find stays in charge.
+    { id: "trace:find", keys: "mod+f", scope: "Run detail", description: "Find a step in the trace", allowInInputs: true, when: inTrace,
       handler: () => { findRef.current?.focus(); findRef.current?.select(); } },
     { id: "trace:next", keys: "j", scope: "Run detail", description: "Next step", when: inTrace, handler: () => moveCursor(1) },
     { id: "trace:previous", keys: "k", scope: "Run detail", description: "Previous step", when: inTrace, handler: () => moveCursor(-1) },
@@ -292,10 +332,36 @@ export function Waterfall({
     }
   };
 
-  useLayoutEffect(() => {
+  // A step opened from outside the waterfall (the failure sentence, a deep
+  // link, a timeline jump) may sit under a collapsed parent, behind a kind
+  // filter or outside the search; open the way to it and bring it into view.
+  const revealState = useRef({ model, rows, ensureVisible });
+  revealState.current = { model, rows, ensureVisible };
+  useEffect(() => {
     if (!selectedId) return;
-    rootRef.current?.querySelector(`[data-span-row="${CSS.escape(selectedId)}"]`)?.scrollIntoView({ block: "nearest" });
-  }, [selectedId]);
+    const { model: current, rows: shown, ensureVisible: open } = revealState.current;
+    if (!current.byId.has(selectedId)) return;
+    if (!shown.some(row => row.span.id === selectedId)) {
+      setQuery("");
+      open(selectedId);
+    }
+    showRow(selectedId, false);
+  }, [selectedId, showRow]);
+
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body || !windowed) return;
+    let frame = 0;
+    const update = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => setScroll({ top: body.scrollTop, height: body.clientHeight }));
+    };
+    update();
+    body.addEventListener("scroll", update, { passive: true });
+    const observer = new ResizeObserver(update);
+    observer.observe(body);
+    return () => { cancelAnimationFrame(frame); body.removeEventListener("scroll", update); observer.disconnect(); };
+  }, [windowed]);
 
   const kindToggle = (kind: TraceKind) => {
     setKinds(previous => {
@@ -309,6 +375,12 @@ export function Waterfall({
   const allCollapsed = anyCollapsible && model.rows.filter(row => row.childIds.length && row.depth > 0).every(row => collapsed.has(row.span.id));
   const activeMatchId = matches.length ? matches[Math.min(activeMatch, matches.length - 1)] : null;
   const searching = query.trim().length > 0;
+  const filtering = deferredQuery.trim().length > 0;
+  const first = windowed ? Math.max(0, Math.floor((scroll.top - AXIS_HEIGHT) / ROW_HEIGHT) - OVERSCAN) : 0;
+  const last = windowed ? Math.min(rows.length, Math.ceil((scroll.top + scroll.height) / ROW_HEIGHT) + OVERSCAN) : rows.length;
+  const rendered = windowed ? rows.slice(first, last) : rows;
+  // One tab stop for the whole list; j/k and the arrow keys move within it.
+  const tabStopId = [cursorId, selectedId].find(id => id && rendered.some(row => row.span.id === id)) ?? rendered[0]?.span.id ?? null;
   const findShortcut = formatKeys("mod+f", mac);
 
   const columns = (
@@ -421,10 +493,14 @@ export function Waterfall({
         </div>
 
         {rows.length === 0 ? (
-          <div className="px-4 py-8 text-center text-13 text-rp-ink-subtle">{searching ? `No step matches "${query.trim()}".` : "No steps of the selected kinds."}</div>
-        ) : rows.map(row => (
+          <div className="px-4 py-8 text-center text-13 text-rp-ink-subtle">{filtering ? `No step matches "${deferredQuery.trim()}".` : "No steps of the selected kinds."}</div>
+        ) : <>
+          {first > 0 && <div aria-hidden="true" style={{ height: first * ROW_HEIGHT }} />}
+          {rendered.map(row => (
           <WaterfallRow
             key={row.span.id}
+            tabStop={row.span.id === tabStopId}
+            onRowFocus={() => setCursorId(row.span.id)}
             row={row}
             view={view}
             windowMs={windowMs}
@@ -437,12 +513,12 @@ export function Waterfall({
             selected={row.span.id === selectedId}
             collapsed={collapsed.has(row.span.id)}
             isContext={context.has(row.span.id)}
-            isMatch={searching && !context.has(row.span.id)}
+            isMatch={filtering && !context.has(row.span.id)}
             isActiveMatch={row.span.id === activeMatchId}
             isSlowest={slowest?.span.id === row.span.id && model.rows.length > 1}
             counted={counted.has(row.span.id)}
             cost={costs.get(row.span.id) ?? null}
-            query={query}
+            query={deferredQuery}
             onSelect={() => { if (!suppressClickRef.current) onSelect(row.span.id); }}
             onToggle={open => toggleCollapsed(row.span.id, open)}
             onFocusParent={() => row.parentId && focusRow(row.parentId)}
@@ -453,7 +529,9 @@ export function Waterfall({
             onClearFresh={onClearFresh}
             after={renderAfterRow?.(row.span, row.depth)}
           />
-        ))}
+          ))}
+          {last < rows.length && <div aria-hidden="true" style={{ height: (rows.length - last) * ROW_HEIGHT }} />}
+        </>}
       </div>
       <div aria-hidden="true" className={cn("hidden flex-shrink-0 items-center gap-3 overflow-hidden whitespace-nowrap border-t border-rp-line-muted px-3 py-1 font-mono text-11 text-rp-ink-subtle", width >= 560 && "md:flex")}>
         <span><kbd className="rp-kbd">j</kbd> <kbd className="rp-kbd">k</kbd> move</span>
@@ -468,10 +546,11 @@ export function Waterfall({
 }
 
 function WaterfallRow({
-  row, view, windowMs, traceStart, nameWidth, narrow, showTrack, showModel, showUsage, selected, collapsed, isContext, isMatch, isActiveMatch,
+  tabStop, onRowFocus, row, view, windowMs, traceStart, nameWidth, narrow, showTrack, showModel, showUsage, selected, collapsed, isContext, isMatch, isActiveMatch,
   isSlowest, counted, cost, query, onSelect, onToggle, onFocusParent, onContextMenu, onOpenContextMenu, annotations, freshIds,
   onClearFresh, after,
 }: {
+  tabStop: boolean; onRowFocus: () => void;
   row: TraceRow; view: Viewport; windowMs: number; traceStart: number; nameWidth: number; narrow: boolean; showTrack: boolean; showModel: boolean; showUsage: boolean;
   selected: boolean; collapsed: boolean; isContext: boolean; isMatch: boolean; isActiveMatch: boolean; isSlowest: boolean;
   counted: boolean; cost: ReturnType<typeof spanCost> | null; query: string;
@@ -490,6 +569,14 @@ function WaterfallRow({
   const tokenTitle = tokens ? `${span.input_tokens?.toLocaleString() ?? "unknown"} input · ${span.output_tokens?.toLocaleString() ?? "unknown"} output tokens` : undefined;
   const costText = !counted ? "" : cost?.usd != null ? fmtCost(cost.usd) : "—";
   const costTitle = !counted ? undefined : cost?.source === "reported" ? "Reported by the provider" : cost?.source === "list-price" ? "Estimated at list price" : "Cost unknown for this call";
+  const tokenText = tokens ? `${span.input_tokens != null ? compactTokens(span.input_tokens) : "?"}/${span.output_tokens != null ? compactTokens(span.output_tokens) : "?"}` : "";
+  // "chat claude-haiku-4-5-20251001" already names its model; repeating it in
+  // the chip only took width from the name.
+  // A phone-width name cell has no room for it; the step sheet shows the same values.
+  const roomForChip = nameWidth >= 260;
+  const chipModel = roomForChip && !showModel && span.model && !span.name.includes(shortModelName(span.model)) ? shortModelName(span.model) : "";
+  const chipParts = roomForChip ? [chipModel, !showUsage && tokens ? tokenText : "", !showUsage && costText ? costText : ""].filter(Boolean) : [];
+  const chipTitle = [span.model, tokenTitle, !showUsage && costText ? `${costText} (${costTitle})` : ""].filter(Boolean).join(" · ");
   const label = `${TRACE_KIND_LABEL[kind]} ${span.name}${isErr ? ", failed" : ""}, ${fmt(span.duration_ms)}`;
 
   return (
@@ -501,13 +588,13 @@ function WaterfallRow({
         data-span-status={isErr ? "error" : "ok"}
         data-search-match={isMatch ? (isActiveMatch ? "active" : "true") : undefined}
         role="button"
-        tabIndex={0}
+        tabIndex={tabStop ? 0 : -1}
         aria-pressed={selected}
         aria-expanded={hasChildren ? !collapsed : undefined}
         aria-label={label}
         onMouseEnter={() => setMeridian(span.id)}
         onMouseLeave={() => clearMeridian()}
-        onFocus={() => setMeridian(span.id)}
+        onFocus={() => { setMeridian(span.id); onRowFocus(); }}
         onBlur={() => clearMeridian()}
         onClick={onSelect}
         onKeyDown={event => {
@@ -549,6 +636,12 @@ function WaterfallRow({
           {isMatch && !span.name.toLowerCase().includes(query.trim().toLowerCase()) && (
             <FileSearch role="img" aria-label="Match inside the step's input or output" className="size-3.5 shrink-0 text-rp-ink-subtle" />
           )}
+          {chipParts.length > 0 && (
+            <span data-span-chip title={chipTitle} className="min-w-0 max-w-[50%] shrink-0 truncate rounded-sm border border-rp-line-muted px-1 font-mono text-11 leading-4 text-rp-ink-subtle">
+              {chipModel && <span data-span-model>{chipModel}</span>}
+              {(chipModel ? chipParts.slice(1) : chipParts).map((part, index) => <span key={part}>{chipModel || index > 0 ? " · " : ""}{part}</span>)}
+            </span>
+          )}
           {isSlowest && !narrow && <span className="shrink-0 rounded-sm border border-rp-line px-1 text-11 text-rp-ink-subtle" title="The longest step in this run">slowest</span>}
           {annotations?.map(annotation => (
             <AnnotationChip key={annotation.id} annotation={annotation} arriving={!!freshIds?.has(annotation.id)} onArrivalEnd={() => onClearFresh?.(annotation.id)} title={annotation.note ?? undefined} />
@@ -562,8 +655,8 @@ function WaterfallRow({
             style={{ left: `${left}%`, width: `max(2px, ${widthPct}%)`, background: isErr ? undefined : KIND_COLOR[kind] }}
           />
         </div>
-        {showModel && <div className="flex w-[128px] shrink-0 items-center px-2"><span className="truncate text-12 text-rp-ink-subtle" title={span.model ?? undefined}>{span.model ?? ""}</span></div>}
-        {showUsage && <div className="flex w-[84px] shrink-0 items-center justify-end px-2 text-12 tabular-nums text-rp-ink-subtle" title={tokenTitle}>{tokens ? `${span.input_tokens != null ? compactTokens(span.input_tokens) : "?"}/${span.output_tokens != null ? compactTokens(span.output_tokens) : "?"}` : ""}</div>}
+        {showModel && <div className="flex w-[128px] shrink-0 items-center px-2"><span data-span-model className="truncate text-12 text-rp-ink-subtle" title={span.model ?? undefined}>{span.model ? shortModelName(span.model) : ""}</span></div>}
+        {showUsage && <div className="flex w-[84px] shrink-0 items-center justify-end px-2 text-12 tabular-nums text-rp-ink-subtle" title={tokenTitle}>{tokenText}</div>}
         {showUsage && <div className="flex w-[68px] shrink-0 items-center justify-end px-2 text-12 tabular-nums text-rp-ink-subtle" title={costTitle}>{costText}</div>}
         <div className="flex w-[64px] shrink-0 items-center justify-end pr-3">
           <span data-span-duration className={cn("font-mono text-12 tabular-nums", isSlowest ? "font-semibold text-rp-ink" : "text-rp-ink-subtle")}>{fmt(span.duration_ms)}</span>

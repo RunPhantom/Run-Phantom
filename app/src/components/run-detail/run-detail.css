@@ -17,6 +17,7 @@
 }
 
 [data-trace-root] [data-span-row] {
+  content-visibility: auto;
   contain-intrinsic-size: auto 28px;
 }
 

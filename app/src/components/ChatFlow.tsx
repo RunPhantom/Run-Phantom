@@ -2,7 +2,7 @@ import { CaptureVisibilityDetails } from "./CaptureVisibilityDetails";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Pencil } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { argsPreview, displayPayload, fmt, MAX_INLINE_PAYLOAD, plural, spanErrorReason, trunc, tryJson } from "../utils/helpers";
+import { argsPreview, compactTokens, displayPayload, fmt, MAX_INLINE_PAYLOAD, plural, spanErrorReason, trunc, tryJson } from "../utils/helpers";
 import { parseSpanAttributes, spanFinishReasons, spanReasoningTokens, stoppedEarlyReason } from "../utils/span-evidence";
 import type { LiveEvent, Span, SubAgent } from "../utils/types";
 import { Button } from "./Button";
@@ -18,7 +18,6 @@ import { spanCost } from "../../../src/pricing/span-cost";
 import { fmtCost } from "../utils/costs";
 import { countedLlmSpans } from "./run-detail/trace-model";
 import { looksLikeMarkdown } from "./run-detail/span-details";
-import { compactTokens } from "./run-detail/Waterfall";
 
 type ToolGroupItem = { type: "tool"; span: Span } | { type: "sub_agent"; agent: SubAgent };
 type LiveToolItem =
