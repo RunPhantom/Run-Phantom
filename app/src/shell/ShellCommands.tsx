@@ -9,7 +9,7 @@ import { runPath } from "../utils/navigation";
 import type { Run } from "../utils/types";
 import { NAV_ITEMS, SETTINGS_NAV } from "./navigation";
 import { useRegisterCommands, useRegisterShortcuts, type PaletteCommand, type PaletteStatus, type ShortcutDefinition } from "./commands";
-import { openCommandPalette, openShortcutSheet } from "./overlays";
+import { openCommandPalette, openShortcutSheet, paletteSession } from "./overlays";
 import { setThemePreference, toggleTheme } from "./theme";
 import { readOtlpEndpoint } from "./otlp";
 
@@ -94,10 +94,12 @@ export function ShellCommands() {
       run: async ({ navigate: go, announce, close }) => {
         if (sampleLoad) { announce("Already loading sample runs…"); return; }
         announce("Loading sample runs…");
+        const openedIn = paletteSession();
         sampleLoad = loadSampleRuns();
         try {
           const ids = await sampleLoad;
           await queryClient.invalidateQueries({ queryKey: ["runs"], exact: true });
+          if (paletteSession() !== openedIn) return;
           close();
           go(ids[0] ? runPath(ids[0]) : "/runs");
         } finally {

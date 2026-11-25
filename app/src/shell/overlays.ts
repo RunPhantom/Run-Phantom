@@ -6,6 +6,7 @@ const listeners = new Set<() => void>();
 let current: ShellOverlay = null;
 let returnFocus: HTMLElement | null = null;
 let focusOverride: (() => boolean) | null = null;
+let session = 0;
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
@@ -20,12 +21,22 @@ function subscribe(listener: () => void): () => void {
 export function openOverlay(next: ShellOverlay): void {
   if (current === next) return;
   if (current === null && next !== null) {
+    session += 1;
     const active = document.activeElement;
     const insideOverlay = active instanceof Element && active.closest("[data-command-palette], [data-shortcut-sheet]") !== null;
     if (!insideOverlay) returnFocus = active instanceof HTMLElement && active !== document.body ? active : null;
   }
   current = next;
   for (const listener of listeners) listener();
+}
+
+/**
+ * Identifies one open-to-close stretch of the palette. An async command compares the
+ * value from before its await with the value after, so a dismissed (or closed and
+ * reopened) palette does not navigate the user somewhere they have already left.
+ */
+export function paletteSession(): number | null {
+  return current === "palette" ? session : null;
 }
 
 export function openCommandPalette(): void { openOverlay("palette"); }
