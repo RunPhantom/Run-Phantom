@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUpRight, ClockArrowUp, Play, Square, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/typography";
 import {
   getDraftFromSpan, getPlaygroundModels, recordedColumn, streamPlaygroundRun, type PlaygroundProviderInfo,
@@ -13,7 +14,7 @@ import { effectiveMaxTemperature, ModelPicker, modelLabel, PlaygroundEditor } fr
 import { ResultColumn, type ColumnState } from "../components/playground/PlaygroundOutput";
 import { PLAYGROUND_HISTORY_KEY, PlaygroundHistory } from "../components/playground/PlaygroundHistory";
 import {
-  appendToolRound, buildRunBody, loadDraft, MAX_COMPARE_COLUMNS, saveDraft, stateFromDraft,
+  appendToolRound, buildRunBody, loadDraft, MAX_COMPARE_COLUMNS, metricLeaders, saveDraft, stateFromDraft,
   type BuildResult, type PlaygroundDraftState, type PlaygroundTarget,
 } from "../components/playground/playground-model";
 import { useRegisterShortcuts } from "../shell/commands";
@@ -74,6 +75,7 @@ export function PlaygroundPage() {
   const [running, setRunning] = useState(false);
   const [problem, setProblem] = useState<{ message: string; field: string | null } | null>(null);
   const [diff, setDiff] = useState(false);
+  const [diffBaseIndex, setDiffBaseIndex] = useState(0);
   const [formatted, setFormatted] = useState(true);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [opening, setOpening] = useState<{ status: "loading" } | { status: "error"; message: string } | null>(null);
@@ -133,6 +135,7 @@ export function PlaygroundPage() {
     while (targets.length < count) targets.push(nextTarget(targets, providers));
     setTargets(targets);
     if (count < 2) setDiff(false);
+    setDiffBaseIndex(index => index < count ? index : 0);
   };
 
   const run = useCallback(async () => {
@@ -204,11 +207,14 @@ export function PlaygroundPage() {
     setDraft(current => stateFromDraft(first, current, { openedFrom: false, targets }));
     setColumns(targets.map(() => ({ status: "idle" })));
     setDiff(false);
+    setDiffBaseIndex(0);
     setProblem(null);
   };
 
   const doneTexts = columns.map(column => column.status === "done" ? column.text : null);
-  const canDiff = draft.targets.length > 1 && !!doneTexts[0] && doneTexts.slice(1).some(text => !!text);
+  const baseIndex = diffBaseIndex < draft.targets.length ? diffBaseIndex : 0;
+  const canDiff = draft.targets.length > 1 && !!doneTexts[baseIndex] && doneTexts.some((text, index) => index !== baseIndex && !!text);
+  const leaders = draft.targets.length > 1 ? metricLeaders(columns.map(column => column.status === "done" ? column.result : null)) : [];
   const opened = draft.openedFrom;
 
   return (
@@ -323,9 +329,9 @@ export function PlaygroundPage() {
         </section>
 
         <section ref={outputRef} aria-label="Output" className="flex min-h-0 scroll-mt-4 flex-col">
-          <div className="flex items-center justify-between gap-3 pb-2">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 pb-2">
             <h2 className="rp-eyebrow">Output</h2>
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
               <div role="group" aria-label="Output text" className="flex rounded-control border border-rp-line bg-rp-surface p-0.5">
                 {([["Formatted", true], ["Raw", false]] as const).map(([label, value]) => (
                   <button
@@ -342,13 +348,28 @@ export function PlaygroundPage() {
                   </button>
                 ))}
               </div>
+              {draft.targets.length > 2 && diff && canDiff && (
+                <label className="flex min-w-0 items-center gap-1.5 text-[12px] text-rp-ink-soft">
+                  vs.
+                  <Select
+                    aria-label="Compare against column"
+                    value={String(baseIndex)}
+                    onChange={event => setDiffBaseIndex(Number(event.target.value))}
+                    className="h-7 w-auto max-w-[13rem] truncate py-0 pl-2 pr-7 text-[12px]"
+                  >
+                    {draft.targets.map((target, index) => (
+                      <option key={index} value={index}>{`Column ${index + 1} · ${modelLabel(providers, target)}`}</option>
+                    ))}
+                  </Select>
+                </label>
+              )}
               {draft.targets.length > 1 && (
                 <button
                   type="button"
                   aria-pressed={diff && canDiff}
                   disabled={!canDiff}
                   onClick={() => setDiff(value => !value)}
-                  title={canDiff ? "Highlight words that differ from column 1" : "Run at least two models with text output to compare them"}
+                  title={canDiff ? `Highlight words that differ from column ${baseIndex + 1}` : "Run at least two models with text output to compare them"}
                   className={cn(
                     "inline-flex h-7 items-center gap-1.5 rounded-control border px-2.5 text-[12px] font-medium transition-colors duration-fast ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rp-blue disabled:cursor-not-allowed disabled:opacity-50",
                     diff && canDiff ? "border-rp-wash-border bg-rp-wash text-rp-blue" : "border-rp-line bg-rp-surface text-rp-ink-soft hover:bg-rp-row-hover",
@@ -371,7 +392,10 @@ export function PlaygroundPage() {
                   subtitle={providers?.find(item => item.id === target.provider)?.label ?? target.provider}
                   state={column}
                   formatted={formatted}
-                  diffBase={diff && canDiff && index > 0 ? doneTexts[0] ?? null : null}
+                  diffBase={diff && canDiff && index !== baseIndex && doneTexts[baseIndex]
+                    ? { text: doneTexts[baseIndex]!, label: `column ${baseIndex + 1}` }
+                    : null}
+                  leads={leaders[index]}
                   onAddToolRound={column.status === "done" && column.result.output.toolCalls.length && !running
                     ? () => {
                       update(current => appendToolRound(current, column.result));

@@ -5,7 +5,9 @@ import { cn } from "@/lib/utils";
 import { fmt } from "../../utils/helpers";
 import { fmtCost } from "../../utils/costs";
 import type { PlaygroundCallResult } from "../../api/playground";
-import { costUnavailableReason, errorHelp, estimateResultCost, FINISH_REASON_LABEL, PRICE_LIST_DATE } from "./playground-model";
+import {
+  costUnavailableReason, errorHelp, estimateResultCost, FINISH_REASON_LABEL, PRICE_LIST_DATE, recordedCostUsd, type LeadMetric,
+} from "./playground-model";
 import { diffStats, wordDiff } from "./word-diff";
 import { Markdown } from "../Markdown";
 
@@ -24,18 +26,24 @@ function Elapsed({ since }: { since: number }) {
   return <span className="rp-num">{((now - since) / 1000).toFixed(1)}s</span>;
 }
 
-function Metric({ label, value, title, span = 1, numeric = true }: { label: string; value: React.ReactNode; title?: string; span?: 1 | 2 | "full"; numeric?: boolean }) {
+function Metric({ label, value, title, span = 1, numeric = true, lead }: { label: string; value: React.ReactNode; title?: string; span?: 1 | 2 | "full"; numeric?: boolean; lead?: string }) {
   return (
     <div className={cn("min-w-0", span === 2 && "col-span-2", span === "full" && "col-span-full")} title={title}>
       <dt className="font-mono text-[11px] uppercase tracking-[0.1em] text-rp-ink-muted">{label}</dt>
-      <dd className={cn("mt-0.5 truncate text-[12px] text-rp-ink", numeric ? "font-mono tabular-nums" : "font-medium")}>{value}</dd>
+      <dd className={cn("mt-0.5 truncate text-[12px] text-rp-ink", numeric ? "font-mono tabular-nums" : "font-medium")}>
+        {value}
+        {lead && <span className="ml-1.5 font-sans text-[11px] font-medium text-rp-success" data-playground-lead>{lead}</span>}
+      </dd>
     </div>
   );
 }
 
+const LEAD_LABEL: Record<LeadMetric, string> = { latency: "Fastest", firstToken: "Fastest", cost: "Cheapest" };
+
 const tokenFormat = new Intl.NumberFormat("en-US");
 
-function Metrics({ result }: { result: PlaygroundCallResult }) {
+function Metrics({ result, leads }: { result: PlaygroundCallResult; leads: readonly LeadMetric[] }) {
+  const lead = (metric: LeadMetric) => leads.includes(metric) ? LEAD_LABEL[metric] : undefined;
   const cost = estimateResultCost(result);
   const usage = result.usage;
   const tokens = usage.inputTokens === null && usage.outputTokens === null
@@ -45,12 +53,14 @@ function Metrics({ result }: { result: PlaygroundCallResult }) {
   return (
     <dl className="grid grid-cols-[repeat(auto-fill,minmax(92px,1fr))] gap-x-3 gap-y-2 border-b border-rp-line-muted px-3 py-2.5" data-playground-metrics>
       <Metric label="Finish" numeric={false} value={result.finishReason ? FINISH_REASON_LABEL[result.finishReason] ?? result.finishReason : "—"} title={result.providerFinishReason ? `Provider reason: ${result.providerFinishReason}` : undefined} />
-      <Metric label="Latency" value={fmt(result.latencyMs)} />
-      <Metric label="First token" value={fmt(result.timeToFirstTokenMs)} title={result.timeToFirstTokenMs === null ? "No output streamed, so there is no first-token time." : undefined} />
+      <Metric label="Latency" value={fmt(result.latencyMs)} lead={lead("latency")} />
+      <Metric label="First token" value={fmt(result.timeToFirstTokenMs)} lead={lead("firstToken")} title={result.timeToFirstTokenMs === null ? "No output streamed, so there is no first-token time." : undefined} />
       <Metric label="Tokens" span={2} value={tokens} title={reasoning} />
       <Metric
         label="Est. cost"
-        value={cost.kind === "estimated" ? fmtCost(cost.totalUsd) : "—"}
+        span={2}
+        value={cost.kind === "estimated" ? fmtCost(recordedCostUsd(cost.totalUsd)) : "—"}
+        lead={lead("cost")}
         title={cost.kind === "estimated"
           ? `Estimated from ${cost.model} list prices as of ${PRICE_LIST_DATE}: $${cost.inputUsdPerMillion} in, $${cost.outputUsdPerMillion} out per million tokens.`
           : costUnavailableReason(cost)}
@@ -60,33 +70,35 @@ function Metrics({ result }: { result: PlaygroundCallResult }) {
   );
 }
 
-function DiffText({ base, text }: { base: string; text: string }) {
+function DiffText({ base, baseLabel, text }: { base: string; baseLabel: string; text: string }) {
   const parts = wordDiff(base, text);
   const stats = diffStats(parts);
   return (
     <>
       <p className="mb-2 font-mono text-[11px] uppercase tracking-[0.1em] text-rp-ink-muted">
-        <span className="text-rp-success">+{stats.added}</span> <span className="text-rp-danger">−{stats.removed}</span> words vs. column 1
+        <span className="text-rp-success">+{stats.added}</span> <span className="text-rp-danger">−{stats.removed}</span> words vs. {baseLabel}
       </p>
       <p className="whitespace-pre-wrap break-words text-[13px] leading-[21px] text-rp-ink" data-playground-diff>
         {parts.map((part, index) => part.kind === "same"
           ? <span key={index}>{part.text}</span>
           : part.kind === "added"
-            ? <ins key={index} className="rounded-[2px] bg-rp-success-soft text-rp-ink no-underline">{part.text}</ins>
-            : <del key={index} className="rounded-[2px] bg-rp-danger-soft text-rp-danger">{part.text}</del>)}
+            ? <ins key={index} className="rounded-[2px] bg-rp-success-soft px-0.5 text-rp-ink no-underline">{part.text}</ins>
+            : <del key={index} className={cn("rounded-[2px] bg-rp-danger-soft px-0.5 text-rp-danger", parts[index + 1]?.kind === "added" && "mr-1")}>{part.text}</del>)}
       </p>
     </>
   );
 }
 
-export function ResultColumn({ index, title, subtitle, state, diffBase, formatted, onAddToolRound }: {
+export function ResultColumn({ index, title, subtitle, state, diffBase, leads = [], formatted, onAddToolRound }: {
   index: number;
   formatted: boolean;
   title: string;
   subtitle: string;
   state: ColumnState;
-  /** Column 1's text when the diff view is on and this column is compared against it. */
-  diffBase: string | null;
+  /** The base column's text and name when the diff view is on and this column is compared against it. */
+  diffBase: { text: string; label: string } | null;
+  /** Metrics this column leads across the compared columns. */
+  leads?: readonly LeadMetric[];
   onAddToolRound?: () => void;
 }) {
   const result = state.status === "done" ? state.result : null;
@@ -106,7 +118,7 @@ export function ResultColumn({ index, title, subtitle, state, diffBase, formatte
               : result ? (result.status === "ok" ? "Done" : "Failed") : subtitle}
         </span>
       </header>
-      {result && <Metrics result={result} />}
+      {result && <Metrics result={result} leads={leads} />}
       <div className="sb min-h-[120px] flex-1 overflow-auto px-3 py-3" tabIndex={0} aria-label={`Output from ${title}`}>
         {state.status === "idle" && (
           <p className="text-[13px] leading-5 text-rp-ink-muted">Output appears here when you run the prompt.</p>
@@ -135,7 +147,7 @@ export function ResultColumn({ index, title, subtitle, state, diffBase, formatte
           </div>
         )}
         {text && (diffBase !== null && state.status === "done"
-          ? <DiffText base={diffBase} text={text} />
+          ? <DiffText base={diffBase.text} baseLabel={diffBase.label} text={text} />
           : formatted
             ? <div className="text-[13px] leading-[21px] text-rp-ink" data-playground-output><Markdown>{text}</Markdown></div>
             : <p className="whitespace-pre-wrap break-words font-mono text-[12px] leading-[19px] text-rp-ink" data-playground-output>{text}</p>)}

@@ -375,3 +375,29 @@ export function groupHistory(runs: readonly PlaygroundHistoryRun[]): HistoryGrou
   return [...groups.values()].sort((a, b) => b.startedAt - a.startedAt);
 }
 
+
+export type LeadMetric = "latency" | "firstToken" | "cost";
+
+/**
+ * Which compare columns lead each metric (lowest value wins). A metric leads only when at least two
+ * successful columns report it and they differ, so a single run or a tie marks nothing.
+ */
+export function metricLeaders(results: ReadonlyArray<Pick<PlaygroundCallResult, "status" | "provider" | "model" | "responseModel" | "usage" | "latencyMs" | "timeToFirstTokenMs"> | null>, at: number = Date.now()): LeadMetric[][] {
+  const values: Record<LeadMetric, Array<number | null>> = { latency: [], firstToken: [], cost: [] };
+  for (const result of results) {
+    const ok = result?.status === "ok" ? result : null;
+    const cost = ok ? estimateResultCost(ok, at) : null;
+    values.latency.push(ok && Number.isFinite(ok.latencyMs) ? ok.latencyMs : null);
+    values.firstToken.push(ok?.timeToFirstTokenMs ?? null);
+    values.cost.push(cost?.kind === "estimated" ? recordedCostUsd(cost.totalUsd) : null);
+  }
+  const leaders: LeadMetric[][] = results.map(() => []);
+  for (const metric of Object.keys(values) as LeadMetric[]) {
+    const known = values[metric].filter((value): value is number => value !== null);
+    if (known.length < 2) continue;
+    const low = Math.min(...known);
+    if (low === Math.max(...known)) continue;
+    values[metric].forEach((value, index) => { if (value === low) leaders[index]!.push(metric); });
+  }
+  return leaders;
+}

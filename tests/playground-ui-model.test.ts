@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createSseParser, toStreamEvent, type PlaygroundCallResult, type PlaygroundDraft } from "../app/src/api/playground";
 import {
-  appendToolRound, buildRunBody, defaultDraft, errorHelp, estimateResultCost, groupHistory, orderByColumn,
+  appendToolRound, buildRunBody, defaultDraft, errorHelp, estimateResultCost, groupHistory, metricLeaders, orderByColumn,
   parseStoredDraft, parseToolsText, recordedCostUsd, stateFromDraft, targetIndexOf, type PlaygroundDraftState,
 } from "../app/src/components/playground/playground-model";
 import { diffStats, wordDiff } from "../app/src/components/playground/word-diff";
@@ -144,6 +144,16 @@ describe("result facts", () => {
   test("the column prints the same cost digits as the recorded run", () => {
     const estimate = estimateResultCost(result({ provider: "anthropic", model: "claude-haiku-4-5-20251001", responseModel: "claude-haiku-4-5-20251001", usage: { inputTokens: 650, outputTokens: 61, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningTokens: null, totalTokens: 711 } }), Date.parse("2026-11-25T12:00:00Z"));
     expect(estimate.kind === "estimated" && recordedCostUsd(estimate.totalUsd)).toBe(0.000955);
+  });
+
+  test("compare columns mark the fastest and cheapest successful result", () => {
+    const at = Date.parse("2026-11-25T12:00:00Z");
+    const fast = result({ latencyMs: 700, timeToFirstTokenMs: 500 });
+    const cheap = result({ index: 1, provider: "gemini", model: "gemini-3.5-flash-lite", responseModel: "gemini-3.5-flash-lite", latencyMs: 900, timeToFirstTokenMs: 300, usage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: null, cacheWriteInputTokens: null, reasoningTokens: null, totalTokens: 15 } });
+    const failed = result({ index: 2, status: "error", latencyMs: 10, timeToFirstTokenMs: null });
+    expect(metricLeaders([fast, cheap, failed], at)).toEqual([["latency"], ["firstToken", "cost"], []]);
+    expect(metricLeaders([fast, null], at)).toEqual([[], []]);
+    expect(metricLeaders([fast, { ...fast, index: 1 }], at)).toEqual([[], []]);
   });
 
   test("unknown token counts give no cost rather than zero", () => {
