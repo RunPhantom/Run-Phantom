@@ -75,6 +75,15 @@ describe("detectSubAgents: agent -> agent hand-offs", () => {
     expect(detectSubAgents(spans).map(agent => [agent.root_span_id, agent.name])).toEqual([["group", "group"], ["leaf", "leaf"]]);
   });
 
+  test("a bare invoke_agent span gets a readable name, not its span id", () => {
+    const spans = [
+      row("root", null, "AGENT_ROOT"),
+      row("0123456789abcdef", "root", "AGENT_ROOT", { name: "invoke_agent" }),
+      row("chat", "0123456789abcdef", "LLM_GENERATION"),
+    ];
+    expect(detectSubAgents(spans).map(agent => agent.name)).toEqual(["sub-agent"]);
+  });
+
   test("the top-level agent and agent spans without model calls are not sub-agents", () => {
     const spans = [
       row("root", null, "AGENT_ROOT"),

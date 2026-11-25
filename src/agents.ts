@@ -168,7 +168,7 @@ export function detectSubAgents(spans: SpanRow[]): SubAgent[] {
   for (const span of spans) {
     if (span.span_type !== "AGENT_ROOT" || !span.parent_span_id || toolRoots.has(span.parent_span_id)) continue;
     if (!hasAgentAncestor(span) || !hasModelCall(span.id)) continue;
-    agents.push(summarise(span, nestedAgentName(span.name) ?? span.id));
+    agents.push(summarise(span, nestedAgentName(span.name) ?? "sub-agent"));
   }
 
   return agents.sort((a, b) => a.start_time_ms - b.start_time_ms);
