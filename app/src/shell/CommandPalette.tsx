@@ -2,14 +2,16 @@ import { useEffect, useId, useMemo, useState, type KeyboardEvent as ReactKeyboar
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { ListTree, Search } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
-import { useCommands, type CommandContext, type PaletteCommand } from "./commands";
+import { commandDetail, useCommands, type CommandContext, type PaletteCommand } from "./commands";
 import { buildSections } from "./palette-model";
 import { closeOverlay, restoreOverlayFocus, useShellOverlay } from "./overlays";
 import { formatKeys, isMacPlatform } from "./keyboard";
 
 function Highlighted({ text, indices }: { text: string; indices: number[] }): ReactNode {
   if (indices.length === 0) return text;
+  // fuzzyScore returns UTF-16 indices (indexOf), so iterate code units, not code points.
   const marks = new Set(indices);
   const parts: ReactNode[] = [];
   let buffer = "";
@@ -19,14 +21,16 @@ function Highlighted({ text, indices }: { text: string; indices: number[] }): Re
     parts.push(marked ? <mark key={key} className="bg-transparent font-semibold text-rp-ink">{buffer}</mark> : <span key={key}>{buffer}</span>);
     buffer = "";
   };
-  [...text].forEach((character, index) => {
+  for (let index = 0; index < text.length; index += 1) {
     const isMark = marks.has(index);
     if (isMark !== marked) { flush(index); marked = isMark; }
-    buffer += character;
-  });
+    buffer += text[index];
+  }
   flush(text.length);
   return parts;
 }
+
+const DETAIL_REFRESH_MS = 30_000;
 
 const STATUS_STYLES: Record<NonNullable<PaletteCommand["status"]>, { dot: string; label: string }> = {
   ok: { dot: "bg-rp-ink-faint", label: "Completed" },
@@ -60,15 +64,25 @@ export function CommandPalette() {
 
 function PaletteBody() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const commands = useCommands();
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const [announcement, setAnnouncement] = useState("");
   const baseId = useId();
   const mac = useMemo(isMacPlatform, []);
+  const [, setTick] = useState(0);
 
-  const sections = useMemo(() => buildSections([...commands, ...searchCommands(query)], query), [commands, query]);
-  const flat = useMemo(() => sections.flatMap(section => section.rows), [sections]);
+  useEffect(() => {
+    void queryClient.invalidateQueries({ queryKey: ["runs"], exact: true });
+    const timer = window.setInterval(() => setTick(tick => tick + 1), DETAIL_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [queryClient]);
+
+  const sections = buildSections([...commands, ...searchCommands(query)], query);
+  const flat = sections.flatMap(section => section.rows);
+  const matchCount = flat.filter(row => row.command.group !== "Search").length;
+  const nothingMatches = matchCount === 0;
   const active = flat[Math.min(activeIndex, flat.length - 1)];
   const optionId = (command: PaletteCommand) => `${baseId}-option-${command.id}`;
 
@@ -76,7 +90,7 @@ function PaletteBody() {
   useEffect(() => {
     if (!active) return;
     document.getElementById(optionId(active.command))?.scrollIntoView({ block: "nearest" });
-  }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [active?.command.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const context: CommandContext = {
     navigate,
@@ -147,12 +161,15 @@ function PaletteBody() {
           />
           <kbd className="rp-kbd hidden sm:inline-flex" aria-hidden="true">Esc</kbd>
         </div>
+        {nothingMatches && (
+          <p className="px-5 pb-1 pt-4 text-[13px] text-rp-ink-muted">
+            {query.trim() ? <>No pages, runs or commands match “{query.trim()}”.</> : "No commands available."}
+          </p>
+        )}
+        <p role="status" aria-live="polite" className="sr-only">
+          {query.trim() ? (nothingMatches ? "No matches" : `${matchCount} ${matchCount === 1 ? "result" : "results"}`) : ""}
+        </p>
         <div id={`${baseId}-listbox`} role="listbox" aria-label="Commands" className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-2">
-          {sections.every(section => section.group === "Search") && (
-            <p role="presentation" className="px-3 pb-2 pt-4 text-[13px] text-rp-ink-muted">
-              {query.trim() ? <>No pages, runs or commands match “{query.trim()}”.</> : "No commands available."}
-            </p>
-          )}
           {sections.map(section => {
             const headingId = `${baseId}-group-${section.group.replace(/\W+/g, "-")}`;
             return (
@@ -165,6 +182,7 @@ function PaletteBody() {
                   const selected = active?.command.id === command.id;
                   const Icon = command.icon;
                   const status = command.status ? STATUS_STYLES[command.status] : null;
+                  const detail = commandDetail(command);
                   return (
                     <div
                       key={command.id}
@@ -174,7 +192,7 @@ function PaletteBody() {
                       onMouseMove={() => { if (activeIndex !== index) setActiveIndex(index); }}
                       onClick={() => void runCommand(command)}
                       className={cn(
-                        "flex min-h-9 cursor-pointer items-center gap-3 rounded-sm px-3 py-1.5 text-[13px] text-rp-ink",
+                        "flex min-h-11 cursor-pointer items-center gap-3 rounded-sm px-3 py-1.5 text-[13px] text-rp-ink [@media(pointer:fine)]:min-h-9",
                         selected ? "bg-rp-wash shadow-[inset_2px_0_0_var(--rp-accent)]" : "",
                       )}
                     >
@@ -189,7 +207,7 @@ function PaletteBody() {
                         <Highlighted text={command.label} indices={row.indices} />
                         {status && <span className="sr-only">, {status.label}</span>}
                       </span>
-                      {command.detail && <span className="max-w-[45%] shrink-0 truncate font-mono text-[12px] text-rp-ink-subtle">{command.detail}</span>}
+                      {detail && <span className="max-w-[45%] shrink-0 truncate font-mono text-[12px] text-rp-ink-subtle">{detail}</span>}
                       {command.shortcut && <kbd aria-hidden="true" className="rp-kbd shrink-0">{formatKeys(command.shortcut, mac)}</kbd>}
                     </div>
                   );

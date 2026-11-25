@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fuzzyMatchEntry, fuzzyScore } from "../app/src/shell/fuzzy";
 import { chordMatches, formatKeys, matchShortcut, parseKeys, type KeyLike } from "../app/src/shell/keyboard";
-import { listCommands, listShortcuts, registerCommands, registerShortcuts, type PaletteCommand, type ShortcutDefinition } from "../app/src/shell/commands";
+import { commandDetail, listCommands, listShortcuts, registerCommands, registerShortcuts, type PaletteCommand, type ShortcutDefinition } from "../app/src/shell/commands";
 import { buildSections } from "../app/src/shell/palette-model";
 import { readOtlpEndpoint } from "../app/src/shell/otlp";
 import { resolveTheme } from "../app/src/shell/theme";
@@ -57,6 +57,17 @@ describe("palette sections", () => {
     expect(sections[0]!.rows[0]!.command.id).toBe("go:costs");
     expect(sections.at(-1)!.group).toBe("Search");
     expect(buildSections(commands, "dark")[0]!.rows[0]!.command.id).toBe("action:theme");
+  });
+
+  test("a detail function is read on every build so relative times stay current and matchable", () => {
+    let age = "2m ago";
+    const aging = [command("run:2", "planner", "Recent runs", { detail: () => age })];
+    expect(commandDetail(aging[0]!)).toBe("2m ago");
+    expect(buildSections(aging, "2m")).toHaveLength(1);
+    age = "1h ago";
+    expect(buildSections(aging, "2m")).toHaveLength(0);
+    expect(buildSections(aging, "1h")).toHaveLength(1);
+    expect(commandDetail(command("go:x", "X"))).toBe("");
   });
 });
 

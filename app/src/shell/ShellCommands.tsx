@@ -61,7 +61,7 @@ export function ShellCommands() {
       id: `run:${run.id}`,
       group: "Recent runs",
       label: name,
-      detail: [agent && agent !== name ? agent : null, ago(run.last_updated_at)].filter(Boolean).join(" · "),
+      detail: () => [agent && agent !== name ? agent : null, ago(run.last_updated_at)].filter(Boolean).join(" · "),
       keywords: [run.id, ...(agent ? [agent] : []), ...(run.model ? [run.model] : [])],
       status: statusOf(run),
       order: index,

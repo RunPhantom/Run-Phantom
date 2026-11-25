@@ -1,4 +1,4 @@
-import type { PaletteCommand } from "./commands";
+import { commandDetail, type PaletteCommand } from "./commands";
 import { fuzzyMatchEntry } from "./fuzzy";
 
 const GROUP_ORDER = ["Go to", "Recent runs", "Search", "Actions", "Help"];
@@ -26,7 +26,8 @@ export function buildSections(commands: readonly PaletteCommand[], query: string
   for (const command of commands) {
     if (command.when && !command.when()) continue;
     if (!trimmed) { rows.push({ command, indices: [], score: -(command.order ?? 0) }); continue; }
-    const match = fuzzyMatchEntry(trimmed, command.label, [...(command.keywords ?? []), ...(command.detail ? [command.detail] : [])]);
+    const detail = commandDetail(command);
+    const match = fuzzyMatchEntry(trimmed, command.label, [...(command.keywords ?? []), ...(detail ? [detail] : [])]);
     if (match) rows.push({ command, indices: match.indices, score: match.score });
   }
   const byGroup = new Map<string, PaletteRow[]>();

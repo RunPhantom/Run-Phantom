@@ -24,8 +24,11 @@ export interface PaletteCommand {
   group: CommandGroup;
   /** Extra words the fuzzy filter matches against, e.g. synonyms or the route path. */
   keywords?: readonly string[];
-  /** Secondary text shown on the right of the row, e.g. an agent name and relative time. */
-  detail?: string;
+  /**
+   * Secondary text shown on the right of the row and matched by the filter. Pass a
+   * function for text that ages, such as relative times; the palette calls it on render.
+   */
+  detail?: string | (() => string);
   /** Shortcut chip text, e.g. "G R" or "⌘K". Display only. */
   shortcut?: string;
   icon?: LucideIcon;
@@ -103,6 +106,10 @@ export function registerCommands(commands: readonly PaletteCommand[]): () => voi
 
 export function registerShortcuts(shortcuts: readonly ShortcutDefinition[]): () => void {
   return shortcutStore.add(shortcuts);
+}
+
+export function commandDetail(command: PaletteCommand): string {
+  return typeof command.detail === "function" ? command.detail() : command.detail ?? "";
 }
 
 export function listCommands(): readonly PaletteCommand[] {

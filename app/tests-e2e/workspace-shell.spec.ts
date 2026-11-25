@@ -74,7 +74,7 @@ test("palette actions report real results: sample runs load and the OTLP endpoin
   await input.fill("otlp");
   await page.keyboard.press("Enter");
   const endpoint = `http://127.0.0.1:${runPhantom.port}/v1/traces`;
-  await expect(palette.getByRole("status")).toHaveText(`Copied ${endpoint}`);
+  await expect(palette.getByRole("status").filter({ hasText: /^Copied / })).toHaveText(`Copied ${endpoint}`);
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(endpoint);
 
   await input.fill("load sample");
