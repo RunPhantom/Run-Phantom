@@ -221,6 +221,38 @@ test("search preserves filters through invalid span routes and external span nav
   await expect(page.getByLabel("Provider", { exact: true })).toHaveValue("openai");
 });
 
+test("an imported trace older than the loaded page stays open, with or without a query", async ({ page, request, runPhantom }) => {
+  await seedSearchRuns(request, runPhantom.url, 55);
+  const trace = (importedId: string, name: string) => ({ name: "old-import.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify({
+    run: { id: importedId, name: "old-import", event_name: name, display_name: name, started_at: 1000, last_updated_at: 1100 },
+    spans: [{ id: `${importedId}-span`, run_id: importedId, name: "old_step", span_type: "TOOL_CALL", status: "OK",
+      input_payload: '{"note":"old import"}', output_payload: '{"ok":true}', start_time_ms: 1000, end_time_ms: 1100, duration_ms: 100 }],
+    liveEvents: [] })) });
+  const importAndSettle = async (importedId: string, name: string) => {
+    const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === "/api/runs/search", { timeout: 15_000 });
+    await page.getByLabel("Import trace file", { exact: true }).setInputFiles(trace(importedId, name));
+    await refreshed;
+    await expect(page.getByRole("status").filter({ hasText: /loaded/ })).toBeVisible();
+  };
+
+  await page.goto(`${runPhantom.url}/search`);
+  await expect(page.locator("[data-run-id]")).toHaveCount(50);
+  await importAndSettle("imported-old-checkout", "Imported old checkout");
+  await expect(page).toHaveURL(/\/search\/imported-old-checkout$/);
+  await expect(page.getByText("Imported old checkout", { exact: true }).first()).toBeVisible();
+  await expect(page.locator(`[data-run-id="imported-old-checkout"]`)).toHaveCount(0);
+
+  await page.goto(`${runPhantom.url}/search?q=cobalt-only`);
+  await expect(page).toHaveURL(new RegExp(`/search/${runId(1)}\\?q=cobalt-only$`));
+  await importAndSettle("imported-old-refund", "Imported old refund");
+  await expect(page).toHaveURL(/\/search\/imported-old-refund\?q=cobalt-only$/);
+  await expect(page.getByText("Imported old refund", { exact: true }).first()).toBeVisible();
+
+  // Changing the query releases the imported run back to the results rule.
+  await page.getByRole("textbox", { name: "Search captured runs", exact: true }).fill("amber-only");
+  await expect(page).toHaveURL(new RegExp(`/search/${runId(0)}\\?q=amber-only$`));
+});
+
 test("search import reports malformed and oversized files before contacting the server", async ({ page, runPhantom }) => {
   let imports = 0;
   page.on("request", (request) => { if (new URL(request.url()).pathname === "/api/import-run") imports++; });

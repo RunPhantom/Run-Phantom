@@ -74,6 +74,15 @@ export function SearchPage() {
   const count = resource === "span-hits" ? hits.length : runs.length;
   useEffect(() => {const controller=new AbortController();void getSearchScope(resource,controller.signal).then(value=>{if(!controller.signal.aborted)setScope({resource,key:`runphantom:search:local:${value.scope}`});},()=>{});return ()=>controller.abort();},[resource]);
   const shortRunIds = useShortRunIds(currentRunResult?.runs);
+  // A run the user or the page opened stays open for the search it was opened
+  // under, even when a refresh pushes it off the loaded page: an imported trace
+  // keeps its original started_at, so it can sort below 50 newer runs.
+  const [pin, setPin] = useState<{ runId: string; filterKey: string } | null>(null);
+  const pinned = !!selectedId && pin?.runId === selectedId && pin.filterKey === filterKey;
+  const openRun = useCallback((runId: string, path: string) => {
+    setPin({ runId, filterKey });
+    navigate(path);
+  }, [filterKey, navigate]);
 
   useEffect(() => {
     const generation = ++generationRef.current;
@@ -183,7 +192,7 @@ export function SearchPage() {
   }, [currentHitResult, currentRunResult, error]);
   const selectedInResults = !!selectedId && !!resultRunIds?.has(selectedId);
   useEffect(() => {
-    if (loading || !resultRunIds || selectedInResults) return;
+    if (loading || !resultRunIds || selectedInResults || pinned) return;
     if (isMobile) {
       if (selectedId) navigate(`/search${querySuffix}`, { replace: true });
       return;
@@ -193,7 +202,7 @@ export function SearchPage() {
     const next = firstHit ? `${tracePath("/search", firstHit.runId)}/span/${encodeURIComponent(firstHit.spanId)}${querySuffix}`
       : firstRun ? `${tracePath("/search", firstRun.id)}${querySuffix}` : selectedId ? `/search${querySuffix}` : null;
     if (next) navigate(next, { replace: true });
-  }, [currentHitResult, currentRunResult, isMobile, loading, navigate, querySuffix, resultRunIds, selectedId, selectedInResults]);
+  }, [currentHitResult, currentRunResult, isMobile, loading, navigate, pinned, querySuffix, resultRunIds, selectedId, selectedInResults]);
 
   const loadDemoTraces = async () => {
     setDemoLoading(true);
@@ -203,7 +212,7 @@ export function SearchPage() {
       if (!response.ok) throw new Error(`Could not load demo traces (${response.status})`);
       const body = await response.json() as { runIds?: string[] };
       setRefresh((value) => value + 1);
-      if (body.runIds?.[0]) navigate(`${tracePath("/search", body.runIds[0])}${querySuffix}`);
+      if (body.runIds?.[0]) openRun(body.runIds[0], `${tracePath("/search", body.runIds[0])}${querySuffix}`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load demo traces.");
     } finally {
@@ -220,7 +229,7 @@ export function SearchPage() {
       const body = await response.json() as { runId?: string; error?: string };
       if (!response.ok || !body.runId) throw new Error(body.error ?? `Could not import trace (${response.status})`);
       setRefresh((value) => value + 1);
-      navigate(`${tracePath("/search", body.runId)}${querySuffix}`);
+      openRun(body.runId, `${tracePath("/search", body.runId)}${querySuffix}`);
     } catch (cause) {
       setImportError(cause instanceof SyntaxError ? "This file is not valid JSON." : cause instanceof Error ? cause.message : "Could not import trace.");
     } finally {
@@ -307,13 +316,13 @@ export function SearchPage() {
           />}
           {runs.map((run) => <RunListItem key={run.id} run={run} shortRunIds={shortRunIds} selected={selectedId === run.id}
             detail={run.match ? <RunMatchSnippet match={run.match} matchedSpans={run.matched_span_count} /> : undefined}
-            onClick={() => navigate(`${tracePath("/search", run.id)}${querySuffix}`)} />)}
-          {resource === "span-hits" && <SearchSpanHits items={hits} open={hit=>navigate(`${tracePath("/search",hit.runId)}/span/${encodeURIComponent(hit.spanId)}${querySuffix}`)}/>}
+            onClick={() => openRun(run.id, `${tracePath("/search", run.id)}${querySuffix}`)} />)}
+          {resource === "span-hits" && <SearchSpanHits items={hits} open={hit=>openRun(hit.runId,`${tracePath("/search",hit.runId)}/span/${encodeURIComponent(hit.spanId)}${querySuffix}`)}/>}
           {currentResult?.hasMore && <Button type="button" variant="outline" size="sm" onClick={() => void loadMore()} disabled={loading} loading={loadingMore} className="w-full">{loadingMore ? "Loading more…" : resource === "span-hits" ? "Load more spans" : "Load more runs"}</Button>}
         </div>
       </div>
       <div className={`${isMobile && !selectedId ? "hidden" : ""} min-w-0 flex-1`}>
-        {selectedId && selectedInResults ? <div className="flex h-full flex-col">
+        {selectedId && (selectedInResults || pinned) ? <div className="flex h-full flex-col">
           {isMobile && <button type="button" className="rp-ease flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-white px-4 py-2 text-left text-[13px] font-medium text-rp-ink hover:bg-rp-row-hover" onClick={() => navigate(`/search${querySuffix}`)}>
             <ArrowLeft aria-hidden="true" className="size-3.5 text-rp-blue" /><span>Back to search</span>
           </button>}
