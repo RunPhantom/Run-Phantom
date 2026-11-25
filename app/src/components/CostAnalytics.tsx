@@ -1,80 +1,97 @@
-import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Download, RefreshCw } from "lucide-react";
-import { ANALYTICS_LIMITS, parseCostAnalyticsRequest, type AnalyticsPopulation, type CostAnalyticsReport, type CostAnalyticsRequest, type MetricPopulation } from "../../../src/pricing/analytics";
-import { TOKEN_CATEGORIES, type FrozenRateRevision } from "../../../src/pricing/protocol";
+import { Download, RefreshCw } from "lucide-react";
+import { ANALYTICS_LIMITS, parseCostAnalyticsRequest, type CostAnalyticsReport, type CostAnalyticsRequest } from "../../../src/pricing/analytics";
+import type { FrozenRateRevision } from "../../../src/pricing/protocol";
 import { parseJsonEvidence } from "../../../src/evaluations/json-evidence";
 import { hasDuplicateJsonKeys } from "../../../src/json-keys";
-import { fmtCost, getPricingSnapshot, subscribePricing } from "../utils/costs";
-import { PRICE_TABLE_AS_OF } from "../../../src/pricing/list-prices";
+import { getPricingSnapshot, subscribePricing, type PricingSnapshot } from "../utils/costs";
 import { cn } from "@/lib/utils";
 import { Button } from "./ui/button";
-import { EmptyPanel } from "./ui/empty-panel";
 import { Select, Textarea } from "./ui/input";
 import { Skeleton } from "./ui/skeleton";
-import { Eyebrow, PageHeader } from "./ui/typography";
+import { CostAccounting } from "./cost/CostAccounting";
+import { CostKpis, ModelTable, SpendOverTime, WindowToggle } from "./cost/CostPanels";
+import {
+  COST_WINDOW_COPY, COST_WINDOW_MS, DEFAULT_COST_WINDOW, ESTIMATE_SOURCE_LABELS, bucketFor, isCostWindow, type CostWindow, type EstimateSource,
+} from "./cost/cost-model";
 
-const PANEL = "rounded-lg border border-rp-line bg-rp-surface p-5 sm:p-6";
-const CONTROL = "h-9 min-w-[11rem] text-[13px]";
-const WINDOW_MS = { "1h": 3_600_000, "24h": 86_400_000, "7d": 7 * 86_400_000, "30d": 30 * 86_400_000 };
-type WindowSelection = keyof typeof WINDOW_MS;
-const count = (value: number | null): string => value === null ? "Unavailable" : value.toLocaleString();
+const PANEL = "rounded-lg border border-rp-line bg-rp-surface p-4";
 
-function Amount({ value, money = false, lead = false }: { value: MetricPopulation; money?: boolean; lead?: boolean }) {
-  const text = value.knownSum === null ? value.eligibleCount ? "Unavailable" : "No eligible generations" : money ? fmtCost(value.knownSum) : count(value.knownSum);
-  const measured = value.knownSum !== null;
-  return <><span className={cn("block", measured ? "rp-num font-semibold text-rp-ink" : "font-medium text-rp-ink-muted", lead && (measured ? "text-[28px] leading-9 tracking-[-0.02em]" : "text-[17px] leading-9"))}>{text}</span>
-    <span className={cn("rp-meta block", lead ? "mt-1" : "mt-0.5")}>{value.knownCount} known · {value.unavailableCount} unavailable{value.sumState === "overflow" ? " · sum overflow" : ""}</span></>;
-}
-function PopulationSummary({ data }: { data: AnalyticsPopulation & { estimateMode?: CostAnalyticsRequest["estimateMode"] } }) {
-  return <div className="grid gap-4 sm:grid-cols-2"><section className={PANEL} aria-label="Reported cost"><Eyebrow as="h2">Reported cost</Eyebrow><div className="mt-3" data-testid="reported-cost"><Amount value={data.reportedUsd} money lead /></div><p className="mt-4 border-t border-rp-line-muted pt-3 text-[12px] leading-5 text-rp-ink-muted">{data.reportedUsd.completeTotal === null ? "Known subtotal; complete reported spend unavailable." : "Complete total for eligible captured generations."} {data.reportedUsd.zeroCount} observed zero.</p></section>
-    <section className={PANEL} aria-label="Estimated cost"><Eyebrow as="h2">Estimated cost</Eyebrow><div className="mt-3" data-testid="estimated-cost"><Amount value={data.estimatedUsd} money lead /></div><p className="mt-4 border-t border-rp-line-muted pt-3 text-[12px] leading-5 text-rp-ink-muted">{data.estimatedUsd.completeTotal === null ? "Known subtotal; complete estimate unavailable." : data.estimateMode === "list-prices" ? `Complete estimate at list prices as of ${PRICE_TABLE_AS_OF}.` : "Complete estimate under the selected frozen rates."} {data.estimatedUsd.zeroCount} observed zero.</p></section></div>;
-}
-export function CostAnalytics({ data, controls }: { data: CostAnalyticsReport; controls?: ReactNode }) {
-  const [dimension, setDimension] = useState<"byModel" | "byProvider" | "byProject" | "byTime">("byModel");
-  const id = useId();
-  const labels = { byModel: "Model", byProvider: "Provider", byProject: "Project", byTime: "Time (UTC)" };
-  const th = "py-3 pr-4 font-mono text-[11px] font-normal uppercase leading-4 tracking-[0.14em] text-rp-ink-muted";
-  return <div className="animate-fade-rise space-y-6 text-[14px] leading-5 text-rp-ink">
-    {controls}
-    <p className="text-[13px] text-rp-ink-muted">{data.population.selectedGenerations} timed generation candidates · {data.population.nestedExcluded} nested generations excluded · {data.population.untimedGenerations} with unavailable timestamps · {data.population.ancestryUnavailable} with unavailable ancestry</p>
-    <PopulationSummary data={data} />
-    {data.reportedUsd.eligibleCount === 0 && <EmptyPanel compact title="No captured generations in this window" description="Choose a wider window or capture an agent run. An empty population has no measured cost." />}
-    {data.population.untimedGenerations > 0 && <p role="status" className="rounded-lg border border-rp-wash-border bg-rp-wash p-4 text-[13px] leading-6 text-rp-ink">Untimed captures might belong in this window. Their unavailable rows remain in the denominator, so timed subtotals cannot prove a complete window total.</p>}
-    <section className={PANEL} aria-labelledby={`${id}-breakdown`}><div className="mb-4 flex flex-wrap items-end justify-between gap-3"><div><Eyebrow>Breakdown / {labels[dimension]}</Eyebrow><h2 id={`${id}-breakdown`} className="rp-subsection-title mt-1.5">Cost breakdown</h2></div><label className="flex items-center gap-2"><span className="rp-field-label whitespace-nowrap">Group by</span><Select className={CONTROL} value={dimension} onChange={event => setDimension(event.target.value as typeof dimension)}>{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></label></div>
-      <div className="overflow-auto" tabIndex={0} role="region" aria-label="Cost breakdown table"><table className="w-full min-w-[560px] text-left text-[13px]"><thead><tr className="border-b border-rp-line"><th scope="col" className={th}>{labels[dimension]}</th><th scope="col" className={th}>Reported USD</th><th scope="col" className={th}>Estimated USD</th><th scope="col" className={th}>Input tokens</th><th scope="col" className={cn(th, "pr-0")}>Output tokens</th></tr></thead><tbody>{data[dimension].map(row => <tr key={row.identity ?? "unknown"} className="rp-ease border-b border-rp-line-muted last:border-0 hover:bg-rp-row-hover"><th scope="row" className={cn("max-w-[240px] break-words py-3.5 pr-4 font-medium", row.identity === null ? "text-rp-ink-muted" : dimension === "byTime" ? "rp-num" : "font-mono text-[12px]")}>{row.identity ?? (dimension === "byTime" ? "Timestamp unavailable" : `${labels[dimension]} unavailable`)}</th><td className="py-3.5 pr-4"><Amount value={row.reportedUsd} money /></td><td className="py-3.5 pr-4"><Amount value={row.estimatedUsd} money /></td><td className="py-3.5 pr-4"><Amount value={row.tokens.input} /></td><td className="py-3.5"><Amount value={row.tokens.output} /></td></tr>)}</tbody></table></div>
-    </section>
-    <section className={PANEL} aria-label="Categorized usage"><Eyebrow>Tokens / By category</Eyebrow><h2 className="rp-subsection-title mt-1.5">Categorized usage</h2><p className="mt-2 text-[13px] leading-6 text-rp-ink-muted">Captured categories may overlap. These counts are shown separately and are never added into an invented token total.</p><dl className="mt-5 grid gap-px overflow-hidden rounded-md border border-rp-line-muted bg-rp-line-muted sm:grid-cols-2 lg:grid-cols-3">{TOKEN_CATEGORIES.map(category => <div key={category} className="bg-rp-surface px-4 py-3"><dt className="rp-eyebrow">{category.replace(/_/g, " ")}</dt><dd className="mt-1.5 text-[13px]"><Amount value={data.tokens[category]} /></dd></div>)}</dl></section>
-    <details className={cn(PANEL, "group")}><summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 font-semibold [&::-webkit-details-marker]:hidden"><span>Rate and capture provenance</span><ChevronDown aria-hidden="true" className="size-4 shrink-0 text-rp-ink-muted transition-transform duration-250 ease-standard group-open:rotate-180 motion-reduce:transition-none" /></summary><div className="mt-3 space-y-3 break-words text-[12px] leading-5 text-rp-ink-muted"><p>{data.estimateMode === "list-prices" ? `Estimates use list input, output and cached-input prices bundled with Run Phantom, read from the OpenAI, Anthropic and Google pricing pages as of ${PRICE_TABLE_AS_OF}. Dated model ids such as gpt-5-nano-2025-08-07 match their listed model. Cache storage, audio, discounts, fees and calls through other vendors are not priced.` : data.estimateMode === "nominal-input-output" ? "Nominal public input/output catalogue estimate. Actual provider, tier, cache, reasoning, audio, discounts, fees and invoiced spend are not established by these quotes." : "Estimates use only the explicitly supplied frozen provider/model/tier rates and captured category declarations."} {data.rateAuthority === "bundled-list-prices" ? "Run Phantom does not verify provider invoices." : "Rates are request-declared; Run Phantom does not verify provider invoices."}</p><p>UTC window: <span className="rp-num text-rp-ink">{new Date(data.window.from).toISOString()}</span> inclusive → <span className="rp-num text-rp-ink">{new Date(data.window.to).toISOString()}</span> exclusive. Captured generation start time.</p><p>Source roster: <code className="rp-meta text-rp-ink">{data.sourceRevision}</code> · {data.population.acquiredSpans} spans including ancestor context. Captured {new Date(data.asOf).toISOString()}.</p>{data.rateRevisions.length === 0 ? <p>No rates selected. Reported cost and observed token populations remain available independently.</p> : data.rateRevisions.map(rate => <div key={JSON.stringify([rate.provider, rate.model, rate.tier, rate.revision])} className="border-t border-rp-line-muted pt-3"><strong className="font-mono text-rp-ink">{rate.model}</strong><p>{rate.provider} · {rate.tier} · {rate.currency} · {rate.unit}</p><p>{rate.source.name} · {rate.source.observedAt}</p><p>Revision <code>{rate.revision}</code> · {rate.version}</p><p>Category policies: {TOKEN_CATEGORIES.map(category => `${category}: ${rate.bands.map(band => band.categories[category].kind).join("/")}`).join(" · ")}</p></div>)}</div></details>
-  </div>;
+/** What a page can add below the model table: the window being shown and the estimate source chosen. */
+export interface CostContext { window: CostWindow; from: number; to: number; source: EstimateSource }
+
+type Load = (request: CostAnalyticsRequest, signal: AbortSignal) => Promise<CostAnalyticsReport>;
+
+/** The OpenRouter quotes for the models a roster saw; the catalogue is only consulted with consent. */
+function nominalRates(roster: CostAnalyticsReport, pricing: PricingSnapshot): FrozenRateRevision[] {
+  const models = new Set(roster.byModel.map(row => row.identity));
+  const rates = pricing.catalogue!.rates.filter(rate => [rate, ...rate.aliases].some(identity => models.has(identity.model)));
+  if (rates.length > ANALYTICS_LIMITS.rates) throw new Error("This window requires too many frozen quotes. Select a smaller window.");
+  return rates;
 }
 
-export function CostAnalyticsWorkspace({ scopeKey, title, load, footer }: { scopeKey: readonly unknown[]; title: string; load: (request: CostAnalyticsRequest, signal: AbortSignal) => Promise<CostAnalyticsReport>; footer?: ReactNode }) {
+async function loadReport(load: Load, request: CostAnalyticsRequest, source: EstimateSource, pricing: PricingSnapshot, signal: AbortSignal): Promise<CostAnalyticsReport> {
+  if (source !== "nominal") return load(request, signal);
+  const roster = await load({ ...request, estimateMode: "captured", rates: [] }, signal);
+  if (pricing.status !== "ready") return roster;
+  return load({ ...request, rates: nominalRates(roster, pricing) }, signal);
+}
+
+export function CostAnalyticsWorkspace({ scopeKey, title, load, footer, modelHref, sections }: {
+  scopeKey: readonly unknown[];
+  title: string;
+  load: Load;
+  footer?: ReactNode;
+  modelHref?: (model: string, window: CostWindow) => string;
+  /** Panels shown under the model table, e.g. spend by agent and the most expensive runs. */
+  sections?: (context: CostContext) => ReactNode;
+}) {
   const pricing = useSyncExternalStore(subscribePricing, getPricingSnapshot, getPricingSnapshot);
-  const [selection, setSelection] = useState<WindowSelection>("24h");
+  const [params, setParams] = useSearchParams();
+  const requested = params.get("window");
+  const selection: CostWindow = isCostWindow(requested) ? requested : DEFAULT_COST_WINDOW;
   const [to, setTo] = useState(Date.now);
-  const [mode, setMode] = useState<"list" | "reported" | "manual" | "nominal">("list");
+  const [mode, setMode] = useState<EstimateSource>("list");
+  const [view, setView] = useState<"spend" | "tokens">("spend");
   const [manualText, setManualText] = useState("");
   const [appliedManualText, setAppliedManualText] = useState<string | null>(null);
   const [manualRates, setManualRates] = useState<readonly FrozenRateRevision[]>([]);
   const [manualError, setManualError] = useState<string | null>(null);
   const [exportState, setExportState] = useState({ key: "", pending: false, error: "" });
   const exportController = useRef<AbortController | null>(null);
-  const from = to - WINDOW_MS[selection];
-  const request = { from, to, bucket: selection === "1h" || selection === "24h" ? "hour" as const : "day" as const, estimateMode: mode === "nominal" ? "nominal-input-output" as const : mode === "list" ? "list-prices" as const : "captured" as const, rates: mode === "manual" ? manualRates : [] };
+  const span = COST_WINDOW_MS[selection];
+  const from = to - span;
+  const request: CostAnalyticsRequest = {
+    from, to, bucket: bucketFor(selection),
+    estimateMode: mode === "nominal" ? "nominal-input-output" : mode === "list" ? "list-prices" : "captured",
+    rates: mode === "manual" ? manualRates : [],
+  };
   const nominalReady = pricing.status === "ready";
   const queryKey = [...scopeKey, "cost-analytics", selection, to, mode, manualRates, mode === "nominal" ? pricing.catalogue?.revision ?? pricing.status : null];
   // Without a consented catalogue the nominal view still shows captured tokens and reported cost; only the estimate waits.
-  const result = useQuery({ queryKey, retry: false,
-    enabled: mode !== "nominal" || pricing.status !== "loading", queryFn: async ({ signal }) => {
-      if (mode !== "nominal") return load(request, signal);
-      const roster = await load({ ...request, estimateMode: "captured", rates: [] }, signal);
-      if (!nominalReady) return roster;
-      const models = new Set(roster.byModel.map(row => row.identity));
-      const rates = pricing.catalogue!.rates.filter(rate => [rate, ...rate.aliases].some(identity => models.has(identity.model)));
-      if (rates.length > ANALYTICS_LIMITS.rates) throw new Error("This window requires too many frozen quotes. Select a smaller window.");
-      return load({ ...request, rates }, signal);
-    } });
+  const result = useQuery({
+    queryKey, retry: false,
+    enabled: mode !== "nominal" || pricing.status !== "loading",
+    queryFn: ({ signal }) => loadReport(load, request, mode, pricing, signal),
+  });
+  // The previous window only feeds the deltas, so it loads after the current one and a failure just hides them.
+  const previous = useQuery({
+    queryKey: [...queryKey, "previous"], retry: false,
+    enabled: !!result.data && !result.error,
+    queryFn: ({ signal }) => loadReport(load, { ...request, from: from - span, to: from }, mode, pricing, signal).catch(() => null),
+  });
+
+  const setWindow = useCallback((next: CostWindow) => {
+    setParams(current => {
+      const updated = new URLSearchParams(current);
+      if (next === DEFAULT_COST_WINDOW) updated.delete("window"); else updated.set("window", next);
+      return updated;
+    }, { replace: true });
+    setTo(Date.now());
+  }, [setParams]);
+
   const unavailableNominal = mode === "nominal" && !nominalReady;
   const unappliedManualRates = mode === "manual" && (appliedManualText === null || manualText !== appliedManualText || manualError !== null);
   const exportKey = JSON.stringify(queryKey);
@@ -111,17 +128,107 @@ export function CostAnalyticsWorkspace({ scopeKey, title, load, footer }: { scop
       if (currentExport.current.key === key) setExportState(value => value.key === key ? { ...value, pending: false } : value);
     }
   };
-  return <section className="min-h-full bg-rp-canvas rp-page text-rp-ink"><div className="mx-auto max-w-[1180px] space-y-6"><PageHeader eyebrow={`Costs / ${title}`} title="Cost & usage" description="Inspect what was measured, what was reported, and what can be estimated. Missing evidence stays visible." />
-    <div className="flex flex-wrap items-end gap-3 rounded-lg border border-rp-line bg-rp-surface p-4"><label className="grid w-full gap-1.5 sm:w-auto"><span className="rp-field-label">Time window</span><Select className={CONTROL} value={selection} onChange={event => { setSelection(event.target.value as WindowSelection); setTo(Date.now()); }}>{Object.keys(WINDOW_MS).map(value => <option key={value} value={value}>{value === "1h" ? "Last hour" : value === "24h" ? "Last 24 hours" : value === "7d" ? "Last 7 days" : "Last 30 days"} (UTC)</option>)}</Select></label><label className="grid w-full gap-1.5 sm:w-auto"><span className="rp-field-label">Estimate source</span><Select className={cn(CONTROL, "min-w-[15rem]")} value={mode} onChange={event => setMode(event.target.value as typeof mode)}><option value="list">List prices as of {PRICE_TABLE_AS_OF} (offline)</option><option value="reported">Reported only</option><option value="manual">Manual frozen rates</option><option value="nominal">OpenRouter public catalogue</option></Select></label><Button type="button" variant="outline" disabled={result.isFetching} onClick={() => setTo(Date.now())}><RefreshCw aria-hidden="true" className={cn(result.isFetching && "animate-spin motion-reduce:animate-none")} />Refresh</Button>
-      {result.data && !result.error && !unavailableNominal && <><Button type="button" variant="outline" className="sm:ml-auto" disabled={!exportAvailable || exporting} loading={exporting} onClick={() => void exportReport()}><Download aria-hidden="true" />Export JSON</Button><p className="rp-field-hint w-full border-t border-rp-line-muted pt-3">{unappliedManualRates ? "Apply the current frozen rates before exporting." : "Export JSON downloads the displayed report with its frozen rates, source revision and UTC window."}</p></>}</div>
-    {exporting && <p role="status" className="rp-meta">Checking current access before export…</p>}
-    {mode === "manual" && <form className={cn(PANEL, "animate-fade-rise")} onSubmit={event => { event.preventDefault(); try { if (new TextEncoder().encode(manualText).byteLength > ANALYTICS_LIMITS.requestBytes || hasDuplicateJsonKeys(manualText)) throw new Error(); const parsed = parseCostAnalyticsRequest({ ...request, rates: parseJsonEvidence(manualText) }); setManualRates(parsed.rates); setAppliedManualText(manualText); setManualError(null); } catch { setManualError("Frozen rates must be a valid bounded USD rate revision array. Nothing was applied."); } }}><label className="grid gap-2"><span className="rp-field-label">Frozen rate JSON</span><Textarea className="min-h-[140px] font-mono text-[12px]" value={manualText} onChange={event => setManualText(event.target.value)} placeholder="Paste a frozen rate revision array" spellCheck={false} aria-invalid={manualError ? true : undefined} /></label><p className="rp-field-hint my-3">Rates apply to this view. Exact provider, model, tier, source, version and category policies are required. Captured reported costs remain unchanged.</p><Button type="submit" size="lg">Apply frozen rates</Button>{manualError && <p role="alert" className="mt-3 rounded-sm border border-rp-danger-border bg-rp-danger-soft px-3 py-2 text-[13px] text-rp-danger">{manualError}</p>}</form>}
-    {unavailableNominal && <p role="status" className="rounded-lg border border-rp-wash-border bg-rp-wash p-4 text-[13px] leading-6 text-rp-ink">{pricing.status === "disabled" ? "Public pricing is disabled. Turn on public model pricing in Settings to load OpenRouter catalogue quotes, or choose list prices. Tokens and reported cost below are unaffected." : pricing.error ?? "Waiting for consented public pricing…"}</p>}
-    {result.error && <div role="alert" className="rounded-lg border border-rp-danger-border bg-rp-surface p-5 sm:p-6"><Eyebrow className="text-rp-danger">Cost &amp; usage / Error</Eyebrow><p className="mt-2 text-[14px] text-rp-ink">{result.error instanceof Error ? result.error.message : "Cost analytics unavailable"}</p><Button className="mt-4" variant="outline" onClick={() => void result.refetch()}>Try again</Button></div>}
-    {result.isFetching && <p role="status" aria-live="polite" className="flex items-center gap-2 text-[13px] text-rp-ink-muted"><span aria-hidden="true" className="size-1.5 rounded-full bg-rp-mark pulse-dot" />Loading captured cost and usage…</p>}
-    {exportState.key === exportKey && exportState.error && <p role="alert" className="rounded-lg border border-rp-danger-border bg-rp-danger-soft p-4 text-[13px] text-rp-danger">{exportState.error}</p>}
-    {!result.data && result.isFetching && <div aria-hidden="true" className="grid gap-4 sm:grid-cols-2">{[0, 1].map(item => <div key={item} className={cn(PANEL, "space-y-3")}><Skeleton className="h-3 w-24" /><Skeleton className="h-8 w-40" /><Skeleton className="h-3 w-32" /></div>)}</div>}
-    {result.data && !result.error && <CostAnalytics data={result.data} />}
-    {footer}
-  </div></section>;
+
+  const applyManual = () => {
+    try {
+      if (new TextEncoder().encode(manualText).byteLength > ANALYTICS_LIMITS.requestBytes || hasDuplicateJsonKeys(manualText)) throw new Error();
+      const parsed = parseCostAnalyticsRequest({ ...request, rates: parseJsonEvidence(manualText) });
+      setManualRates(parsed.rates); setAppliedManualText(manualText); setManualError(null);
+    } catch { setManualError("Frozen rates must be a valid bounded USD rate revision array. Nothing was applied."); }
+  };
+
+  const report = result.data && !result.error ? result.data : null;
+  const context: CostContext = { window: selection, from, to, source: mode };
+  const copy = COST_WINDOW_COPY[selection];
+
+  return (
+    <section className="min-h-full bg-rp-canvas rp-page text-rp-ink" data-cost-page>
+      <div className="mx-auto flex max-w-[1480px] flex-col gap-4">
+        <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h1 className="rp-type-headline text-rp-ink">Cost &amp; usage</h1>
+            <p className="text-13 text-rp-ink-subtle"><span className="sr-only">Showing </span>{title} · {copy.eyebrow.toLowerCase()}</p>
+            {result.isFetching && <p role="status" aria-live="polite" className="text-12 text-rp-ink-subtle">Loading captured cost and usage…</p>}
+          </div>
+          <div className="flex flex-wrap items-center gap-2" data-cost-toolbar>
+            <WindowToggle value={selection} onChange={setWindow} />
+            <label className="flex items-center gap-2">
+              <span className="text-12 text-rp-ink-subtle" aria-hidden="true">Estimate</span>
+              <Select aria-label="Estimate source" className="h-8 w-auto min-w-[12.5rem] text-13" value={mode} onChange={event => setMode(event.target.value as EstimateSource)}>
+                {(Object.keys(ESTIMATE_SOURCE_LABELS) as EstimateSource[]).map(value => <option key={value} value={value}>{ESTIMATE_SOURCE_LABELS[value]}</option>)}
+              </Select>
+            </label>
+            <Button type="button" variant="outline" size="icon-sm" aria-label="Refresh" title="Refresh" disabled={result.isFetching} onClick={() => setTo(Date.now())}>
+              <RefreshCw aria-hidden="true" className={cn(result.isFetching && "animate-spin motion-reduce:animate-none")} />
+            </Button>
+            {result.data && !result.error && !unavailableNominal && (
+              <Button type="button" variant="outline" size="sm" disabled={!exportAvailable || exporting} loading={exporting} onClick={() => void exportReport()}
+                title={unappliedManualRates ? "Apply the frozen rates before exporting" : "Download this report with its rates, data revision and UTC window"}>
+                <Download aria-hidden="true" />Export JSON
+              </Button>
+            )}
+          </div>
+        </header>
+
+        {exporting && <p role="status" className="text-12 text-rp-ink-subtle">Checking current access before export…</p>}
+        {mode === "manual" && (
+          <form className={cn(PANEL, "grid gap-3")} onSubmit={event => { event.preventDefault(); applyManual(); }}>
+            <label className="grid gap-1.5">
+              <span className="rp-field-label">Frozen rate JSON</span>
+              <Textarea className="min-h-[120px] font-mono text-12" value={manualText} onChange={event => setManualText(event.target.value)} placeholder="Paste a frozen rate revision array" spellCheck={false} aria-invalid={manualError ? true : undefined} />
+            </label>
+            <p className="rp-field-hint">Rates apply to this view only. Each needs the exact provider, model, tier, source, version and category policies. Reported costs are unchanged.</p>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button type="submit" size="lg">Apply frozen rates</Button>
+              {unappliedManualRates && !manualError && <span className="text-13 text-rp-ink-subtle">Apply the current frozen rates before exporting.</span>}
+            </div>
+            {manualError && <p role="alert" className="rounded-sm border border-rp-danger-border bg-rp-danger-soft px-3 py-2 text-13 text-rp-danger">{manualError}</p>}
+          </form>
+        )}
+        {unavailableNominal && (
+          <p role="status" className="rounded-lg border border-rp-wash-border bg-rp-wash px-4 py-3 text-13 text-rp-ink">
+            {pricing.status === "disabled" ? "Public pricing is disabled. Turn on public model pricing in Settings to load OpenRouter catalogue quotes, or choose list prices. Tokens and reported cost below are unaffected." : pricing.error ?? "Waiting for consented public pricing…"}
+          </p>
+        )}
+        {result.error && (
+          <div role="alert" className="rounded-lg border border-rp-danger-border bg-rp-danger-soft p-4">
+            <p className="text-14 font-semibold text-rp-danger">Cost and usage did not load.</p>
+            <p className="mt-1 text-13 text-rp-ink-muted">{result.error instanceof Error ? result.error.message : "Cost analytics unavailable"}</p>
+            <Button className="mt-3" size="sm" variant="outline" onClick={() => void result.refetch()}>Try again</Button>
+          </div>
+        )}
+        {exportState.key === exportKey && exportState.error && <p role="alert" className="rounded-lg border border-rp-danger-border bg-rp-danger-soft px-4 py-3 text-13 text-rp-danger">{exportState.error}</p>}
+
+        {!result.data && result.isFetching && <CostSkeleton />}
+        {report && (
+          <div className={cn("flex flex-col gap-4 transition-opacity duration-state", result.isFetching && "opacity-60")} aria-busy={result.isFetching || undefined}>
+            <CostKpis report={report} previous={previous.data ?? null} source={mode} window={selection} />
+            {report.population.untimedGenerations > 0 && (
+              <p role="status" className="text-13 text-rp-ink-muted">
+                {report.population.untimedGenerations} {report.population.untimedGenerations === 1 ? "call has" : "calls have"} no start time and may belong to this window, so these totals may be incomplete.
+              </p>
+            )}
+            <SpendOverTime report={report} source={mode} window={selection} view={view} onViewChange={setView} />
+            <div className={cn("grid grid-cols-[minmax(0,1fr)] gap-4", sections && "xl:grid-cols-2")}>
+              <ModelTable report={report} source={mode} window={selection} modelHref={modelHref ? model => modelHref(model, selection) : undefined} />
+              {sections?.(context)}
+            </div>
+            <CostAccounting report={report} />
+          </div>
+        )}
+        {footer}
+      </div>
+    </section>
+  );
+}
+
+function CostSkeleton() {
+  return (
+    <div className="flex flex-col gap-4" role="status" aria-label="Loading cost and usage">
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-rp-line bg-rp-line xl:grid-cols-4">
+        {[0, 1, 2, 3].map(item => <div key={item} className="bg-rp-surface px-4 pb-3 pt-3"><Skeleton className="h-3 w-24" /><Skeleton className="mt-3 h-7 w-24" /><Skeleton className="mt-3 h-3 w-32" /></div>)}
+      </div>
+      <div className={PANEL}><Skeleton className="h-4 w-40" /><Skeleton className="mt-4 h-[200px] w-full" /></div>
+    </div>
+  );
 }

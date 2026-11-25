@@ -28,6 +28,10 @@ async function applyManual(page: Page) {
   await page.getByRole("button", { name: "Apply frozen rates", exact: true }).click();
   await expect(page.getByTestId("estimated-cost")).toContainText("$0.0051");
 }
+async function openAccounting(page: Page) {
+  const disclosure = page.locator("[data-cost-accounting]");
+  if (!(await disclosure.evaluate(element => (element as HTMLDetailsElement).open))) await page.getByText("How this is calculated", { exact: true }).click();
+}
 async function downloadAnalytics(page: Page): Promise<{ filename: string; report: CostAnalyticsReport }> {
   const pending = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export JSON", exact: true }).click();
@@ -36,12 +40,14 @@ async function downloadAnalytics(page: Page): Promise<{ filename: string; report
 }
 async function outputAssertions(page: Page) {
   await expect(page.getByTestId("reported-cost")).toContainText("$0.123");
-  await expect(page.getByTestId("reported-cost")).toContainText("2 known · 1 unavailable");
-  await expect(page.getByTestId("estimated-cost")).toContainText("2 known · 1 unavailable");
+  await expect(page.getByTestId("reported-cost")).toContainText("2 of 3 calls reported a cost");
+  await expect(page.getByTestId("estimated-cost")).toContainText("2 of 3 calls priced");
+  await expect(page.getByRole("region", { name: "Cost by model" }).getByRole("rowheader", { name: "unpriced-model", exact: true })).toBeVisible();
+  await openAccounting(page);
   await expect(page.getByRole("region", { name: "Cost breakdown table" }).getByRole("rowheader", { name: "unpriced-model", exact: true })).toBeVisible();
   const categories = page.getByRole("region", { name: "Categorized usage" });
   await expect(categories).toContainText("cache read"); await expect(categories).toContainText("reasoning"); await expect(categories).toContainText("audio output");
-  await expect(categories).toContainText("0 known · 3 unavailable");
+  await expect(categories).toContainText("0 of 3");
 }
 
 test.describe("local cost analytics journeys", () => {
@@ -59,7 +65,7 @@ test("cost analytics: navigation, reload and JSON export preserve reported snaps
   await page.goto(`${runPhantom.url}/runs`);
   await page.getByRole("link", { name: "Cost & usage", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Cost & usage", exact: true })).toBeVisible();
-  await expect(page.getByTestId("estimated-cost")).toContainText("Unavailable");
+  await expect(page.getByTestId("estimated-cost")).toContainText("None of 3 calls priced");
   const manualResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/api/pricing/analytics" && response.request().method() === "POST" && response.request().postDataJSON().rates.length === 1);
   await applyManual(page); await outputAssertions(page);
   const displayed: CostAnalyticsReport = await (await manualResponse).json();
@@ -71,7 +77,7 @@ test("cost analytics: navigation, reload and JSON export preserve reported snaps
   expect(exported.report.rateAuthority).toBe("request-declared");
   await page.getByRole("combobox", { name: "Group by", exact: true }).selectOption("byProvider");
   await expect(page.getByRole("region", { name: "Cost breakdown table" }).getByRole("rowheader", { name: "fixture-provider", exact: true })).toBeVisible();
-  await page.getByText("Rate and capture provenance", { exact: true }).click();
+  await openAccounting(page);
   await expect(page.getByText("Revision fixture-rate-1 · runphantom-pricing/1", { exact: true })).toBeVisible();
   expect(externalRequests).toBe(0);
   await page.getByTestId("reported-cost").scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath("cost-analytics-manual-desktop.png"), fullPage: true });
@@ -79,7 +85,7 @@ test("cost analytics: navigation, reload and JSON export preserve reported snaps
   await page.reload();
   await expect(page.getByRole("combobox", { name: "Estimate source", exact: true })).toHaveValue("list");
   await expect(page.getByTestId("reported-cost")).toContainText("$0.123");
-  await expect(page.getByTestId("estimated-cost")).toContainText("Unavailable");
+  await expect(page.getByTestId("estimated-cost")).toContainText("None of 3 calls priced");
   const reloaded: CostAnalyticsReport = await (await reloadedResponse).json();
   expect((await downloadAnalytics(page)).report).toEqual(reloaded);
   expect(reloaded.reportedUsd).toEqual(displayed.reportedUsd);
@@ -106,10 +112,57 @@ test("cost analytics: by default real dated model ids are estimated offline at b
   // toFixed(4) rounds 0.00275 down to 0.0027 through its binary value.
   const shown = new Intl.NumberFormat("en-US", { minimumSignificantDigits: 2, maximumSignificantDigits: 2 }).format(estimate);
   await expect(page.getByTestId("estimated-cost")).toContainText(`$${shown}`);
-  await expect(page.getByTestId("estimated-cost")).toContainText("2 known · 0 unavailable");
-  await page.getByText("Rate and capture provenance", { exact: true }).click();
+  await expect(page.getByTestId("estimated-cost")).toContainText("All 2 calls priced");
+  await openAccounting(page);
   await expect(page.getByText(/prices bundled with Run Phantom/)).toBeVisible();
   expect(externalRequests).toBe(0);
+});
+
+test("cost & usage: the first number sits high, and every panel agrees with the APIs", async ({ page, runPhantom }) => {
+  const now = Date.now() - 1_000;
+  const runs = [
+    { traceId: "0000000000000000000000000000c051", agent: "refund_agent", calls: [{ model: "gpt-5-nano-2025-08-07", provider: "openai", input: 4_000, output: 2_000 }] },
+    { traceId: "0000000000000000000000000000c052", agent: "triage_agent", calls: [{ model: "claude-haiku-4-5-20251001", provider: "anthropic", input: 2_000, output: 100 }, { model: "claude-haiku-4-5-20251001", provider: "anthropic", input: 1_000, output: 50 }] },
+  ];
+  const attributes = (values: Record<string, string | number>) => Object.entries(values).map(([key, value]) => ({ key, value: typeof value === "number" ? { intValue: String(value) } : { stringValue: value } }));
+  const spans = runs.flatMap((run, runIndex) => [
+    { traceId: run.traceId, spanId: `${runIndex}`.padStart(16, "a"), name: run.agent, startTimeUnixNano: String(BigInt(now) * 1_000_000n), endTimeUnixNano: String(BigInt(now + 500) * 1_000_000n), status: { code: 1 }, attributes: attributes({ "runphantom.span.kind": "agent", "ai.telemetry.metadata.runphantom.eventName": run.agent }) },
+    ...run.calls.map((call, index) => ({ traceId: run.traceId, spanId: `${runIndex}${index}`.padStart(16, "b"), parentSpanId: `${runIndex}`.padStart(16, "a"), name: "chat",
+      startTimeUnixNano: String(BigInt(now + 10 + index * 100) * 1_000_000n), endTimeUnixNano: String(BigInt(now + 90 + index * 100) * 1_000_000n), status: { code: 1 },
+      attributes: attributes({ "runphantom.span.kind": "llm_call", "gen_ai.response.model": call.model, "gen_ai.provider.name": call.provider, "gen_ai.usage.input_tokens": call.input, "gen_ai.usage.output_tokens": call.output }) })),
+  ]);
+  expect((await page.request.post(`${runPhantom.url}/v1/traces`, { data: { resourceSpans: [{ scopeSpans: [{ spans }] }] } })).ok()).toBe(true);
+  const overview = await (await page.request.get(`${runPhantom.url}/api/overview?window=24h`)).json();
+  const listed = await (await page.request.get(`${runPhantom.url}/api/runs?envelope=1&sort=cost`)).json();
+  const usd = (value: number) => value < 0.01 ? `$${new Intl.NumberFormat("en-US", { minimumSignificantDigits: 2, maximumSignificantDigits: 2 }).format(value)}` : `$${value.toFixed(3)}`;
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${runPhantom.url}/costs`);
+  const estimated = page.getByTestId("estimated-cost");
+  await expect(estimated).toContainText(usd(overview.kpis.costUsd.value));
+  await expect(estimated).toContainText("All 3 calls priced");
+  expect((await estimated.locator("[data-kpi-value]").boundingBox())!.y).toBeLessThanOrEqual(200);
+  await expect(page.getByTestId("reported-cost")).toContainText("None of 3 calls reported a cost");
+  await expect(page.getByTestId("input-tokens")).toContainText("7,000");
+  await expect(page.getByTestId("output-tokens")).toContainText("2,150");
+
+  const byModel = page.getByRole("region", { name: "Cost by model" });
+  await expect(byModel.getByRole("link", { name: "claude-haiku-4-5-20251001", exact: true })).toHaveAttribute("href", "/runs?model=claude-haiku-4-5-20251001&window=24h&sort=cost");
+  await expect(byModel.getByRole("row").filter({ hasText: "gpt-5-nano-2025-08-07" })).toContainText(usd((4_000 * 0.05 + 2_000 * 0.4) / 1e6));
+  const byAgent = page.getByRole("region", { name: "Cost by agent" });
+  for (const agent of overview.byAgent) {
+    await expect(byAgent.getByRole("row").filter({ hasText: agent.agent })).toContainText(usd(agent.costUsd));
+  }
+  const expensive = page.getByRole("region", { name: "Most expensive runs" });
+  await expect(expensive.getByRole("row").nth(1).getByRole("link")).toHaveAttribute("href", `/runs/${listed.runs[0].id}`);
+  await expect(expensive.getByRole("row").nth(1)).toContainText(usd(listed.runs[0].est_cost_usd));
+
+  await page.getByRole("button", { name: "Tokens", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Tokens per hour", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Last 7 days", exact: true }).click();
+  await expect(page).toHaveURL(/\/costs\?window=7d$/);
+  await expect(page.getByText(/Local runs · last 7 days/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Tokens per day (UTC)", exact: true })).toBeVisible();
 });
 
 test("cost analytics: export refuses draft rates, pending calculations and changed captures", async ({ page, runPhantom }) => {
@@ -158,7 +211,7 @@ test("cost analytics: export refuses draft rates, pending calculations and chang
   expect(downloads).toHaveLength(1);
 });
 
-test("cost analytics: unavailable ancestry is labelled as timed generation candidates", async ({ page, runPhantom }, info) => {
+test("cost analytics: calls without a known place in their run are explained in plain English", async ({ page, runPhantom }, info) => {
   const captured = await page.request.post(`${runPhantom.url}/v1/traces`, { data: capture(true) }); expect(captured.ok()).toBe(true);
   const beforeDetail = await (await page.request.get(`${runPhantom.url}/api/runs/detail/${traceId}`)).json();
   const to = Date.now();
@@ -167,10 +220,12 @@ test("cost analytics: unavailable ancestry is labelled as timed generation candi
   expect(report.population).toMatchObject({ selectedGenerations: 3, nestedExcluded: 0, ancestryUnavailable: 1 });
   expect(report.reportedUsd).toMatchObject({ eligibleCount: 3, knownCount: 1, unavailableCount: 2, zeroCount: 1, knownSum: 0, completeTotal: null });
   await page.goto(`${runPhantom.url}/costs`);
-  await expect(page.getByText("3 timed generation candidates · 0 nested generations excluded · 0 with unavailable timestamps · 1 with unavailable ancestry", { exact: true })).toBeVisible();
-  await expect(page.getByText(/timed top-level generations/)).toHaveCount(0);
-  await expect(page.getByTestId("reported-cost")).toContainText("1 known · 2 unavailable");
-  await expect(page.getByText("Known subtotal; complete reported spend unavailable.", { exact: false })).toBeVisible();
+  await expect(page.getByText(/timed generation candidates|timed top-level generations|Known subtotal/)).toHaveCount(0);
+  await expect(page.getByTestId("reported-cost")).toContainText("$0.00");
+  await expect(page.getByTestId("reported-cost")).toContainText("1 of 3 calls reported a cost");
+  await openAccounting(page);
+  await expect(page.getByText("3 model calls started in this window and are counted.", { exact: true })).toBeVisible();
+  await expect(page.getByText("1 call could not be placed in its run, so its cost and tokens count as unknown.", { exact: true })).toBeVisible();
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport); await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: info.outputPath(`cost-analytics-ancestry-${viewport.width}x${viewport.height}.png`), fullPage: true });
@@ -185,24 +240,24 @@ test("cost analytics: consented nominal quote is explicit and revocation removes
   await page.goto(`${runPhantom.url}/costs`); await page.getByRole("combobox", { name: "Estimate source", exact: true }).selectOption("nominal");
   await expect(page.getByText(/Public pricing is disabled/)).toBeVisible(); expect(catalogueRequests).toBe(0);
   // Without consent the catalogue estimate waits, but captured tokens and reported cost stay visible.
-  await expect(page.getByTestId("reported-cost")).toContainText("$0.123"); await expect(page.getByTestId("estimated-cost")).toContainText("Unavailable");
-  await expect(page.getByRole("region", { name: "Cost breakdown table" }).getByRole("rowheader", { name: "unpriced-model", exact: true })).toBeVisible();
+  await expect(page.getByTestId("reported-cost")).toContainText("$0.123"); await expect(page.getByTestId("estimated-cost")).toContainText("None of 3 calls priced");
+  await expect(page.getByRole("region", { name: "Cost by model" }).getByRole("rowheader", { name: "unpriced-model", exact: true })).toBeVisible();
   await page.getByRole("link", { name: /^settings$/i }).click(); await page.getByRole("checkbox", { name: /fetch public model pricing/i }).check();
   await page.getByRole("link", { name: "Cost & usage", exact: true }).click(); await page.getByRole("combobox", { name: "Estimate source", exact: true }).selectOption("nominal");
   await expect(page.getByTestId("estimated-cost")).toContainText("$0.0051"); await outputAssertions(page);
-  await page.getByText("Rate and capture provenance", { exact: true }).click(); await expect(page.getByText(/Nominal public input\/output catalogue estimate/)).toBeVisible();
+  await openAccounting(page); await expect(page.getByText(/prices in the OpenRouter public catalogue/)).toBeVisible();
   await expect(page.getByText("fixture/fixture-model", { exact: true })).toBeVisible(); expect(catalogueRequests).toBe(1);
   await page.getByTestId("reported-cost").scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath("cost-analytics-nominal-desktop.png"), fullPage: true });
   const settings = await context.newPage(); await settings.goto(`${runPhantom.url}/settings`); await settings.getByRole("checkbox", { name: /fetch public model pricing/i }).uncheck();
   await expect(page.getByText(/Public pricing is disabled/)).toBeVisible(); await expect(page.getByTestId("estimated-cost")).not.toContainText("$0.0051");
-  await expect(page.getByTestId("estimated-cost")).toContainText("Unavailable"); await expect(page.getByTestId("reported-cost")).toContainText("$0.123"); expect(catalogueRequests).toBe(1); await settings.close();
+  await expect(page.getByTestId("estimated-cost")).toContainText("None of 3 calls priced"); await expect(page.getByTestId("reported-cost")).toContainText("$0.123"); expect(catalogueRequests).toBe(1); await settings.close();
 });
 
 for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 800 }, { width: 1024, height: 768 }, { width: 768, height: 1024 }, { width: 390, height: 844 }, { width: 320, height: 740 }]) {
   test(`cost analytics: keyboard and bounded layout ${viewport.width}x${viewport.height}`, async ({ page, runPhantom }, info) => {
     await page.setViewportSize(viewport); await seed(page.request, runPhantom.url); await page.goto(`${runPhantom.url}/costs`); await applyManual(page); await outputAssertions(page);
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.getByRole("combobox", { name: "Time window", exact: true }).focus(); await page.keyboard.press("Tab"); await expect(page.getByRole("combobox", { name: "Estimate source", exact: true })).toBeFocused();
+    await page.getByRole("group", { name: "Time window", exact: true }).getByRole("button", { name: "Last 30 days", exact: true }).focus(); await page.keyboard.press("Tab"); await expect(page.getByRole("combobox", { name: "Estimate source", exact: true })).toBeFocused();
     expect(await page.getByRole("button", { name: "Apply frozen rates", exact: true }).evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
     await page.emulateMedia({ reducedMotion: "reduce" }); await page.screenshot({ path: info.outputPath(`cost-analytics-controls-${viewport.width}x${viewport.height}.png`), fullPage: true });
     await page.getByTestId("reported-cost").scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath(`cost-analytics-${viewport.width}x${viewport.height}.png`), fullPage: true });
@@ -221,7 +276,7 @@ teamTest("cost analytics: actual private project/UI and revoked viewer never fal
   const keyResponse = await mutate(`/projects/${projectId}/keys`, { label: "Synthetic pricing producer" }); expect(keyResponse.ok()).toBe(true); const key = (await keyResponse.json()).token;
   const ingest = await page.request.post(`${team.url}/api/team/ingest/v1/traces`, { headers: { Authorization: `Bearer ${key}` }, data: capture() }); expect(ingest.ok()).toBe(true);
   await page.getByRole("link", { name: "Cost & usage", exact: true }).click(); await applyManual(page); await outputAssertions(page);
-  await page.getByRole("combobox", { name: "Group by", exact: true }).selectOption("byProject"); await expect(page.getByRole("rowheader", { name: projectId, exact: true })).toBeVisible();
+  await openAccounting(page); await page.getByRole("combobox", { name: "Group by", exact: true }).selectOption("byProject"); await expect(page.getByRole("rowheader", { name: projectId, exact: true })).toBeVisible();
   const ownerExport = await downloadAnalytics(page);
   expect(ownerExport.report.scope).toEqual({ kind: "team", projectId });
   expect(ownerExport.report.rateRevisions).toEqual([rateFixture()]);
