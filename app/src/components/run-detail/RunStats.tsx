@@ -206,7 +206,7 @@ export function StatsLine({ stats, model, spans, active, startedAt, completionUn
   const costPanelRef = useRef<HTMLDivElement>(null);
   const costPanelId = useId();
   const pricing = useSyncExternalStore(subscribePricing, getPricingSnapshot, getPricingSnapshot);
-  const [costPosition, setCostPosition] = useState<{ left: number; top: number; width: number } | null>(null);
+  const [costPosition, setCostPosition] = useState<{ left: number; top: number; width: number; maxHeight: number } | null>(null);
   const inTok = stats.inTokens ?? 0;
   const outTok = stats.outTokens ?? 0;
 
@@ -225,8 +225,14 @@ export function StatsLine({ stats, model, spans, active, startedAt, completionUn
       const rect = costButtonRef.current?.getBoundingClientRect();
       if (!rect) return;
       const width = Math.min(352, window.innerWidth - 32);
-      const height = Math.min(costPanelRef.current?.scrollHeight ?? 400, 400, window.innerHeight - 32);
-      setCostPosition({ left: Math.max(16, Math.min(rect.left, window.innerWidth - width - 16)), top: rect.bottom + height + 8 <= window.innerHeight - 16 ? rect.bottom + 8 : Math.max(16, rect.top - height - 8), width });
+      const natural = Math.min(costPanelRef.current?.scrollHeight ?? 400, 400);
+      // Placed whole on the roomier side of the trigger and scrolled when it does
+      // not fit, never shifted over the trigger: that hid the button that closes it.
+      const below = window.innerHeight - 16 - (rect.bottom + 8);
+      const above = rect.top - 8 - 16;
+      const placeBelow = natural <= below || below >= above;
+      const maxHeight = Math.max(0, Math.min(natural, placeBelow ? below : above));
+      setCostPosition({ left: Math.max(16, Math.min(rect.left, window.innerWidth - width - 16)), top: placeBelow ? rect.bottom + 8 : rect.top - 8 - maxHeight, width, maxHeight });
     };
     position();
     // The first measurement runs before the panel width is constrained, so a
@@ -315,7 +321,7 @@ export function StatsLine({ stats, model, spans, active, startedAt, completionUn
             </button>
             {showCost && (
               <div ref={costPanelRef} id={costPanelId} role="region" aria-label="Cost breakdown" className="fixed z-50 overflow-y-auto rounded-md border border-rp-line bg-rp-surface p-4 text-[12px] shadow-e3"
-                style={{ ...costPosition, maxHeight: "min(400px, calc(100vh - 32px))", visibility: costPosition ? "visible" : "hidden" }}>
+                style={{ ...costPosition, maxHeight: costPosition?.maxHeight ?? "min(400px, calc(100vh - 32px))", visibility: costPosition ? "visible" : "hidden" }}>
                 <div className="rp-eyebrow mb-2">Cost by model</div>
                 <p className="mb-3 whitespace-normal leading-5 text-rp-ink-muted">Reported costs are used as is. Estimates price input, output and cached input at list prices as of {PRICE_TABLE_AS_OF}, or input and output at OpenRouter catalogue quotes; fees excluded.</p>
                 {breakdown.map(b => (

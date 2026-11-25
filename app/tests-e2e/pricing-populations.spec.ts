@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Page, Route } from "@playwright/test";
+import type { Locator, Page, Route } from "@playwright/test";
 import type { Snapshot } from "../../src/evaluations/protocol";
 import { expect, test } from "./fixtures";
 import { headerSeparatorProblems } from "./helpers";
@@ -452,6 +452,27 @@ async function checkLayout(page: Page, population: Population, state: State, des
   return { state, desktop, viewport: page.viewportSize(), labelWidth: button?.width ?? null, ...layout };
 }
 
+/**
+ * The breakdown opens above its trigger when there is more room there, and then
+ * covers the duration stat; clicking that stat timed out instead of testing
+ * dismissal. Click the first plain-text target the open region does not cover.
+ */
+async function clickOutside(page: Page, region: Locator) {
+  const box = (await region.boundingBox())!;
+  const candidates = [
+    page.locator(".rp-meta-metrics").getByText("duration", { exact: true }),
+    page.getByRole("heading", { level: 1 }).first(),
+    page.getByText("Traces are stored on this machine", { exact: true }),
+  ];
+  for (const candidate of candidates) {
+    const target = await candidate.boundingBox();
+    if (!target || target.width === 0) continue;
+    const overlaps = target.x < box.x + box.width && box.x < target.x + target.width && target.y < box.y + box.height && box.y < target.y + target.height;
+    if (!overlaps) { await candidate.click(); return; }
+  }
+  throw new Error("Every outside-click target is covered by the cost breakdown");
+}
+
 async function disclosure(page: Page, population: Population, state: State, activation: "keyboard" | "click" | "touch", outside = false) {
   const triggers = page.locator(".rp-meta-metrics").getByRole("button", { name: SUMMARY });
   if (!population.rows.length) { await expect(triggers).toHaveCount(0); return; }
@@ -498,13 +519,16 @@ async function disclosure(page: Page, population: Population, state: State, acti
     await expect(region).not.toContainText("$0.00");
   }
   const viewport = page.viewportSize()!;
+  const trigger = (await button.boundingBox())!;
+  const panel = (await region.boundingBox())!;
+  expect(panel.y >= trigger.y + trigger.height - 1 || panel.y + panel.height <= trigger.y + 1, "the open breakdown must not cover its own trigger").toBe(true);
   await expect.poll(async () => {
     const box = await region.boundingBox();
     return !!box && box.x >= 16 && box.y >= 16 && box.x + box.width <= viewport.width - 16 + 1
       && box.y + box.height <= viewport.height - 16 + 1;
   }).toBe(true);
   expect(await region.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
-  if (outside) await page.locator(".rp-meta-metrics").getByText("duration", { exact: true }).click();
+  if (outside) await clickOutside(page, region);
   else await page.keyboard.press("Escape");
   await expect(region).toHaveCount(0);
   await expect(button).toHaveAttribute("aria-expanded", "false");
