@@ -55,6 +55,18 @@ export function chordMatches(event: KeyLike, chord: Chord, mac: boolean): boolea
 }
 
 /** Human-readable chord text for kbd chips: "⌘K" on macOS, "Ctrl+K" elsewhere, "G R" for sequences. */
+/**
+ * aria-keyshortcuts value for one chord on this platform: "Meta+K" on macOS, "Control+K"
+ * elsewhere. The attribute separates alternatives with spaces and cannot express
+ * sequences, so pass a single chord such as "mod+k", not "g r".
+ */
+export function ariaKeyShortcuts(keys: string, mac = isMacPlatform()): string {
+  return parseKeys(keys).slice(0, 1).map(chord => {
+    const key = chord.key === " " ? "Space" : chord.key === "escape" ? "Escape" : chord.key.length === 1 ? chord.key.toUpperCase() : chord.key[0]!.toUpperCase() + chord.key.slice(1);
+    return [chord.mod ? (mac ? "Meta" : "Control") : "", chord.alt ? "Alt" : "", chord.shift && !shiftIsImplicit(chord.key) ? "Shift" : "", key].filter(Boolean).join("+");
+  }).join("");
+}
+
 export function formatKeys(keys: string, mac = isMacPlatform()): string {
   return parseKeys(keys).map(chord => {
     const key = chord.key === " " ? "Space" : chord.key === "escape" ? "Esc" : chord.key.length === 1 ? chord.key.toUpperCase() : chord.key[0]!.toUpperCase() + chord.key.slice(1);

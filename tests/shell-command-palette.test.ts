@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fuzzyMatchEntry, fuzzyScore } from "../app/src/shell/fuzzy";
-import { chordMatches, formatKeys, matchShortcut, parseKeys, type KeyLike } from "../app/src/shell/keyboard";
+import { ariaKeyShortcuts, chordMatches, formatKeys, matchShortcut, parseKeys, type KeyLike } from "../app/src/shell/keyboard";
 import { commandDetail, commandStatus, listCommands, listShortcuts, registerCommands, registerShortcuts, type PaletteCommand, type ShortcutDefinition } from "../app/src/shell/commands";
 import { buildSections } from "../app/src/shell/palette-model";
 import { readOtlpEndpoint } from "../app/src/shell/otlp";
@@ -109,6 +109,13 @@ describe("keyboard chords", () => {
     expect(formatKeys("mod+k", false)).toBe("Ctrl+K");
     expect(formatKeys("g r", true)).toBe("G R");
     expect(formatKeys("?", true)).toBe("?");
+  });
+
+  test("aria-keyshortcuts names the one key the platform actually uses", () => {
+    expect(ariaKeyShortcuts("mod+k", true)).toBe("Meta+K");
+    expect(ariaKeyShortcuts("mod+j", false)).toBe("Control+J");
+    expect(ariaKeyShortcuts("mod+shift+p", false)).toBe("Control+Shift+P");
+    expect(ariaKeyShortcuts("?", true)).toBe("?");
   });
 });
 

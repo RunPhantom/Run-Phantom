@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Monitor, Moon, Search, Sun } from "lucide-react";
 import { openCommandPalette } from "./overlays";
-import { formatKeys, isMacPlatform } from "./keyboard";
+import { ariaKeyShortcuts, formatKeys, isMacPlatform } from "./keyboard";
 import { setThemePreference, useThemePreference, type ThemePreference } from "./theme";
 
 const THEME_CYCLE: Record<ThemePreference, ThemePreference> = { light: "dark", dark: "system", system: "light" };
@@ -17,7 +17,7 @@ export function CommandPaletteTrigger() {
       type="button"
       onClick={openCommandPalette}
       aria-haspopup="dialog"
-      aria-keyshortcuts="Meta+K Control+K"
+      aria-keyshortcuts={ariaKeyShortcuts("mod+k", mac)}
       data-command-palette-trigger
       className={`${headerControl} gap-2 md:w-[300px] md:justify-start md:px-3 lg:h-9 lg:w-[300px]`}
     >
@@ -44,7 +44,7 @@ export function ThemeToggle() {
           setThemePreference(next);
           setAnnouncement(`${THEME_LABEL[next]} theme`);
         }}
-        className={`${headerControl} hidden sm:flex`}
+        className={headerControl}
       >
         <Icon aria-hidden="true" className="size-4" />
       </button>
