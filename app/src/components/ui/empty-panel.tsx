@@ -15,7 +15,7 @@ export function EmptyPanel({ eyebrow, title, description, action, tone = "defaul
   return (
     <section
       className={cn(
-        "flex min-w-0 flex-col items-start border border-dashed bg-white",
+        "flex min-w-0 flex-col items-start border border-dashed bg-rp-surface",
         compact ? "gap-3 px-5 py-6" : "gap-4 px-6 py-10 sm:px-10 sm:py-14",
         tone === "danger" ? "border-rp-danger-border" : "border-[color:var(--rp-line-dashed)]",
         className

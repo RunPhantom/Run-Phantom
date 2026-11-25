@@ -8,7 +8,7 @@ const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElemen
       ref={ref}
       data-tone={tone}
       className={cn(
-        "min-w-0 rounded-lg border bg-white",
+        "min-w-0 rounded-lg border bg-rp-surface",
         tone === "default" && "border-rp-line",
         tone === "accent" && "border-rp-wash-border bg-rp-wash",
         tone === "danger" && "border-rp-danger-border bg-rp-danger-soft",

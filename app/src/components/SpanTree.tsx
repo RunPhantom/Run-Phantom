@@ -204,7 +204,7 @@ function SpanDetail({ span }: { span: Span }) {
             {info.label}
           </span>
           {isErr && <span className="rounded-sm bg-rp-danger-soft px-1.5 py-0.5 font-mono text-[10px] font-medium tracking-[0.06em] text-rp-danger">ERROR</span>}
-          {(() => { const p = detectProvider(span.model, span.provider); return p ? <span className="rounded-sm border border-rp-line bg-white px-1.5 py-0.5 font-mono text-[10px] font-medium text-rp-ink-muted">{p.label}</span> : null; })()}
+          {(() => { const p = detectProvider(span.model, span.provider); return p ? <span className="rounded-sm border border-rp-line bg-rp-surface px-1.5 py-0.5 font-mono text-[10px] font-medium text-rp-ink-muted">{p.label}</span> : null; })()}
         </div>
         <div className="mt-1.5 break-all font-display text-[18px] font-semibold tracking-[-0.02em] text-rp-ink">{span.name}</div>
       </div>

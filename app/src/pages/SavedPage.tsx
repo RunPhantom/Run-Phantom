@@ -216,7 +216,7 @@ function FilterBar({ filters, agents, onUpdate, onResetSecondary }: {
         ref={btnRef}
         aria-label="Open filters"
         aria-expanded={popOpen}
-        className={`rp-ease flex h-8 shrink-0 items-center gap-1.5 rounded-control border px-2.5 text-xs font-medium ${activeCount > 0 ? "border-rp-wash-border bg-rp-wash text-rp-blue" : "border-rp-line bg-white text-rp-ink hover:border-rp-wash-border hover:bg-rp-wash"}`}
+        className={`rp-ease flex h-8 shrink-0 items-center gap-1.5 rounded-control border px-2.5 text-xs font-medium ${activeCount > 0 ? "border-rp-wash-border bg-rp-wash text-rp-blue" : "border-rp-line bg-rp-surface text-rp-ink hover:border-rp-wash-border hover:bg-rp-wash"}`}
         onClick={() => setPopOpen(v => !v)}
       >
         <SlidersHorizontal aria-hidden="true" className="size-3.5" />
@@ -231,7 +231,7 @@ function FilterBar({ filters, agents, onUpdate, onResetSecondary }: {
             el.style.top = `${r.bottom + 6}px`;
             el.style.right = `${window.innerWidth - r.right}px`;
           }}
-          className="rp-pop fixed z-[9999] w-[240px] space-y-3 rounded-lg border border-rp-line bg-white p-3 shadow-e3"
+          className="rp-pop fixed z-[9999] w-[240px] space-y-3 rounded-lg border border-rp-line bg-rp-surface p-3 shadow-e3"
         >
           <label className="grid gap-1.5">
             <span className="rp-field-label">Agent</span>
@@ -364,7 +364,7 @@ export function SavedPage() {
         want to reach for them.
       */}
       <div
-        className={`${isMobile ? (selectedEvent ? "hidden" : "w-full") : "w-80 border-r border-rp-line"} flex flex-shrink-0 flex-col bg-white`}
+        className={`${isMobile ? (selectedEvent ? "hidden" : "w-full") : "w-80 border-r border-rp-line"} flex flex-shrink-0 flex-col bg-rp-surface`}
       >
         <div className="space-y-3 border-b border-rp-line px-5 py-5">
           <div className="flex items-start justify-between gap-3">
@@ -419,7 +419,7 @@ export function SavedPage() {
             {isMobile && (
               <button
                 type="button"
-                className="rp-ease flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-white px-4 py-2 text-left text-[13px] font-medium text-rp-ink hover:bg-rp-row-hover"
+                className="rp-ease flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-rp-surface px-4 py-2 text-left text-[13px] font-medium text-rp-ink hover:bg-rp-row-hover"
                 onClick={() => navigate("/saved")}
               >
                 <ArrowLeft aria-hidden="true" className="size-3.5 text-rp-blue" />
@@ -480,7 +480,7 @@ function SavedListItem({ event, selected, onClick, onRemove, onMove }: {
       <button
         type="button"
         aria-current={selected ? "true" : undefined}
-        className={`rp-ease w-full rounded-lg border py-3 pl-3 pr-12 text-left ${selected ? "border-rp-wash-border bg-rp-wash" : "border-transparent hover:border-rp-line hover:bg-white"}`}
+        className={`rp-ease w-full rounded-lg border py-3 pl-3 pr-12 text-left ${selected ? "border-rp-wash-border bg-rp-wash" : "border-transparent hover:border-rp-line hover:bg-rp-surface"}`}
         onClick={onClick}
       >
         <div className="min-w-0 overflow-hidden">
@@ -499,7 +499,7 @@ function SavedListItem({ event, selected, onClick, onRemove, onMove }: {
           )}
           <div className="mt-2 flex items-center gap-2 overflow-hidden">
             {event.folder && (
-              <span className="flex shrink-0 items-center gap-1 rounded-sm border border-rp-line bg-white px-1.5 py-px text-[11px] font-medium text-rp-ink-soft">
+              <span className="flex shrink-0 items-center gap-1 rounded-sm border border-rp-line bg-rp-surface px-1.5 py-px text-[11px] font-medium text-rp-ink-soft">
                 <span aria-hidden="true" className="size-1.5 rounded-[1px]" style={{ background: folderColor! }} />
                 {event.folder}
               </span>

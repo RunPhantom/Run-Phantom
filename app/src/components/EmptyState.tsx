@@ -47,7 +47,7 @@ export function EmptyState({ onSeeDemoTraces }: EmptyStateProps) {
           Instrument a local agent once. Run Phantom streams traces, tool calls, and replay context into a local evidence workspace.
         </p>
 
-        <section aria-labelledby="runphantom-setup-step" className="mt-8 w-full rounded-lg border border-rp-line bg-white p-5 sm:p-6">
+        <section aria-labelledby="runphantom-setup-step" className="mt-8 w-full rounded-lg border border-rp-line bg-rp-surface p-5 sm:p-6">
           <p id="runphantom-setup-step" className="rp-eyebrow">
             <span className="text-rp-blue">01</span> Instrument an agent
           </p>
@@ -62,7 +62,7 @@ export function EmptyState({ onSeeDemoTraces }: EmptyStateProps) {
                 onClick={handleSeeDemoTraces}
                 disabled={demoLoading}
                 aria-busy={demoLoading || undefined}
-                className="inline-flex h-9 items-center rounded-control border border-rp-line bg-white px-4 text-[13px] font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash disabled:cursor-wait disabled:opacity-60"
+                className="inline-flex h-9 items-center rounded-control border border-rp-line bg-rp-surface px-4 text-[13px] font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash disabled:cursor-wait disabled:opacity-60"
               >
                 {demoLoading ? "Loading demo traces..." : "Load demo traces"}
               </button>
@@ -123,7 +123,7 @@ function WorksWith() {
   );
 }
 
-const agentTileClass = "inline-flex h-11 items-center gap-2 rounded-control border border-rp-line bg-white px-3 text-[13px] text-rp-ink";
+const agentTileClass = "inline-flex h-11 items-center gap-2 rounded-control border border-rp-line bg-rp-surface px-3 text-[13px] text-rp-ink";
 
 function AgentName({ agent }: { agent: Agent }) {
   const content = (

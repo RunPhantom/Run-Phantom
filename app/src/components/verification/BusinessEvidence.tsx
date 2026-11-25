@@ -16,7 +16,7 @@ export function BusinessEvidence({ events, enabled, connected, retained = false 
     <ul className="space-y-3">{[...latest.values()].reverse().slice(0, 12).map(event => {
       const data = event.data;
       const findings = data.state === "complete" ? bodyFailureFindings(data.body) : [];
-      return <li key={String(data.requestId)} className="rp-fade-rise space-y-2 rounded-md border border-rp-line bg-white p-3 text-[13px] text-rp-ink">
+      return <li key={String(data.requestId)} className="rp-fade-rise space-y-2 rounded-md border border-rp-line bg-rp-surface p-3 text-[13px] text-rp-ink">
         <div className="flex flex-wrap justify-between gap-2"><span className="min-w-0 break-all font-mono text-[12px] font-medium">{String(data.method)} {String(data.url)}</span><span className="text-[12px] text-rp-ink-muted">{String(data.state)}{event.truncated ? " · partial evidence" : ""}</span></div>
         <p className="rp-meta">Request {String(data.requestId)} · {String(data.bytes)} bytes · {String(data.chunks)} chunks · HTTP {String(data.status)}</p>
         {(data.state !== "complete" || event.truncated || data.redacted === true) && <p className="text-[12px] text-rp-warning">Business outcome unknown. Incomplete bodies are withheld; redacted content cannot prove the contract.</p>}

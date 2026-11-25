@@ -818,7 +818,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
                     <HeaderIconTooltip label="Copy terminal command">
                       <button
                         onClick={() => void copyOpenInTerminalCommand()}
-                        className="grid h-7 w-7 place-items-center rounded-md border border-[color:var(--rp-border)] bg-white text-[color:var(--rp-ink-soft)] transition-[background-color,border-color,color] duration-250 ease-standard hover:border-[color:var(--rp-ink-a12)] hover:bg-rp-wash hover:border-rp-wash-border hover:text-[color:var(--rp-ink-strong)]"
+                        className="grid h-7 w-7 place-items-center rounded-md border border-[color:var(--rp-border)] bg-rp-surface text-[color:var(--rp-ink-soft)] transition-[background-color,border-color,color] duration-250 ease-standard hover:border-[color:var(--rp-ink-a12)] hover:bg-rp-wash hover:border-rp-wash-border hover:text-[color:var(--rp-ink-strong)]"
                         aria-label="Copy terminal command"
                       >
                         <ExternalLink className="h-3.5 w-3.5" />
@@ -827,7 +827,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
                     {terminalCommandCopied && (
                     <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-lg border border-[color:var(--rp-border)] bg-[color:var(--rp-surface)] px-3 py-2 text-[11px] leading-relaxed text-[color:var(--rp-ink-strong)] shadow-2xl">
                       <div>Copied command to clipboard. Run it in your terminal.</div>
-                      <code className="mt-2 block select-all break-all rounded bg-white px-2 py-1.5 font-mono text-[10px] text-[color:var(--rp-ink-strong)]">
+                      <code className="mt-2 block select-all break-all rounded bg-rp-surface px-2 py-1.5 font-mono text-[10px] text-[color:var(--rp-ink-strong)]">
                         {terminalCommand}
                       </code>
                       </div>
@@ -837,7 +837,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
                 <HeaderIconTooltip label="New chat">
                   <button
                     onClick={startNewChat}
-                    className="grid h-7 w-7 place-items-center rounded-md border border-[color:var(--rp-border)] bg-white text-[color:var(--rp-ink-soft)] transition-[background-color,border-color,color] duration-250 ease-standard hover:border-[color:var(--rp-ink-a12)] hover:bg-rp-wash hover:border-rp-wash-border hover:text-[color:var(--rp-ink-strong)]"
+                    className="grid h-7 w-7 place-items-center rounded-md border border-[color:var(--rp-border)] bg-rp-surface text-[color:var(--rp-ink-soft)] transition-[background-color,border-color,color] duration-250 ease-standard hover:border-[color:var(--rp-ink-a12)] hover:bg-rp-wash hover:border-rp-wash-border hover:text-[color:var(--rp-ink-strong)]"
                     aria-label="New chat"
                   >
                     <Plus className="h-3.5 w-3.5" />
@@ -846,7 +846,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
                 <HeaderIconTooltip label="Hide">
                   <button
                     onClick={() => setCollapsed(true)}
-                    className="grid h-7 w-7 place-items-center rounded-md border border-[color:var(--rp-border)] bg-white text-[color:var(--rp-ink-soft)] transition-[background-color,border-color,color] duration-250 ease-standard hover:border-[color:var(--rp-ink-a12)] hover:bg-rp-wash hover:border-rp-wash-border hover:text-[color:var(--rp-ink-strong)]"
+                    className="grid h-7 w-7 place-items-center rounded-md border border-[color:var(--rp-border)] bg-rp-surface text-[color:var(--rp-ink-soft)] transition-[background-color,border-color,color] duration-250 ease-standard hover:border-[color:var(--rp-ink-a12)] hover:bg-rp-wash hover:border-rp-wash-border hover:text-[color:var(--rp-ink-strong)]"
                     aria-label="Hide chat"
                   >
                     <X className="h-3.5 w-3.5" />
@@ -1014,7 +1014,7 @@ function FloatingAskButton({ provider, onOpen }: { provider: AgentProviderId; on
       <button
         type="button"
         onClick={onOpen}
-        className="flex h-10 items-center gap-2 rounded-control border border-rp-line bg-white px-4 text-[13px] font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash"
+        className="flex h-10 items-center gap-2 rounded-control border border-rp-line bg-rp-surface px-4 text-[13px] font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash"
         title={`Ask ${providerLabel(provider)}`}
       >
         <Terminal aria-hidden="true" className="h-4 w-4 text-rp-blue" />
@@ -1092,12 +1092,12 @@ function DirectoryPicker({
             aria-label="Working directory path"
             value={pathInput}
             onChange={(event) => setPathInput(event.target.value)}
-            className="min-w-0 flex-1 rounded-md border border-[color:var(--rp-border)] bg-white px-2 py-1.5 font-mono text-xs text-[color:var(--rp-ink-strong)] placeholder:text-[color:var(--rp-ink-muted)] focus:border-[color:var(--rp-border)] focus:outline-none"
+            className="min-w-0 flex-1 rounded-md border border-[color:var(--rp-border)] bg-rp-surface px-2 py-1.5 font-mono text-xs text-[color:var(--rp-ink-strong)] placeholder:text-[color:var(--rp-ink-muted)] focus:border-[color:var(--rp-border)] focus:outline-none"
             placeholder="~/Projects/my-agent"
           />
           <button
             type="submit"
-            className="rounded-md border border-[color:var(--rp-border)] bg-white px-2.5 py-1.5 text-xs text-[color:var(--rp-ink-soft)] transition-colors hover:bg-rp-wash hover:border-rp-wash-border hover:text-[color:var(--rp-ink-strong)]"
+            className="rounded-md border border-[color:var(--rp-border)] bg-rp-surface px-2.5 py-1.5 text-xs text-[color:var(--rp-ink-soft)] transition-colors hover:bg-rp-wash hover:border-rp-wash-border hover:text-[color:var(--rp-ink-strong)]"
           >
             Go to path
           </button>
@@ -1123,7 +1123,7 @@ function DirectoryPicker({
           </button>
         </div>
 
-        <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-[color:var(--rp-border)] bg-white p-1">
+        <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-[color:var(--rp-border)] bg-rp-surface p-1">
           {loading && (
             <div className="flex items-center justify-center gap-2 py-8 text-xs text-[color:var(--rp-ink-muted)]">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1160,7 +1160,7 @@ function DirectoryPicker({
               type="button"
               disabled={!listing}
               onClick={() => listing && onSelect(listing.path)}
-              className="rounded-md border border-[color:var(--rp-border)] bg-white px-2.5 py-1.5 text-xs font-medium text-[color:var(--rp-ink-strong)] transition-colors hover:bg-rp-wash hover:border-rp-wash-border disabled:cursor-not-allowed disabled:opacity-35"
+              className="rounded-md border border-[color:var(--rp-border)] bg-rp-surface px-2.5 py-1.5 text-xs font-medium text-[color:var(--rp-ink-strong)] transition-colors hover:bg-rp-wash hover:border-rp-wash-border disabled:cursor-not-allowed disabled:opacity-35"
             >
               Select
             </button>
@@ -1497,7 +1497,7 @@ function AskUserQuestionCard({
   const complete = Object.keys(answers).length === prompt.questions.length;
 
   return (
-    <div className="message-arrive w-[90%] rounded border px-3 py-3 text-[color:var(--rp-ink-strong)]" style={{ borderColor: "color-mix(in srgb, var(--rp-warning) 24%, white 76%)", background: "color-mix(in srgb, var(--rp-warning) 7%, white 93%)" }}>
+    <div className="message-arrive w-[90%] rounded border px-3 py-3 text-[color:var(--rp-ink-strong)]" style={{ borderColor: "color-mix(in srgb, var(--rp-warning) 24%, var(--rp-surface) 76%)", background: "color-mix(in srgb, var(--rp-warning) 7%, var(--rp-surface) 93%)" }}>
       <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-[color:var(--rp-warning)]">Claude needs input</div>
       <div className="space-y-3">
         {prompt.questions.map((question, questionIndex) => {
@@ -1519,7 +1519,7 @@ function AskUserQuestionCard({
                       role={question.multiSelect ? "checkbox" : "radio"}
                       aria-checked={active}
                       onClick={() => toggle(questionIndex, option.label, question.multiSelect)}
-                      className={`rounded border px-2 py-1.5 text-left text-[color:var(--rp-ink-strong)] transition-[background-color,border-color,color] ${active ? "border-rp-wash-border bg-rp-wash text-rp-blue" : "border-[color:var(--rp-border)] bg-white hover:bg-rp-wash hover:border-rp-wash-border"}`}
+                      className={`rounded border px-2 py-1.5 text-left text-[color:var(--rp-ink-strong)] transition-[background-color,border-color,color] ${active ? "border-rp-wash-border bg-rp-wash text-rp-blue" : "border-[color:var(--rp-border)] bg-rp-surface hover:bg-rp-wash hover:border-rp-wash-border"}`}
                     >
                       <div className="text-xs font-medium">{option.label}</div>
                       {option.description && <div className="mt-0.5 text-[11px] text-[color:var(--rp-ink-muted)]">{option.description}</div>}
@@ -1532,7 +1532,7 @@ function AskUserQuestionCard({
                 value={otherText[questionIndex] ?? ""}
                 onChange={(event) => setOtherText((current) => ({ ...current, [questionIndex]: event.target.value }))}
                 placeholder="Other"
-                className="w-full rounded border border-[color:var(--rp-border)] bg-white px-2 py-1.5 text-xs text-[color:var(--rp-ink-strong)] placeholder:text-[color:var(--rp-ink-muted)] focus:outline-none focus:border-[color:var(--rp-border)]"
+                className="w-full rounded border border-[color:var(--rp-border)] bg-rp-surface px-2 py-1.5 text-xs text-[color:var(--rp-ink-strong)] placeholder:text-[color:var(--rp-ink-muted)] focus:outline-none focus:border-[color:var(--rp-border)]"
               />
             </fieldset>
           );
@@ -1542,7 +1542,7 @@ function AskUserQuestionCard({
         type="button"
         disabled={!complete}
         onClick={() => onAnswer(answers)}
-        className="mt-3 flex min-h-9 items-center justify-center gap-2 rounded border border-[color:var(--rp-border)] bg-white px-3 text-xs text-[color:var(--rp-ink-strong)] hover:bg-rp-wash hover:border-rp-wash-border transition-[background-color,color] duration-250 ease-standard disabled:opacity-35 disabled:cursor-not-allowed disabled:active:scale-100"
+        className="mt-3 flex min-h-9 items-center justify-center gap-2 rounded border border-[color:var(--rp-border)] bg-rp-surface px-3 text-xs text-[color:var(--rp-ink-strong)] hover:bg-rp-wash hover:border-rp-wash-border transition-[background-color,color] duration-250 ease-standard disabled:opacity-35 disabled:cursor-not-allowed disabled:active:scale-100"
       >
         <Send className="h-3.5 w-3.5" />
         Send answer
@@ -2056,7 +2056,7 @@ function AgentAskCard({ block }: { block: Extract<AssistantMessageBlock, { type:
           Agent needs an API key
         </div>
         <div className="mt-2 text-sm text-[color:var(--rp-ink-strong)]">Add the key in Run Phantom Settings, or set the environment variable and restart Run Phantom.</div>
-        <code className="mt-2 block rounded-md border border-[color:var(--rp-border)] bg-white px-2 py-1.5 font-mono text-[11px] text-[color:var(--rp-ink-strong)]">
+        <code className="mt-2 block rounded-md border border-[color:var(--rp-border)] bg-rp-surface px-2 py-1.5 font-mono text-[11px] text-[color:var(--rp-ink-strong)]">
           {envVar}=...
         </code>
       </div>

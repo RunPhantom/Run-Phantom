@@ -609,7 +609,7 @@ function MoreMenu({ runId }: { runId?: string }) {
         aria-haspopup="menu"
         aria-controls={open ? menuId : undefined}
         title="More actions"
-        className="flex size-8 items-center justify-center rounded-control border border-transparent text-rp-ink-muted transition-[background-color,border-color,color] duration-250 ease-standard hover:border-rp-line hover:bg-white hover:text-rp-ink"
+        className="flex size-8 items-center justify-center rounded-control border border-transparent text-rp-ink-muted transition-[background-color,border-color,color] duration-250 ease-standard hover:border-rp-line hover:bg-rp-surface hover:text-rp-ink"
         onClick={() => setOpen(!open)}
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>

@@ -40,7 +40,7 @@ export function RouteError() {
 
   return (
     <div role="alert" className="flex h-full items-center justify-center overflow-auto px-5 py-10 sm:px-10">
-      <section className="w-full max-w-xl animate-fade-rise rounded-lg border border-rp-danger-border bg-white px-6 py-8 sm:px-8">
+      <section className="w-full max-w-xl animate-fade-rise rounded-lg border border-rp-danger-border bg-rp-surface px-6 py-8 sm:px-8">
         <Eyebrow className="text-rp-danger">
           <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
           View / Render error

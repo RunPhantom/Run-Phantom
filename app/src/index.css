@@ -293,6 +293,7 @@
   --rp-json-number: #0953AA;
   --rp-json-boolean: #0C6648;
   --rp-json-null: var(--rp-ink-muted);
+  --rp-json-view-string: #3D4B80;
 
   --rp-motion-instant: 120ms;
   --rp-motion-state: 180ms;
@@ -365,6 +366,164 @@
   --rp-ease-panel: cubic-bezier(0.22, 1, 0.36, 1);
   --rp-ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
 
+  }
+
+  /* Opt-in only: final-release-audit pins color-scheme light and a bright body by default. */
+  :root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --rp-blue: #8C9EFF;
+  --rp-blue-hover: #B3C0FF;
+  --rp-blue-active: #C9D2FF;
+  --rp-line: #262C39;
+  --rp-line-muted: #1C212C;
+  --rp-line-strong: #5A6274;
+  --rp-wash: #18204A;
+  --rp-wash-border: #33408F;
+  --rp-line-dashed: #3A4252;
+  --rp-canvas-grey: #0F1218;
+  --rp-canvas-blue: #121731;
+  --rp-row-hover: #1A1F2A;
+  --rp-ink-subtle: #969EAE;
+  --rp-index: #969EAE;
+
+  --rp-n0: #181C25;
+  --rp-n1: #12151C;
+  --rp-n2: #0B0D12;
+  --rp-n3: #161A23;
+  --rp-n4: #0F1218;
+  --rp-n5: #1A2244;
+  --rp-n6: #1A2244;
+  --rp-n7: #1C212C;
+  --rp-n8: #1C212C;
+  --rp-n9: #262C39;
+  --rp-n10: #3A4252;
+  --rp-n11: #8A92A3;
+  --rp-n12: #8A92A3;
+  --rp-n13: #9AA2B1;
+  --rp-n14: #A3AAB8;
+  --rp-n15: #C5CAD6;
+  --rp-n16: #E8EBF2;
+  --rp-n17: #E8EBF2;
+  --rp-n18: #E8EBF2;
+  --rp-n19: #E8EBF2;
+
+  --rp-user-surface: #161B2E;
+  --rp-border-strong: #5A6274;
+  --rp-border-heavy: #7C8494;
+
+  --rp-ink-faint: #8A92A3;
+  --rp-ink-muted: #A3AAB8;
+  --rp-ink-soft: #C5CAD6;
+  --rp-ink: #E8EBF2;
+  --rp-ink-strong: #F4F6FA;
+  --rp-ink-max: #F4F6FA;
+  --rp-ink-black: #E8EBF2;
+
+  --rp-shadow-rgb: 0 0 0;
+
+  --rp-wash-1: rgb(232 235 242 / 0.030);
+  --rp-wash-2: rgb(232 235 242 / 0.045);
+  --rp-wash-3: rgb(232 235 242 / 0.065);
+  --rp-wash-4: rgb(232 235 242 / 0.100);
+  --rp-wash-5: rgb(232 235 242 / 0.160);
+
+  --rp-scrim: rgb(0 0 0 / 0.65);
+  --rp-scrim-soft: rgb(0 0 0 / 0.5);
+
+  --rp-ink-a02: rgb(232 235 242 / 0.02);
+  --rp-ink-a04: rgb(232 235 242 / 0.04);
+  --rp-ink-a06: rgb(232 235 242 / 0.06);
+  --rp-ink-a08: rgb(232 235 242 / 0.08);
+  --rp-ink-a10: rgb(232 235 242 / 0.10);
+  --rp-ink-a12: rgb(232 235 242 / 0.12);
+  --rp-ink-a15: rgb(232 235 242 / 0.15);
+  --rp-ink-a18: rgb(232 235 242 / 0.18);
+  --rp-ink-a20: rgb(232 235 242 / 0.20);
+  --rp-ink-a22: rgb(232 235 242 / 0.22);
+
+  --rp-guide: rgb(232 235 242 / 0.12);
+  --rp-guide-hover: rgb(232 235 242 / 0.26);
+  --rp-inset-hairline: rgb(232 235 242 / 0.06);
+  --rp-inset-hairline-soft: rgb(232 235 242 / 0.04);
+  --rp-grid-line: rgb(232 235 242 / 0.035);
+  --rp-accent-flash: rgb(140 158 255 / 0.16);
+  --rp-canvas-fade-0: rgb(11 13 18 / 0);
+  --rp-canvas-fade-1: rgb(11 13 18 / 0.86);
+  --rp-canvas-fade-2: rgb(11 13 18 / 1);
+  --rp-highlight-top: inset 0 1px 0 0 rgb(255 255 255 / 0.04);
+
+  --rp-accent: #8C9EFF;
+  --rp-accent-hover: #B3C0FF;
+  --rp-accent-active: #C9D2FF;
+  --rp-accent-soft: #18204A;
+  --rp-accent-soft-hover: #1F2858;
+  --rp-accent-border: #33408F;
+  --rp-mark-accent: #8C9EFF;
+  --rp-focus: #8C9EFF;
+
+  --rp-danger: #F97066;
+  --rp-danger-hover: #FDA29B;
+  --rp-danger-active: #FECDCA;
+  --rp-danger-soft: #3A1512;
+  --rp-danger-border: #7A271A;
+  --rp-danger-solid: #D92D20;
+  --rp-danger-solid-hover: #B42318;
+
+  --rp-warning: #FDB022;
+  --rp-warning-hover: #FEC84B;
+  --rp-warning-active: #FEDF89;
+  --rp-warning-soft: #33250A;
+  --rp-warning-border: #7A5A10;
+  --rp-warning-solid: #B54708;
+
+  --rp-success: #47CD89;
+  --rp-success-hover: #75E0A7;
+  --rp-success-active: #A6EFC6;
+  --rp-success-soft: #0F2A1E;
+  --rp-success-border: #1E6B47;
+  --rp-success-solid: #067647;
+
+  --rp-info: #84ADFF;
+  --rp-info-hover: #B2CCFF;
+  --rp-info-active: #D1E0FF;
+  --rp-info-soft: #102040;
+  --rp-info-border: #2E4E8F;
+
+  --rp-span-1: #73C6D8;  --rp-span-1-fill: #375863;  --rp-span-1-wash: #202E36;
+  --rp-span-2: #C8D292;  --rp-span-2-fill: #575D49;  --rp-span-2-wash: #2B2F2D;
+  --rp-span-3: #A7B4EE;  --rp-span-3-fill: #4B516C;  --rp-span-3-wash: #272B39;
+  --rp-span-4: #84DCDC;  --rp-span-4-fill: #3D6165;  --rp-span-4-wash: #223137;
+  --rp-span-5: #D2C7FB;  --rp-span-5-fill: #5B5971;  --rp-span-5-wash: #2D2E3B;
+  --rp-span-6: #A4C48B;  --rp-span-6-fill: #495846;  --rp-span-6-wash: #262E2C;
+  --rp-span-7: #8CD3B2;  --rp-span-7-fill: #405D55;  --rp-span-7-wash: #233031;
+  --rp-span-8: #8DC9F2;  --rp-span-8-fill: #41596D;  --rp-span-8-wash: #232E3A;
+  --rp-span-9: #E6AF86;  --rp-span-9-fill: #635044;  --rp-span-9-wash: #302B2B;
+  --rp-span-10: #E1A7CF; --rp-span-10-fill: #614C60; --rp-span-10-wash: #2F2935;
+  --rp-span-11: #D7B7EF; --rp-span-11-fill: #5D536C; --rp-span-11-wash: #2E2C3A;
+  --rp-span-12: #9EC3F8; --rp-span-12-fill: #475770; --rp-span-12-wash: #262D3B;
+  --rp-span-neutral: #A3AAB8;
+  --rp-span-neutral-fill: #2A303C;
+  --rp-span-error-fill: #3A1512;
+  --rp-span-error-hatch: repeating-linear-gradient(45deg, transparent 0 3px, rgb(249 112 102 / 0.28) 3px 6px);
+
+  --rp-json-string: #E0A872;
+  --rp-json-number: #8CB4FF;
+  --rp-json-boolean: #5FD0A0;
+  --rp-json-view-string: #B3BEF5;
+
+  --rp-trace: #B79CF0;
+  --rp-thinking-border: rgb(140 170 230 / 0.30);
+  --rp-thinking-bg: rgb(140 170 230 / 0.08);
+
+  --sidebar-background: 222.000 21.739% 9.020%;
+  --sidebar-foreground: 222.000 27.778% 92.941%;
+  --sidebar-primary: 230.609 100.000% 77.451%;
+  --sidebar-primary-foreground: 222.857 24.138% 5.686%;
+  --sidebar-accent: 228.571 44.681% 18.431%;
+  --sidebar-accent-foreground: 229.737 100.000% 85.098%;
+  --sidebar-border: 221.053 20.000% 18.627%;
+  --sidebar-ring: 230.609 100.000% 77.451%;
   }
 }
 
@@ -450,6 +609,9 @@
     background-repeat: no-repeat;
     background-size: 16px 16px;
   }
+  :root[data-theme="dark"] .rp-select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='M4 6l4 4 4-4' stroke='%23A3AAB8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
   .rp-field-hint {
     font-size: 12px;
     line-height: 18px;
@@ -511,8 +673,10 @@
   :root { --rp-page-px: 16px; --rp-page-pt: 16px; }
 }
 
-html {
+html:not([data-theme="dark"]) {
   color-scheme: light;
+}
+html {
   background-color: var(--rp-canvas);
   background: var(--rp-canvas);
 }

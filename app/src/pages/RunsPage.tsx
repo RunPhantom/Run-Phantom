@@ -423,7 +423,7 @@ export function RunsPage() {
                       {isMobile && (
                         <button
                           type="button"
-                          className="rp-ease flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-white px-4 py-2 text-left text-[13px] font-medium text-rp-ink hover:bg-rp-row-hover"
+                          className="rp-ease flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-rp-surface px-4 py-2 text-left text-[13px] font-medium text-rp-ink hover:bg-rp-row-hover"
                           onClick={() => navigate("/runs")}
                         >
                           <ArrowLeft aria-hidden="true" className="size-3.5 text-rp-blue" />
@@ -459,7 +459,7 @@ export function RunsPage() {
                               </span>
                               {!replayCompare && !isMobile && (
                                 <button
-                                  className="flex h-7 flex-shrink-0 items-center gap-1 rounded-control border border-rp-line bg-white px-2 text-[12px] font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash"
+                                  className="flex h-7 flex-shrink-0 items-center gap-1 rounded-control border border-rp-line bg-rp-surface px-2 text-[12px] font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash"
                                   onClick={() => setReplayCompare(true)}>
                                   compare <ArrowRight aria-hidden="true" className="size-3" />
                                 </button>

@@ -12,7 +12,7 @@ const badgeVariants = cva(
         success: "border-transparent bg-rp-success-soft text-rp-success",
         danger: "border-transparent bg-rp-danger-soft text-rp-danger",
         warning: "border-transparent bg-rp-warning-soft text-rp-warning",
-        outline: "border-rp-line bg-white text-rp-ink",
+        outline: "border-rp-line bg-rp-surface text-rp-ink",
       },
       mono: {
         true: "font-mono text-[10.5px] uppercase tracking-[0.08em]",

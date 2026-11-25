@@ -144,7 +144,7 @@ function ChangeReview({ report }: { report: VerificationReport }) {
     try { await navigator.clipboard.writeText(JSON.stringify(retained.handoff)); if (revision.current === retainedRevision) setMessage("Measured failure handoff copied."); }
     catch { if (revision.current === retainedRevision) setMessage("Clipboard is unavailable. Select the handoff text below to copy it."); }
   };
-  return <section aria-label="Change-aware QA and failure handoff" className="space-y-3 rounded-md border border-rp-line bg-white p-4 text-[13px] text-rp-ink sm:p-5">
+  return <section aria-label="Change-aware QA and failure handoff" className="space-y-3 rounded-md border border-rp-line bg-rp-surface p-4 text-[13px] text-rp-ink sm:p-5">
     <div><Eyebrow marker>Handoff / Workspace changes</Eyebrow><h3 className="rp-subsection-title mt-2">Change-aware QA</h3></div>
     <p className={fine}>Review bounded metadata from the workspace you explicitly selected. Related tests are filename suggestions. This review runs no tests and changes no saved verdict.</p>
     {!offer && !busy && <Button size="lg" variant="outline" onClick={() => void run(false)}>Prepare failure handoff</Button>}

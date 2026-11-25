@@ -129,7 +129,7 @@ export function ConnectionIndicator({
         </button>
       )}
       {showWorkspaceMenu && status.state === "green" && (
-        <div id="runphantom-workspace-menu" role="menu" aria-label="Registered workspaces" className="rp-pop absolute left-0 top-full z-50 mt-2 w-[min(20rem,calc(100vw-3rem))] rounded-lg border border-rp-line bg-white p-1 text-xs shadow-e3">
+        <div id="runphantom-workspace-menu" role="menu" aria-label="Registered workspaces" className="rp-pop absolute left-0 top-full z-50 mt-2 w-[min(20rem,calc(100vw-3rem))] rounded-lg border border-rp-line bg-rp-surface p-1 text-xs shadow-e3">
           {onChooseFolder && (
             <button
               type="button"
@@ -172,7 +172,7 @@ export function ConnectionIndicator({
         </div>
       )}
       {showRemediation && status.state !== "green" && (
-        <div id="runphantom-agent-remediation" role="dialog" aria-label={`${providerLabel(provider)} setup help`} className="rp-pop absolute left-0 top-full z-50 mt-2 w-[min(20rem,calc(100vw-3rem))] rounded-lg border border-rp-line bg-white p-4 text-xs shadow-e3">
+        <div id="runphantom-agent-remediation" role="dialog" aria-label={`${providerLabel(provider)} setup help`} className="rp-pop absolute left-0 top-full z-50 mt-2 w-[min(20rem,calc(100vw-3rem))] rounded-lg border border-rp-line bg-rp-surface p-4 text-xs shadow-e3">
           <div className="mb-2 leading-5 text-rp-ink">
             Run Phantom chat streams through your local {providerLabel(provider)} CLI. Make sure
             <code className="mx-1 rounded-control bg-rp-canvas-blue px-1 font-mono text-rp-ink">{provider === "codex" ? "codex" : "claude"}</code>

@@ -30,7 +30,7 @@ const inlineButtonStyle: React.CSSProperties = {
 
 const dc = {
   key: "var(--rp-ink)",
-  string: "#3D4B80",
+  string: "var(--rp-json-view-string)",
   number: "var(--rp-blue)",
   boolean: "var(--rp-blue)",
   null: "var(--rp-ink-muted)",

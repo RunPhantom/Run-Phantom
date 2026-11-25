@@ -10,8 +10,10 @@ import { queryClient } from "./query-client";
 import "@fontsource-variable/inter/wght.css";
 import "./index.css";
 import { installNavModality } from "./utils/nav-modality";
+import { installTheme } from "./shell/theme";
 
 installNavModality();
+installTheme();
 
 const root = createRoot(document.getElementById("root")!);
 void createAppRouter().then(router => {
@@ -23,7 +25,7 @@ void createAppRouter().then(router => {
 }).catch(() => {
   root.render(
     <main role="alert" className="flex min-h-full items-center justify-center px-5 py-10">
-      <section className="flex w-full max-w-xl flex-col items-start gap-4 border border-dashed border-rp-danger-border bg-white px-6 py-10 sm:px-10">
+      <section className="flex w-full max-w-xl flex-col items-start gap-4 border border-dashed border-rp-danger-border bg-rp-surface px-6 py-10 sm:px-10">
         <p className="rp-eyebrow text-rp-danger"><span aria-hidden="true" className="rp-eyebrow-marker bg-rp-danger" />Workspace / Not loaded</p>
         <h1 className="rp-section-title">The workspace could not be loaded</h1>
         <p className="text-[13px] leading-[1.8] text-rp-ink-muted">The app code for this page failed to download. Check that Run Phantom is still running, then reload.</p>

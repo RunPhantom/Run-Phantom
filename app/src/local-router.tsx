@@ -65,7 +65,7 @@ function AppLayout() {
         <NavSidebar />
         <SidebarInset id="runphantom-main" tabIndex={-1}>
           <div className="relative flex h-full flex-col overflow-hidden">
-            <header data-workspace-header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-rp-line bg-white px-4 lg:px-8">
+            <header data-workspace-header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-rp-line bg-rp-surface px-4 lg:px-8">
               <div className="flex min-w-0 items-center gap-4">
                 <SidebarTrigger className="size-11 shrink-0 rounded-control border border-rp-line text-rp-ink hover:bg-rp-row-hover hover:text-rp-ink lg:size-9" />
                 <nav aria-label="Workspace breadcrumb" className="min-w-0 text-[13px]">
@@ -99,7 +99,7 @@ function AppLayout() {
                   aria-labelledby="runphantom-disconnected-title"
                   aria-describedby="runphantom-disconnected-description"
                   tabIndex={-1}
-                  className="flex w-[520px] max-w-full flex-col items-start rounded-lg border border-rp-line bg-white p-6 text-left shadow-e4 animate-fade-rise sm:p-8"
+                  className="flex w-[520px] max-w-full flex-col items-start rounded-lg border border-rp-line bg-rp-surface p-6 text-left shadow-e4 animate-fade-rise sm:p-8"
                 >
                   <p className="rp-eyebrow text-rp-danger">
                     <span aria-hidden="true" className="rp-eyebrow-marker bg-rp-danger" />
@@ -124,7 +124,7 @@ function DaemonStatusStrip({ status }: { status: ReturnType<typeof useRunPhantom
   return (
     <div className={`flex h-[var(--rp-strip-h)] shrink-0 items-center justify-between gap-4 px-4 text-[11px] font-medium leading-4 text-white transition-colors duration-250 ease-standard lg:px-8 ${status === "disconnected" ? "bg-rp-danger" : "bg-rp-blue"}`}>
       <p data-connection-status={status} role="status" className="flex min-w-0 items-center gap-2">
-        <span aria-hidden="true" className={`size-[5px] shrink-0 rounded-full bg-white ${status === "connecting" ? "pulse-dot" : ""}`} />
+        <span aria-hidden="true" className={`size-[5px] shrink-0 rounded-full bg-rp-on-solid ${status === "connecting" ? "pulse-dot" : ""}`} />
         <span className="truncate">Local daemon · {label}</span>
       </p>
       <p className="hidden shrink-0 text-white/85 sm:block">Traces are stored on this machine</p>

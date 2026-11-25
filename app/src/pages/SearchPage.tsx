@@ -239,7 +239,7 @@ export function SearchPage() {
   };
   return (
     <div className="flex h-full">
-      <div className={`${isMobile ? (selectedId ? "hidden" : "w-full") : "w-[300px] border-r border-rp-line"} flex min-h-0 flex-shrink-0 flex-col bg-white`}>
+      <div className={`${isMobile ? (selectedId ? "hidden" : "w-full") : "w-[300px] border-r border-rp-line"} flex min-h-0 flex-shrink-0 flex-col bg-rp-surface`}>
         <div className="flex-shrink-0 overflow-auto border-b border-rp-line px-5 py-5" style={{ maxHeight: "66dvh" }}>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -298,9 +298,9 @@ export function SearchPage() {
             {loading ? "Searching local traces…" : currentResult && !error ? `${count} ${resource === "span-hits" ? "spans" : count === 1 ? "run" : "runs"} loaded${currentResult.hasMore ? "; more available" : ""}` : ""}
           </div>
           {loading && !currentResult && !error && <div aria-hidden="true" className="space-y-2 px-2">
-            {[0, 1, 2].map((item) => <div key={item} className="space-y-2 rounded-lg border border-rp-line-muted bg-white px-3 py-3"><Skeleton className="h-3.5 w-2/3" /><Skeleton className="h-3 w-1/2" /></div>)}
+            {[0, 1, 2].map((item) => <div key={item} className="space-y-2 rounded-lg border border-rp-line-muted bg-rp-surface px-3 py-3"><Skeleton className="h-3.5 w-2/3" /><Skeleton className="h-3 w-1/2" /></div>)}
           </div>}
-          {error && <div role="alert" className="animate-fade-rise rounded-lg border border-rp-danger-border bg-white px-4 py-4">
+          {error && <div role="alert" className="animate-fade-rise rounded-lg border border-rp-danger-border bg-rp-surface px-4 py-4">
             <Eyebrow className="text-rp-danger">Search / Error</Eyebrow>
             <p className="mt-2 text-[13px] font-semibold text-rp-ink">Search unavailable</p>
             <p className="mt-1 break-words text-xs leading-5 text-rp-ink-muted">{error}</p>
@@ -323,7 +323,7 @@ export function SearchPage() {
       </div>
       <div className={`${isMobile && !selectedId ? "hidden" : ""} min-w-0 flex-1`}>
         {selectedId && (selectedInResults || pinned) ? <div className="flex h-full flex-col">
-          {isMobile && <button type="button" className="rp-ease flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-white px-4 py-2 text-left text-[13px] font-medium text-rp-ink hover:bg-rp-row-hover" onClick={() => navigate(`/search${querySuffix}`)}>
+          {isMobile && <button type="button" className="rp-ease flex min-h-11 flex-shrink-0 items-center gap-2 border-b border-rp-line bg-rp-surface px-4 py-2 text-left text-[13px] font-medium text-rp-ink hover:bg-rp-row-hover" onClick={() => navigate(`/search${querySuffix}`)}>
             <ArrowLeft aria-hidden="true" className="size-3.5 text-rp-blue" /><span>Back to search</span>
           </button>}
           <div className="min-h-0 flex-1 overflow-auto"><RunDetail key={selectedId} runId={selectedId} routeBase="/search" /></div>
