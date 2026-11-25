@@ -108,7 +108,7 @@ export function ShellCommands() {
       },
     }),
     action({ id: "action:toggle-sidebar", label: "Toggle sidebar", keywords: ["navigation", "collapse", "expand"], icon: PanelLeft, shortcut: "mod+b", order: 5, run: toggleSidebar }),
-    { id: "help:shortcuts", group: "Help", label: "Keyboard shortcuts", keywords: ["keys", "hotkeys", "help"], icon: Keyboard, shortcut: "?", run: () => openShortcutSheet() },
+    { id: "help:shortcuts", group: "Help", label: "Keyboard shortcuts", keywords: ["keys", "hotkeys", "help"], icon: Keyboard, shortcut: "?", keepOpen: true, run: () => openShortcutSheet() },
   ], [toggleSidebar]);
 
   const shortcuts = useMemo<ShortcutDefinition[]>(() => [

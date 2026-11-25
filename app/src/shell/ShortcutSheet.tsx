@@ -46,6 +46,7 @@ export function ShortcutSheet() {
           title="Keyboard shortcuts"
           description="Single-key shortcuts pause while you type in a field."
           className="max-w-2xl"
+          data-shortcut-sheet
           onCloseAutoFocus={restoreOverlayFocus}
         >
           <div className="mt-5 grid gap-x-8 gap-y-5 sm:grid-cols-2">
