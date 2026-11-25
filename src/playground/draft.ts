@@ -62,12 +62,24 @@ function detectProvider(...hints: Array<string | null | undefined>): PlaygroundP
   return null;
 }
 
-/** Maps a captured (often dated) model id onto the Playground list: exact match, else the longest listed id it extends. */
-function matchModel(provider: PlaygroundProvider, captured: string | null): string | null {
+const DATED_SUFFIX = /-(?:\d{4}-\d{2}-\d{2}|\d{8}|latest)$/;
+
+/**
+ * Maps a captured model id onto the Playground list. The id itself, a dated or "-latest" snapshot of a listed id
+ * (gpt-5-mini-2025-08-07), or the undated alias of a listed snapshot (claude-haiku-4-5) count as the same model.
+ * Any other listed id the captured one extends (gpt-4o-mini-search-preview) is only a stand-in.
+ */
+function matchModel(provider: PlaygroundProvider, captured: string | null): { model: string; exact: boolean } | null {
   if (!captured) return null;
+  const id = captured.startsWith("models/") ? captured.slice("models/".length) : captured;
   const candidates = PLAYGROUND_MODELS.filter(item => item.provider === provider).map(item => item.model);
-  if (candidates.includes(captured)) return captured;
-  return candidates.filter(id => captured.startsWith(`${id}-`)).sort((a, b) => b.length - a.length)[0] ?? null;
+  const base = id.replace(DATED_SUFFIX, "");
+  const dated = base !== id && !id.endsWith("-latest");
+  const same = candidates.find(item => item === id) ?? candidates.find(item => item === base)
+    ?? (dated ? undefined : candidates.find(item => item.replace(DATED_SUFFIX, "") === base));
+  if (same) return { model: same, exact: true };
+  const nearest = candidates.filter(item => id.startsWith(`${item}-`)).sort((a, b) => b.length - a.length)[0];
+  return nearest ? { model: nearest, exact: false } : null;
 }
 
 interface Converted { system: string[]; messages: PlaygroundMessage[]; warnings: Set<string> }
@@ -408,9 +420,10 @@ export function draftFromSpan(span: DraftSpanInput, runName: string | null): Pla
   const capturedModel = extracted.modelHint ?? span.model;
   const capturedProvider = extracted.providerHint ?? span.provider;
   const provider = detectProvider(capturedProvider, capturedModel, extracted.format === "anthropic" ? "anthropic" : extracted.format === "gemini" ? "gemini" : null) ?? "openai";
-  const matched = matchModel(provider, capturedModel) ?? matchModel(provider, span.model);
-  const model = matched ?? PLAYGROUND_DEFAULT_MODEL[provider];
-  if (!matched) warnings.add(capturedModel
+  const matches = [matchModel(provider, capturedModel), matchModel(provider, span.model)];
+  const matched = matches.find(item => item?.exact) ?? matches.find(item => item !== null) ?? null;
+  const model = matched?.model ?? PLAYGROUND_DEFAULT_MODEL[provider];
+  if (!matched?.exact) warnings.add(capturedModel
     ? `${capturedModel} is not available in the Playground, so ${model} was selected instead.`
     : `The span did not record its model, so ${model} was selected.`);
 
@@ -437,7 +450,7 @@ export function draftFromSpan(span: DraftSpanInput, runName: string | null): Pla
   if (missing.length) warnings.add(`The span did not record definitions for ${missing.join(", ")}; add them before running if the model should call them again.`);
 
   return {
-    provider, model, capturedProvider: capturedProvider ?? null, capturedModel: capturedModel ?? null, modelSubstituted: !matched,
+    provider, model, capturedProvider: capturedProvider ?? null, capturedModel: capturedModel ?? null, modelSubstituted: !matched?.exact,
     system,
     messages,
     params: { ...(temperature !== null && temperature >= 0 && temperature <= 2 ? { temperature } : {}), maxOutputTokens },

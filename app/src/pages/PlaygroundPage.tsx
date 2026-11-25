@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpRight, ClockArrowUp, Play, Square, X } from "lucide-react";
+import { ArrowUpRight, ClockArrowUp, Play, Square, TriangleAlert, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/input";
@@ -331,6 +331,15 @@ export function PlaygroundPage() {
                     <X aria-hidden="true" className="size-4" />
                   </button>
                 </div>
+                {opened.substitutedModel && opened.capturedModel && (
+                  <p className="mt-1.5 flex items-start gap-1.5 text-[12px] leading-[18px] text-rp-ink" data-playground-model-substituted>
+                    <TriangleAlert aria-hidden="true" className="mt-px size-3.5 shrink-0 text-rp-warning" />
+                    <span>
+                      <span className="font-semibold">Different model.</span> This step called <code className="font-mono text-[11.5px]">{opened.capturedModel}</code>, which
+                      the Playground does not offer, so it opened on {providers?.flatMap(group => group.models).find(model => model.id === opened.substitutedModel)?.label ?? opened.substitutedModel} instead. Results can differ from the captured call.
+                    </span>
+                  </p>
+                )}
                 {replaced && (
                   <p className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[12px] leading-[18px] text-rp-ink-soft" data-playground-replaced>
                     This replaced your previous draft.

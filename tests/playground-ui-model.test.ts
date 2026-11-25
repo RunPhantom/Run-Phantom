@@ -26,7 +26,7 @@ describe("buildRunBody", () => {
     const built = buildRunBody(draft({
       system: "Be brief.", temperature: "0.3", maxOutputTokens: "256", reasoningEffort: "low", toolsEnabled: true,
       targets: [{ provider: "openai", model: "gpt-5-nano" }, { provider: "anthropic", model: "claude-haiku-4-5-20251001" }],
-      openedFrom: { runId: "run_1", spanId: "span_1", runName: "Triage", spanName: "chat", capturedModel: null, warnings: [] },
+      openedFrom: { runId: "run_1", spanId: "span_1", runName: "Triage", spanName: "chat", capturedModel: null, substitutedModel: null, warnings: [] },
     }));
     expect(built.ok).toBe(true);
     if (!built.ok) return;
@@ -112,7 +112,9 @@ describe("drafts", () => {
     };
     const state = stateFromDraft(source, defaultDraft(), { openedFrom: true });
     expect(state).toMatchObject({ system: "Triage tickets.", temperature: "0.2", maxOutputTokens: "200", toolsEnabled: true, targets: [{ provider: "openai", model: "gpt-5-nano" }] });
-    expect(state.openedFrom).toEqual({ runId: "support_triage_0613", spanId: "support_triage_0613_llm-2", runName: "Customer support triage", spanName: "ai.generateText", capturedModel: "gpt-4-0613", warnings: source.warnings });
+    expect(state.openedFrom).toEqual({ runId: "support_triage_0613", spanId: "support_triage_0613_llm-2", runName: "Customer support triage", spanName: "ai.generateText", capturedModel: "gpt-4-0613", substitutedModel: "gpt-5-nano", warnings: [] });
+    expect(stateFromDraft({ ...source, model: "gpt-4.1-mini", capturedModel: "gpt-4.1-mini-2025-04-14", modelSubstituted: false, warnings: ["Reasoning blocks from the captured call were left out."] }, defaultDraft(), { openedFrom: true }).openedFrom)
+      .toMatchObject({ capturedModel: "gpt-4.1-mini-2025-04-14", substitutedModel: null, warnings: ["Reasoning blocks from the captured call were left out."] });
     const built = buildRunBody(state);
     expect(built.ok && built.body.messages).toEqual(source.messages);
     expect(built.ok && built.body.source).toEqual({ runId: "support_triage_0613", spanId: "support_triage_0613_llm-2" });

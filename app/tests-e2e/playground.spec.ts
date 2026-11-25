@@ -274,6 +274,24 @@ test("Open in Playground fills the editor from a captured model call", async ({ 
   await expect(page.getByRole("alert").filter({ hasText: "Could not open that step: Only model call spans can be opened in the Playground." })).toBeVisible();
 });
 
+test("Open in Playground names the captured model when it opens on a different one", async ({ page, runPhantom }) => {
+  await page.route("**/api/playground/draft-from-span/**", route => route.fulfill({ json: {
+    provider: "openai", model: "gpt-5-nano", capturedProvider: "openai", capturedModel: "gpt-5-nano-doesnotexist", modelSubstituted: true,
+    system: "", messages: [{ role: "user", content: "Where is order A1002?" }], params: { maxOutputTokens: 1024 }, tools: [],
+    source: { runId: "run_missing_model", spanId: "span_missing_model", runName: "Where is order A1002?", spanName: "chat gpt-5-nano-doesnotexist", format: "otel-genai" },
+    warnings: ["gpt-5-nano-doesnotexist is not available in the Playground, so gpt-5-nano was selected instead.", "Reasoning blocks from the captured call were left out."],
+  } }));
+  await page.goto(`${runPhantom.url}/playground?span=span_missing_model&run=run_missing_model`);
+
+  const banner = page.locator("[data-playground-opened-from]");
+  await expect(banner.locator("[data-playground-model-substituted]")).toHaveText(
+    "Different model. This step called gpt-5-nano-doesnotexist, which the Playground does not offer, so it opened on GPT-5 nano instead. Results can differ from the captured call.",
+  );
+  await expect(banner).not.toContainText("is not available in the Playground");
+  await expect(banner).toContainText("Reasoning blocks from the captured call were left out.");
+  await expect(page.getByRole("combobox", { name: "Model", exact: true })).toHaveValue("openai/gpt-5-nano");
+});
+
 function recordedPlaygroundRun(comparisonId: string, index: number, target: { provider: "openai" | "anthropic"; model: string }, ids: { traceId: string; rootSpanId: string; llmSpanId: string }) {
   const request: PlaygroundRunRequest = {
     targets: [{ provider: "openai", model: "gpt-5-nano" }, { provider: "anthropic", model: "claude-haiku-4-5-20251001" }],

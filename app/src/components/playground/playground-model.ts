@@ -34,6 +34,8 @@ export interface OpenedFrom {
   runName: string | null;
   spanName: string;
   capturedModel: string | null;
+  /** The Playground model opened in place of capturedModel, which the Playground does not offer; null when it was the same model. */
+  substitutedModel: string | null;
   warnings: string[];
 }
 
@@ -115,6 +117,7 @@ export function parseStoredDraft(raw: string | null): PlaygroundDraftState | nul
       runName: typeof value.openedFrom.runName === "string" ? value.openedFrom.runName : null,
       spanName: str(value.openedFrom.spanName),
       capturedModel: typeof value.openedFrom.capturedModel === "string" ? value.openedFrom.capturedModel : null,
+      substitutedModel: typeof value.openedFrom.substitutedModel === "string" ? value.openedFrom.substitutedModel : null,
       warnings: Array.isArray(value.openedFrom.warnings) ? value.openedFrom.warnings.filter((item): item is string => typeof item === "string") : [],
     }
     : null;
@@ -164,9 +167,18 @@ export function stateFromDraft(draft: PlaygroundDraft, current: PlaygroundDraftS
     toolsEnabled: draft.tools.length > 0,
     toolsText: draft.tools.length ? JSON.stringify(draft.tools, null, 2) : current.toolsText,
     targets: options.targets?.length ? options.targets.slice(0, MAX_COMPARE_COLUMNS) : [{ provider: draft.provider, model: draft.model }],
-    openedFrom: options.openedFrom
-      ? { runId: draft.source.runId, spanId: draft.source.spanId, runName: draft.source.runName, spanName: draft.source.spanName, capturedModel: draft.capturedModel, warnings: draft.warnings }
-      : null,
+    openedFrom: options.openedFrom ? openedFromDraft(draft) : null,
+  };
+}
+
+function openedFromDraft(draft: PlaygroundDraft): OpenedFrom {
+  const substituted = draft.modelSubstituted && draft.capturedModel ? draft.capturedModel : null;
+  // The substitution gets its own notice, so its line in the daemon's warning list would only repeat it.
+  const repeat = substituted ? `${substituted} is not available in the Playground` : null;
+  return {
+    runId: draft.source.runId, spanId: draft.source.spanId, runName: draft.source.runName, spanName: draft.source.spanName,
+    capturedModel: draft.capturedModel, substitutedModel: substituted ? draft.model : null,
+    warnings: repeat ? draft.warnings.filter(warning => !warning.startsWith(repeat)) : draft.warnings,
   };
 }
 

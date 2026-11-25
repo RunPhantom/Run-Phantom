@@ -145,9 +145,9 @@ describe("Open in Playground across providers", () => {
 });
 
 describe("draft fidelity", () => {
-  const aiSdkSpan = (messages: unknown[], model = "gpt-4.1-mini"): DraftSpanInput => ({
-    id: "span-ai", run_id: "run-ai", name: "ai.generateText.doGenerate", span_type: "LLM_GENERATION", model, provider: "openai.chat", input_payload: null,
-    attributes: JSON.stringify({ "ai.operationId": "ai.generateText.doGenerate", "ai.model.id": model, "ai.model.provider": "openai.chat", "ai.prompt.messages": JSON.stringify(messages) }),
+  const aiSdkSpan = (messages: unknown[], model = "gpt-4.1-mini", provider = "openai.chat"): DraftSpanInput => ({
+    id: "span-ai", run_id: "run-ai", name: "ai.generateText.doGenerate", span_type: "LLM_GENERATION", model, provider, input_payload: null,
+    attributes: JSON.stringify({ "ai.operationId": "ai.generateText.doGenerate", "ai.model.id": model, "ai.model.provider": provider, "ai.prompt.messages": JSON.stringify(messages) }),
   });
 
   test("AI SDK v5 tool output reaches the model as the value the SDK sent, not its wrapper", () => {
@@ -172,5 +172,19 @@ describe("draft fidelity", () => {
       { role: "tool", toolCallId: "t3", content: "{\"status\":503}" },
       { role: "tool", toolCallId: "t4", content: "{\"total\":4}" },
     ]);
+  });
+
+  test("a captured model counts as the Playground model only for the same id, a dated snapshot or an undated alias", () => {
+    const opened = (model: string, provider = "openai") => {
+      const draft = draftFromSpan(aiSdkSpan([{ role: "user", content: "hi" }], model, provider), null);
+      return [draft.model, draft.modelSubstituted, draft.warnings.filter(warning => warning.includes("not available"))];
+    };
+    expect(opened("gpt-5-mini-2025-08-07")).toEqual(["gpt-5-mini", false, []]);
+    expect(opened("gpt-4o-mini-latest")).toEqual(["gpt-4o-mini", false, []]);
+    expect(opened("claude-haiku-4-5", "anthropic")).toEqual(["claude-haiku-4-5-20251001", false, []]);
+    expect(opened("models/gemini-3.8-flash", "google")).toEqual(["gemini-3.8-flash", false, []]);
+    expect(opened("gpt-5-nano-doesnotexist")).toEqual(["gpt-5-nano", true, ["gpt-5-nano-doesnotexist is not available in the Playground, so gpt-5-nano was selected instead."]]);
+    expect(opened("gpt-4o-mini-search-preview")).toEqual(["gpt-4o-mini", true, ["gpt-4o-mini-search-preview is not available in the Playground, so gpt-4o-mini was selected instead."]]);
+    expect(opened("claude-haiku-4-5-20250101", "anthropic")[1]).toBe(true);
   });
 });
