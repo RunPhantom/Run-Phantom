@@ -198,6 +198,9 @@ export interface ModelCostRow {
   catalogueUsd: number;
   /** Null when any generation of this model has no reported cost and no estimate. */
   totalUsd: number | null;
+  /** Sum over the generations that have a cost, and how many have none; matches the run list's known_cost_usd and cost_unknown_calls. */
+  knownUsd: number;
+  unavailableCalls: number;
   listPrice: ListPriceDetail | null;
   catalogue: CostBreakdown | null;
   unavailableReason: string | null;
@@ -205,6 +208,7 @@ export interface ModelCostRow {
 
 function unavailableReason(span: Span, reason: string | null, pricing: PricingSnapshot): string {
   if (reason === "reported_cost_invalid") return "The captured reported cost is invalid or conflicting.";
+  if (reason === "provider_unresolved") return "The span names conflicting or invalid providers, so the call may have gone through a vendor with its own prices.";
   if (reason === "cache_usage_ambiguous") return "The capture does not say whether input tokens include cached tokens.";
   if (!span.model) return "Model identity was not captured.";
   if (!validTokenCount(span.input_tokens) || !validTokenCount(span.output_tokens)) return "Input or output token capture is unavailable.";
@@ -227,7 +231,7 @@ export function getRunCostRows(spans: Span[], pricing: PricingSnapshot = getPric
     if (!span.span_type?.includes("LLM") || (span.parent_span_id && llmIds.has(span.parent_span_id))) continue;
     const key = span.model || null;
     const tokens = usage.get(key) ?? { inTok: null, outTok: null };
-    const row = rows.get(key) ?? { model: key, inTok: tokens.inTok, outTok: tokens.outTok, generations: 0, sources: { reported: 0, listPrice: 0, catalogue: 0 }, reportedUsd: 0, listPriceUsd: 0, listPriceCacheUsd: 0, listPriceCacheTokens: 0, catalogueUsd: 0, totalUsd: 0, listPrice: null, catalogue: null, unavailableReason: null };
+    const row = rows.get(key) ?? { model: key, inTok: tokens.inTok, outTok: tokens.outTok, generations: 0, sources: { reported: 0, listPrice: 0, catalogue: 0 }, reportedUsd: 0, listPriceUsd: 0, listPriceCacheUsd: 0, listPriceCacheTokens: 0, catalogueUsd: 0, totalUsd: 0, knownUsd: 0, unavailableCalls: 0, listPrice: null, catalogue: null, unavailableReason: null };
     rows.set(key, row);
     row.generations++;
     const cost = spanCost(span);
@@ -238,14 +242,31 @@ export function getRunCostRows(spans: Span[], pricing: PricingSnapshot = getPric
       row.listPriceCacheUsd += cost.estimate.cacheUsd; row.listPriceCacheTokens += cost.estimate.cacheTokens;
       const family = cost.estimate.family;
       row.listPrice ??= { inRate: cost.estimate.inputUsdPerMillion, outRate: cost.estimate.outputUsdPerMillion, sourceName: PRICE_SOURCES[family].name, sourceUrl: PRICE_SOURCES[family].url, asOf: PRICE_TABLE_AS_OF, priceModel: cost.estimate.model };
-    } else if (cost.reason !== "reported_cost_invalid" && pricing.catalogue) {
+    } else if (cost.reason !== "reported_cost_invalid" && cost.reason !== "provider_unresolved" && pricing.catalogue) {
       const quote = getCostBreakdown(span.model, span.input_tokens, span.output_tokens);
       if (quote) { amount = quote.totalCost; row.catalogueUsd += quote.totalCost; row.catalogue ??= quote; row.sources.catalogue++; }
     }
-    if (amount === null) { row.totalUsd = null; row.unavailableReason ??= unavailableReason(span, cost.source === null ? cost.reason : null, pricing); }
-    else if (row.totalUsd !== null) row.totalUsd = Number.isFinite(row.totalUsd + amount) ? row.totalUsd + amount : null;
+    if (amount === null) { row.totalUsd = null; row.unavailableCalls++; row.unavailableReason ??= unavailableReason(span, cost.source === null ? cost.reason : null, pricing); }
+    else {
+      row.knownUsd += amount;
+      if (row.totalUsd !== null) row.totalUsd = Number.isFinite(row.totalUsd + amount) ? row.totalUsd + amount : null;
+    }
   }
   return [...rows.values()];
+}
+
+export interface RunCostSummary { knownUsd: number; pricedCalls: number; unavailableCalls: number; allReported: boolean }
+
+/** Run total over the calls that have a cost, counting unpriced calls rather than models, like the run list and overview. */
+export function summarizeRunCost(rows: readonly ModelCostRow[]): RunCostSummary {
+  let knownUsd = 0, pricedCalls = 0, unavailableCalls = 0, allReported = true;
+  for (const row of rows) {
+    knownUsd += row.knownUsd;
+    pricedCalls += row.generations - row.unavailableCalls;
+    unavailableCalls += row.unavailableCalls;
+    if (row.sources.listPrice > 0 || row.sources.catalogue > 0) allReported = false;
+  }
+  return { knownUsd, pricedCalls, unavailableCalls, allReported };
 }
 
 // Cheap calls cost fractions of a hundredth of a cent; two significant digits keep them comparable.

@@ -3,7 +3,7 @@ import { parseJsonEvidence } from "../evaluations/json-evidence";
 import { calculateCost } from "./calculator";
 import { TOKEN_CATEGORIES, type FrozenRateRevision, type TokenCategory } from "./protocol";
 import { freezeRateRevision, NOMINAL_CATALOGUE_PROVIDER, NOMINAL_CATALOGUE_TIER, NOMINAL_CATALOGUE_URL, selectRateRevision } from "./rates";
-import { estimateListPriceCost, resolveModelIdentity, spanCacheUsage } from "./list-prices";
+import { estimateCallListPrice, requestModel, resolveModelIdentity } from "./list-prices";
 import { normalizeUsage } from "./usage";
 
 export const COST_ANALYTICS_VERSION = "runphantom-cost-analytics/1" as const;
@@ -236,9 +236,9 @@ export function aggregateCostAnalytics(spans: readonly AnalyticsSpan[], input: C
     const usage = normalizeUsage(values, span.provider);
     let estimate: { totalUsd: number | null; reasons: readonly string[] } | null;
     if (request.estimateMode === "list-prices") {
-      const quote = estimateListPriceCost({ model: usage.model, provider: usage.provider, inputTokens: usage.categories.input.count, outputTokens: usage.categories.output.count,
-        ...spanCacheUsage(values), at: timed ? span.startedAt : null });
-      if (quote.kind === "estimated") listRates.set(quote.revision.model, quote.revision);
+      const quote = estimateCallListPrice({ values: captured.unavailable ? null : values, models: [usage.model, requestModel(values)], provider: span.provider,
+        inputTokens: usage.categories.input.count, outputTokens: usage.categories.output.count, at: timed ? span.startedAt : null, normalized: captured.unavailable ? undefined : usage });
+      if (quote.kind === "estimated") listRates.set(`${quote.revision.model}\u0000${quote.revision.revision}`, quote.revision);
       estimate = quote.kind === "estimated" ? { totalUsd: quote.totalUsd, reasons: [] } : { totalUsd: null, reasons: [quote.reason === "model_unpriced" ? "rate_identity_unavailable" : quote.reason] };
     } else {
       const quoteModel = request.estimateMode === "nominal-input-output" && usage.model !== null
@@ -273,5 +273,5 @@ export function aggregateCostAnalytics(spans: readonly AnalyticsSpan[], input: C
   }
   const finishGroups = (items: Map<string | null, MutablePopulation>): readonly AnalyticsGroup[] => Object.freeze([...items].sort(([a], [b]) => a === null ? 1 : b === null ? -1 : a < b ? -1 : a > b ? 1 : 0).map(([identity, item]) => Object.freeze({ identity, ...finish(item) })));
   return Object.freeze({ ...finish(total), version: COST_ANALYTICS_VERSION, currency: "USD", window: Object.freeze({ from: request.from, to: request.to, bucket: request.bucket, timezone: "UTC", field: "generationStartedAt" }),
-    estimateMode: request.estimateMode, population: Object.freeze(counts), untimed: finish(untimed), byModel: finishGroups(groups.byModel), byProvider: finishGroups(groups.byProvider), byProject: finishGroups(groups.byProject), byTime: finishGroups(groups.byTime), rateRevisions: request.estimateMode === "list-prices" ? Object.freeze([...listRates.values()].sort((a, b) => a.model < b.model ? -1 : a.model > b.model ? 1 : 0)) : request.rates });
+    estimateMode: request.estimateMode, population: Object.freeze(counts), untimed: finish(untimed), byModel: finishGroups(groups.byModel), byProvider: finishGroups(groups.byProvider), byProject: finishGroups(groups.byProject), byTime: finishGroups(groups.byTime), rateRevisions: request.estimateMode === "list-prices" ? Object.freeze([...listRates.values()].sort((a, b) => a.model < b.model ? -1 : a.model > b.model ? 1 : a.revision < b.revision ? -1 : a.revision > b.revision ? 1 : 0)) : request.rates });
 }

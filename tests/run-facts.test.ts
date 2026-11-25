@@ -4,10 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { clearAll, closeDb, getDbPath, getDrizzleDb } from "../src/db";
 import { aggregateCostAnalytics, type AnalyticsSpan } from "../src/pricing/analytics";
-import { registerServerCostRates, serverCostRates } from "../src/stats/cost-rates";
 import { clearRunFactsCache, clip, firstSentence, loadRunRows, RUN_FACT_LIMITS, selectRunAggregates } from "../src/stats/run-facts";
 import { deriveRunStatus } from "../src/stats/run-status";
-import { nominalRate, seedMetricsRuns } from "./fixtures/metrics-seed";
+import { seedMetricsRuns } from "./fixtures/metrics-seed";
+import { getRunCostRows, summarizeRunCost } from "../app/src/utils/costs";
+import type { Span } from "../app/src/utils/types";
 
 let directory: string;
 let oldDb: string | undefined;
@@ -19,21 +20,21 @@ beforeAll(() => {
   process.env.RUNPHANTOM_DB_PATH = path.join(directory, "facts.db");
   getDrizzleDb();
 });
-beforeEach(() => { clearAll(); clearRunFactsCache(); registerServerCostRates(null); });
+beforeEach(() => { clearAll(); clearRunFactsCache(); });
 afterAll(() => {
-  registerServerCostRates(null);
   closeDb();
   if (oldDb === undefined) delete process.env.RUNPHANTOM_DB_PATH; else process.env.RUNPHANTOM_DB_PATH = oldDb;
   rmSync(directory, { recursive: true, force: true });
 });
 
 const db = () => getDrizzleDb().$client;
-const rows = () => loadRunRows(db(), getDbPath(), selectRunAggregates(db(), "1 = 1", []), serverCostRates());
+const rows = () => loadRunRows(db(), getDbPath(), selectRunAggregates(db(), "1 = 1", []));
 const facts = (id: string) => rows().find(row => row.id === id)!.facts;
-function span(runId: string, id: string, options: { parent?: string; type?: string; status?: string; attributes?: string | null; model?: string; input?: number; output?: number; payload?: string } = {}) {
+function span(runId: string, id: string, options: { parent?: string; type?: string; status?: string; attributes?: string | null; model?: string; provider?: string | null; input?: number; output?: number; payload?: string; start?: number } = {}) {
+  const start = options.start ?? 10;
   db().query(`INSERT INTO spans(run_id,id,parent_span_id,name,span_type,status,start_time_ms,end_time_ms,duration_ms,model,provider,input_tokens,output_tokens,attributes,input_payload)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(runId, id, options.parent ?? null, id, options.type ?? "LLM_GENERATION", options.status ?? "OK", 10, 20, 10,
-    options.model ?? null, options.model ? "openai" : null, options.input ?? null, options.output ?? null, options.attributes ?? null, options.payload ?? null);
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(runId, id, options.parent ?? null, id, options.type ?? "LLM_GENERATION", options.status ?? "OK", start, start + 10, 10,
+    options.model ?? null, options.provider !== undefined ? options.provider : options.model ? "openai" : null, options.input ?? null, options.output ?? null, options.attributes ?? null, options.payload ?? null);
 }
 const run = (id: string) => db().query("INSERT INTO runs(id,name,started_at,last_updated_at) VALUES(?,?,1,1)").run(id, id);
 
@@ -52,28 +53,36 @@ describe("deriveRunStatus", () => {
 });
 
 describe("run cost and tokens agree with the Cost page aggregation", () => {
-  function projection(): AnalyticsSpan[] {
+  function projection(startedAt: number): AnalyticsSpan[] {
     return (db().query("SELECT run_id, id, parent_span_id, span_type, model, provider, input_tokens, output_tokens, attributes FROM spans").all() as Array<Record<string, unknown>>)
       .map(row => ({ projectId: row.run_id as string, runId: row.run_id as string, id: row.id as string, parentSpanId: row.parent_span_id as string | null, kind: row.span_type as string | null,
-        startedAt: 0, model: row.model as string | null, provider: row.provider as string | null, inputTokens: row.input_tokens as number | null, outputTokens: row.output_tokens as number | null,
+        startedAt, model: row.model as string | null, provider: row.provider as string | null, inputTokens: row.input_tokens as number | null, outputTokens: row.output_tokens as number | null,
         attributes: row.attributes as string | null }));
   }
   function seedEdgeCases() {
     run("edge-orphan"); span("edge-orphan", "root", { type: "AGENT_ROOT" }); span("edge-orphan", "llm", { parent: "missing", model: "gpt-4o-mini-2024-07-18", input: 5, output: 6 });
     run("edge-dupe"); span("edge-dupe", "root", { type: "AGENT_ROOT" }); span("edge-dupe", "llm", { parent: "root", model: "gpt-4o-mini-2024-07-18", input: 5, output: 6, attributes: '{"gen_ai.usage.input_tokens":5,"gen_ai.usage.input_tokens":7}' });
-    run("edge-nested"); span("edge-nested", "root", { type: "AGENT_ROOT" }); span("edge-nested", "outer", { parent: "root", model: "gemini-2.5-flash", input: 40, output: 4 });
-    span("edge-nested", "inner", { parent: "outer", model: "gemini-2.5-flash", input: 30, output: 3 });
+    run("edge-nested"); span("edge-nested", "root", { type: "AGENT_ROOT" }); span("edge-nested", "outer", { parent: "root", model: "gemini-2.5-flash", provider: "google", input: 40, output: 4 });
+    span("edge-nested", "inner", { parent: "outer", model: "gemini-2.5-flash", provider: "google", input: 30, output: 3 });
     run("edge-columns"); span("edge-columns", "root", { type: "AGENT_ROOT" }); span("edge-columns", "llm", { parent: "root", model: "gemini-2.5-flash", input: 11, output: 12 });
+    run("edge-request"); span("edge-request", "root", { type: "AGENT_ROOT" });
+    span("edge-request", "llm", { parent: "root", model: "gemini-flash-house", provider: "google", input: 1_000, output: 1_000,
+      attributes: JSON.stringify({ "gen_ai.request.model": "gemini-2.5-flash-lite", "gen_ai.response.model": "gemini-flash-house" }) });
+    run("edge-conflict"); span("edge-conflict", "root", { type: "AGENT_ROOT" });
+    span("edge-conflict", "llm", { parent: "root", model: "claude-haiku-4-5-20251001", provider: "anthropic", input: 1_000, output: 1_000, attributes: JSON.stringify({ "gen_ai.system": "aws.bedrock" }) });
+    run("edge-bedrock"); span("edge-bedrock", "root", { type: "AGENT_ROOT" });
+    span("edge-bedrock", "llm", { parent: "root", model: "claude-haiku-4-5-20251001", provider: null, input: 1_000, output: 1_000, attributes: JSON.stringify({ "gen_ai.system": "aws.bedrock" }) });
+    run("edge-azure"); span("edge-azure", "root", { type: "AGENT_ROOT" });
+    span("edge-azure", "llm", { parent: "root", model: "gpt-5-nano", provider: null, input: 1_000, output: 1_000, attributes: JSON.stringify({ "gen_ai.system": "azure.ai.openai" }) });
   }
 
-  for (const mode of ["no price table", "nominal price table"] as const) test(`per-run totals match aggregateCostAnalytics with ${mode}`, () => {
-    seedMetricsRuns(db(), { runs: 300, now: 2_000_000_000_000, seed: 11 });
+  test("per-run totals match aggregateCostAnalytics with the bundled list prices", () => {
+    const now = Date.UTC(2026, 10, 20);
+    seedMetricsRuns(db(), { runs: 300, now, seed: 11 });
     seedEdgeCases();
-    if (mode === "nominal price table") registerServerCostRates(() => ({ estimateMode: "nominal-input-output", rates: [nominalRate("gemini-2.5-flash", 0.3, 2.5), nominalRate("gpt-4o-mini-2024-07-18", 0.15, 0.6)] }));
-    const rates = serverCostRates();
-    const reference = aggregateCostAnalytics(projection(), { from: 0, to: 1, bucket: "day", estimateMode: rates.estimateMode, rates: rates.rates });
+    const reference = aggregateCostAnalytics(projection(now - 86_400_000), { from: now - 31 * 86_400_000, to: now, bucket: "day", estimateMode: "list-prices", rates: [] });
     const byRun = new Map(reference.byProject.map(group => [group.identity!, group]));
-    let compared = 0;
+    let compared = 0, estimatedCalls = 0;
     for (const row of rows()) {
       const expected = byRun.get(row.id);
       const generations = row.facts.generations;
@@ -88,22 +97,89 @@ describe("run cost and tokens agree with the Cost page aggregation", () => {
       expect(sum(reported.map(item => item.costUsd))).toBeCloseTo(expected.reportedUsd.knownSum ?? 0, 12);
       if (!reported.length) {
         const estimated = generations.filter(item => item.costSource === "estimated");
+        estimatedCalls += estimated.length;
         expect(estimated.length).toBe(expected.estimatedUsd.knownCount);
         expect(sum(estimated.map(item => item.costUsd))).toBeCloseTo(expected.estimatedUsd.knownSum ?? 0, 12);
       }
       compared++;
     }
-    expect(compared).toBe(304);
+    expect(compared).toBe(308);
+    expect(estimatedCalls).toBeGreaterThan(400);
     expect(reference.population.nestedExcluded).toBe(1);
     expect(facts("edge-orphan")).toMatchObject({ inputTokens: null, costUsd: null, costSource: "unknown" });
     expect(facts("edge-dupe")).toMatchObject({ inputTokens: null, outputTokens: null, costSource: "unknown" });
-    expect(facts("edge-nested")).toMatchObject({ inputTokens: 40, outputTokens: 4 });
-    if (mode === "nominal price table") expect(facts("edge-columns")).toMatchObject({ costUsd: 11 * 0.3 / 1e6 + 12 * 2.5 / 1e6, costSource: "estimated" });
+    expect(facts("edge-nested")).toMatchObject({ inputTokens: 40, outputTokens: 4, costSource: "estimated" });
+    expect(facts("edge-nested").costUsd).toBeCloseTo(40 * 0.3 / 1e6 + 4 * 2.5 / 1e6, 15);
+    // gemini-2.5-flash reported by a span whose provider column says openai is not a first-party Google call.
+    expect(facts("edge-columns")).toMatchObject({ inputTokens: 11, costUsd: null, costSource: "unknown" });
+    // An unpriced response model falls back to the priced request model on both surfaces: 1,000 × $0.10 + 1,000 × $0.40 per million.
+    expect(facts("edge-request")).toMatchObject({ costSource: "estimated", costUnknownCalls: 0 });
+    expect(facts("edge-request").costUsd).toBeCloseTo(0.0005, 15);
+    expect(byRun.get("edge-request")!.estimatedUsd).toMatchObject({ knownCount: 1, unavailableCount: 0 });
+    // A provider column that disagrees with gen_ai.system, or a cloud vendor named only in the attributes, is not a first-party call.
+    for (const id of ["edge-conflict", "edge-bedrock", "edge-azure"]) {
+      expect({ id, ...facts(id) }).toMatchObject({ id, inputTokens: 1_000, costUsd: null, costSource: "unknown", costUnknownCalls: 1 });
+      expect({ id, ...byRun.get(id)!.estimatedUsd }).toMatchObject({ id, knownCount: 0, unavailableCount: 1 });
+    }
+  });
+});
+
+describe("run cost estimates", () => {
+  const usd = (id: string) => facts(id).generations.map(item => [item.costSource, item.costUsd === null ? null : Math.round(item.costUsd * 1e12) / 1e12]);
+
+  test("prices dated ids, cached input and the requested model with exact list prices", () => {
+    run("priced"); span("priced", "root", { type: "AGENT_ROOT" });
+    span("priced", "nano", { parent: "root", start: 11, model: "gpt-5-nano-2025-08-07", input: 1_000_000, output: 1_000_000 });
+    span("priced", "haiku", { parent: "root", start: 12, model: "claude-haiku-4-5-20251001", provider: "anthropic", input: 2_000, output: 300 });
+    span("priced", "cached", { parent: "root", start: 13, model: "gpt-4.1-mini", input: 10_000, output: 1_000,
+      attributes: JSON.stringify({ "gen_ai.usage.cache_read.input_tokens": 4_000, "runphantom.usage.input_includes_cache": true }) });
+    span("priced", "request", { parent: "root", start: 14, model: "gemini-flash-house", provider: "google", input: 1_000, output: 1_000,
+      attributes: JSON.stringify({ "gen_ai.request.model": "gemini-2.5-flash-lite", "gen_ai.response.model": "gemini-flash-house" }) });
+    expect(usd("priced")).toEqual([
+      ["estimated", 0.45],
+      ["estimated", 0.0035],
+      // 6,000 fresh × $0.40 + 4,000 cached × $0.10 + 1,000 × $1.60 per million.
+      ["estimated", 0.0044],
+      ["estimated", 0.0005],
+    ]);
+    expect(facts("priced")).toMatchObject({ costSource: "estimated", costUnknownCalls: 0 });
+    expect(facts("priced").costUsd).toBeCloseTo(0.4584, 15);
+  });
+
+  test("reported cost wins, an invalid one stays unknown, and an ended price is not applied", () => {
+    run("rules"); span("rules", "root", { type: "AGENT_ROOT" });
+    span("rules", "reported", { parent: "root", start: 11, model: "gpt-5-nano", input: 1_000, output: 1_000, attributes: JSON.stringify({ "gen_ai.usage.cost_usd": 0.25 }) });
+    span("rules", "invalid", { parent: "root", start: 12, model: "gpt-5-nano", input: 1_000, output: 1_000, attributes: JSON.stringify({ "gen_ai.usage.cost_usd": -1 }) });
+    span("rules", "retired", { parent: "root", model: "gemini-4-carbon", provider: "google", input: 1_000, output: 1_000, start: Date.UTC(2026, 11, 1) });
+    span("rules", "proxy", { parent: "root", start: 13, model: "gpt-5-nano", provider: "aws.bedrock", input: 1_000, output: 1_000 });
+    span("rules", "no-tokens", { parent: "root", start: 14, model: "gpt-5-nano" });
+    expect(usd("rules")).toEqual([["reported", 0.25], ["unknown", null], ["unknown", null], ["unknown", null], ["unknown", null]]);
+    expect(facts("rules").generations.map(item => item.model)).toEqual(["gpt-5-nano", "gpt-5-nano", "gpt-5-nano", "gpt-5-nano", "gemini-4-carbon"]);
+    expect(facts("rules")).toMatchObject({ costUsd: null, costSource: "unknown", knownCostUsd: 0.25, costUnknownCalls: 4 });
+  });
+});
+
+describe("run header agrees with the run list", () => {
+  test("a model with priced and unpriced calls adds its priced calls and counts unpriced calls", () => {
+    run("mixed"); span("mixed", "root", { type: "AGENT_ROOT" });
+    span("mixed", "bedrock", { parent: "root", start: 11, model: "claude-haiku-4-5-20251001", provider: "anthropic", input: 1_000, output: 1_000, attributes: JSON.stringify({ "gen_ai.system": "aws.bedrock" }) });
+    span("mixed", "direct", { parent: "root", start: 12, model: "claude-haiku-4-5-20251001", provider: "anthropic", input: 2_000, output: 100 });
+    span("mixed", "sonnet", { parent: "root", start: 13, model: "claude-sonnet-5-5", provider: "anthropic", input: 100_000, output: 30_000 });
+    span("mixed", "house-1", { parent: "root", start: 14, model: "in-house-model", input: 5, output: 5 });
+    span("mixed", "house-2", { parent: "root", start: 15, model: "in-house-model", input: 5, output: 5 });
+    const listed = facts("mixed");
+    // 2,000 × $1 + 100 × $5 per million, plus 100,000 × $2 + 30,000 × $10 per million.
+    expect(listed).toMatchObject({ costSource: "unknown", costUnknownCalls: 3 });
+    expect(listed.knownCostUsd).toBeCloseTo(0.0025 + 0.5, 15);
+    const spans = db().query("SELECT * FROM spans WHERE run_id = 'mixed'").all() as Span[];
+    const header = summarizeRunCost(getRunCostRows(spans, { status: "disabled", catalogue: null, error: null }));
+    expect(header).toMatchObject({ pricedCalls: 2, unavailableCalls: listed.costUnknownCalls, allReported: false });
+    expect(header.knownUsd).toBeCloseTo(listed.knownCostUsd!, 15);
   });
 });
 
 describe("run facts cache", () => {
-  test("recomputes when a run's spans or the price table change", () => {
+  test("recomputes when a run's spans change", () => {
     run("cached"); span("cached", "root", { type: "AGENT_ROOT" });
     span("cached", "llm", { parent: "root", attributes: JSON.stringify({ "gen_ai.response.model": "gemini-2.5-flash", "gen_ai.usage.input_tokens": 10, "gen_ai.usage.output_tokens": 2, "gen_ai.usage.cost_usd": 0.5 }) });
     expect(facts("cached")).toMatchObject({ costUsd: 0.5, costSource: "reported", status: "completed" });
@@ -112,10 +188,10 @@ describe("run facts cache", () => {
     db().query("UPDATE spans SET status = 'ERROR' WHERE run_id = 'cached' AND id = 'llm'").run();
     expect(facts("cached")).toMatchObject({ status: "completed_with_errors", errorCount: 1 });
     db().query("UPDATE spans SET attributes = ? WHERE run_id = 'cached' AND id = 'llm'").run(JSON.stringify({ "gen_ai.response.model": "gemini-2.5-flash", "gen_ai.usage.input_tokens": 10, "gen_ai.usage.output_tokens": 2 }));
-    expect(facts("cached")).toMatchObject({ costUsd: null, costSource: "unknown" });
-    registerServerCostRates(() => ({ estimateMode: "nominal-input-output", rates: [nominalRate("gemini-2.5-flash", 1, 10)] }));
-    expect(facts("cached").costSource).toBe("estimated");
-    expect(facts("cached").costUsd).toBeCloseTo(0.00003, 15);
+    expect(facts("cached")).toMatchObject({ costSource: "estimated" });
+    expect(facts("cached").costUsd).toBeCloseTo(10 * 0.3 / 1e6 + 2 * 2.5 / 1e6, 15);
+    span("cached", "late", { parent: "root", model: "in-house-model", input: 5, output: 5 });
+    expect(facts("cached")).toMatchObject({ costUsd: null, costSource: "unknown", costUnknownCalls: 1, llmCalls: 2 });
   });
 
   test("recomputes when a span is re-typed, renamed, re-modelled or moved without changing its sizes", () => {

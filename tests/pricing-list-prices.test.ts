@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { aggregateCostAnalytics, parseCostAnalyticsRequest, type AnalyticsSpan } from "../src/pricing/analytics";
+import { PLAYGROUND_DEFAULT_MODEL, PLAYGROUND_MODELS } from "../src/playground/protocol";
+import { OTEL_PROVIDER_NAME } from "../src/playground/providers";
 import { estimateListPriceCost, LIST_PRICE_REVISIONS, LIST_PRICES, lookupListPrice, PRICE_SOURCES, PRICE_TABLE_AS_OF, PRICE_TABLE_REVISION, resolveModelIdentity } from "../src/pricing/list-prices";
 import { parseNominalCatalogue } from "../src/pricing/rates";
 import { spanCost } from "../src/pricing/span-cost";
@@ -14,9 +16,9 @@ const priced = (model: string, provider: string | null, input: number, output: n
 describe("bundled list price table", () => {
   test("is dated, sourced from each provider's pricing page and freezes as valid rate revisions", () => {
     expect(PRICE_TABLE_AS_OF).toBe("2026-11-25");
-    expect(LIST_PRICE_REVISIONS).toHaveLength(LIST_PRICES.length);
+    expect(LIST_PRICE_REVISIONS).toHaveLength(LIST_PRICES.length + LIST_PRICES.reduce((sum, entry) => sum + (entry.changes?.length ?? 0), 0));
     for (const revision of LIST_PRICE_REVISIONS) {
-      expect(revision.revision).toBe(PRICE_TABLE_REVISION);
+      expect(revision.revision).toMatch(/^runphantom-list-prices\/2026-11-25(?:\/from-\d{4}-\d{2}-\d{2})?$/);
       expect(revision.source.observedAt).toBe("2026-11-25T00:00:00.000Z");
       expect(Object.values(PRICE_SOURCES).map(source => source.url)).toContain(revision.source.reference!);
       expect(revision.source.name).toContain("as of 2026-11-25");
@@ -61,8 +63,8 @@ describe("bundled list price table", () => {
     expect(lookupListPrice("claude-haiku-4-5", { provider: "aws.bedrock" })).toBeNull();
     expect(lookupListPrice("gpt-5-nano", { provider: "azure.ai.openai" })).toBeNull();
     expect(lookupListPrice("gpt-5-nano", { provider: "openai.chat" })).not.toBeNull();
-    expect(lookupListPrice("gemini-2.5-pro", { at: Date.parse("2026-11-30T23:59:59Z") })).not.toBeNull();
-    expect(lookupListPrice("gemini-2.5-pro", { at: Date.parse("2026-12-01T00:00:00Z") })).toBeNull();
+    expect(lookupListPrice("gemini-4-carbon", { at: Date.parse("2026-11-30T23:59:59Z") })).not.toBeNull();
+    expect(lookupListPrice("gemini-4-carbon", { at: Date.parse("2026-12-01T00:00:00Z") })).toBeNull();
   });
 
   test("prompt-length bands count Anthropic cache tokens and OpenAI long context", () => {
@@ -91,10 +93,45 @@ describe("bundled list price table", () => {
     expect(priced("claude-opus-4-20250514", "anthropic", 1_000_000, 1_000_000).totalUsd).toBeCloseTo(15 + 75, 12);
   });
 
-  test("gemini-2.5-flash is unpriced from Google's 2026-12-01 routing change", () => {
-    expect(lookupListPrice("gemini-2.5-flash", { at: Date.parse("2026-11-30T23:59:59Z") })).not.toBeNull();
-    expect(lookupListPrice("gemini-2.5-flash", { at: Date.parse("2026-12-01T00:00:00Z") })).toBeNull();
+  test("every Playground model has a list price, including Google's published 2027 Gemini 3.8 Flash price", () => {
+    for (const option of PLAYGROUND_MODELS) {
+      const provider = OTEL_PROVIDER_NAME[option.provider];
+      for (const at of ["2026-11-25T12:00:00Z", "2026-12-02T00:00:00Z", "2027-02-01T00:00:00Z"]) {
+        expect({ model: option.model, at, priced: lookupListPrice(option.model, { provider, at: Date.parse(at) }) !== null }).toEqual({ model: option.model, at, priced: true });
+      }
+    }
+    expect(lookupListPrice(PLAYGROUND_DEFAULT_MODEL.gemini, { provider: "google", at: Date.parse("2026-12-31T23:59:59Z") })?.revision.revision).toBe(PRICE_TABLE_REVISION);
+    const after = estimateListPriceCost({ model: "gemini-3.8-flash", provider: "google", inputTokens: 1_000_000, outputTokens: 1_000_000, cacheReadTokens: 200_000, inputIncludesCache: true, at: Date.parse("2027-01-01T00:00:00Z") });
+    expect(after).toMatchObject({ kind: "estimated", inputUsdPerMillion: 1.5, outputUsdPerMillion: 7.5, revision: { revision: "runphantom-list-prices/2026-11-25/from-2027-01-01" } });
+    // 800,000 fresh × $1.50 + 200,000 cached × $0.15 + 1,000,000 × $7.50 per million.
+    expect(after.kind === "estimated" && after.totalUsd).toBeCloseTo(1.2 + 0.03 + 7.5, 12);
+    expect(estimateListPriceCost({ model: "gemini-3.8-flash", provider: "google", inputTokens: 1_000_000, outputTokens: 1_000_000 })).toMatchObject({ inputUsdPerMillion: 0.75, outputUsdPerMillion: 3.75 });
+    expect(lookupListPrice("gemini-3.6-flash", { at: Date.parse("2027-02-01T00:00:00Z") })?.revision.bands[0].categories.input).toEqual({ kind: "priced", usdPerMillionTokens: 1.5 });
+  });
+
+  test("gemini-2.5 calls are billed at the routed model's rates from Google's 2026-12-01 routing change", () => {
+    const call = (model: string, at: string) => estimateListPriceCost({ model, provider: "gcp.gemini", inputTokens: 1_000_000, outputTokens: 1_000_000, cacheReadTokens: 200_000, inputIncludesCache: true, at: Date.parse(at) });
+    // 800,000 fresh × $0.30 + 200,000 cached × $0.03 + 1,000,000 × $2.50 per million, before and after.
+    expect(call("gemini-2.5-flash", "2026-11-30T23:59:59Z")).toMatchObject({ kind: "estimated", revision: { revision: "runphantom-list-prices/2026-11-25" } });
+    const flash = call("gemini-2.5-flash", "2026-12-02T00:00:00Z");
+    expect(flash).toMatchObject({ kind: "estimated", inputUsdPerMillion: 0.3, outputUsdPerMillion: 2.5, revision: { revision: "runphantom-list-prices/2026-11-25/from-2026-12-01" } });
+    expect(flash.kind === "estimated" && flash.totalUsd).toBeCloseTo(0.24 + 0.006 + 2.5, 12);
+    expect(call("gemini-2.5-pro", "2026-11-30T23:59:59Z")).toMatchObject({ inputUsdPerMillion: 2.5, outputUsdPerMillion: 15 });
+    const pro = call("gemini-2.5-pro", "2026-12-02T00:00:00Z");
+    expect(pro).toMatchObject({ inputUsdPerMillion: 0.75, outputUsdPerMillion: 3.75 });
+    // 800,000 × $0.75 + 200,000 × $0.075 + 1,000,000 × $3.75.
+    expect(pro.kind === "estimated" && pro.totalUsd).toBeCloseTo(0.6 + 0.015 + 3.75, 12);
+    expect(call("gemini-2.5-pro", "2027-01-01T00:00:00Z")).toMatchObject({ inputUsdPerMillion: 1.5, outputUsdPerMillion: 7.5, revision: { revision: "runphantom-list-prices/2026-11-25/from-2027-01-01" } });
     expect(PRICE_SOURCES.google.url).toBe("https://aistudio.google.com/docs/pricing");
+  });
+
+  test("model resolution is memoised per model and provider, while the call time still picks the price period", () => {
+    for (let index = 0; index < 3; index++) {
+      expect(lookupListPrice("claude-haiku-4-5-20251001", { provider: "aws.bedrock" })).toBeNull();
+      expect(lookupListPrice("claude-haiku-4-5-20251001", { provider: "anthropic" })?.entry.model).toBe("claude-haiku-4-5-20251001");
+      expect(lookupListPrice("gemini-4-carbon", { at: Date.parse("2026-12-01T00:00:00Z") })).toBeNull();
+      expect(lookupListPrice("gemini-4-carbon", { at: Date.parse("2026-11-01T00:00:00Z") })).not.toBeNull();
+    }
   });
 });
 

@@ -160,15 +160,3 @@ export function seedMetricsFixture(db: Database, now = FIXTURE_NOW): void {
     }
   })();
 }
-
-/** A nominal input/output price for `model`, shaped like one parsed OpenRouter catalogue entry. */
-export function nominalRate(model: string, input: number, output: number) {
-  const categories = Object.fromEntries(["input", "output", "cache_read", "cache_write", "cache_write_5m", "cache_write_1h", "reasoning", "audio_input", "audio_output"]
-    .map(category => [category, { kind: "not_applicable" }]));
-  return {
-    version: "runphantom-pricing/1", provider: "openrouter-catalogue", model: `test/${model}`, tier: "nominal-input-output", revision: "test-1", currency: "USD", unit: "usd_per_million_tokens",
-    source: { kind: "catalogue", name: "Test catalogue", reference: "https://openrouter.ai/api/v1/models", observedAt: "2027-01-01T00:00:00Z" },
-    aliases: [{ provider: "openrouter-catalogue", model, tier: "nominal-input-output" }],
-    bands: [{ maxContextTokens: null, categories: { ...categories, input: { kind: "priced", usdPerMillionTokens: input }, output: { kind: "priced", usdPerMillionTokens: output } } }],
-  };
-}

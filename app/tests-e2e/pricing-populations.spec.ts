@@ -29,7 +29,7 @@ const POPULATIONS: readonly Population[] = [
   { name: "mixed known and unavailable", runId: "0000000000000000000000000000f180", rows: [
     { model: "fixture/known", input: 200, output: 300, reported: null },
     { model: "fixture/missing-price", input: 100, output: 50, reported: null },
-  ], ready: "Known estimates $0.0051 · 1 unavailable", reported: null },
+  ], ready: "Known estimates $0.0051 · 1 call unavailable", reported: null },
 ];
 
 test.use({ hasTouch: true });

@@ -1,7 +1,7 @@
 import { calculateCost } from "./calculator";
-import { PRICING_VERSION, TOKEN_CATEGORIES, type CategoryRate, type FrozenRateRevision, type TokenCategory } from "./protocol";
+import { PRICING_VERSION, TOKEN_CATEGORIES, type CategoryRate, type FrozenRateRevision, type NormalizedUsage, type TokenCategory } from "./protocol";
 import { freezeRateRevision } from "./rates";
-import { normalizeUsage, validTokenCount } from "./usage";
+import { normalizeUsage, providerIdentity, validTokenCount } from "./usage";
 
 /**
  * Bundled, offline list prices for first-party OpenAI, Anthropic and Google
@@ -55,7 +55,10 @@ export interface ListPriceEntry {
   readonly cachedInputRatio?: number;
   /** Exclusive end of this price, from the provider's announced change; later calls are unpriced. */
   readonly effectiveUntil?: string;
+  /** Prices the provider has already published for later dates, in ascending order; each replaces the one before from `from` on. */
+  readonly changes?: readonly ListPriceChange[];
 }
+export interface ListPriceChange { readonly from: string; readonly bands: readonly PriceBand[]; readonly cachedInputRatio?: number }
 
 const flat = (input: number, output: number): PriceBand[] => [{ maxPromptTokens: null, input, output }];
 const tiered = (threshold: number, low: [number, number], high: [number, number]): PriceBand[] =>
@@ -110,17 +113,23 @@ export const LIST_PRICES: readonly ListPriceEntry[] = Object.freeze([
   { family: "anthropic", model: "claude-opus-4-20250514", aliases: ["claude-opus-4-0"], bands: flat(15, 75), cachedInputRatio: 0.1 },
   { family: "anthropic", model: "claude-sonnet-4-20250514", aliases: ["claude-sonnet-4-0"], bands: flat(3, 15), cachedInputRatio: 0.1 },
 
-  // From 2026-12-01 Google routes gemini-2.5-pro to Gemini 3.8 Flash and
-  // gemini-2.5-flash to Gemini 3.5 Flash-Lite, billed at the routed model's rates.
-  { family: "google", model: "gemini-2.5-pro", bands: tiered(200_000, [1.25, 10], [2.5, 15]), cachedInputRatio: 0.1, effectiveUntil: "2026-12-01T00:00:00.000Z" },
-  { family: "google", model: "gemini-2.5-flash", bands: flat(0.3, 2.5), cachedInputRatio: 0.1, effectiveUntil: "2026-12-01T00:00:00.000Z" },
+  // Google's page: "Effective December 1, 2026, all API requests to gemini-2.5-pro
+  // will automatically route to [Gemini 3.8 Flash] and be billed at Gemini 3.8
+  // Flash rates", and gemini-2.5-flash likewise at Gemini 3.5 Flash-Lite rates.
+  // The changes below repeat those models' rows.
+  { family: "google", model: "gemini-2.5-pro", bands: tiered(200_000, [1.25, 10], [2.5, 15]), cachedInputRatio: 0.1, changes: [
+    { from: "2026-12-01T00:00:00.000Z", bands: flat(0.75, 3.75), cachedInputRatio: 0.1 },
+    { from: "2027-01-01T00:00:00.000Z", bands: flat(1.5, 7.5), cachedInputRatio: 0.1 },
+  ] },
+  { family: "google", model: "gemini-2.5-flash", bands: flat(0.3, 2.5), cachedInputRatio: 0.1, changes: [{ from: "2026-12-01T00:00:00.000Z", bands: flat(0.3, 2.5), cachedInputRatio: 0.1 }] },
   { family: "google", model: "gemini-2.5-flash-lite", bands: flat(0.1, 0.4), cachedInputRatio: 0.1 },
   { family: "google", model: "gemini-3-flash-preview", bands: flat(0.5, 3), cachedInputRatio: 0.1 },
   { family: "google", model: "gemini-3.1-pro-preview", aliases: ["gemini-3.1-pro-preview-customtools"], bands: tiered(200_000, [2, 12], [4, 18]), cachedInputRatio: 0.1 },
   { family: "google", model: "gemini-3.1-flash-lite", bands: flat(0.25, 1.5), cachedInputRatio: 0.1 },
   { family: "google", model: "gemini-3.5-flash-lite", bands: flat(0.3, 2.5), cachedInputRatio: 0.1 },
-  { family: "google", model: "gemini-3.6-flash", bands: flat(0.75, 3.75), cachedInputRatio: 0.1, effectiveUntil: "2027-01-01T00:00:00.000Z" },
-  { family: "google", model: "gemini-3.8-flash", bands: flat(0.75, 3.75), cachedInputRatio: 0.1, effectiveUntil: "2027-01-01T00:00:00.000Z" },
+  // Google's page lists $0.75 / $3.75 through 2026-12-31 and $1.50 / $7.50 from 2027-01-01 for both.
+  { family: "google", model: "gemini-3.6-flash", bands: flat(0.75, 3.75), cachedInputRatio: 0.1, changes: [{ from: "2027-01-01T00:00:00.000Z", bands: flat(1.5, 7.5), cachedInputRatio: 0.1 }] },
+  { family: "google", model: "gemini-3.8-flash", bands: flat(0.75, 3.75), cachedInputRatio: 0.1, changes: [{ from: "2027-01-01T00:00:00.000Z", bands: flat(1.5, 7.5), cachedInputRatio: 0.1 }] },
   { family: "google", model: "gemini-4-neon", bands: flat(3, 15), cachedInputRatio: 0.05 },
   { family: "google", model: "gemini-4-hydrogen", bands: flat(1.5, 7.5), cachedInputRatio: 0.05 },
   { family: "google", model: "gemini-4-carbon", bands: flat(2, 10), cachedInputRatio: 0.05, effectiveUntil: "2026-12-01T00:00:00.000Z" },
@@ -136,29 +145,33 @@ const priced = (usdPerMillionTokens: number): CategoryRate => ({ kind: "priced",
  * for the 1-hour cache. A write reported without its duration is priced as
  * the 5-minute default; OpenAI and Gemini report no cache writes.
  */
-function cacheRates(entry: ListPriceEntry, input: number): Partial<Record<TokenCategory, CategoryRate>> {
-  if (entry.cachedInputRatio === undefined) return {};
-  const read = { cache_read: priced(input * entry.cachedInputRatio) };
+function cacheRates(entry: ListPriceEntry, cachedInputRatio: number | undefined, input: number): Partial<Record<TokenCategory, CategoryRate>> {
+  if (cachedInputRatio === undefined) return {};
+  const read = { cache_read: priced(input * cachedInputRatio) };
   if (entry.family !== "anthropic") return read;
   return { ...read, cache_write: priced(input * 1.25), cache_write_5m: priced(input * 1.25), cache_write_1h: priced(input * 2) };
 }
 
-function revisionFor(entry: ListPriceEntry): FrozenRateRevision {
+function revisionFor(entry: ListPriceEntry, change?: ListPriceChange): FrozenRateRevision {
   const source = PRICE_SOURCES[entry.family];
   const notPriced = Object.fromEntries(TOKEN_CATEGORIES.map(category => [category, { kind: "not_applicable" }])) as Record<TokenCategory, CategoryRate>;
+  const from = change?.from.slice(0, 10);
   return freezeRateRevision({
     version: PRICING_VERSION, provider: LIST_PRICE_PROVIDER, model: entry.model, tier: LIST_PRICE_TIER,
-    revision: PRICE_TABLE_REVISION, currency: "USD", unit: "usd_per_million_tokens",
-    source: { kind: "catalogue", name: `${source.name}, list price as of ${PRICE_TABLE_AS_OF}`, reference: source.url, observedAt: OBSERVED_AT },
+    revision: from ? `${PRICE_TABLE_REVISION}/from-${from}` : PRICE_TABLE_REVISION, currency: "USD", unit: "usd_per_million_tokens",
+    source: { kind: "catalogue", name: `${source.name}, list price as of ${PRICE_TABLE_AS_OF}${from ? `, effective from ${from}` : ""}`, reference: source.url, observedAt: OBSERVED_AT },
     aliases: (entry.aliases ?? []).map(alias => ({ provider: LIST_PRICE_PROVIDER, model: alias, tier: LIST_PRICE_TIER })),
-    bands: entry.bands.map(band => ({ maxContextTokens: band.maxPromptTokens, categories: {
-      ...notPriced, input: priced(band.input), output: priced(band.output), ...cacheRates(entry, band.input),
+    bands: (change?.bands ?? entry.bands).map(band => ({ maxContextTokens: band.maxPromptTokens, categories: {
+      ...notPriced, input: priced(band.input), output: priced(band.output), ...cacheRates(entry, change ? change.cachedInputRatio : entry.cachedInputRatio, band.input),
     } })),
   });
 }
 
 const REVISIONS = new Map<ListPriceEntry, FrozenRateRevision>(LIST_PRICES.map(entry => [entry, revisionFor(entry)]));
-export const LIST_PRICE_REVISIONS: readonly FrozenRateRevision[] = Object.freeze([...REVISIONS.values()]);
+const CHANGE_REVISIONS = new Map<ListPriceEntry, ReadonlyArray<{ from: number; revision: FrozenRateRevision }>>(LIST_PRICES.filter(entry => entry.changes?.length)
+  .map(entry => [entry, entry.changes!.map(change => ({ from: Date.parse(change.from), revision: revisionFor(entry, change) }))]));
+/** Every priced period: one revision per row, plus one per published future price. */
+export const LIST_PRICE_REVISIONS: readonly FrozenRateRevision[] = Object.freeze([...REVISIONS.values(), ...[...CHANGE_REVISIONS.values()].flatMap(list => list.map(item => item.revision))]);
 
 const DATED_SUFFIX = /-(?:\d{4}-\d{2}-\d{2}|\d{8}|latest)$/;
 
@@ -202,12 +215,29 @@ function providerMatches(family: PriceFamily, provider: string | null | undefine
 
 export interface ListPriceMatch { readonly entry: ListPriceEntry; readonly revision: FrozenRateRevision }
 
+const RESOLVED = new Map<string, ListPriceEntry | null>();
+const RESOLVED_LIMIT = 4_096;
+
+function resolveEntry(model: string, provider: string | null | undefined): ListPriceEntry | null {
+  const key = `${model}\u0000${provider ?? ""}`;
+  const cached = RESOLVED.get(key);
+  if (cached !== undefined) return cached;
+  const entry = resolveModelIdentity(model.startsWith("models/") ? model.slice("models/".length) : model, identity => BY_IDENTITY.get(identity) ?? [], id => EXCLUDED.has(id));
+  const result = entry && providerMatches(entry.family, provider) ? entry : null;
+  if (RESOLVED.size >= RESOLVED_LIMIT) RESOLVED.clear();
+  RESOLVED.set(key, result);
+  return result;
+}
+
 export function lookupListPrice(model: string | null | undefined, options: { provider?: string | null; at?: number | null } = {}): ListPriceMatch | null {
   if (!model) return null;
-  const entry = resolveModelIdentity(model.startsWith("models/") ? model.slice("models/".length) : model, identity => BY_IDENTITY.get(identity) ?? [], id => EXCLUDED.has(id));
-  if (!entry || !providerMatches(entry.family, options.provider)) return null;
+  const entry = resolveEntry(model, options.provider);
+  if (!entry) return null;
   if (entry.effectiveUntil && typeof options.at === "number" && options.at >= Date.parse(entry.effectiveUntil)) return null;
-  return { entry, revision: REVISIONS.get(entry)! };
+  const at = options.at;
+  const started = typeof at === "number" ? (CHANGE_REVISIONS.get(entry) ?? []).filter(item => at >= item.from) : [];
+  const change = started[started.length - 1];
+  return { entry, revision: change?.revision ?? REVISIONS.get(entry)! };
 }
 
 export interface ListPriceUsage {
@@ -237,14 +267,14 @@ export interface ListPriceUsage {
  * (src/coding-hooks/projection.ts). Other spans use the captured gen_ai
  * cache attributes and the exporter's runphantom.usage.input_includes_cache.
  */
-export function spanCacheUsage(values: Record<string, unknown>): Pick<ListPriceUsage, "cacheReadTokens" | "cacheWriteTokens" | "cacheWrite5mTokens" | "cacheWrite1hTokens" | "inputIncludesCache"> {
+export function spanCacheUsage(values: Record<string, unknown>, normalized?: NormalizedUsage): Pick<ListPriceUsage, "cacheReadTokens" | "cacheWriteTokens" | "cacheWrite5mTokens" | "cacheWrite1hTokens" | "inputIncludesCache"> {
   const hook = values.usage;
   if ((values.source === "claude_hook" || values.source === "cursor_hook") && hook && typeof hook === "object" && !Array.isArray(hook)) {
     const usage = hook as Record<string, unknown>;
     const count = (value: unknown) => typeof value === "number" ? value : null;
     return { cacheReadTokens: count(usage.cacheReadInputTokens), cacheWriteTokens: count(usage.cacheCreatedInputTokens), inputIncludesCache: false };
   }
-  const usage = normalizeUsage(values, null);
+  const usage = normalized ?? normalizeUsage(values, null);
   const inclusion = usage.inclusion.cache_read;
   return {
     cacheReadTokens: usage.categories.cache_read.count, cacheWriteTokens: usage.categories.cache_write.count,
@@ -255,7 +285,7 @@ export function spanCacheUsage(values: Record<string, unknown>): Pick<ListPriceU
 
 export type ListPriceEstimate =
   | { readonly kind: "estimated"; readonly totalUsd: number; readonly inputUsd: number; readonly outputUsd: number; readonly cacheUsd: number; readonly cacheTokens: number; readonly inputUsdPerMillion: number; readonly outputUsdPerMillion: number; readonly model: string; readonly family: PriceFamily; readonly revision: FrozenRateRevision }
-  | { readonly kind: "unavailable"; readonly reason: "model_unpriced" | "usage_unavailable" | "cache_usage_ambiguous" | "estimate_failed" };
+  | { readonly kind: "unavailable"; readonly reason: "model_unpriced" | "provider_unresolved" | "usage_unavailable" | "cache_usage_ambiguous" | "estimate_failed" };
 
 export function estimateListPriceCost(usage: ListPriceUsage): ListPriceEstimate {
   const match = lookupListPrice(usage.model, { provider: usage.provider, at: usage.at });
@@ -289,4 +319,45 @@ export function estimateListPriceCost(usage: ListPriceUsage): ListPriceEstimate 
   const cacheUsd = (["cache_read", "cache_write", "cache_write_5m", "cache_write_1h"] as const).reduce((sum, name) => sum + (category(name).costUsd ?? 0), 0);
   return { kind: "estimated", totalUsd: estimate.totalUsd, inputUsd: input.costUsd!, outputUsd: output.costUsd!, cacheUsd, cacheTokens,
     inputUsdPerMillion: input.rateUsdPerMillionTokens!, outputUsdPerMillion: output.rateUsdPerMillionTokens!, model: match.revision.model, family: match.entry.family, revision: match.revision };
+}
+
+export function requestModel(values: Record<string, unknown> | null): string | null {
+  const value = values?.["gen_ai.request.model"];
+  return typeof value === "string" && value ? value : null;
+}
+
+export interface CallListPriceInput {
+  /** Parsed span attributes; null when they could not be read. */
+  readonly values: Record<string, unknown> | null;
+  /** Model ids to price, in order of preference; the first one the table knows is used. */
+  readonly models: readonly (string | null | undefined)[];
+  /** The stored provider column, before it is reconciled with the captured attributes. */
+  readonly provider: string | null;
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly at: number | null;
+  /** normalizeUsage(values, provider) when the caller already has it; must come from the same values and provider. */
+  readonly normalized?: NormalizedUsage;
+}
+
+/**
+ * List-price estimate for one model call, shared by the run header, the run
+ * list, the overview and the Cost page. A provider that is invalid or
+ * disagrees between the column and the attributes (for example anthropic
+ * against aws.bedrock) may be a proxy or cloud vendor with its own prices, so
+ * the call stays unpriced.
+ */
+export function estimateCallListPrice(input: CallListPriceInput): ListPriceEstimate {
+  const values = input.values ?? {};
+  const identity = input.normalized
+    ? { provider: input.normalized.provider, issues: input.normalized.issues.filter(issue => issue.endsWith("provider")) }
+    : providerIdentity(values, input.provider);
+  if (identity.issues.length) return { kind: "unavailable", reason: "provider_unresolved" };
+  const cache = input.values ? spanCacheUsage(values, input.normalized) : {};
+  let estimate: ListPriceEstimate = { kind: "unavailable", reason: "model_unpriced" };
+  for (const model of new Set(input.models.filter((value): value is string => !!value))) {
+    estimate = estimateListPriceCost({ model, provider: identity.provider, inputTokens: input.inputTokens, outputTokens: input.outputTokens, ...cache, at: input.at });
+    if (estimate.kind === "estimated" || estimate.reason !== "model_unpriced") break;
+  }
+  return estimate;
 }
