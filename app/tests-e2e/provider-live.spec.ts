@@ -26,27 +26,35 @@ test("live providers: OpenAI streams a reply and a follow-up through the demo UI
   }
 });
 
-test("live providers: saving a synthetic run in the UI persists an Anthropic summary", async ({ page, request }) => {
+test("live providers: saving writes a local summary and Anthropic is called only after consent", async ({ page, request }) => {
   await seedRunPhantomFixtures(liveUrl!);
   const configured = await request.get(`${liveUrl}/api/secrets`);
   expect((await configured.json()).keys.anthropic.configured).toBe(true);
   const savedFixtureUrl = `${liveUrl}/api/saved-runs/events/${FIXTURE_PRIMARY_RUN_ID}`;
   expect((await request.delete(savedFixtureUrl)).status()).toBe(200);
   expect((await request.get(savedFixtureUrl)).status()).toBe(404);
+  const summaryCalls: string[] = [];
+  page.on("request", (sent) => { if (new URL(sent.url()).pathname === "/api/summarize") summaryCalls.push(sent.url()); });
   await page.goto(`${liveUrl}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
   await expect(page.getByRole("button", { name: "Save", exact: true })).toBeVisible();
-  const summaryResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/summarize", { timeout: 120_000 });
   await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(async () => (await (await request.get(savedFixtureUrl)).json()).event?.properties?.summary_source, { timeout: 10_000 }).toBe("local");
+  expect(summaryCalls).toEqual([]);
+  await page.goto(`${liveUrl}/saved/${FIXTURE_PRIMARY_RUN_ID}`);
+  await page.getByRole("button", { name: "Summarize with Anthropic…", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Send this run to Anthropic?" });
+  await expect(dialog).toContainText("claude-haiku-4-5-20251001");
+  expect(summaryCalls).toEqual([]);
+  const summaryResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/summarize", { timeout: 120_000 });
+  await dialog.getByRole("button", { name: "Send to Anthropic", exact: true }).click();
   const result = await (await summaryResponse).json();
   expect(typeof result.summary).toBe("string");
   expect(result.summary?.length).toBeGreaterThan(10);
   await expect.poll(async () => {
     const response = await request.get(savedFixtureUrl);
     const saved = await response.json();
-    return saved.event?.summary === result.summary;
+    return saved.event?.summary === result.summary && saved.event?.properties?.summary_source === "provider";
   }, { timeout: 10_000 }).toBe(true);
-  await page.reload();
-  await expect(page.getByRole("button", { name: "Saved", exact: true })).toBeVisible();
 });
 
 for (const [provider, model] of [

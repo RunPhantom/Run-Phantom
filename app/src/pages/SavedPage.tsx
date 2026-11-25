@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Loader2, Trash2, FolderPlus, Folder, Check, Search, X, SlidersHorizontal, MessageSquareText } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { SavePopover } from "../components/SavePopover";
+import { SavedRunSummary } from "../components/SavedRunSummary";
 import { RunDetail, TraceNotFound } from "../components/RunDetail";
 import {
   addFolder,
@@ -576,15 +577,14 @@ function SavedRunDetail({ event }: { event: SavedEvent }) {
     </div>;
   }
 
-  if (hasLocalRun) {
-    return (
-      <div className="h-full overflow-auto sb">
-        <RunDetail runId={event.id} routeBase="/saved" />
+  return (
+    <div className="flex h-full flex-col">
+      <SavedRunSummary event={event} />
+      <div className="min-h-0 flex-1 overflow-auto sb">
+        {hasLocalRun ? <RunDetail runId={event.id} routeBase="/saved" /> : <SavedTraceUnavailable event={event} />}
       </div>
-    );
-  }
-
-  return <SavedTraceUnavailable event={event} />;
+    </div>
+  );
 }
 
 function SavedTraceUnavailable({ event }: { event: SavedEvent }) {

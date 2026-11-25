@@ -28,6 +28,7 @@ import { fieldClassName } from "@/components/ui/input";
 import { fmt, plural, runDisplayName, runStatusTone, isoTimestamp, safeDecodeParam, spanErrorReason } from "../utils/helpers";
 import { deriveRunStatus, runErrorEvidenceFromSpans, runInProgress, RUN_QUIET_AFTER_MS, type RunStatusEvidence, type RunStatusSummary } from "../../../src/run-status";
 import { useRunStatus } from "../hooks/use-run-status";
+import { localRunSummary } from "../utils/run-summary";
 import { buildReplayModelOptions } from "../utils/replay-models";
 import { captureCompletion, observationReplayUnavailable } from "../../../src/spans/normalized";
 import { useQueryClient } from "@tanstack/react-query";
@@ -702,10 +703,11 @@ function buildSavedEventFromRun({
   }
   const outputSpan = llmSpans.find(s => s.output_payload);
   if (outputSpan?.output_payload) assistantOutput = outputSpan.output_payload;
+  const eventName = run.event_name ?? run.name ?? run.id.slice(0, 12);
 
   return {
     id: run.id,
-    event_name: run.event_name ?? run.name ?? run.id.slice(0, 12),
+    event_name: eventName,
     user_id: run.user_id,
     convo_id: run.convo_id,
     timestamp: isoTimestamp(run.started_at),
@@ -713,7 +715,8 @@ function buildSavedEventFromRun({
     assistant_output: assistantOutput,
     saved_at: Date.now(),
     folder,
-    properties: annotationPreview ? { annotation_preview: annotationPreview } : undefined,
+    summary: localRunSummary({ name: eventName, userInput, spans }),
+    properties: { summary_source: "local", ...(annotationPreview ? { annotation_preview: annotationPreview } : {}) },
   };
 }
 
