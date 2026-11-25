@@ -108,6 +108,28 @@ test("the editor builds a prompt, validates it and keeps the draft", async ({ pa
   });
 });
 
+test("a key from the daemon's environment is named by its variable, never shown", async ({ page, runPhantom }) => {
+  await page.route("**/api/playground/models", async (route: Route) => {
+    const response = await route.fetch();
+    const body = await response.json() as { providers: Array<Record<string, unknown>> };
+    body.providers = body.providers.map(provider => provider.id === "openai" ? { ...provider, configured: true, keySource: "env", keyEnvVar: "OPENAI_API_KEY" }
+      : provider.id === "anthropic" ? { ...provider, configured: true, keySource: "store", keyEnvVar: null } : provider);
+    await route.fulfill({ response, json: body });
+  });
+  await openPlayground(page, runPhantom.url);
+
+  const model = page.getByRole("combobox", { name: "Model", exact: true });
+  await expect(model).toHaveValue("openai/gpt-5-nano");
+  await expect(page.locator("#playground-model-0-key")).toHaveText("Using OPENAI_API_KEY from the environment");
+  await expect(model).toHaveAttribute("aria-describedby", "playground-model-0-key");
+  await expect(page.getByText("No key saved")).toHaveCount(0);
+  await expect(model.locator("optgroup").first()).toHaveAttribute("label", "OpenAI · key from environment");
+  await expect(model.locator("optgroup").nth(1)).toHaveAttribute("label", "Anthropic · key saved");
+
+  await model.selectOption("anthropic/claude-haiku-4-5-20251001");
+  await expect(page.locator("#playground-model-0-key")).toHaveText("Using the Anthropic key saved in Settings");
+});
+
 test("compare runs stream into side-by-side columns with metrics, run links and a word diff", async ({ page, runPhantom }) => {
   const requests = await mockRuns(page, body => {
     const targets = body.targets as Array<{ provider: "openai" | "anthropic" | "gemini"; model: string }>;
@@ -236,10 +258,10 @@ test("Open in Playground fills the editor from a captured model call", async ({ 
 
   const banner = page.locator("[data-playground-opened-from]");
   await expect(banner).toContainText("Opened from Customer support triage › ai.generateText");
-  await expect(banner).toContainText("claude-sonnet-4-5 is not available in the Playground, so claude-haiku-4-5-20251001 was selected instead.");
+  await expect(banner).not.toContainText("is not available in the Playground");
   await expect(banner.getByRole("link")).toHaveAttribute("href", "/runs/demo_triage/span/demo_triage_llm-2");
   await expect(page).toHaveURL(/\/playground$/);
-  await expect(page.getByRole("combobox", { name: "Model", exact: true })).toHaveValue("anthropic/claude-haiku-4-5-20251001");
+  await expect(page.getByRole("combobox", { name: "Model", exact: true })).toHaveValue("anthropic/claude-sonnet-5-5");
   await expect(page.getByLabel("System")).toHaveValue(/^You triage incoming support tickets\./);
   await expect(page.getByRole("textbox", { name: "Content of message 1" })).toHaveValue(/export keeps timing out/);
   await expect(page.getByText("3 messages")).toBeVisible();

@@ -156,6 +156,14 @@ test("Home: tiles, failures and agents deep-link into Runs with filters", async 
   await page.goto(runPhantom.url);
   await kpi(page, "error-rate").getByRole("link").click();
   await expect(page).toHaveURL(/\/runs\?status=failed%2Ccompleted_with_errors&window=24h$/);
+  const problemRuns = overview.kpis.failed.value! + overview.kpis.completedWithErrors.value!;
+  expect(problemRuns).toBeGreaterThan(0);
+  expect(problemRuns).toBeLessThan(overview.kpis.runs.value!);
+  const rows = page.locator("[role=grid] [data-run-id], ul[aria-label='Runs'] > [data-run-id]");
+  await expect(rows).toHaveCount(problemRuns);
+  const statuses = await rows.locator("[data-run-list-status]").evaluateAll(cells => cells.map(cell => cell.getAttribute("data-run-list-status")));
+  expect(statuses).toHaveLength(problemRuns);
+  for (const status of statuses) expect(["failed", "completed_with_errors"]).toContain(status);
 
   await page.goto(runPhantom.url);
   await page.getByRole("table", { name: /^Agents in the last 24 hours/ }).getByRole("link", { name: "code_review_agent", exact: true }).click();

@@ -8,6 +8,8 @@ export interface SecretStatus {
   source: SecretSource;
   env_var: string;
   stored: boolean;
+  /** The environment variable is set, even while a saved key takes precedence. */
+  env_available?: boolean;
 }
 
 export type SecretStatuses = Record<SecretKey, SecretStatus>;

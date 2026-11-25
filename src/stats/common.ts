@@ -1,3 +1,4 @@
+import { deriveRunAgent } from "../run-agent";
 import type { RunRow } from "./run-facts";
 
 export class StatsRequestError extends Error {
@@ -21,11 +22,8 @@ export function queryTime(query: Record<string, unknown>, key: string): number |
   return value;
 }
 
-/** Same rule as the UI's runAgentName: the event name, else the root span name once the root has ended. */
-export function runAgent(row: Pick<RunRow, "event_name" | "name"> & { facts: { finished: number } }): string | null {
-  const eventName = row.event_name?.replace(/^replay:/i, "").trim();
-  if (eventName) return eventName;
-  return row.facts.finished ? row.name?.trim() || null : null;
+export function runAgent(row: Pick<RunRow, "event_name" | "name"> & { facts: Pick<RunRow["facts"], "finished" | "agentHints"> }): string | null {
+  return deriveRunAgent({ event_name: row.event_name, name: row.name, finished: row.facts.finished, hints: row.facts.agentHints });
 }
 
 export function runDisplayName(row: Pick<RunRow, "id" | "display_name" | "event_name" | "name">): string {

@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { queryString, queryTime, roundUsd, runAgent, runUsesModel, StatsRequestError } from "./common";
 import { loadRunRows, selectRunAggregates, type CostSource, type RunRow } from "./run-facts";
+import { AGENT_FILTER_CHARS } from "../run-agent";
 import { RUN_STATUSES, type RunStatus } from "./run-status";
 import { deriveRunStatus as deriveSharedRunStatus, type RunStatus as SharedRunStatus } from "../run-status";
 
@@ -91,7 +92,7 @@ export function parseRunListQuery(query: Record<string, unknown>): RunListQuery 
   if (!RUN_LIST_SORTS.includes(sort)) throw new StatsRequestError(`sort must be one of ${RUN_LIST_SORTS.join(", ")}`);
   const order = queryString(query, "order", 8) || "desc";
   if (order !== "asc" && order !== "desc") throw new StatsRequestError("order must be asc or desc");
-  const agent = queryString(query, "agent") || undefined;
+  const agent = queryString(query, "agent", AGENT_FILTER_CHARS) || undefined;
   const model = queryString(query, "model") || undefined;
   const q = queryString(query, "q", RUN_LIST_LIMITS.queryChars)?.trim() || undefined;
   const since = queryTime(query, "since");
@@ -163,7 +164,7 @@ export function runMatchesQuery(row: RunRow, query: Pick<RunListQuery, "statuses
     && (!query.statuses || query.statuses.includes(row.facts.status))
     && (!query.agent || runAgent(row) === query.agent)
     && (!query.model || runUsesModel(row, query.model))
-    && (!needle || [row.id, row.display_name, row.name, row.event_name, row.facts.inputPreview].some(field => field?.toLowerCase().includes(needle)));
+    && (!needle || [row.id, row.display_name, row.name, row.event_name, runAgent(row), row.facts.inputPreview].some(field => field?.toLowerCase().includes(needle)));
 }
 
 /**

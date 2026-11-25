@@ -16,6 +16,10 @@ function archiveReceipt(destination: string | undefined, receipt: unknown): void
   appendFileSync(destination, line);
 }
 
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
+}
+
 export function compileChangeGitFixture() {
   const git = Bun.which("git");
   if (!git) throw new Error("Native fixture Git is unavailable");
@@ -32,22 +36,32 @@ export function compileChangeGitFixture() {
     for (const mode of ["held", "slow", "encoding", "bytes", "filter"] as const) {
       const target = path.join(directory, `${mode}-git${process.platform === "win32" ? ".exe" : ""}`);
       copyFileSync(binary, target, constants.COPYFILE_FICLONE);
-      const ready = spawnSync(target, ["--fixture-ready"], { encoding: "utf8", timeout: 3000, maxBuffer: 1024 });
-      if (ready.status !== 0 || ready.stdout !== "native-git-fixture-ready\n") throw new Error("Compiled native Git fixture did not become ready");
+      const ready = spawnSync(target, ["--fixture-ready"], { encoding: "utf8", timeout: 3000, maxBuffer: 64 * 1024 });
+      if (ready.status !== 0 || ready.stdout !== "native-git-fixture-ready\n")
+        throw new Error(`Compiled native Git fixture did not become ready (status ${ready.status}, signal ${ready.signal}, ${ready.error?.message ?? "no spawn error"}, stdout ${JSON.stringify(ready.stdout?.slice(0, 200))}, stderr ${JSON.stringify(ready.stderr?.slice(-400))})`);
       executables.set(mode, target);
     }
-    const assertClosed = () => {
+    const unconfirmed = () => {
       const receipts = path.join(directory, "children.jsonl");
-      if (!existsSync(receipts)) return;
+      if (!existsSync(receipts)) return [];
       if (statSync(receipts).size > 65_536) throw new Error("Native Git fixture receipt exceeds its bound");
       const rows = readFileSync(receipts, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line) as ChildReceipt);
-      for (const row of rows.filter(item => item.phase === "started")) {
-        if (!rows.some(item => item.id === row.id && item.pid === row.pid && item.phase === "closed"))
-          throw new Error("Native Git fixture child close was not confirmed; retained fixture directory");
+      return rows.filter(row => row.phase === "started" && !rows.some(item => item.id === row.id && item.pid === row.pid && item.phase === "closed"));
+    };
+    // The helper writes its "closed" receipt after the Git child exits, so an
+    // assertion made the moment a test returns can race it; a helper killed by
+    // the reader never writes it. A child that is no longer running is closed.
+    const assertClosed = async (waitMs = 5000) => {
+      const deadline = performance.now() + waitMs;
+      for (;;) {
+        const open = unconfirmed().filter(row => processAlive(row.pid));
+        if (!open.length) return;
+        if (performance.now() >= deadline) throw new Error(`Native Git fixture child close was not confirmed within ${waitMs} ms (pids ${open.map(row => row.pid).join(", ")})`);
+        await Bun.sleep(20);
       }
     };
-    return { executable: (mode: Mode) => executables.get(mode)!, assertClosed,
-      close() { assertClosed(); rmSync(directory, { recursive: true, force: true }); } };
+    return { directory, executable: (mode: Mode) => executables.get(mode)!, assertClosed,
+      async close(waitMs?: number) { try { await assertClosed(waitMs); } finally { rmSync(directory, { recursive: true, force: true }); } } };
   } catch (error) { rmSync(directory, { recursive: true, force: true }); throw error; }
 }
 

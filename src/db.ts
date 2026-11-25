@@ -5,6 +5,7 @@ import path from "path";
 import os from "os";
 import fs from "fs";
 import { detectSubAgents } from "./agents";
+import { deriveRunAgent, selectRootAgentHints } from "./run-agent";
 import { normalizeStoredSpan } from "./spans/normalize";
 import { captureCompletion, type NormalizedSpan } from "./spans/normalized";
 import { deriveRunStatus, rootFailed, runErrorEvidenceFromSpans } from "./run-status";
@@ -1010,6 +1011,15 @@ export function getRunById(runId: string) {
     .get() ?? null;
 }
 
+type RunForAgent = { id: string | null; event_name: string | null; name: string | null; finished?: number | null; status?: string | null };
+
+/** deriveRunAgent for one run row; `status` is the outline's root status when the row has no `finished`. */
+export function runAgentFor(run: RunForAgent): string | null {
+  if (!run.id) return null;
+  const finished = run.finished ?? (run.status === "OK" || run.status === "ERROR" ? 1 : 0);
+  return deriveRunAgent({ event_name: run.event_name, name: run.name, finished, hints: selectRootAgentHints(getDrizzleDb().$client, [run.id]).get(run.id)! });
+}
+
 export function getMostRecentlyTouchedRun() {
   return getDrizzleDb()
     .select()
@@ -1597,7 +1607,7 @@ export function getRunOutline(runId: string, payloadPreviewChars = 80): RunOutli
     .all();
 
   return {
-    run: run as Record<string, unknown>,
+    run: { ...(run as Record<string, unknown>), agent: runAgentFor(run as RunForAgent) },
     summary,
     spans,
     live_events: { count: eventBounds.cnt, first_ts: eventBounds.first_ts, last_ts: eventBounds.last_ts, types },

@@ -42,22 +42,19 @@ export function ModelPicker({ id, label, target, providers, disabled, onChange, 
   const known = providers?.some(item => item.id === target.provider && item.models.some(model => model.id === target.model));
   const hintId = `${id}-key`;
   const missingKey = provider && !provider.configured;
+  const keyNote = provider ? keySourceNote(provider) : null;
   return (
     <div className="min-w-0">
       <div className="flex items-center justify-between gap-2">
         <label htmlFor={id} className="rp-field-label">{label}</label>
-        {provider && (
-          <span className={cn("text-[12px] leading-4", missingKey ? "text-rp-danger" : "text-rp-ink-muted")} title={missingKey ? undefined : provider.keySource === "env" ? `${provider.label} key read from an environment variable` : `${provider.label} key saved in Settings`}>
-            {missingKey ? "No key saved" : "Key set"}
-          </span>
-        )}
+        {missingKey && <span className="text-[12px] leading-4 text-rp-danger">No key saved</span>}
       </div>
       <div className="mt-1.5 flex items-center gap-1.5">
         <Select
           id={id}
           value={`${target.provider}/${target.model}`}
           disabled={disabled}
-          aria-describedby={missingKey ? hintId : undefined}
+          aria-describedby={missingKey || keyNote ? hintId : undefined}
           onChange={event => {
             const [nextProvider, ...rest] = event.target.value.split("/");
             onChange({ provider: nextProvider as PlaygroundTarget["provider"], model: rest.join("/") });
@@ -66,7 +63,7 @@ export function ModelPicker({ id, label, target, providers, disabled, onChange, 
         >
           {!known && <option value={`${target.provider}/${target.model}`}>{target.model}</option>}
           {providers?.map(group => (
-            <optgroup key={group.id} label={`${group.label} · ${group.configured ? "key saved" : "no key"}`}>
+            <optgroup key={group.id} label={`${group.label} · ${group.keySource === "env" ? "key from environment" : group.configured ? "key saved" : "no key"}`}>
               {group.models.map(model => (
                 <option key={model.id} value={`${group.id}/${model.id}`}>{model.label}{group.configured ? "" : " (no key)"}</option>
               ))}
@@ -84,13 +81,21 @@ export function ModelPicker({ id, label, target, providers, disabled, onChange, 
           </button>
         )}
       </div>
-      {missingKey && (
+      {missingKey ? (
         <p id={hintId} className="mt-1.5 text-[12px] leading-[18px] text-rp-ink-muted">
           Add a {provider.label} key in <Link to="/settings" className="font-medium text-rp-blue underline-offset-2 hover:underline">Settings</Link> to run this model.
         </p>
+      ) : keyNote && (
+        <p id={hintId} className="mt-1.5 truncate text-[12px] leading-[18px] text-rp-ink-muted" title={keyNote}>{keyNote}</p>
       )}
     </div>
   );
+}
+
+function keySourceNote(provider: PlaygroundProviderInfo): string | null {
+  if (provider.keySource === "env") return provider.keyEnvVar ? `Using ${provider.keyEnvVar} from the environment` : `Using a ${provider.label} key from the environment`;
+  if (provider.keySource === "store") return `Using the ${provider.label} key saved in Settings`;
+  return null;
 }
 
 function MessageEditor({ message, index, count, onChange, onRemove, onMove }: {

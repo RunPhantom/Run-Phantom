@@ -7,6 +7,7 @@ import { normalizeStoredSpan } from "../spans/normalize";
 import { captureCompletion } from "../spans/normalized";
 import { deriveRunStatus, type RunStatus } from "./run-status";
 import { rootFailed } from "../run-status";
+import { selectRootAgentHints, type RootAgentHints } from "../run-agent";
 
 export type CostSource = "reported" | "estimated" | "unknown";
 
@@ -69,6 +70,7 @@ export interface RunFacts {
   readonly errors: readonly ErrorFact[];
   readonly toolCalls: Readonly<Record<string, number>>;
   readonly toolFailures: Readonly<Record<string, ToolFailureFact>>;
+  readonly agentHints: RootAgentHints;
 }
 
 export interface RunRow {
@@ -182,9 +184,11 @@ export function loadRunRows(db: Database, dbPath: string, aggregates: readonly A
   }
   for (let offset = 0; offset < missing.length; offset += RUN_FACT_LIMITS.idsPerQuery) {
     const batch = missing.slice(offset, offset + RUN_FACT_LIMITS.idsPerQuery);
-    const spans = selectSpans(db, batch.map(item => item.id));
+    const ids = batch.map(item => item.id);
+    const spans = selectSpans(db, ids);
+    const hints = selectRootAgentHints(db, ids);
     for (const aggregate of batch) {
-      const computed = computeRunFacts(aggregate, spans.get(aggregate.id) ?? []);
+      const computed = computeRunFacts(aggregate, spans.get(aggregate.id) ?? [], hints.get(aggregate.id)!);
       facts.set(aggregate.id, computed);
       remember(cacheKey(dbPath, aggregate.id), fingerprint(aggregate), computed);
     }
@@ -225,7 +229,7 @@ function selectSpans(db: Database, runIds: readonly string[]): Map<string, SpanR
   return grouped;
 }
 
-function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[]): RunFacts {
+function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[], agentHints: RootAgentHints): RunFacts {
   const runRootFailed = rootFailed({ roots: aggregate.root_count, rootErrors: aggregate.root_error_count, agentRoots: aggregate.agent_root_count, agentRootErrors: aggregate.agent_root_error_count });
   const status = deriveRunStatus({ rootCount: aggregate.root_count, endedRootCount: aggregate.ended_root_count, rootErrorCount: aggregate.root_error_count, rootFailed: runRootFailed, errorCount: aggregate.error_count });
   const finished = aggregate.root_count > 0 && aggregate.ended_root_count === aggregate.root_count ? 1 : 0;
@@ -281,6 +285,7 @@ function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[]): RunFa
     inputPreview: inputPreview(firstGeneration, spans.find(span => span.parent_span_id === null) ?? null),
     captureCompletion: rootCaptureCompletion(root),
     generations: Object.freeze(generations), errors: Object.freeze(errors), toolCalls: Object.freeze(toolCalls), toolFailures: Object.freeze(toolFailures),
+    agentHints: Object.freeze(agentHints),
   });
 }
 

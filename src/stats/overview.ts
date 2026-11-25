@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { LIST_PRICE_REVISIONS, PRICE_TABLE_AS_OF, PRICE_TABLE_REVISION } from "../pricing/list-prices";
 import { percentile, queryString, roundUsd, runAgent, runDisplayName, runUsesModel, sortedNumbers, StatsRequestError } from "./common";
 import { loadRunRows, selectRunAggregates, type GenerationFact, type RunRow } from "./run-facts";
+import { AGENT_FILTER_CHARS } from "../run-agent";
 import type { RunStatus } from "./run-status";
 import { OVERVIEW_LIMITS, OVERVIEW_VERSION, OVERVIEW_WINDOWS, type CostKpi, type DurationKpi, type Kpi, type Overview, type OverviewAgentRow, type OverviewBucket, type OverviewFailingTool, type OverviewFailure, type OverviewGroupStats, type OverviewLiveRun, type OverviewModelRow, type OverviewWindow, type TokenKpi } from "./overview-types";
 
@@ -17,7 +18,7 @@ function parseOverviewQuery(query: Record<string, unknown>): OverviewQuery {
   if (rawOffset && !/^-?\d{1,3}$/.test(rawOffset)) throw new StatsRequestError("tz_offset_minutes must be an integer from -840 to 840");
   const tzOffsetMinutes = rawOffset ? Number(rawOffset) : 0;
   if (!Number.isInteger(tzOffsetMinutes) || tzOffsetMinutes < -840 || tzOffsetMinutes > 840) throw new StatsRequestError("tz_offset_minutes must be an integer from -840 to 840");
-  return { selection, agent: queryString(query, "agent") || undefined, model: queryString(query, "model") || undefined, tzOffsetMinutes };
+  return { selection, agent: queryString(query, "agent", AGENT_FILTER_CHARS) || undefined, model: queryString(query, "model") || undefined, tzOffsetMinutes };
 }
 
 const ended = (status: RunStatus) => status !== "running";

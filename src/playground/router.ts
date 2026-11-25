@@ -11,7 +11,8 @@ import { buildPlaygroundOtlp, newSpanId, newTraceId } from "./trace";
 
 export interface PlaygroundRouterDeps {
   resolveKey(provider: PlaygroundProvider): string | null;
-  keySource(provider: PlaygroundProvider): "env" | "store" | null;
+  /** `envVar` names the variable a key is read from when `source` is "env"; never the value. */
+  keyStatus(provider: PlaygroundProvider): { source: "env" | "store" | null; envVar: string | null };
   /** Ingests an OTLP/JSON export through the daemon's normal trace path. */
   recordOtlp(body: Record<string, unknown>): void;
   getSpan(spanId: string, runId?: string): DraftSpanInput | null;
@@ -37,9 +38,10 @@ export function createPlaygroundRouter(deps: PlaygroundRouterDeps): express.Rout
   router.get("/models", (_req, res) => {
     res.json({
       providers: PLAYGROUND_PROVIDERS.map(provider => {
-        const source = deps.keySource(provider);
+        const { source, envVar } = deps.keyStatus(provider);
         return {
-          id: provider, label: PROVIDER_LABEL[provider], configured: source !== null, keySource: source, defaultModel: PLAYGROUND_DEFAULT_MODEL[provider],
+          id: provider, label: PROVIDER_LABEL[provider], configured: source !== null, keySource: source, keyEnvVar: source === "env" ? envVar : null,
+          defaultModel: PLAYGROUND_DEFAULT_MODEL[provider],
           models: PLAYGROUND_MODELS.filter(item => item.provider === provider).map(item => ({ id: item.model, label: item.label, temperature: item.temperature, maxTemperature: item.maxTemperature, reasoningEffort: item.reasoningEffort })),
         };
       }),

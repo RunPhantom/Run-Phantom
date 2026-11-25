@@ -26,11 +26,11 @@ export type SecretSource = "env" | "store" | null;
 export interface SecretStatus {
   configured: boolean;
   source: SecretSource;
+  /** The variable that holds the key when one is set, else the first variable the daemon reads. Never the value. */
   env_var: string;
-  // True whenever a value exists in the secret store, independent of whether an
-  // env var currently shadows it. Lets the UI expose "Clear" for a stored key
-  // even while `source` reports "env".
   stored: boolean;
+  /** True when `env_var` is set, including while a saved key takes precedence over it. */
+  env_available: boolean;
 }
 
 type SecretFile = Partial<Record<SecretKey, string>>;
@@ -342,21 +342,20 @@ export function getEnvSecret(key: SecretKey): { value: string; envVar: string } 
   return null;
 }
 
+/** A key saved in Settings wins over the environment, so a user can override a shell-wide key from the UI. */
 export function getEffectiveSecret(key: SecretKey): string | null {
-  return getEnvSecret(key)?.value ?? getStoredSecret(key);
+  return getStoredSecret(key) ?? getEnvSecret(key)?.value ?? null;
 }
 
 export function getSecretStatus(key: SecretKey): SecretStatus {
-  const stored = getStoredSecret(key);
+  const stored = !!getStoredSecret(key);
   const env = getEnvSecret(key);
-  if (env) {
-    return { configured: true, source: "env", env_var: env.envVar, stored: !!stored };
-  }
   return {
-    configured: !!stored,
-    source: stored ? "store" : null,
-    env_var: SECRET_DEFS[key].envVars[0],
-    stored: !!stored,
+    configured: stored || !!env,
+    source: stored ? "store" : env ? "env" : null,
+    env_var: env?.envVar ?? SECRET_DEFS[key].envVars[0],
+    stored,
+    env_available: !!env,
   };
 }
 

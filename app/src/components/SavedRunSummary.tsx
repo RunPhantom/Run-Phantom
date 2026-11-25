@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogFooter } from "@/components/ui/dialog";
-import { getSecretStatuses } from "../api/secrets";
+import { getSecretStatuses, type SecretStatus } from "../api/secrets";
 import { providerSummaryContent, requestProviderSummary, savedLocalSummary, savedSummarySource, type SavedEvent } from "../api/saved-runs";
 import { PROVIDER_SUMMARY } from "../../../src/summary-protocol";
 
 const failureCopy: Record<string, string> = {
-  missing_provider_key: `No ${PROVIDER_SUMMARY.providerLabel} key is saved. Add one in Settings, then try again.`,
+  missing_provider_key: `No ${PROVIDER_SUMMARY.providerLabel} key is saved or set in the environment. Add one in Settings, then try again.`,
   provider_error: `${PROVIDER_SUMMARY.providerLabel} returned an error. The local summary is unchanged.`,
   provider_unavailable: `${PROVIDER_SUMMARY.providerLabel} could not be reached. The local summary is unchanged.`,
   empty_content: "This run has no captured input or output to summarize.",
@@ -19,6 +19,7 @@ const failureCopy: Record<string, string> = {
  * provider for a better one happens only after the user confirms here.
  */
 export function SavedRunSummary({ event }: { event: SavedEvent }) {
+  const [keyStatus, setKeyStatus] = useState<SecretStatus | null>(null);
   const [keyConfigured, setKeyConfigured] = useState<boolean | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -26,7 +27,11 @@ export function SavedRunSummary({ event }: { event: SavedEvent }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     let live = true;
-    getSecretStatuses().then(keys => { if (live) setKeyConfigured(!!keys[PROVIDER_SUMMARY.provider]?.configured); }, () => { if (live) setKeyConfigured(false); });
+    getSecretStatuses().then(keys => {
+      if (!live) return;
+      setKeyStatus(keys[PROVIDER_SUMMARY.provider] ?? null);
+      setKeyConfigured(!!keys[PROVIDER_SUMMARY.provider]?.configured);
+    }, () => { if (live) setKeyConfigured(false); });
     return () => { live = false; };
   }, []);
   useEffect(() => setMessage(null), [event.id]);
@@ -36,6 +41,7 @@ export function SavedRunSummary({ event }: { event: SavedEvent }) {
   const sourceNote = source === "provider" ? `Written by ${PROVIDER_SUMMARY.providerLabel} (${PROVIDER_SUMMARY.model}) at your request.`
     : source === "local" ? "Written on this machine from the captured run. Nothing was sent to a provider."
     : event.summary ? "Saved before Run Phantom recorded where summaries come from." : null;
+  const keyPhrase = keyStatus?.source === "env" ? `the key in ${keyStatus.env_var}` : `the ${PROVIDER_SUMMARY.providerLabel} key saved on this machine`;
   const send = async () => {
     setBusy(true); setMessage(null);
     try {
@@ -64,7 +70,7 @@ export function SavedRunSummary({ event }: { event: SavedEvent }) {
         <DialogContent
           onCloseAutoFocus={event => { event.preventDefault(); triggerRef.current?.focus(); }}
           title={`Send this run to ${PROVIDER_SUMMARY.providerLabel}?`}
-          description={`Run Phantom will send the excerpt below to ${PROVIDER_SUMMARY.providerLabel} (model ${PROVIDER_SUMMARY.model}) using the ${PROVIDER_SUMMARY.providerLabel} key saved on this machine. It includes the run name, the steps recorded on this machine, signal names, and up to ${PROVIDER_SUMMARY.maxFieldChars.toLocaleString()} characters each of the input and the output, with known credential formats removed. ${PROVIDER_SUMMARY.providerLabel} bills your account for the call. Nothing is sent unless you confirm.`}>
+          description={`Run Phantom will send the excerpt below to ${PROVIDER_SUMMARY.providerLabel} (model ${PROVIDER_SUMMARY.model}) using ${keyPhrase}. It includes the run name, the steps recorded on this machine, signal names, and up to ${PROVIDER_SUMMARY.maxFieldChars.toLocaleString()} characters each of the input and the output, with known credential formats removed. ${PROVIDER_SUMMARY.providerLabel} bills your account for the call. Nothing is sent unless you confirm.`}>
           <pre aria-label="Content that will be sent" className="mt-4 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-sm border border-rp-line bg-rp-canvas-blue p-3 font-mono text-[11px] leading-5 text-rp-ink">{content}</pre>
           <DialogFooter>
             <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>

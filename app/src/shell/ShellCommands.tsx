@@ -5,7 +5,7 @@ import { Contrast, Keyboard, Link2, PanelLeft, PlayCircle, Settings, type Lucide
 import { useSidebar } from "@/components/ui/sidebar";
 import { replayDemoTraces } from "../api/demo-traces";
 import { useRuns } from "../hooks/use-runs";
-import { ago, runAgentName, runDisplayName, runStatus, type RunStatus } from "../utils/helpers";
+import { ago, runDisplayName, runStatus, type RunStatus } from "../utils/helpers";
 import { runPath } from "../utils/navigation";
 import type { Run } from "../utils/types";
 import { NAV_ITEMS, SETTINGS_NAV } from "./navigation";
@@ -62,7 +62,7 @@ export function ShellCommands() {
 
   const latest = (run: Run): Run => queryClient.getQueryData<Run[]>(["runs"])?.find(row => row.id === run.id) ?? run;
   const recentCommands: PaletteCommand[] = recent.map((run, index) => {
-    const agent = runAgentName(run);
+    const agent = run.agent ?? null;
     const name = runDisplayName(run);
     return {
       id: `run:${run.id}`,
