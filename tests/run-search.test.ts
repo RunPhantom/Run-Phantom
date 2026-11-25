@@ -87,7 +87,7 @@ describe("full-store run search", () => {
     for (const q of ["error", "Failed", "exception"]) {
       const result = await searchRuns({ q });
       expect(result.runs.map(r => r.id)).toEqual(q === "error" ? ["red", "green"] : ["red"]);
-      expect(result.runs[0]).toMatchObject({ status: "failed", error_count: 1, matched_span_count: 1 });
+      expect(result.runs[0]).toMatchObject({ status: "completed_with_errors", error_count: 1, matched_span_count: 1 });
       expect(result.runs[0].match).toMatchObject({ field: "failed_span", span_id: "tool", span_name: "run_tests", snippet: { state: "available", text: "FAIL auth/middleware.test.ts Expected status 401, got 200.", highlights: [] } });
     }
     expect((await searchRuns({ q: "error" })).runs[1].match).toMatchObject({ field: "output", snippet: { highlights: [{ start: 3, end: 8 }] } });
