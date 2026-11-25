@@ -113,10 +113,15 @@ export const LIST_PRICES: readonly ListPriceEntry[] = Object.freeze([
   { family: "anthropic", model: "claude-opus-4-20250514", aliases: ["claude-opus-4-0"], bands: flat(15, 75), cachedInputRatio: 0.1 },
   { family: "anthropic", model: "claude-sonnet-4-20250514", aliases: ["claude-sonnet-4-0"], bands: flat(3, 15), cachedInputRatio: 0.1 },
 
-  // From 2026-12-01 Google routes gemini-2.5-pro to Gemini 3.8 Flash and
-  // gemini-2.5-flash to Gemini 3.5 Flash-Lite, billed at the routed model's rates.
-  { family: "google", model: "gemini-2.5-pro", bands: tiered(200_000, [1.25, 10], [2.5, 15]), cachedInputRatio: 0.1, effectiveUntil: "2026-12-01T00:00:00.000Z" },
-  { family: "google", model: "gemini-2.5-flash", bands: flat(0.3, 2.5), cachedInputRatio: 0.1, effectiveUntil: "2026-12-01T00:00:00.000Z" },
+  // Google's page: "Effective December 1, 2026, all API requests to gemini-2.5-pro
+  // will automatically route to [Gemini 3.8 Flash] and be billed at Gemini 3.8
+  // Flash rates", and gemini-2.5-flash likewise at Gemini 3.5 Flash-Lite rates.
+  // The changes below repeat those models' rows.
+  { family: "google", model: "gemini-2.5-pro", bands: tiered(200_000, [1.25, 10], [2.5, 15]), cachedInputRatio: 0.1, changes: [
+    { from: "2026-12-01T00:00:00.000Z", bands: flat(0.75, 3.75), cachedInputRatio: 0.1 },
+    { from: "2027-01-01T00:00:00.000Z", bands: flat(1.5, 7.5), cachedInputRatio: 0.1 },
+  ] },
+  { family: "google", model: "gemini-2.5-flash", bands: flat(0.3, 2.5), cachedInputRatio: 0.1, changes: [{ from: "2026-12-01T00:00:00.000Z", bands: flat(0.3, 2.5), cachedInputRatio: 0.1 }] },
   { family: "google", model: "gemini-2.5-flash-lite", bands: flat(0.1, 0.4), cachedInputRatio: 0.1 },
   { family: "google", model: "gemini-3-flash-preview", bands: flat(0.5, 3), cachedInputRatio: 0.1 },
   { family: "google", model: "gemini-3.1-pro-preview", aliases: ["gemini-3.1-pro-preview-customtools"], bands: tiered(200_000, [2, 12], [4, 18]), cachedInputRatio: 0.1 },

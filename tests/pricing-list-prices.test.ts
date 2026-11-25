@@ -63,8 +63,8 @@ describe("bundled list price table", () => {
     expect(lookupListPrice("claude-haiku-4-5", { provider: "aws.bedrock" })).toBeNull();
     expect(lookupListPrice("gpt-5-nano", { provider: "azure.ai.openai" })).toBeNull();
     expect(lookupListPrice("gpt-5-nano", { provider: "openai.chat" })).not.toBeNull();
-    expect(lookupListPrice("gemini-2.5-pro", { at: Date.parse("2026-11-30T23:59:59Z") })).not.toBeNull();
-    expect(lookupListPrice("gemini-2.5-pro", { at: Date.parse("2026-12-01T00:00:00Z") })).toBeNull();
+    expect(lookupListPrice("gemini-4-carbon", { at: Date.parse("2026-11-30T23:59:59Z") })).not.toBeNull();
+    expect(lookupListPrice("gemini-4-carbon", { at: Date.parse("2026-12-01T00:00:00Z") })).toBeNull();
   });
 
   test("prompt-length bands count Anthropic cache tokens and OpenAI long context", () => {
@@ -96,7 +96,9 @@ describe("bundled list price table", () => {
   test("every Playground model has a list price, including Google's published 2027 Gemini 3.8 Flash price", () => {
     for (const option of PLAYGROUND_MODELS) {
       const provider = OTEL_PROVIDER_NAME[option.provider];
-      expect({ model: option.model, priced: lookupListPrice(option.model, { provider, at: Date.parse("2026-11-25T12:00:00Z") }) !== null }).toEqual({ model: option.model, priced: true });
+      for (const at of ["2026-11-25T12:00:00Z", "2026-12-02T00:00:00Z", "2027-02-01T00:00:00Z"]) {
+        expect({ model: option.model, at, priced: lookupListPrice(option.model, { provider, at: Date.parse(at) }) !== null }).toEqual({ model: option.model, at, priced: true });
+      }
     }
     expect(lookupListPrice(PLAYGROUND_DEFAULT_MODEL.gemini, { provider: "google", at: Date.parse("2026-12-31T23:59:59Z") })?.revision.revision).toBe(PRICE_TABLE_REVISION);
     const after = estimateListPriceCost({ model: "gemini-3.8-flash", provider: "google", inputTokens: 1_000_000, outputTokens: 1_000_000, cacheReadTokens: 200_000, inputIncludesCache: true, at: Date.parse("2027-01-01T00:00:00Z") });
@@ -107,9 +109,19 @@ describe("bundled list price table", () => {
     expect(lookupListPrice("gemini-3.6-flash", { at: Date.parse("2027-02-01T00:00:00Z") })?.revision.bands[0].categories.input).toEqual({ kind: "priced", usdPerMillionTokens: 1.5 });
   });
 
-  test("gemini-2.5-flash is unpriced from Google's 2026-12-01 routing change", () => {
-    expect(lookupListPrice("gemini-2.5-flash", { at: Date.parse("2026-11-30T23:59:59Z") })).not.toBeNull();
-    expect(lookupListPrice("gemini-2.5-flash", { at: Date.parse("2026-12-01T00:00:00Z") })).toBeNull();
+  test("gemini-2.5 calls are billed at the routed model's rates from Google's 2026-12-01 routing change", () => {
+    const call = (model: string, at: string) => estimateListPriceCost({ model, provider: "gcp.gemini", inputTokens: 1_000_000, outputTokens: 1_000_000, cacheReadTokens: 200_000, inputIncludesCache: true, at: Date.parse(at) });
+    // 800,000 fresh × $0.30 + 200,000 cached × $0.03 + 1,000,000 × $2.50 per million, before and after.
+    expect(call("gemini-2.5-flash", "2026-11-30T23:59:59Z")).toMatchObject({ kind: "estimated", revision: { revision: "runphantom-list-prices/2026-11-25" } });
+    const flash = call("gemini-2.5-flash", "2026-12-02T00:00:00Z");
+    expect(flash).toMatchObject({ kind: "estimated", inputUsdPerMillion: 0.3, outputUsdPerMillion: 2.5, revision: { revision: "runphantom-list-prices/2026-11-25/from-2026-12-01" } });
+    expect(flash.kind === "estimated" && flash.totalUsd).toBeCloseTo(0.24 + 0.006 + 2.5, 12);
+    expect(call("gemini-2.5-pro", "2026-11-30T23:59:59Z")).toMatchObject({ inputUsdPerMillion: 2.5, outputUsdPerMillion: 15 });
+    const pro = call("gemini-2.5-pro", "2026-12-02T00:00:00Z");
+    expect(pro).toMatchObject({ inputUsdPerMillion: 0.75, outputUsdPerMillion: 3.75 });
+    // 800,000 × $0.75 + 200,000 × $0.075 + 1,000,000 × $3.75.
+    expect(pro.kind === "estimated" && pro.totalUsd).toBeCloseTo(0.6 + 0.015 + 3.75, 12);
+    expect(call("gemini-2.5-pro", "2027-01-01T00:00:00Z")).toMatchObject({ inputUsdPerMillion: 1.5, outputUsdPerMillion: 7.5, revision: { revision: "runphantom-list-prices/2026-11-25/from-2027-01-01" } });
     expect(PRICE_SOURCES.google.url).toBe("https://aistudio.google.com/docs/pricing");
   });
 });

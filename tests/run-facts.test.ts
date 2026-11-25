@@ -130,11 +130,11 @@ describe("run cost estimates", () => {
     run("rules"); span("rules", "root", { type: "AGENT_ROOT" });
     span("rules", "reported", { parent: "root", start: 11, model: "gpt-5-nano", input: 1_000, output: 1_000, attributes: JSON.stringify({ "gen_ai.usage.cost_usd": 0.25 }) });
     span("rules", "invalid", { parent: "root", start: 12, model: "gpt-5-nano", input: 1_000, output: 1_000, attributes: JSON.stringify({ "gen_ai.usage.cost_usd": -1 }) });
-    span("rules", "retired", { parent: "root", model: "gemini-2.5-flash", provider: "google", input: 1_000, output: 1_000, start: Date.UTC(2026, 11, 1) });
+    span("rules", "retired", { parent: "root", model: "gemini-4-carbon", provider: "google", input: 1_000, output: 1_000, start: Date.UTC(2026, 11, 1) });
     span("rules", "proxy", { parent: "root", start: 13, model: "gpt-5-nano", provider: "aws.bedrock", input: 1_000, output: 1_000 });
     span("rules", "no-tokens", { parent: "root", start: 14, model: "gpt-5-nano" });
     expect(usd("rules")).toEqual([["reported", 0.25], ["unknown", null], ["unknown", null], ["unknown", null], ["unknown", null]]);
-    expect(facts("rules").generations.map(item => item.model)).toEqual(["gpt-5-nano", "gpt-5-nano", "gpt-5-nano", "gpt-5-nano", "gemini-2.5-flash"]);
+    expect(facts("rules").generations.map(item => item.model)).toEqual(["gpt-5-nano", "gpt-5-nano", "gpt-5-nano", "gpt-5-nano", "gemini-4-carbon"]);
     expect(facts("rules")).toMatchObject({ costUsd: null, costSource: "unknown", knownCostUsd: 0.25, costUnknownCalls: 4 });
   });
 });
