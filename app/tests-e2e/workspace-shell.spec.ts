@@ -191,6 +191,21 @@ test("runs page lists sample runs in the table instead of showing onboarding", a
   await expect(page.getByRole("tab", { name: "Span Tree", exact: true })).toBeVisible();
 });
 
+test("the shortcut sheet stacks the page's keys beside the Go to list instead of below it", async ({ page, runPhantom }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await seedRunPhantomFixtures(runPhantom.url);
+  await page.goto(`${runPhantom.url}/runs`);
+  await expect(page.getByRole("grid", { name: "Runs" })).toBeVisible();
+  await page.keyboard.press("Shift+?");
+  const sheet = page.getByRole("dialog", { name: "Keyboard shortcuts", exact: true });
+  const global = (await sheet.getByRole("heading", { name: "Global", exact: true }).boundingBox())!;
+  const runsList = (await sheet.getByRole("heading", { name: "Runs list", exact: true }).boundingBox())!;
+  const goTo = (await sheet.getByRole("heading", { name: "Go to", exact: true }).boundingBox())!;
+  expect(Math.abs(runsList.x - global.x)).toBeLessThan(2);
+  expect(goTo.x).toBeGreaterThan(global.x + 100);
+  expect((await sheet.boundingBox())!.height).toBeLessThan(700);
+});
+
 test("the shortcut sheet opened from the palette hands focus back to the palette's opener on Esc", async ({ page, runPhantom }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`${runPhantom.url}/settings`);

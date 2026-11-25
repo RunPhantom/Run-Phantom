@@ -4,11 +4,13 @@ import { useShortcuts, type ShortcutDefinition } from "./commands";
 import { closeOverlay, restoreOverlayFocus, useShellOverlay } from "./overlays";
 import { formatKeys, isMacPlatform } from "./keyboard";
 
-const SCOPE_ORDER = ["Global", "Go to"];
-
+/**
+ * Global, then the current page's scopes, then the long "Go to" list last: in two flowing columns the short sections
+ * stack beside "Go to" instead of leaving a gap under Global, and on a phone the page's own keys come before the
+ * navigation list.
+ */
 function scopeRank(scope: string): number {
-  const index = SCOPE_ORDER.indexOf(scope);
-  return index === -1 ? SCOPE_ORDER.length : index;
+  return scope === "Global" ? 0 : scope === "Go to" ? 2 : 1;
 }
 
 function Keys({ keys, mac }: { keys: string; mac: boolean }) {
@@ -49,9 +51,9 @@ export function ShortcutSheet() {
           data-shortcut-sheet
           onCloseAutoFocus={restoreOverlayFocus}
         >
-          <div className="mt-5 grid gap-x-8 gap-y-5 sm:grid-cols-2">
+          <div className="mt-5 gap-x-8 sm:columns-2">
             {scopes.map(([scope, list]) => (
-              <section key={scope} aria-labelledby={`rp-shortcuts-${scope.replace(/\W+/g, "-")}`}>
+              <section key={scope} className="mb-5 break-inside-avoid last:mb-0" aria-labelledby={`rp-shortcuts-${scope.replace(/\W+/g, "-")}`}>
                 <h3 id={`rp-shortcuts-${scope.replace(/\W+/g, "-")}`} className="rp-eyebrow mb-2 text-rp-ink-subtle">{scope}</h3>
                 <dl className="divide-y divide-rp-line-muted">
                   {list.map(shortcut => (
