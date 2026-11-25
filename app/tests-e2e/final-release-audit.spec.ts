@@ -311,10 +311,17 @@ test("release audit: optional provider routes degrade cleanly without API keys",
     configured: false,
   });
 
-  const summaryResponse = await fetch(`${runPhantom.url}/api/summarize`, {
+  const withoutConsent = await fetch(`${runPhantom.url}/api/summarize`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ content: "A local trace that needs a title." }),
+  });
+  expect(withoutConsent.status).toBe(400);
+  expect(await withoutConsent.json()).toMatchObject({ summary: null, available: false, reason: "consent_required" });
+  const summaryResponse = await fetch(`${runPhantom.url}/api/summarize`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content: "A local trace that needs a title.", consent: { provider: "anthropic", model: "claude-haiku-4-5-20251001" } }),
   });
   expect(summaryResponse.status).toBe(200);
   expect(await summaryResponse.json()).toMatchObject({

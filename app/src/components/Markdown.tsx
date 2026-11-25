@@ -4,6 +4,7 @@ import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { Streamdown } from "streamdown";
 import { Copy, Check } from "lucide-react";
+import { normalizeMarkdownBullets } from "../utils/markdown-normalize";
 
 const plugins = { cjk, code, math };
 
@@ -62,7 +63,7 @@ function escapeXmlTags(text: string): string {
 }
 
 export function Markdown({ children }: { children: string }) {
-  const cleaned = escapeXmlTags(children);
+  const cleaned = normalizeMarkdownBullets(escapeXmlTags(children));
   return (
     <div className="streamdown">
       <Streamdown

@@ -46,13 +46,23 @@ export class EvidenceInventories {
     });
   }
   get(anchorValue: unknown, revision?: number): EvidenceInventoryRevision {
+    return this.#read(anchorValue, revision, false)!;
+  }
+  /** The head revision, or null when no inventory was ever declared for this anchor. */
+  current(anchorValue: unknown): EvidenceInventoryRevision | null {
+    return this.#read(anchorValue, undefined, true);
+  }
+  #read(anchorValue: unknown, revision: number | undefined, allowMissing: boolean): EvidenceInventoryRevision | null {
     const anchor = parseEvidenceAnchor(anchorValue);
     return this.#transaction(() => {
       this.owner.authorize("normalized_read", null); this.owner.authorize("normalized_read", anchor.kind === "dataset_revision" ? null : anchor);
       const generation = activeEvidenceGeneration(this.owner);
       const id = identityId(this.owner.scope, this.owner.resolveAnchor(anchor));
       const selected = revision ?? (this.owner.database.query("SELECT revision FROM evaluation_evidence_inventory_heads WHERE scope_key=? AND id=?").get(`${this.owner.scope.kind}:${this.owner.scope.id}`, id) as { revision: number } | null)?.revision;
-      if (selected === undefined) throw new EvidenceError("Inventory revision not found", 404);
+      if (selected === undefined) {
+        if (allowMissing && revision === undefined) return null;
+        throw new EvidenceError("Inventory revision not found", 404);
+      }
       const inventory = this.owner.store.getInventory(id, selected);
       this.owner.authorize("normalized_read", null); this.owner.authorize("normalized_read", anchor.kind === "dataset_revision" ? null : anchor);
       this.owner.resolveAnchor(anchor);

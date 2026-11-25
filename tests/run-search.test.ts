@@ -54,8 +54,8 @@ describe("full-store run search", () => {
     const result = await searchRuns({ q: "elusive needle" });
     expect(result.runs.map(r => r.id)).toEqual(["old-match"]);
     expect(result).toMatchObject({ hasMore: false, nextCursor: null });
-    expect(result.runs[0]).toMatchObject({ metadata: null, status: "complete", span_count: 1 });
-    expect(JSON.stringify(result)).not.toContain("elusive needle");
+    expect(result.runs[0]).toMatchObject({ metadata: null, status: "complete", span_count: 1, matched_span_count: 1 });
+    expect(result.runs[0].match).toEqual({ field: "output", span_id: "root", span_name: "agent", snippet: { state: "available", text: "The archive has the elusive needle", highlights: [{ start: 20, end: 34 }], truncated: false } });
     expect(JSON.stringify(result)).not.toContain("do not serialize");
     expect((await searchRuns()).runs).toHaveLength(50);
     expect((await searchRuns({ limit: 100 })).runs).toHaveLength(100);
@@ -77,6 +77,82 @@ describe("full-store run search", () => {
     const db = getDrizzleDb().$client;
     db.query("UPDATE runs SET event_id='event-needle', display_name='display-needle', event_name='type-needle', user_id='user-needle', convo_id='conversation-needle' WHERE id='inputs'").run();
     for (const q of ["event-needle", "display-needle", "type-needle", "user-needle", "conversation-needle"]) expect((await searchRuns({ q })).runs.map(r => r.id)).toEqual(["inputs"]);
+  });
+
+  test("failure words find errored spans and rank failed runs first with the error as the snippet", async () => {
+    const db = getDrizzleDb().$client;
+    run("green", 300, "research_agent"); span("green", { output: "No error budget concerns in this report." });
+    run("red", 100, "code_review_agent"); span("red"); span("red", { id: "tool", parent: "root", name: "run_tests", status: "ERROR", output: "FAIL auth/middleware.test.ts\nExpected status 401, got 200." });
+    run("quiet", 200, "triage_agent"); span("quiet", { output: "All tickets triaged." });
+    for (const q of ["error", "Failed", "exception"]) {
+      const result = await searchRuns({ q });
+      expect(result.runs.map(r => r.id)).toEqual(q === "error" ? ["red", "green"] : ["red"]);
+      expect(result.runs[0]).toMatchObject({ status: "completed_with_errors", error_count: 1, matched_span_count: 1 });
+      expect(result.runs[0].match).toMatchObject({ field: "failed_span", span_id: "tool", span_name: "run_tests", snippet: { state: "available", text: "FAIL auth/middleware.test.ts Expected status 401, got 200.", highlights: [] } });
+    }
+    expect((await searchRuns({ q: "error" })).runs[1].match).toMatchObject({ field: "output", snippet: { highlights: [{ start: 3, end: 8 }] } });
+    db.query("UPDATE spans SET attributes=? WHERE run_id='red' AND id='tool'").run(JSON.stringify({ "exception.message": "ConnectionResetError: upstream closed the socket" }));
+    const reported = await searchRuns({ q: "connectionreset" });
+    expect(reported.runs.map(r => r.id)).toEqual(["red"]);
+    expect(reported.runs[0].match).toMatchObject({ field: "error", span_id: "tool", snippet: { text: "ConnectionResetError: upstream closed the socket", highlights: [{ start: 0, end: 15 }] } });
+    db.query("UPDATE spans SET status='OK' WHERE run_id='red'").run();
+    expect((await searchRuns({ q: "connectionreset" })).runs).toEqual([]);
+    expect((await searchRuns({ q: "exception" })).runs).toEqual([]);
+  });
+
+  test("tool names, models, providers and agent names match and outrank payload-only hits", async () => {
+    run("payload-only", 500, "summarizer"); span("payload-only", { input: "please call the lookup_weather tool" });
+    run("tool-run", 100, "planner"); span("tool-run"); span("tool-run", { id: "t1", parent: "root", name: "lookup_weather" });
+    run("model-run", 50, "writer"); span("model-run", { model: "gpt-5-nano", provider: "openai" });
+    run("agent-run", 25, "weather_agent");
+    expect((await searchRuns({ q: "lookup_weather" })).runs.map(r => [r.id, r.match?.field])).toEqual([["tool-run", "span_name"], ["payload-only", "input"]]);
+    expect((await searchRuns({ q: "GPT-5-NANO" })).runs.map(r => [r.id, r.match?.field])).toEqual([["model-run", "model"]]);
+    expect((await searchRuns({ q: "openai" })).runs.map(r => [r.id, r.match?.field])).toEqual([["model-run", "provider"]]);
+    const agent = await searchRuns({ q: "weather_agent" });
+    expect(agent.runs.map(r => r.id)).toEqual(["agent-run"]);
+    expect(agent.runs[0]).toMatchObject({ matched_span_count: 0, match: { field: "run", span_id: null, snippet: { text: "weather_agent", highlights: [{ start: 0, end: 13 }] } } });
+    getDrizzleDb().$client.query("UPDATE runs SET metadata=? WHERE id='agent-run'").run('{"private":"metadata-only-term"}');
+    expect((await searchRuns({ q: "metadata-only-term" })).runs[0].match).toEqual({ field: "metadata", span_id: null, span_name: null, snippet: { state: "unavailable", text: "", highlights: [], truncated: false } });
+  });
+
+  test("snippets are bounded, scrub credentials near the match and carry exact highlight ranges", async () => {
+    const prefix = "a".repeat(5000), suffix = " tail".repeat(2000);
+    run("long"); span("long", { output: `${prefix} token sent: Bearer sk-live-abcdefghijklmnop\nthen the Needle-Term appears ${suffix}` });
+    const [row] = (await searchRuns({ q: "needle-term" })).runs;
+    const snippet = row.match!.snippet;
+    expect(snippet.truncated).toBe(true);
+    expect(snippet.text.startsWith("\u2026")).toBe(true);
+    expect(snippet.text.endsWith("\u2026")).toBe(true);
+    expect(snippet.text.length).toBeLessThanOrEqual(242);
+    expect(snippet.text).not.toContain("sk-live-abcdefghijklmnop");
+    expect(snippet.highlights).toHaveLength(1);
+    const [range] = snippet.highlights;
+    expect(snippet.text.slice(range.start, range.end)).toBe("Needle-Term");
+    expect(Buffer.byteLength(JSON.stringify(row.match))).toBeLessThanOrEqual(1536);
+    run("json"); span("json", { input: JSON.stringify({ messages: [{ role: "user", content: "x".repeat(3000) + " find the json-needle here " + "y".repeat(3000) }] }) });
+    expect((await searchRuns({ q: "json-needle" })).runs[0].match).toMatchObject({ field: "input", snippet: { state: "available", truncated: true } });
+  });
+
+  test("ranked keyset pages keep score order without duplicates and reject unranked cursors", async () => {
+    for (let i = 0; i < 6; i++) { run(`ok-${i}`, 100 + i); span(`ok-${i}`, { output: "shared-term" }); }
+    for (let i = 0; i < 3; i++) { run(`bad-${i}`, i); span(`bad-${i}`, { status: "ERROR", output: "shared-term" }); }
+    const ids: string[] = []; let cursor: string | undefined;
+    do {
+      const page = await searchRuns({ q: "shared-term", limit: 2, cursor });
+      ids.push(...page.runs.map(r => r.id)); cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    expect(ids).toEqual(["ok-5", "ok-4", "ok-3", "ok-2", "ok-1", "ok-0", "bad-2", "bad-1", "bad-0"]);
+    const failures: string[] = []; cursor = undefined;
+    do {
+      const page = await searchRuns({ q: "failed", limit: 2, cursor });
+      failures.push(...page.runs.map(r => r.id)); cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    expect(failures).toEqual(["bad-2", "bad-1", "bad-0"]);
+    const unranked = (await searchRuns({ limit: 1 })).nextCursor;
+    expect(await searchRuns({ q: "shared-term", cursor: unranked }).catch(error => error)).toMatchObject({ status: 400 });
+    const ranked = (await searchRuns({ q: "shared-term", limit: 1 })).nextCursor;
+    expect(await searchRuns({ cursor: ranked }).catch(error => error)).toMatchObject({ status: 400 });
+    expect((await searchRuns({ limit: 1 })).runs[0]).toMatchObject({ match: null, matched_span_count: null });
   });
 
   test("status and exact model/provider filters apply across history with same-span semantics", async () => {

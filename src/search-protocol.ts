@@ -8,3 +8,6 @@ export interface SearchSnippet { state: "available" | "unavailable"; text: strin
 export interface SearchSpanHit { runId: string; spanId: string; name: string; input: SearchSnippet; output: SearchSnippet }
 export interface SearchHitPage { items: SearchSpanHit[]; nextCursor: string | null; hasMore: boolean; elapsedMs: number }
 export interface SearchSuggestionResult { values: string[]; hasMore: boolean }
+/** Why a run matched a text query. `error` and `failed_span` come from spans whose status is ERROR. */
+export type RunSearchMatchField = "error" | "failed_span" | "span_name" | "model" | "provider" | "output" | "input" | "run" | "metadata";
+export interface RunSearchMatch { field: RunSearchMatchField; span_id: string | null; span_name: string | null; snippet: SearchSnippet }

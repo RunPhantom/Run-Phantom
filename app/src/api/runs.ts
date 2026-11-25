@@ -1,7 +1,7 @@
 import { apiJson, apiJsonOrNull, jsonInit } from "./request";
 import type { LiveEvent, Run, Span, SubAgent } from "../utils/types";
-import type { SearchHitPage, SearchSuggestionResult } from "../../../src/search-protocol";
-export type { SearchHitPage } from "../../../src/search-protocol";
+import type { RunSearchMatch, SearchHitPage, SearchSuggestionResult } from "../../../src/search-protocol";
+export type { RunSearchMatch, SearchHitPage } from "../../../src/search-protocol";
 
 export interface RunDetailData {
   run: Run;
@@ -31,8 +31,10 @@ export interface RunSearchOptions {
   filter?: string;
 }
 
+export type RunSearchRun = Run & { match?: RunSearchMatch | null; matched_span_count?: number | null };
+
 export interface RunSearchResult {
-  runs: Run[];
+  runs: RunSearchRun[];
   nextCursor: string | null;
   hasMore: boolean;
   elapsedMs: number;
@@ -51,6 +53,12 @@ export function getSearchScope(resource:"runs"|"span-hits",signal:AbortSignal):P
 
 export async function getRunDetail(runId: string, signal?: AbortSignal): Promise<RunDetailData> {
   return apiJson<RunDetailData>(`/api/runs/detail/${encodeURIComponent(runId)}`, { signal });
+}
+
+/** The run row alone, without span payloads; null when the run does not exist. */
+export async function getRunRow(runId: string, signal?: AbortSignal): Promise<Run | null> {
+  const outline = await apiJsonOrNull<{ run: Run | null }>(`/api/runs/${encodeURIComponent(runId)}/outline?payload_preview_chars=0`, { signal });
+  return outline?.run ?? null;
 }
 
 export async function getRunDetailOrNull(runId: string): Promise<RunDetailData | null> {

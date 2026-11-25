@@ -59,7 +59,7 @@ export const evidenceApi = {
   capabilities: () => apiJson<EvidenceCapabilities>(`${evidenceRoot}/capabilities`, { cache: "no-store" }),
   sets: (attachment: EvidenceAttachment, signal?: AbortSignal) => apiJson<{ items: { id: string; revision: number; createdAt: number }[]; truncated: boolean }>(`${evidenceRoot}/sets?${new URLSearchParams({ attachment: JSON.stringify(attachment) })}`, { signal, cache: "no-store" }),
   set: (id: string, revision?: number, signal?: AbortSignal) => apiJson<EvidenceSetView>(evidenceSet(id) + (revision === undefined ? "" : `?revision=${revision}`), { signal, cache: "no-store" }),
-  inventory: (anchor: EvidenceInventoryAnchor, signal?: AbortSignal) => apiJson<EvidenceInventoryRevision>(`${evidenceRoot}/inventories?${new URLSearchParams({ anchor: JSON.stringify(anchor) })}`, { signal, cache: "no-store" }),
+  inventory: (anchor: EvidenceInventoryAnchor, signal?: AbortSignal) => apiJson<EvidenceInventoryRevision | null>(`${evidenceRoot}/inventories?${new URLSearchParams({ anchor: JSON.stringify(anchor) })}`, { signal, cache: "no-store" }),
   saveInventory: (anchor: EvidenceInventoryAnchor, expectedRevision: number, expected: EvidenceExpectedSource[]) => apiJson<EvidenceInventoryRevision>(`${evidenceRoot}/inventories`, jsonInit("PUT", { anchor, expectedRevision, expected })),
   upload: (body: Blob, contentType: string, signal: AbortSignal) => apiJson<EvidenceImportReceipt>(`${evidenceRoot}/imports`, { method: "POST", headers: { "Content-Type": contentType }, body, signal }),
   job: (id: string, signal?: AbortSignal) => apiJson<{ job: EvidenceJob; observationsAvailable: boolean; timings: EvidenceOperationTimings }>(`${evidenceRoot}/imports/${encodeURIComponent(id)}`, { signal, cache: "no-store" }),

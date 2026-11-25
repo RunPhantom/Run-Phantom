@@ -14,8 +14,11 @@ for (const width of [320, 390, 768, 1024, 1440, 1920]) test(`advisory guard obse
   await page.setViewportSize({ width, height: 1000 }); await page.goto(`${runPhantom.url}/runs/${guardTraceId}/span/${guardSpanId}`);
   const region = page.getByRole("region", { name: "Captured guard decisions" }); await expect(region).toBeVisible();
   await expect(region.getByText("Partial capture", { exact: true })).toBeVisible();
+  // Disclaimers sit behind a disclosure after the decisions.
+  await expect(region.getByText(/Captured producer actions are advisory/)).toBeHidden();
+  await region.getByText("About this capture", { exact: true }).click();
   await expect(region.getByText(/Captured producer actions are advisory/)).toBeVisible();
-  await expect(region.locator("details")).toHaveCount(5);
+  await expect(region.getByTestId("guard-decision")).toHaveCount(5);
   const summary = region.locator("summary").first(); await summary.focus(); await page.keyboard.press("Enter");
   await expect(region.locator("details").first()).toHaveAttribute("open", "");
   await expect(region.locator("details").first().getByText("0 ms", { exact: true })).toBeVisible();
@@ -30,14 +33,15 @@ for (const width of [320, 390, 768, 1024, 1440, 1920]) test(`advisory guard obse
   await expect(denied.getByText(/\[REDACTED\]/).first()).toBeVisible();
   expect(await page.evaluate(() => (window as unknown as { guardExecuted?: boolean }).guardExecuted)).toBeUndefined();
   noSecret(await page.locator("body").innerText()); await denied.locator("summary").click();
-  const error = region.locator("details").last(); await error.locator("summary").click();
+  const error = region.getByTestId("guard-decision").last(); await error.locator("summary").click();
   await expect(error.getByText("Producer error reported", { exact: true }).first()).toBeVisible();
   await expect(error.getByText("Reported allow", { exact: true })).toBeVisible();
   await expect(page.getByText("Run failed", { exact: true })).toHaveCount(0);
   await error.locator("summary").click();
   const heading = region.getByRole("heading", { name: "Captured guard decisions" });
   await heading.scrollIntoViewIfNeeded(); await expect(heading).toBeInViewport({ ratio: 1 });
-  await expect(region.getByText(/Captured producer actions are advisory/)).toBeInViewport({ ratio: 1 });
+  const advisory = region.getByText(/Captured producer actions are advisory/);
+  await advisory.evaluate(element => element.scrollIntoView({ block: "center" })); await expect(advisory).toBeInViewport({ ratio: 1 });
   const geometry = await region.evaluate(element => { const rectangle = element.getBoundingClientRect(); return {
     viewport: innerWidth, left: rectangle.left, right: rectangle.right, width: rectangle.width,
     contentWidth: element.scrollWidth, clientWidth: element.clientWidth, documentWidth: document.documentElement.scrollWidth,
@@ -59,10 +63,11 @@ test("unknown, duplicate and lossy guard capture remains distinct from span stat
   await page.goto(`${runPhantom.url}/runs/${guardTraceId}/span/${guardSpanId}`);
   const region = page.getByRole("region", { name: "Captured guard decisions" }); await expect(region).toBeVisible();
   await expect(region.getByText("Action unknown", { exact: true })).toBeVisible();
+  await region.getByText("About this capture", { exact: true }).click();
   await expect(region.getByText(/Exporter dropped 2 events · Receiver omitted 1 events/)).toBeVisible();
   await expect(region.getByTestId("guard-capture-reasons")).toContainText("Duplicate fields are ambiguous");
   await expect(region.getByTestId("guard-capture-reasons")).toContainText("Exporter attribute loss is unknown");
-  await region.locator("summary").click();
+  await region.getByTestId("guard-decision").locator("summary").click();
   await expect(region.getByText("guard.action: Duplicate fields are ambiguous", { exact: true })).toBeVisible();
   await expect(region.getByText("guard.score: Fields are invalid", { exact: true })).toBeVisible();
   const response = await request.get(`${runPhantom.url}/api/runs/detail/${guardTraceId}`), actual = await response.json();
@@ -70,8 +75,32 @@ test("unknown, duplicate and lossy guard capture remains distinct from span stat
     counts: { duplicateFields: 1, invalidNumericFields: 1, receiverDroppedEvents: 1 }, decisions: [{ sourceEventIndex: null }] } });
   const missing = guardRequest() as any; missing.resourceSpans[0].scopeSpans[0].spans[0].events = []; delete missing.resourceSpans[0].scopeSpans[0].spans[0].droppedEventsCount;
   expect((await request.post(`${runPhantom.url}/v1/traces`, { data: missing })).status()).toBe(200); await page.reload();
-  await expect(region.getByText(/Exporter dropped unknown events/)).toBeVisible();
-  await expect(region.getByText(/No retained guard decision can be displayed/)).toBeVisible();
-  await expect(region.locator("details")).toHaveCount(0); noSecret(await page.locator("body").innerText());
+  // A span without guard.evaluation events shows no guard panel at all.
+  await expect(page.getByText("Output", { exact: true }).first()).toBeVisible();
+  await expect(region).toHaveCount(0); noSecret(await page.locator("body").innerText());
   await testInfo.attach("guard-unknown-source-proof", { contentType: "application/json", body: Buffer.from(JSON.stringify(actual, null, 2)) });
+});
+
+test("a plain chat span shows payloads first and no guard or stream claims", async ({ page, request, runPhantom }) => {
+  const traceId = "e1".repeat(16), spanId = "f2".repeat(8);
+  const attribute = (key: string, value: string | number) => ({ key, value: typeof value === "number" ? { intValue: String(value) } : { stringValue: value } });
+  const span = { traceId, spanId, name: "chat gpt-5-nano", startTimeUnixNano: "1770000000000000000", endTimeUnixNano: "1770000003000000000", status: { code: 1 },
+    attributes: [attribute("gen_ai.operation.name", "chat"), attribute("gen_ai.request.model", "gpt-5-nano"), attribute("gen_ai.provider.name", "openai"),
+      attribute("gen_ai.input.messages", JSON.stringify([{ role: "user", parts: [{ type: "text", content: "Name three planets." }] }])),
+      attribute("gen_ai.output.messages", JSON.stringify([{ role: "assistant", parts: [{ type: "text", content: "Mercury, Venus and Earth." }] }])),
+      attribute("gen_ai.usage.input_tokens", 15), attribute("gen_ai.usage.output_tokens", 369), attribute("gen_ai.usage.output_tokens.reasoning", 320)] };
+  expect((await request.post(`${runPhantom.url}/v1/traces`, { data: { resourceSpans: [{ scopeSpans: [{ spans: [span] }] }] } })).status()).toBe(200);
+  await page.goto(`${runPhantom.url}/runs/${traceId}/span/${spanId}`);
+  const input = page.getByText(/^Input$/).first();
+  await expect(input).toBeVisible();
+  await expect(page.getByRole("region", { name: "Captured guard decisions" })).toHaveCount(0);
+  await expect(page.getByText(/Credential content was redacted|PARTIAL CAPTURE|Stream evidence/i)).toHaveCount(0);
+  const usage = page.getByRole("region", { name: "Token usage details", exact: true });
+  await expect(usage).toBeVisible();
+  await usage.locator("summary").click();
+  await expect(usage).toContainText("Reasoning tokens");
+  await expect(usage).toContainText("320");
+  await expect(usage).not.toContainText("Some evidence is missing");
+  const [inputBox, usageBox] = [await input.boundingBox(), await usage.boundingBox()];
+  expect(inputBox!.y).toBeLessThan(usageBox!.y);
 });

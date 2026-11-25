@@ -9,6 +9,8 @@ import path from "path";
 import { randomUUID } from "crypto";
 import { normalizeOtelId } from "./ids";
 import { searchRuns, RunSearchError } from "./run-search";
+import { hasProviderSummaryConsent, PROVIDER_SUMMARY } from "./summary-protocol";
+import { scrubSecretText } from "./verification/redaction";
 import { searchSpanHits, searchSuggestions, localSearchScope, SearchResourceError } from "./local-search-resources";
 import { getRunComparison, RunComparisonError } from "./run-comparison";
 import { publicCaptureMetadata } from "./spans/adapters/capture-visibility";
@@ -2754,11 +2756,16 @@ export async function createServer(port: number, options: { comparisons?: Compar
     }
   });
 
-  // Summarize an event using Haiku (server-side to avoid CORS)
+  // Provider summaries are opt-in per request: the UI names the provider and
+  // model and sends this consent only after the user confirms.
   app.post("/api/summarize", async (req, res) => {
-    const { content } = req.body;
+    const { content, consent } = req.body ?? {};
     if (typeof content !== "string" || content.trim().length === 0) {
       res.json({ summary: null, available: false, reason: "empty_content" });
+      return;
+    }
+    if (!hasProviderSummaryConsent(consent)) {
+      res.status(400).json({ summary: null, available: false, reason: "consent_required" });
       return;
     }
     const key = getEffectiveSecret("anthropic");
@@ -2771,10 +2778,10 @@ export async function createServer(port: number, options: { comparisons?: Compar
         method: "POST",
         headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
         body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
+          model: PROVIDER_SUMMARY.model,
           max_tokens: 200,
           system: "Summarize this AI agent interaction in 1-2 sentences. Focus on what user asked and what happened (tools used, outcome). Be specific and brief. Avoid unnecessary articles like 'the', 'a', 'an' — write in a terse, telegraphic style. If the trace is sparse or incomplete, summarize whatever is present in one short phrase; NEVER ask for more information or reply with a request for clarification.",
-          messages: [{ role: "user", content }],
+          messages: [{ role: "user", content: scrubSecretText(content).slice(0, PROVIDER_SUMMARY.maxContentChars) }],
         }),
       });
       if (!r.ok) {

@@ -323,3 +323,17 @@ const PRIVATE_KEY_BLOCK = /-----BEGIN ((?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRI
 export function scrubKnownSecrets(text: string): string {
   return text.replace(PRIVATE_KEY_BLOCK, REDACTED_VALUE).replace(KNOWN_SECRET, REDACTED_VALUE);
 }
+
+/**
+ * Free-text credential scrub shared by team ingest and the provider summary
+ * excerpt: known secret shapes, sensitive URL parts, auth schemes and
+ * `key: value` credential headers.
+ */
+export function scrubSecretText(text: string): string {
+  // The JWT recognizer backtracks on long base64 runs without dots.
+  // Bound ambiguous tokens before invoking it, keeping their loss explicit.
+  let safe = text.replace(/[A-Za-z0-9_.-]+/g, token => token.length > 256 && token.includes("eyJ") ? "[UNAVAILABLE]" : scrubKnownSecrets(token));
+  safe = safe.replace(/\b(?:https?|wss?):\/\/[^\s<>"']+/gi, url => redactUrl(url, defaultIsSensitiveKey));
+  safe = safe.replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9+/_=.-]{8,}/gi, "[REDACTED]");
+  return safe.replace(/\b(?:authorization|proxy-authorization|x-api-key|api[_-]?key|password|cookie|set-cookie)\s*[:=]\s*[^\r\n,;]+/gi, "[REDACTED]");
+}

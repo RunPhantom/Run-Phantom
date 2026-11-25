@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { Button } from "../components/ui/button";
@@ -15,6 +15,9 @@ import { ExternalEvidencePanel } from "../components/ExternalEvidencePanel";
 import { FindingComparison } from "../components/evaluations/FindingComparison";
 import { EvaluationNavigation } from "../components/evaluations/EvaluationNavigation";
 import { ExperimentIndex } from "../components/evaluations/ExperimentIndex";
+import { useRuns } from "../hooks/use-runs";
+import { runDisplayName } from "../utils/helpers";
+import { getRunRow } from "../api/runs";
 
 export function EvaluationsPage() {
   const [params, setParams] = useSearchParams();
@@ -47,6 +50,22 @@ export function EvaluationsPage() {
     }
   }
   const [datasetName, setDatasetName] = useState("");
+  const linkedRunId = params.get("runId") ?? "";
+  const runs = useRuns();
+  const listedRun = runs.data?.find(item => item.id === linkedRunId);
+  const fetchedRun = useQuery({ queryKey: ["evaluations", "linked-run", linkedRunId], enabled: !!linkedRunId && runs.isSuccess && !listedRun,
+    queryFn: ({ signal }) => getRunRow(linkedRunId, signal), staleTime: Infinity, retry: false });
+  const linkedRun = listedRun ?? fetchedRun.data ?? undefined;
+  const linkedRunName = linkedRun ? runDisplayName(linkedRun) : linkedRunId.slice(0, 12);
+  const [nameTouched, setNameTouched] = useState(false);
+  const seededName = useRef("");
+  const defaultName = linkedRun ? `${runDisplayName(linkedRun)} regression cases`.slice(0, 128) : "";
+  useEffect(() => {
+    // Offer a ready dataset name once per linked run; a later refetch must not refill a cleared field.
+    if (!defaultName || nameTouched || seededName.current === linkedRunId) return;
+    seededName.current = linkedRunId;
+    setDatasetName(defaultName);
+  }, [defaultName, linkedRunId, nameTouched]);
   const [selectedExperiment, setSelectedExperiment] = useState("");
   const [portableJson, setPortableJson] = useState("");
   const [error, setError] = useState("");
@@ -68,7 +87,12 @@ export function EvaluationsPage() {
     <PageHeader eyebrow="Evaluations / Regression" title="Evaluations" description="Build regression cases from captured runs. Compare frozen candidates, inspect the evidence, and keep human reviews separate." actions={<Button variant="outline" disabled={datasets.isFetching || experiments.isFetching} onClick={() => void queryClient.invalidateQueries({ queryKey: ["evaluations"] })}>Refresh workspace</Button>} />
     {(error || selectionError || queryError) && <div role="alert" className="evaluation-alert"><span>{error || selectionError || queryError?.message}</span><Button variant="destructive-outline" size="sm" onClick={() => { setError(""); void queryClient.invalidateQueries({ queryKey: ["evaluations"] }); }}>Refresh evaluations</Button></div>}
     {notice && <p role="status" className="evaluation-notice">{notice}</p>}
-    <section aria-label="Datasets" className="evaluation-panel space-y-4"><h2>Regression datasets</h2><div className="flex flex-wrap items-end gap-3"><div className="min-w-[200px] flex-1"><Field label="Dataset name"><Input value={datasetName} onChange={event => setDatasetName(event.target.value)} placeholder="Checkout regression cases" maxLength={128} /></Field></div><Button disabled={busy || !datasetName.trim()} onClick={() => void perform(async () => { saved(await evaluationsApi.createDataset(datasetName.trim())); setDatasetName(""); })}>Create dataset</Button></div>
+    {linkedRunId && <section aria-label="Run to evaluate" className="evaluation-linked-run">
+      <div className="min-w-0"><h2>Add <span title={linkedRunId}>{linkedRunName}</span> as a regression case</h2>
+        <p>{datasets.data?.length ? "It is preselected as the source run of a new case below. Choose a dataset, add your expectations, then save a new revision." : "Create a dataset first. The case form then opens with this run preselected as its source."}</p></div>
+      {datasets.data?.length ? <a className="evaluation-linked-run-action" href="#new-case">Go to the case form</a> : null}
+    </section>}
+    <section aria-label="Datasets" className="evaluation-panel space-y-4"><h2>Regression datasets</h2><div className="flex flex-wrap items-end gap-3"><div className="min-w-[200px] flex-1"><Field label="Dataset name"><Input value={datasetName} onChange={event => { setNameTouched(true); setDatasetName(event.target.value); }} placeholder="Checkout regression cases" maxLength={128} /></Field></div><Button disabled={busy || !datasetName.trim()} onClick={() => void perform(async () => { saved(await evaluationsApi.createDataset(datasetName.trim())); setDatasetName(""); })}>Create dataset</Button></div>
       {datasets.isLoading ? <p role="status" className="evaluation-meta">Loading datasets…</p> : datasets.isError ? <p className="evaluation-meta">Datasets are unavailable. Refresh evaluations to try again.</p> : !datasets.data?.length ? <p className="evaluation-empty-note">No datasets yet. Create one, then add an example from a captured run.</p> : <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_200px]"><Field label="Dataset"><Select value={selectionError ? "" : datasetId} onChange={event => selectRevision(event.target.value)} disabled={busy}>{selectionError && <option value="">Choose an available dataset</option>}{datasets.data.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></Field><Field label="Revision"><Select value={selectionError ? "" : selectedVersion ?? dataset?.latestVersion ?? 1} onChange={event => { if (explicitSelection) selectRevision(datasetId, Number(event.target.value)); else setVersion(Number(event.target.value)); }} disabled={busy || !dataset}>{selectionError && <option value="">Choose an available revision</option>}{Array.from({ length: dataset?.latestVersion ?? revision.data?.version ?? 1 }, (_, index) => index + 1).map(item => <option value={item} key={item}>Revision {item}{item === dataset?.latestVersion ? " (latest)" : ""}</option>)}</Select></Field></div>}
       {visibleRevision && <div className="evaluation-revision-context" aria-label="Selected dataset revision"><strong>{visibleRevision.datasetName}</strong><span>Revision {visibleRevision.version}{visibleRevision.version === dataset?.latestVersion ? " · Latest" : dataset && visibleRevision.version < dataset.latestVersion ? " · Historical" : ""}</span><span className="evaluation-meta">{visibleRevision.cases.length} frozen {visibleRevision.cases.length === 1 ? "case" : "cases"}</span></div>}
       <details className="border-t border-rp-line-muted pt-2"><summary>Import and export datasets</summary><div className="mt-3 space-y-4"><p className="evaluation-meta">Portable JSON contains case names, reference inputs, tags and explicit rules. Import creates a new dataset and drops source run identities.</p><Field label="Dataset JSON"><textarea className={`${textareaClass} min-h-36`} maxLength={2 * 1024 * 1024} value={portableJson} onChange={event => setPortableJson(event.target.value)} /></Field><Field label="Import dataset file"><input type="file" accept=".json,application/json" className="text-xs" disabled={busy} onChange={event => { const file = event.target.files?.[0]; if (file) void perform(async () => { if (file.size > 2 * 1024 * 1024) throw new Error("Dataset import exceeds 2 MiB."); setPortableJson(await file.text()); setNotice("Dataset file loaded. Review it, then import JSON."); }); event.target.value = ""; }} /></Field><div className="flex flex-wrap gap-2"><Button disabled={busy || !portableJson.trim()} onClick={() => void perform(() => importJson(portableJson))}>Import JSON</Button><Button variant="outline" disabled={busy || !visibleRevision} onClick={() => void perform(async () => { const exported = await evaluationsApi.exportDataset(datasetId, visibleRevision!.version); const json = JSON.stringify(exported, null, 2); setPortableJson(json); const url = URL.createObjectURL(new Blob([json], { type: "application/json" })); const anchor = document.createElement("a"); anchor.href = url; anchor.download = `runphantom-dataset-r${visibleRevision!.version}.json`; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); setNotice("Dataset exported. The portable JSON is available above."); })}>Export selected revision</Button></div></div></details>

@@ -23,7 +23,7 @@ const TOOLS = [
   { name: "search_suggestions", description: "List at most20 captured local model, provider or valid tag suggestions for a literal prefix. Contains no payloads and makes no remote provider calls.", inputSchema: {type:"object",additionalProperties:false,required:["field"],properties:{field:{type:"string",enum:["model","provider","tag"]},prefix:{type:"string",maxLength:256},limit:{type:"integer",minimum:1,maximum:20}}} },
   {
     name: "search_runs",
-    description: "Search all local run history with literal text across run metadata and span names, inputs and outputs. Returns bounded run summaries without payloads, newest started_at first. Text matching folds ASCII case and treats other Unicode literally. Filter model/provider exactly on the same span. Follow nextCursor while hasMore; refresh after runs change. Use get_run_outline or get_span_payload to inspect evidence.",
+    description: "Search all local run history with literal text across run metadata, agent names, span (tool) names, models, providers, inputs, outputs and reported error messages. The words error, failed or exception also match spans whose status is ERROR. Returns bounded run summaries newest first; with q, failed matches rank first and each run carries one scrubbed match snippet (at most 240 characters) with highlight ranges. Text matching folds ASCII case and treats other Unicode literally. Filter model/provider exactly on the same span. Follow nextCursor while hasMore; refresh after runs change. Use get_run_outline or get_span_payload to inspect evidence.",
     inputSchema: {
       type: "object",
       properties: {

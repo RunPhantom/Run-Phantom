@@ -3,7 +3,7 @@ import { observeOtlpTagSource, ambiguousOtlpTagSpans } from "../otlp-tag-source"
 import { hasDuplicateJsonKeys } from "../json-keys";
 import { decodeOtlpProtobuf } from "../otlp-protobuf";
 import { parseJsonEvidence } from "../evaluations/json-evidence";
-import { defaultIsSensitiveKey, redactUrl, scrubKnownSecrets } from "../verification/redaction";
+import { defaultIsSensitiveKey, scrubSecretText } from "../verification/redaction";
 import { TeamError } from "./errors";
 import { TEAM_LIMITS as L, type Span } from "./protocol";
 
@@ -108,13 +108,7 @@ export function redactTeamText(text: string, activeSecret = ""): string {
     let safe = value.replace(/\0/g, "\uFFFD");
     if (activeSecret) safe = safe.split(activeSecret).join("[REDACTED]");
     safe = safe.replace(/rp_team_(?:session|setup|invite|ingest)_[A-Za-z0-9_-]{16,}/g, "[REDACTED]");
-    // The shared JWT recognizer backtracks on long base64 runs without dots.
-    // Bound ambiguous tokens before invoking it, keeping their loss explicit.
-    safe = safe.replace(/[A-Za-z0-9_.-]+/g, token => token.length > 256 && token.includes("eyJ") ? "[UNAVAILABLE]" : scrubKnownSecrets(token));
-    safe = safe.replace(/\b(?:https?|wss?):\/\/[^\s<>"']+/gi, url => redactUrl(url, defaultIsSensitiveKey));
-    safe = safe.replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9+/_=.-]{8,}/gi, "[REDACTED]");
-    safe = safe.replace(/\b(?:authorization|proxy-authorization|x-api-key|api[_-]?key|password|cookie|set-cookie)\s*[:=]\s*[^\r\n,;]+/gi, "[REDACTED]");
-    return safe;
+    return scrubSecretText(safe);
   }
   function visit(value: unknown, depth: number): unknown {
     if (++nodes > L.INGEST_NODES || depth > L.INGEST_DEPTH) return "[TRUNCATED]";

@@ -3,6 +3,7 @@ import { redactText } from "../../verification/serialization";
 import { hasDuplicateJsonKeys } from "../../json-keys";
 import { validateOtlpEvidence, OTLP_EVIDENCE_LIMITS, type OtlpEvidence, type EvidenceAttribute, type EvidenceValue } from "../otlp-evidence";
 import type { AdapterInput, SpanAdapter } from "./types";
+import { COUNT_ATTRIBUTES } from "../../pricing/usage";
 
 export const CAPTURE_LIMITS = { bytes: 65536, text: 4096, chunks: 64, chunkText: 2048, streamText: 16384, filterBytes: 8192, filterDepth: 6, filterNodes: 256, filterEntries: 64 } as const;
 import type { CaptureReason, RetrievalCapture, EmbeddingCapture, StreamCapture, CaptureVisibilityV1 } from "./capture-visibility-types";
@@ -251,8 +252,13 @@ export function captureVisibility(input: AdapterInput): CaptureVisibilityV1 | un
   const attrs = evidence ? fields(evidence.attributes) : input.attrs;
   const retrievalKind = input.spanType === "RETRIEVAL", embeddingKind = input.spanType === "EMBEDDING";
   const hasStream = attrs["gen_ai.request.stream"] === true || attrs["gen_ai.request.is_stream"] === true || evidence?.events.some(e => e.name.startsWith("runphantom.stream."));
-  const usageKeys = ["gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.cache_creation.input_tokens", "gen_ai.usage.reasoning_tokens", "gen_ai.usage.completion_tokens_details.reasoning"];
-  if (!retrievalKind && !embeddingKind && !hasStream && !usageKeys.some(key => attrs[key] !== undefined)) return undefined;
+  // Same aliases as cost analytics, so this panel and the Cost page agree on one span.
+  const usageAliases = { cacheRead: COUNT_ATTRIBUTES.cache_read, cacheCreation: COUNT_ATTRIBUTES.cache_write,
+    reasoning: ["gen_ai.usage.reasoning_tokens", "gen_ai.usage.completion_tokens_details.reasoning", ...COUNT_ATTRIBUTES.reasoning] };
+  const usageKeys = [...usageAliases.cacheRead, ...usageAliases.cacheCreation, ...usageAliases.reasoning];
+  // Usage is gated on the same flat map usageNumber reads: receipt *_tokens
+  // values are withheld, so a key present only there yields no usable row.
+  if (!retrievalKind && !embeddingKind && !hasStream && !usageKeys.some(key => input.attrs[key] !== undefined)) return undefined;
   const reasons = new Set<CaptureReason>();
   if (!evidence) reasons.add("missing-source-evidence");
   const number = (...keys: string[]): number | null => {
@@ -289,9 +295,11 @@ export function captureVisibility(input: AdapterInput): CaptureVisibilityV1 | un
     if (!found.every(v => v === found[0])) { reasons.add("metadata-conflict"); return null; }
     return found[0] as number;
   };
-  const usage = { cacheReadInputTokens: usageNumber(usageKeys[0]), cacheCreationInputTokens: usageNumber(usageKeys[1]), reasoningOutputTokens: usageNumber(...usageKeys.slice(2)) };
+  const usage = { cacheReadInputTokens: usageNumber(...usageAliases.cacheRead), cacheCreationInputTokens: usageNumber(...usageAliases.cacheCreation), reasoningOutputTokens: usageNumber(...usageAliases.reasoning) };
   if (evidence?.capture.droppedEvents || evidence?.capture.droppedAttributes || evidence?.capture.invalidValues || evidence?.capture.truncatedValues) reasons.add("receiver-loss");
-  if (evidence && (evidence.droppedEventsCount !== 0 || evidence.droppedAttributesCount !== 0)) reasons.add("source-loss");
+  // Coverage reports only loss the exporter declared, as agent-definitions.ts
+  // does. Stream completion below stays strict: an absent count is not proof.
+  if (evidence && ((evidence.droppedEventsCount ?? 0) > 0 || (evidence.droppedAttributesCount ?? 0) > 0)) reasons.add("source-loss");
   let stream: StreamCapture | null = null;
   if (hasStream) {
     const streamReasons = new Set<CaptureReason>();
@@ -334,6 +342,7 @@ export function captureVisibility(input: AdapterInput): CaptureVisibilityV1 | un
       else if (declaredChunkCount !== ordered.length || ordered.some((item, index) => item.sequence !== index)) streamReasons.add("missing-chunk");
     }
     for (const reason of reasons) if (["missing-source-evidence", "source-loss", "receiver-loss"].includes(reason)) streamReasons.add(reason);
+    if (evidence && (evidence.droppedEventsCount !== 0 || evidence.droppedAttributesCount !== 0)) streamReasons.add("source-loss");
     const timing = (...keys: string[]): number | null => {
       const found = keys.map(key => attrs[key]).filter(v => v !== undefined);
       if (!found.length) return null;

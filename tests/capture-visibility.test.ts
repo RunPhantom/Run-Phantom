@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { parseOtlpRequest } from "../src/parse";
 import { normalizeStoredSpan } from "../src/spans/normalize";
+import { captureVisibility } from "../src/spans/adapters/capture-visibility";
 import { captureTrace, captureAttributes, chunk, terminal, captureInput, captureOutput } from "./fixtures/capture-visibility";
 import { classificationCases } from "./fixtures/capture-classification-cases";
 
@@ -209,4 +210,29 @@ test("UTF-8 projection cap counts JSON escaping and discloses whole-view loss", 
   expect(Buffer.byteLength(JSON.stringify(capture))).toBeLessThanOrEqual(CAPTURE_LIMITS.bytes);
   expect(capture.stream.state).toBe("incomplete"); expect(capture.stream.reasons).toContain("content-truncated");
   expect(capture.stream.chunks).toEqual([]); expect(capture.stream.observedChunkCount).toBe(16);
+});
+test("a plain chat span reads cost-analytics usage aliases and reports no loss the exporter never declared", () => {
+  const attribute = (key: string, value: string | number) => ({ key, value: typeof value === "number" ? { intValue: String(value) } : { stringValue: value } });
+  const body = { resourceSpans: [{ scopeSpans: [{ spans: [{ traceId: "c".repeat(32), spanId: "d".repeat(16), name: "chat gpt-5-nano",
+    startTimeUnixNano: "1770000000000000000", endTimeUnixNano: "1770000001000000000", status: { code: 1 },
+    attributes: [attribute("gen_ai.operation.name", "chat"), attribute("gen_ai.request.model", "gpt-5-nano"), attribute("gen_ai.usage.input_tokens", 15),
+      attribute("gen_ai.usage.output_tokens", 369), attribute("gen_ai.usage.output_tokens.reasoning", 320)] }] }] }] };
+  const capture = (parseOtlpRequest(body)[0] as any).captureVisibility;
+  expect(capture.stream).toBeNull();
+  expect(capture.usage).toEqual({ cacheReadInputTokens: null, cacheCreationInputTokens: null, reasoningOutputTokens: 320 });
+  expect(capture.coverage.reasons).not.toContain("source-loss");
+  expect(capture.coverage.reasons).not.toContain("receiver-loss");
+});
+
+test("a usage key present only in the evidence receipt does not open an empty usage panel", () => {
+  const attribute = (key: string, value: string | number) => ({ key, value: typeof value === "number" ? { intValue: String(value) } : { stringValue: value } });
+  const body = { resourceSpans: [{ scopeSpans: [{ spans: [{ traceId: "e".repeat(32), spanId: "f".repeat(16), name: "chat gpt-5-nano",
+    startTimeUnixNano: "1770000000000000000", endTimeUnixNano: "1770000001000000000", status: { code: 1 },
+    attributes: [attribute("gen_ai.operation.name", "chat"), attribute("gen_ai.request.model", "gpt-5-nano"), attribute("gen_ai.usage.output_tokens.reasoning", 64)] }] }] }] };
+  const span = parseOtlpRequest(body)[0] as any;
+  expect(span.otlpEvidence).toBeTruthy();
+  const withUsage = captureVisibility({ spanName: span.name, spanType: span.spanType, attrs: span.attributes, otlpEvidence: span.otlpEvidence });
+  expect(withUsage?.usage.reasoningOutputTokens).toBe(64);
+  const { "gen_ai.usage.output_tokens.reasoning": _reasoning, ...withoutUsage } = span.attributes;
+  expect(captureVisibility({ spanName: span.name, spanType: span.spanType, attrs: withoutUsage, otlpEvidence: span.otlpEvidence })).toBeUndefined();
 });

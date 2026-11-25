@@ -110,7 +110,7 @@ async function execute(work: Omit<SearchResourceWork,"deadline"|"cancellation">,
 function project(options: SearchResourceOptions): SearchResourceWork["project"] {
   return options.projectId ? {id:options.projectId,bytes:L.PROJECT_BYTES,runs:L.PROJECT_RUNS,spans:L.PROJECT_SPANS} : undefined;
 }
-/** Explicit span evidence resource. Existing run summaries remain payload-free. */
+/** Explicit span evidence resource. Run summaries carry at most one short scrubbed match excerpt. */
 export async function searchSpanHits(value: unknown, options: SearchResourceOptions): Promise<SearchHitPage> {
   const input=inputRecord(value,["q","model","provider","status","filter","limit","cursor","from","to"]);
   const q=text(input.q), filter=typedFilter(input), pageSize=limit(input.limit,50,50), dbPath=databasePath(options.dbPath), scope=options.projectId?"team":"local";

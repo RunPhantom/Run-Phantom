@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Field, Select } from "./field";
@@ -25,6 +25,17 @@ export function DatasetEditor({ revision, latestVersion, initialRunId, onSaved }
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const historical = revision.version !== latestVersion;
+  const [sourceState, setSourceState] = useState<"idle" | "loading" | "error">("idle");
+  // "Add case" needs the source snapshot; load it as soon as a source is chosen
+  // so a run linked from "Evaluate run" is ready without an extra click.
+  useEffect(() => {
+    if (!sourceRunId || historical) return;
+    const controller = new AbortController();
+    setSourceState("loading");
+    evaluationsApi.snapshot(sourceRunId, sourceSpanId || undefined).then(next => { if (!controller.signal.aborted) { setSnapshot(next); setSourceState("idle"); } },
+      () => { if (!controller.signal.aborted) setSourceState("error"); });
+    return () => controller.abort();
+  }, [sourceRunId, sourceSpanId, historical]);
   async function perform(operation: () => Promise<void>) { if (busy) return; setBusy(true); setError(""); try { await operation(); } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not update the dataset."); } finally { setBusy(false); } }
   function addCase() {
     setError("");
@@ -43,11 +54,13 @@ export function DatasetEditor({ revision, latestVersion, initialRunId, onSaved }
     {notice && <p role="status" className="text-xs text-[color:var(--rp-ink-soft)]">{notice}</p>}
     {!cases.length && <p className="text-xs text-[color:var(--rp-ink-soft)]">Add a captured example and explicit expectations to create your first regression case.</p>}
     <ol className="space-y-3">{cases.map((item, index) => <li key={item.id ?? index} className="space-y-2 border-b border-[color:var(--rp-border)] pb-3"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-medium">{item.name}</h3><div className="flex gap-1"><Button variant="ghost" size="sm" disabled={historical || busy} aria-label={`Edit case ${item.name}`} onClick={() => { setEditing(index); setCaseName(item.name); setSourceRunId(item.sourceRunId ?? ""); setSourceSpanId(item.sourceSpanId ?? ""); setSnapshot(null); setOverrideInput(item.input !== undefined); setInput(item.input ?? ""); setTags(item.tags?.join(", ") ?? ""); setRules(item.rules.map(ruleDraft)); }}>Edit</Button><Button variant="ghost" size="sm" disabled={historical || busy} aria-label={`Remove case ${item.name}`} onClick={() => { setCases(previous => previous.filter((_, at) => at !== index)); setDirty(true); setEditing(null); }}>Remove</Button></div></div><ul className="space-y-1 text-xs text-[color:var(--rp-ink-soft)]">{item.rules.map((rule, at) => <li className="break-words" key={at}>{ruleLabel(rule)}</li>)}</ul></li>)}</ol>
-    <fieldset disabled={busy || historical} className="space-y-4">
+    <fieldset id="new-case" disabled={busy || historical} className="scroll-mt-6 space-y-4">
       <h3 className="text-sm font-medium">{editing === null ? "Create a case" : "Edit case"}</h3>
       <Field label="Source run"><Select value={sourceRunId} onChange={event => { setSourceRunId(event.target.value); setSourceSpanId(""); setSnapshot(null); }}><option value="">Manual reference input</option>{sourceRunId && !runs.data?.some(run => run.id === sourceRunId) && <option value={sourceRunId}>Run from link</option>}{runs.data?.map(run => <option key={run.id} value={run.id}>{runDisplayName(run)}</option>)}</Select></Field>
       {runs.isError && <p className="text-xs text-[color:var(--rp-danger)]">Captured run choices could not load.</p>}
       {sourceRunId && <><ResponseSpanSelect runId={sourceRunId} value={sourceSpanId} onChange={value => { setSourceSpanId(value); setSnapshot(null); }} /><Button variant="outline" onClick={() => void perform(async () => { setSnapshot(await evaluationsApi.snapshot(sourceRunId, sourceSpanId || undefined)); })}>Preview source</Button></>}
+      {sourceRunId && !snapshot && sourceState === "loading" && <p role="status" className="text-xs text-[color:var(--rp-ink-soft)]">Loading the source run…</p>}
+      {sourceRunId && !snapshot && sourceState === "error" && <p role="alert" className="text-xs text-[color:var(--rp-danger)]">The source run could not be loaded. Use Preview source to try again.</p>}
       {snapshot && <SnapshotPreview snapshot={snapshot} />}
       <Field label="Case name"><Input value={caseName} onChange={event => setCaseName(event.target.value)} maxLength={128} placeholder="Checkout result" /></Field>
       <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={overrideInput} onChange={event => setOverrideInput(event.target.checked)} />Override reference input</label>
