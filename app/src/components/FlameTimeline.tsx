@@ -208,6 +208,14 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
   const [hovered, setHovered] = useState<{ entry: TimelineEntry; rect: DOMRect; trigger: HTMLElement } | null>(null);
   const dismissedFocusRef = useRef<HTMLElement | null>(null);
   const [hoveredLabelName, setHoveredLabelName] = useState<string | null>(null);
+  const rowsRef = useRef<HTMLDivElement>(null);
+  const axisRef = useRef<HTMLDivElement>(null);
+  const [overflow, setOverflow] = useState({ before: false, after: false });
+  const revealedErrorRef = useRef<string | null>(null);
+  const firstErrorId = useMemo(() => {
+    const drawn = new Set(vizSpans.map(span => span.id));
+    return [...spans].sort((a, b) => a.start_time_ms - b.start_time_ms).find(span => span.status === "ERROR" && drawn.has(span.id))?.id ?? null;
+  }, [spans, vizSpans]);
   const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const cancelTooltipDismiss = useCallback(() => {
@@ -226,6 +234,37 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
   }, [cancelTooltipDismiss]);
 
   useEffect(() => () => cancelTooltipDismiss(), [cancelTooltipDismiss]);
+
+  const measureOverflow = useCallback(() => {
+    const axis = axisRef.current;
+    if (!axis) return;
+    const max = axis.scrollWidth - axis.clientWidth;
+    setOverflow(prev => {
+      const next = { before: axis.scrollLeft > 1, after: max - axis.scrollLeft > 1 };
+      return prev.before === next.before && prev.after === next.after ? prev : next;
+    });
+  }, []);
+
+  // On a pane too narrow for the whole trace, the failure is what the reader
+  // came for: bring the first failed step into view once per failure.
+  useEffect(() => {
+    const axis = axisRef.current, rowsEl = rowsRef.current;
+    if (!axis || !rowsEl) return;
+    if (firstErrorId && revealedErrorRef.current !== firstErrorId) {
+      const marker = axis.querySelector<HTMLElement>(`[data-timeline-span-id="${CSS.escape(firstErrorId)}"]`);
+      if (marker) {
+        revealedErrorRef.current = firstErrorId;
+        if (axis.scrollWidth > axis.clientWidth) {
+          axis.scrollLeft = Math.max(0, marker.offsetLeft + marker.offsetWidth / 2 - axis.clientWidth / 2);
+        }
+        const top = marker.offsetTop, bottom = top + marker.offsetHeight;
+        if (bottom > rowsEl.scrollTop + rowsEl.clientHeight || top < rowsEl.scrollTop) {
+          rowsEl.scrollTop = Math.max(0, top - rowsEl.clientHeight / 2);
+        }
+      }
+    }
+    measureOverflow();
+  }, [containerW, compact, firstErrorId, layout, measureOverflow]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -313,8 +352,10 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
   const MIN_PX_PER_MS = 0.005;
   // Below this the chart scrolls horizontally rather than compressing every
   // short span to the same minimum-width blob, which destroys the duration
-  // signal the timeline exists to show (narrow panes, mobile, chat open).
-  const MIN_CHART_W = 480;
+  // signal the timeline exists to show (mobile). At 480 a tablet-width pane
+  // (about 467px of chart) overflowed by a few pixels, exactly where a run's
+  // final failure sits.
+  const MIN_CHART_W = 360;
   // Short spans must still read as bars, not uniform dots.
   const MIN_BAR_W = 3;
   const ERROR_MARKER_W = 14;
@@ -375,7 +416,7 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
       </div>}
 
       {containerW > 0 && (
-      <div role="region" aria-label="Trace timeline" tabIndex={0} className="max-h-80 max-[360px]:max-h-32" style={{ overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain" }}>
+      <div ref={rowsRef} role="region" aria-label="Trace timeline" tabIndex={0} className="max-h-80 max-[360px]:max-h-32" style={{ overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain" }}>
       <div style={{ display: "flex", height: totalH }}>
         <div style={{ width: labelW, flexShrink: 0 }}>
           {Array.from({ length: rowCount }, (_, row) => {
@@ -418,8 +459,13 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
         </div>
 
         {/* Chart area — explicit width + horizontal scroll for long runs */}
+        <div className="relative min-w-0 flex-1">
+        {overflow.before && <div aria-hidden="true" data-timeline-overflow="before" className="pointer-events-none absolute inset-y-0 left-0 z-[100000] w-6" style={{ background: "linear-gradient(to right, var(--rp-surface), transparent)" }} />}
+        {overflow.after && <div aria-hidden="true" data-timeline-overflow="after" className="pointer-events-none absolute inset-y-0 right-0 z-[100000] w-6" style={{ background: "linear-gradient(to left, var(--rp-surface), transparent)" }} />}
         <div
-          className="min-w-0 flex-1"
+          ref={axisRef}
+          onScroll={measureOverflow}
+          className="h-full min-w-0"
           role="region"
           aria-label="Trace time axis"
           tabIndex={0}
@@ -540,6 +586,7 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
               </button>
             );
           })}
+        </div>
         </div>
         </div>
       </div>
