@@ -36,7 +36,8 @@ test("hit snippets redact complete evidence before cutting a secret at the excer
   const range=page.items[0].input.highlights[0]; expect(page.items[0].input.text.slice(range.start,range.end)).toBe("needle");
   expect(page.items[0].output.state).toBe("unavailable");
   for(const row of page.items) { expect(Buffer.byteLength(JSON.stringify(row))).toBeLessThanOrEqual(4096); expect(row.input.text.length).toBeLessThanOrEqual(512); }
-  expect(JSON.stringify(await searchRuns({q:"needle"}))).not.toContain("needle");
+  const runs=JSON.stringify(await searchRuns({q:"needle"}));
+  expect(runs).toContain("needle"); expect(runs).not.toContain(synthetic); expect(runs).not.toContain("sk-proj-");
 });
 
 test("oversized complete fields are unavailable and never contribute a partial secret",async()=>{

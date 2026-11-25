@@ -10,6 +10,9 @@ export interface RunSearchWork {
   deadline: number;
   cancellation: SharedArrayBuffer;
   cursorKey?: string;
+  /** Rows carry `match_rank` (kept in the cursor) and a raw `match_json` window replaced by the caller. */
+  ranked: boolean;
+  matchBytes: number;
 }
 
 // Keep this function self-contained: its compiled JavaScript is also the worker
@@ -25,8 +28,9 @@ export async function runSearchWorker(): Promise<void> {
     if (Atomics.load(cancellation, 0)) throw new Error("Search cancelled");
     if (Date.now() >= work.deadline) throw new Error("Search timed out; narrow the query or filters");
   };
+  const ranks = new Map<string, number>();
   const cursorFor = (row: RunSearchSummary) => {
-    const cursor = Buffer.from(JSON.stringify({ v: work.cursorKey ? 2 : 1, startedAt: row.started_at, id: row.id, ...(work.cursorKey ? { key: work.cursorKey } : {}) })).toString("base64url");
+    const cursor = Buffer.from(JSON.stringify({ v: work.cursorKey ? 2 : 1, startedAt: row.started_at, id: row.id, ...(work.cursorKey ? { key: work.cursorKey } : {}), ...(work.ranked ? { rank: ranks.get(row.id) ?? 0 } : {}) })).toString("base64url");
     if (cursor.length > 4096) throw new Error("Run identity exceeds the search cursor byte limit");
     return cursor;
   };
@@ -38,11 +42,14 @@ export async function runSearchWorker(): Promise<void> {
     let hasMore = false;
     for (const value of db.query(work.sql).iterate(...work.params)) {
       checkDeadline();
-      const row = value as RunSearchSummary;
+      const { match_rank: rank, ...row } = value as RunSearchSummary & { match_rank?: number; match_json?: string | null };
       if (runs.length === work.limit) { hasMore = true; break; }
       if (!row.id || row.id.length > 1024 || row.id.includes("\0") || !Number.isFinite(row.started_at)) throw new Error("Run identity cannot be represented by a search cursor");
+      if (work.ranked) ranks.set(row.id, Number(rank) || 0);
       const candidate: RunSearchResult = { runs: [...runs, row], nextCursor: cursorFor(row), hasMore: true, elapsedMs: Date.now() - work.started };
-      if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > work.maxBytes - 32) {
+      // The raw match window is replaced by a match object of at most matchBytes.
+      const size = Buffer.byteLength(JSON.stringify(candidate, (key, item) => key === "match_json" ? undefined : item), "utf8") + (work.ranked ? (runs.length + 1) * work.matchBytes : 0);
+      if (size > work.maxBytes - 32) {
         if (!runs.length) throw new Error("A run summary exceeds the search response byte limit");
         hasMore = true;
         break;
