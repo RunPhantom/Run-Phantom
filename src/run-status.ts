@@ -26,6 +26,8 @@ export interface RunStatusEvidence {
   readonly tool_error_count?: number | null;
   /** The span that stands for the whole run errored. See `rootFailed`. */
   readonly root_failed?: number | boolean | null;
+  /** `replayOutcome(metadata)` precomputed by a payload that omits metadata, such as search rows. */
+  readonly replay_outcome?: "failed" | "cancelled" | null;
 }
 
 export interface RunStatusSummary {
@@ -79,7 +81,7 @@ export function replayOutcome(run: { metadata?: string | null }): "failed" | "ca
   if (!run.metadata) return null;
   try {
     const error = JSON.parse(run.metadata)?.replay?.error;
-    if (!error) return null;
+    if (!error || typeof error !== "object" || Array.isArray(error)) return null;
     return error.code === "replay_cancelled" ? "cancelled" : "failed";
   } catch {
     return null;
@@ -97,7 +99,7 @@ export function deriveRunStatus(run: RunStatusEvidence, now: number = Date.now()
   const errorCount = count(run.error_count);
   const toolErrorCount = Math.min(count(run.tool_error_count), errorCount);
   const summary = (status: RunStatus, label: string, detail: string): RunStatusSummary => ({ status, label, detail, errorCount, toolErrorCount });
-  const outcome = replayOutcome(run);
+  const outcome = run.replay_outcome ?? replayOutcome(run);
   if (outcome === "cancelled") return summary("cancelled", "Run cancelled", "The replay was cancelled before it finished.");
   if (outcome === "failed") return summary("failed", "Run failed", "The replay failed before it recorded any spans.");
   if (run.capture_completion === "unavailable") return summary("unknown", "Completion unavailable", "This capture cannot show whether the run finished.");

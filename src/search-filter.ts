@@ -2,6 +2,7 @@ import { parseJsonEvidence } from "./evaluations/json-evidence";
 import { REPORTED_COST_ALIASES } from "./evaluations/snapshot";
 import { hasDuplicateJsonKeys } from "./json-keys";
 import { unsupportedTagCarrierSql } from "./captured-tags";
+import { RUN_STATUS_FILTER_VALUES, runStatusFilterSql, runStatusSql } from "./run-status-sql";
 import { SEARCH_FILTER_LIMITS, SEARCH_FILTER_FIELDS, type SearchFilterField, type SearchFilterOperator, type SearchFilterClause, type SearchFilter } from "./search-protocol";
 export { SEARCH_FILTER_LIMITS, SEARCH_FILTER_FIELDS } from "./search-protocol";
 export type { SearchFilterField, SearchFilterOperator, SearchFilterClause, SearchFilter } from "./search-protocol";
@@ -53,7 +54,7 @@ export function parseSearchFilter(value: unknown): SearchFilter {
       if (typeof clause.value !== "number" || !Number.isFinite(clause.value) || clause.value < 0 || clause.value > Number.MAX_SAFE_INTEGER) return invalid();
     } else {
       if (typeof clause.value !== "string" || !clause.value || clause.value.length > SEARCH_FILTER_LIMITS.valueChars || Buffer.byteLength(clause.value) > SEARCH_FILTER_LIMITS.valueBytes || Array.from(clause.value).some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) return invalid();
-      if (field === "status" && !["running", "completed", "failed"].includes(clause.value)) return invalid();
+      if (field === "status" && !RUN_STATUS_FILTER_VALUES.includes(clause.value)) return invalid();
     }
     clauses.push({ field, op: clause.op as SearchFilterOperator, value: clause.value as string | number });
   }
@@ -95,12 +96,14 @@ export function compileSearchFilter(filter: SearchFilter, scope: "local" | "team
     return `WHEN json_type(${checkedAttrs},${jsonPath}) IS NOT NULL THEN json_extract(${checkedAttrs},${jsonPath})`;
   });
   const cost = `(CASE ${costCases.join(" ")} END)`;
-  const failed = "EXISTS (SELECT 1 FROM spans fs WHERE fs.run_id=r.id AND fs.status='ERROR')";
-  const finished = "(EXISTS (SELECT 1 FROM spans rs WHERE rs.run_id=r.id AND rs.parent_span_id IS NULL) AND NOT EXISTS (SELECT 1 FROM spans rs WHERE rs.run_id=r.id AND rs.parent_span_id IS NULL AND (rs.status IS NULL OR rs.status NOT IN ('OK','ERROR'))))";
-  const status = scope === "team" ? "r.status" : `(CASE WHEN ${failed} THEN 'failed' WHEN ${finished} THEN 'completed' ELSE 'running' END)`;
   for (const clause of checked.all) {
     const op = operators[clause.op];
-    if (clause.field === "status") { runClauses.push(`${status} ${op} ?`); runParams.push(clause.value); }
+    // Team runs store their own coarse running/completed/failed status.
+    if (clause.field === "status" && scope === "team") { runClauses.push(`r.status ${op} ?`); runParams.push(clause.value); }
+    else if (clause.field === "status") {
+      const match = runStatusFilterSql(runStatusSql("r").status, clause.value as string, clause.op as "eq" | "ne");
+      runClauses.push(match.sql); runParams.push(...match.params);
+    }
     else if (clause.field === "model" || clause.field === "provider") {
       spanClauses.push(`s.${clause.field} IS NOT NULL AND s.${clause.field} ${op} ?`); spanParams.push(clause.value);
     } else if (clause.field === "tag") {

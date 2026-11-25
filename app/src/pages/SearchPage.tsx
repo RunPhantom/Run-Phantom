@@ -16,6 +16,7 @@ import { Eyebrow } from "@/components/ui/typography";
 import { useScrollRestoration } from "../hooks/use-scroll-restoration";
 import { safeDecodeParam } from "../utils/helpers";
 import { tracePath } from "../utils/navigation";
+import { STATUS_FILTER_OPTIONS } from "../utils/search-state";
 import { useIsMobile } from "../hooks/use-mobile";
 
 const PAGE_SIZE = 50;
@@ -256,9 +257,7 @@ export function SearchPage() {
               <span className="rp-field-label">Status</span>
               <Select value={status} onChange={(event) => updateFilter("status", event.target.value)} className="text-[13px]">
                 <option value="">All statuses</option>
-                <option value="running">Running</option>
-                <option value="completed">Completed</option>
-                <option value="failed">Failed</option>
+                {STATUS_FILTER_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
               </Select>
             </label>
             <div className="grid grid-cols-2 gap-2">

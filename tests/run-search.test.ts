@@ -8,6 +8,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { closeDb, clearAll, getDrizzleDb } from "../src/db";
 import { searchRuns, RUN_SEARCH_LIMITS, _runSearchInternal } from "../src/run-search";
+import { deriveRunStatus } from "../src/run-status";
 import { createServer } from "../src/server";
 import { runMcpServer } from "../src/mcp/index";
 
@@ -53,7 +54,7 @@ describe("full-store run search", () => {
     const result = await searchRuns({ q: "elusive needle" });
     expect(result.runs.map(r => r.id)).toEqual(["old-match"]);
     expect(result).toMatchObject({ hasMore: false, nextCursor: null });
-    expect(result.runs[0]).toMatchObject({ metadata: null, status: "completed", span_count: 1 });
+    expect(result.runs[0]).toMatchObject({ metadata: null, status: "complete", span_count: 1 });
     expect(JSON.stringify(result)).not.toContain("elusive needle");
     expect(JSON.stringify(result)).not.toContain("do not serialize");
     expect((await searchRuns()).runs).toHaveLength(50);
@@ -82,14 +83,41 @@ describe("full-store run search", () => {
     run("completed"); span("completed", { model: "model-a", provider: "provider-a" });
     run("failed"); span("failed", { status: "ERROR", model: "model-b", provider: "provider-b" });
     run("running"); span("running", { status: "UNSET" });
+    getDrizzleDb().$client.query("UPDATE runs SET last_updated_at=? WHERE id='running'").run(Date.now());
     run("child-failure"); span("child-failure"); span("child-failure", { id: "child", parent: "root", status: "ERROR" });
-    expect((await searchRuns({ status: "completed" })).runs.map(r => r.id)).toEqual(["completed"]);
-    expect((await searchRuns({ status: "failed" })).runs.map(r => r.id)).toEqual(["failed", "child-failure"]);
+    expect((await searchRuns({ status: "completed" })).runs.map(r => r.id)).toEqual(["completed", "child-failure"]);
+    expect((await searchRuns({ status: "failed" })).runs.map(r => r.id)).toEqual(["failed"]);
     expect((await searchRuns({ status: "running" })).runs.map(r => r.id)).toEqual(["running"]);
     expect((await searchRuns({ model: "model-a", provider: "provider-a", status: "completed" })).runs.map(r => r.id)).toEqual(["completed"]);
     expect((await searchRuns({ model: "model" })).runs).toEqual([]);
     span("completed", { id: "another-model", model: "model-b", provider: "provider-b" });
     expect((await searchRuns({ model: "model-a", provider: "provider-b" })).runs).toEqual([]);
+  });
+
+  test("status uses the shared run status: one tool error under an OK agent root is completed, not failed", async () => {
+    const db = getDrizzleDb().$client;
+    const typed = (runId: string, id: string, type: string, status: string, parent: string | null = null) =>
+      db.query("INSERT INTO spans(run_id,id,parent_span_id,name,span_type,status,start_time_ms) VALUES(?,?,?,?,?,?,1)").run(runId, id, parent, id, type, status);
+    run("tool-error", 400); typed("tool-error", "root", "AGENT_ROOT", "OK"); typed("tool-error", "tool", "TOOL_CALL", "ERROR", "root");
+    run("root-error", 300); typed("root-error", "root", "AGENT_ROOT", "ERROR"); typed("root-error", "tool", "TOOL_CALL", "OK", "root");
+    run("stalled", 200); typed("stalled", "tool", "TOOL_CALL", "OK", "root");
+    run("replay-failed", 100, "replay", JSON.stringify({ replay: { error: { code: "provider_error", message: "secret detail" } } }));
+    const all = new Map((await searchRuns({})).runs.map(row => [row.id, row]));
+    expect(all.get("tool-error")).toMatchObject({ status: "completed_with_errors", root_failed: 0, error_count: 1, tool_error_count: 1 });
+    expect(all.get("root-error")).toMatchObject({ status: "failed", root_failed: 1 });
+    expect(all.get("stalled")).toMatchObject({ status: "interrupted" });
+    expect(all.get("replay-failed")).toMatchObject({ status: "failed", replay_outcome: "failed", metadata: null });
+    expect(JSON.stringify([...all.values()])).not.toContain("secret detail");
+    for (const row of all.values()) expect(deriveRunStatus(row).status).toBe(row.status);
+    const ids = async (status: string) => (await searchRuns({ status })).runs.map(r => r.id);
+    expect(await ids("failed")).toEqual(["root-error", "replay-failed"]);
+    expect(await ids("completed")).toEqual(["tool-error"]);
+    expect(await ids("completed_with_errors")).toEqual(["tool-error"]);
+    expect(await ids("interrupted")).toEqual(["stalled"]);
+    expect(await ids("running")).toEqual([]);
+    const typedFilter = (value: string, op = "eq") => searchRuns({ filter: { version: 1, all: [{ field: "status", op, value }] } }).then(result => result.runs.map(r => r.id));
+    expect(await typedFilter("failed")).toEqual(["root-error", "replay-failed"]);
+    expect(await typedFilter("completed", "ne")).toEqual(["root-error", "stalled", "replay-failed"]);
   });
 
   test("keyset pages preserve timestamp ties without duplication and report exhaustion", async () => {
