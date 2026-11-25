@@ -3,6 +3,7 @@ import { parseJsonEvidence } from "../evaluations/json-evidence";
 import { calculateCost } from "./calculator";
 import { TOKEN_CATEGORIES, type FrozenRateRevision, type TokenCategory } from "./protocol";
 import { freezeRateRevision, NOMINAL_CATALOGUE_PROVIDER, NOMINAL_CATALOGUE_TIER, NOMINAL_CATALOGUE_URL, selectRateRevision } from "./rates";
+import { estimateListPriceCost, resolveModelIdentity } from "./list-prices";
 import { normalizeUsage } from "./usage";
 
 export const COST_ANALYTICS_VERSION = "runphantom-cost-analytics/1" as const;
@@ -22,7 +23,11 @@ export interface CostAnalyticsRequest {
   readonly from: number;
   readonly to: number;
   readonly bucket: "hour" | "day";
-  readonly estimateMode: "captured" | "nominal-input-output";
+  /**
+   * "list-prices" prices input and output with the bundled, dated table in
+   * list-prices.ts; the request must declare no rates.
+   */
+  readonly estimateMode: "captured" | "nominal-input-output" | "list-prices";
   readonly rates: readonly FrozenRateRevision[];
 }
 /** Storage adapters supply only this projection, never prompts, responses or credential context. */
@@ -104,7 +109,7 @@ export interface CostAnalyticsReport extends CostAnalytics {
   readonly asOf: number;
   readonly scope: { readonly kind: "local" | "team"; readonly projectId: string };
   readonly sourceRevision: string;
-  readonly rateAuthority: "request-declared";
+  readonly rateAuthority: "request-declared" | "bundled-list-prices";
 }
 const hasOwn = (value: Record<string, unknown>, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
 
@@ -120,8 +125,8 @@ export function parseCostAnalyticsRequest(value: unknown): CostAnalyticsRequest 
     || typeof item.from !== "number" || !Number.isSafeInteger(item.from) || item.from < 0
     || typeof item.to !== "number" || !Number.isSafeInteger(item.to) || item.to <= item.from || item.to > 8_640_000_000_000_000
     || item.to - item.from > ANALYTICS_LIMITS.windowMs
-    || item.bucket !== "hour" && item.bucket !== "day" || item.estimateMode !== "captured" && item.estimateMode !== "nominal-input-output"
-    || !Array.isArray(item.rates) || item.rates.length > ANALYTICS_LIMITS.rates) throw invalid();
+    || item.bucket !== "hour" && item.bucket !== "day" || item.estimateMode !== "captured" && item.estimateMode !== "nominal-input-output" && item.estimateMode !== "list-prices"
+    || !Array.isArray(item.rates) || item.rates.length > ANALYTICS_LIMITS.rates || item.estimateMode === "list-prices" && item.rates.length) throw invalid();
   const rates: FrozenRateRevision[] = [];
   try {
     for (let index = 0; index < item.rates.length; index++) {
@@ -171,7 +176,8 @@ function attributes(span: AnalyticsSpan): { values: Record<string, unknown>; una
     return { values: object(parseJsonEvidence(span.attributes)), unavailable: false };
   } catch { return { values: {}, unavailable: true }; }
 }
-function reported(values: Record<string, unknown>, unavailable: boolean): { value: number | null; reasons: string[] } {
+/** Provider- or exporter-reported USD cost captured on a span; a captured cost always wins over any estimate. */
+export function reportedCost(values: Record<string, unknown>, unavailable = false): { value: number | null; reasons: string[] } {
   if (unavailable) return { value: null, reasons: ["attributes_unavailable"] };
   if (hasOwn(values, "runphantom.cost.currency") && values["runphantom.cost.currency"] !== "USD") return { value: null, reasons: ["reported_currency_unavailable"] };
   const observed = REPORTED_COST_KEYS.filter(key => hasOwn(values, key)).map(key => values[key]);
@@ -212,6 +218,7 @@ export function aggregateCostAnalytics(spans: readonly AnalyticsSpan[], input: C
   const groups = { byModel: new Map<string | null, MutablePopulation>(), byProvider: new Map<string | null, MutablePopulation>(), byProject: new Map<string | null, MutablePopulation>(), byTime: new Map<string | null, MutablePopulation>() };
   const counts = { selectedGenerations: 0, nestedExcluded: 0, ancestryUnavailable: 0, untimedGenerations: 0, outsideWindow: 0, acquiredSpans: spans.length };
   let groupCount = 0;
+  const listRates = new Map<string, FrozenRateRevision>();
   for (const span of spans) {
     if (span.kind !== "LLM_GENERATION") continue;
     const timed = typeof span.startedAt === "number" && Number.isFinite(span.startedAt) && span.startedAt >= 0 && span.startedAt <= 8_640_000_000_000_000;
@@ -227,13 +234,24 @@ export function aggregateCostAnalytics(spans: readonly AnalyticsSpan[], input: C
     if (!OUTPUT_KEYS.some(key => hasOwn(values, key)) && span.outputTokens !== null) values["gen_ai.usage.output_tokens"] = span.outputTokens;
     if (captured.unavailable) values["runphantom.usage.unit"] = "unavailable";
     const usage = normalizeUsage(values, span.provider);
-    const quoteUsage = request.estimateMode === "nominal-input-output" ? normalizeUsage({
-      "gen_ai.response.model": usage.model, "runphantom.usage.tier": NOMINAL_CATALOGUE_TIER,
-      "gen_ai.usage.input_tokens": usage.categories.input.count, "gen_ai.usage.output_tokens": usage.categories.output.count,
-    }, NOMINAL_CATALOGUE_PROVIDER) : usage;
-    const rate = selectRateRevision(quoteUsage, request.rates);
-    const estimate = rate ? calculateCost(quoteUsage, rate) : null;
-    const capturedCost = reported(values, captured.unavailable);
+    let estimate: { totalUsd: number | null; reasons: readonly string[] } | null;
+    if (request.estimateMode === "list-prices") {
+      const quote = estimateListPriceCost({ model: usage.model, provider: usage.provider, inputTokens: usage.categories.input.count, outputTokens: usage.categories.output.count,
+        cacheReadTokens: usage.categories.cache_read.count, cacheWriteTokens: usage.categories.cache_write.count, at: timed ? span.startedAt : null });
+      if (quote.kind === "estimated") listRates.set(quote.revision.model, quote.revision);
+      estimate = quote.kind === "estimated" ? { totalUsd: quote.totalUsd, reasons: [] } : { totalUsd: null, reasons: [quote.reason === "model_unpriced" ? "rate_identity_unavailable" : quote.reason] };
+    } else {
+      const quoteModel = request.estimateMode === "nominal-input-output" && usage.model !== null
+        ? resolveModelIdentity(usage.model, identity => request.rates.some(rate => [rate, ...rate.aliases].some(item => item.model === identity)) ? [identity] : []) ?? usage.model
+        : usage.model;
+      const quoteUsage = request.estimateMode === "nominal-input-output" ? normalizeUsage({
+        "gen_ai.response.model": quoteModel, "runphantom.usage.tier": NOMINAL_CATALOGUE_TIER,
+        "gen_ai.usage.input_tokens": usage.categories.input.count, "gen_ai.usage.output_tokens": usage.categories.output.count,
+      }, NOMINAL_CATALOGUE_PROVIDER) : usage;
+      const rate = selectRateRevision(quoteUsage, request.rates);
+      estimate = rate ? calculateCost(quoteUsage, rate) : null;
+    }
+    const capturedCost = reportedCost(values, captured.unavailable);
     const loss = !timed ? ["timestamp_unavailable"] : structure === "unavailable" ? ["ancestry_unavailable"] : [];
     // An untimed capture might belong inside the window; retain it in the
     // unavailable denominator so timed subtotals never certify full coverage.
@@ -255,5 +273,5 @@ export function aggregateCostAnalytics(spans: readonly AnalyticsSpan[], input: C
   }
   const finishGroups = (items: Map<string | null, MutablePopulation>): readonly AnalyticsGroup[] => Object.freeze([...items].sort(([a], [b]) => a === null ? 1 : b === null ? -1 : a < b ? -1 : a > b ? 1 : 0).map(([identity, item]) => Object.freeze({ identity, ...finish(item) })));
   return Object.freeze({ ...finish(total), version: COST_ANALYTICS_VERSION, currency: "USD", window: Object.freeze({ from: request.from, to: request.to, bucket: request.bucket, timezone: "UTC", field: "generationStartedAt" }),
-    estimateMode: request.estimateMode, population: Object.freeze(counts), untimed: finish(untimed), byModel: finishGroups(groups.byModel), byProvider: finishGroups(groups.byProvider), byProject: finishGroups(groups.byProject), byTime: finishGroups(groups.byTime), rateRevisions: request.rates });
+    estimateMode: request.estimateMode, population: Object.freeze(counts), untimed: finish(untimed), byModel: finishGroups(groups.byModel), byProvider: finishGroups(groups.byProvider), byProject: finishGroups(groups.byProject), byTime: finishGroups(groups.byTime), rateRevisions: request.estimateMode === "list-prices" ? Object.freeze([...listRates.values()].sort((a, b) => a.model < b.model ? -1 : a.model > b.model ? 1 : 0)) : request.rates });
 }
