@@ -897,6 +897,11 @@ html[data-nav="key"] {
   color: var(--rp-ink);
   overflow-wrap: anywhere;
 }
+/* Streamdown lists use list-inside, which puts the marker of a loose item
+   (an item wrapping a <p>) on its own line above the text. Hang markers
+   outside instead; its [li_&]:pl-6 nesting class is not generated here. */
+.streamdown ol, .streamdown ul { list-style-position: outside !important; padding-left: 1.5em !important; }
+.streamdown li > p { margin-top: 0 !important; margin-bottom: 0 !important; }
 /* Tables stay inside the markdown container and scroll when they need width. */
 .streamdown hr { opacity: 0.35 !important; }
 .streamdown table { width: max-content !important; min-width: 100% !important; max-width: none !important; border: none !important; background: var(--rp-ink-a02) !important; }
