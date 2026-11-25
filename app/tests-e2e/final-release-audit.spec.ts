@@ -253,7 +253,7 @@ test("release audit: mobile search uses a list-to-detail flow", async ({ page, r
   await seedRunPhantomFixtures(runPhantom.url);
 
   await page.goto(`${runPhantom.url}/search`);
-  const searchField = page.getByPlaceholder("Title, user or run ID");
+  const searchField = page.getByPlaceholder("Errors, tools or any text");
   await expect(searchField).toBeVisible({ timeout: 10_000 });
   await page.locator(`[data-run-id="${FIXTURE_PRIMARY_RUN_ID}"]`).click();
   await expect(page.getByRole("button", { name: "Back to search" })).toBeVisible();

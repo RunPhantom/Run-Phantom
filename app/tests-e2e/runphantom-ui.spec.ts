@@ -120,7 +120,7 @@ test("Run Phantom UI: local search filters seeded runs", async ({ page, runPhant
   await page.goto(`${runPhantom.url}/search`);
   await expectRunPhantomBranding(page);
 
-  const searchField = page.getByPlaceholder("Title, user or run ID");
+  const searchField = page.getByPlaceholder("Errors, tools or any text");
   await expect(page.locator(`[data-run-id="${FIXTURE_PRIMARY_RUN_ID}"]`)).toBeVisible({ timeout: 10_000 });
 
   await searchField.fill("definitely-not-a-real-event-name-xyz");

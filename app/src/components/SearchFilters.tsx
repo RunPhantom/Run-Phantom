@@ -7,9 +7,13 @@ import { canonicalSearchQuery, FILTER_FIELDS, FILTER_OPERATORS, STATUS_FILTER_OP
 
 interface Props {
   query: string; onChange: (value:URLSearchParams)=>void; scopeKey: string; team?:boolean;
+  /** Bump after the page itself records a search, so the recent list re-reads storage. */
+  historyVersion?: number;
+  /** Hide the result-type chooser where the page offers its own. */
+  showResultType?: boolean;
   suggestions: (field:"model"|"provider"|"tag",prefix:string,signal:AbortSignal)=>Promise<{values:string[]}>;
 }
-export function SearchFilters({query,onChange,scopeKey,team=false,suggestions}:Props) {
+export function SearchFilters({query,onChange,scopeKey,team=false,suggestions,historyVersion=0,showResultType=true}:Props) {
   const [open,setOpen]=useState(false), [field,setField]=useState<SearchFilterField>("model"), [operator,setOperator]=useState<keyof typeof FILTER_OPERATORS>("eq"), [value,setValue]=useState("");
   const [error,setError]=useState(""), [values,setValues]=useState<{key:string;values:string[]}>({key:"",values:[]}), [recent,setRecent]=useState<string[]>([]);
   const [journal,setJournal]=useState<{past:string[];future:string[]}>({past:[],future:[]});
@@ -34,6 +38,10 @@ export function SearchFilters({query,onChange,scopeKey,team=false,suggestions}:P
     // History belongs to one opaque profile/session/project/resource, not this component's route.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[scopeKey,team,scopeStamp]);
+  useEffect(()=>{
+    if(!historyVersion||!scopeKey)return;
+    try{setRecent(readSearchHistory(team?sessionStorage:localStorage,scopeKey));}catch{}
+  },[historyVersion,scopeKey,team]);
   useEffect(()=>{
     const denied=()=>{generation.current++;controller.current?.abort();setValues({key:"",values:[]});setRecent([]);setJournal({past:[],future:[]});};
     if(team)window.addEventListener("runphantom:search-denied",denied);
@@ -64,7 +72,7 @@ export function SearchFilters({query,onChange,scopeKey,team=false,suggestions}:P
   const linkButton="rp-ease min-h-8 text-left text-xs font-medium text-rp-blue hover:text-rp-blue-hover disabled:cursor-not-allowed disabled:text-rp-ink-faint";
   const resource=new URLSearchParams(query).get("resource")??"runs";
   return <section aria-label="Investigation filters" className="mt-4 min-w-0 border-t border-rp-line-muted pt-4 text-xs text-rp-ink">
-    <label className="grid gap-1.5"><span className="rp-field-label">Results</span><Select aria-label="Search result type" className={control} value={resource} onChange={event=>{const next=new URLSearchParams(query);if(event.target.value==="runs")next.delete("resource");else next.set("resource",event.target.value);onChange(next);}}><option value="runs">Run summaries</option><option value="span-hits">Matching spans</option></Select></label>
+    {showResultType&&<label className="grid gap-1.5"><span className="rp-field-label">Results</span><Select aria-label="Search result type" className={control} value={resource} onChange={event=>{const next=new URLSearchParams(query);if(event.target.value==="runs")next.delete("resource");else next.set("resource",event.target.value);onChange(next);}}><option value="runs">Runs</option><option value="span-hits">Matching steps</option></Select></label>}
     <button type="button" aria-expanded={open} onClick={()=>setOpen(!open)} className="rp-ease mt-3 flex min-h-8 w-full items-center justify-between gap-2 text-left text-xs font-medium text-rp-ink hover:text-rp-blue"><span>Advanced filters</span><ChevronDown aria-hidden="true" className={`size-3.5 text-rp-ink-muted transition-transform duration-250 ease-standard motion-reduce:transition-none ${open?"rotate-180":""}`}/></button>
     {open&&<div className="mt-2 grid min-w-0 animate-fade-rise gap-3" onKeyDown={event=>{if(event.key==="Enter"&&event.target instanceof HTMLInputElement){event.preventDefault();add();}}}>
       <div className="flex flex-wrap gap-1.5 empty:hidden" aria-label="Active typed filters">{filter?.all.map((clause,index)=><button type="button" key={JSON.stringify(clause)} onClick={()=>remove(index)} aria-label={`Remove ${FILTER_FIELDS.find(f=>f.value===clause.field)?.label} ${FILTER_OPERATORS[clause.op]} ${clause.value}`} className="rp-ease inline-flex max-w-full items-center gap-1.5 break-words rounded-sm border border-rp-wash-border bg-rp-wash px-2 py-1 text-left text-rp-blue hover:border-rp-blue">{FILTER_FIELDS.find(f=>f.value===clause.field)?.label} {FILTER_OPERATORS[clause.op]} <strong className="font-semibold">{clause.value}</strong><X aria-hidden="true" className="size-3 shrink-0"/></button>)}</div>
@@ -76,9 +84,10 @@ export function SearchFilters({query,onChange,scopeKey,team=false,suggestions}:P
       <p className="rp-field-hint">All span conditions match one captured step. Unavailable cost, duration or tags never prove zero or absence.</p>
       <div className="flex flex-wrap gap-x-4 gap-y-1"><button type="button" disabled={!ready||!journal.past.length} onClick={undo} className={linkButton}>Undo filters</button><button type="button" disabled={!ready||!journal.future.length} onClick={redo} className={linkButton}>Redo filters</button><button type="button" onClick={save} disabled={!ready||!safeSearchHistory(query)} className={linkButton}>Save search</button></div>
       {!safeSearchHistory(query)&&<p className="rp-field-hint">Queries containing credentials are excluded from recent searches.</p>}
-      {!!visibleRecent.length&&<p className="rp-eyebrow">Recent searches</p>}
-      <div aria-label="Recent searches" className="-mt-2 grid empty:hidden">{visibleRecent.map(item=>{const label=new URLSearchParams(item).get("q")||"Saved filters";return <button type="button" key={item} title={label} onClick={()=>apply(item)} className="rp-ease min-h-8 truncate rounded-control px-2 text-left text-xs text-rp-ink hover:bg-rp-row-hover hover:text-rp-blue">{label}</button>;})}</div>
-      {!!visibleRecent.length&&<button type="button" onClick={()=>{try{storage().removeItem(scopeKey);}catch{}setRecent([]);}} className={linkButton}>Clear recent searches</button>}
+    </div>}
+    {!!visibleRecent.length&&<div className="mt-4 border-t border-rp-line-muted pt-3">
+      <div className="flex items-center justify-between gap-2"><p className="rp-eyebrow">Recent searches</p><button type="button" onClick={()=>{try{storage().removeItem(scopeKey);}catch{}setRecent([]);}} className={linkButton} aria-label="Clear recent searches">Clear</button></div>
+      <div aria-label="Recent searches" className="mt-1 grid">{visibleRecent.map(item=>{const params=new URLSearchParams(item);const label=params.get("q")||"Saved filters";const extra=[params.get("status"),params.get("model"),params.get("provider"),params.get("filter")?"typed filters":null].filter(Boolean).join(" · ");return <button type="button" key={item} title={extra?`${label} · ${extra}`:label} onClick={()=>apply(item)} className="rp-ease flex min-h-8 min-w-0 items-baseline gap-2 rounded-control px-2 text-left text-13 text-rp-ink hover:bg-rp-row-hover hover:text-rp-blue"><span className="truncate">{label}</span>{extra&&<span className="shrink-0 truncate text-12 text-rp-ink-subtle">{extra}</span>}</button>;})}</div>
     </div>}
     {(error||!filter)&&<p role="alert" className="mt-3 break-words rounded-sm border border-rp-danger-border bg-rp-danger-soft px-3 py-2 text-xs leading-5 text-rp-danger">{error||"Typed filters are invalid. Clear all filters to continue."}</p>}
   </section>;
