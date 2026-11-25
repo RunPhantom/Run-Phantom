@@ -54,7 +54,7 @@ you can:
 
 - **Send a test span** to check that the connection works;
 - **Load sample runs** to explore the app with sample data that makes no
-  provider calls; sample runs are labelled **Sample** in the table;
+  provider calls; on desktop, the runs table labels them **Sample**;
 - copy the command that runs the bundled example agent (below).
 
 | Local service | Default address |
@@ -102,6 +102,9 @@ local daemon:
 ```bash
 export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:5947/v1/traces
 ```
+
+`runphantom-dev connect --print` prints the same address as
+`http://localhost:5947/v1/traces`; either host reaches the local daemon.
 
 It reads the OpenTelemetry GenAI and OpenInference conventions, so existing
 instrumentation works without a Run Phantom SDK. What a run shows depends on
@@ -164,7 +167,7 @@ choose columns, and save the current filters as a named view in the sidebar.
 Select runs to compare, export, add to a test set or delete. New runs stream in
 live.
 
-![Runs table listing support-agent and Playground runs across Gemini, Claude and GPT models with status, duration, tokens and cost](./screenshots/runs.png)
+![Runs table filtered to the support agent: complete runs, runs that finished with a tool error and failed runs on Gemini, Claude and GPT models, with duration, tokens, cost and errors](./screenshots/runs.png)
 
 ### Run detail
 
@@ -176,7 +179,7 @@ opens a resizable drawer with the error first, then input and output, tools,
 timing, usage, cost and every attribute. **Open in Playground** loads a captured
 model call into the Playground.
 
-![Run detail in the dark theme: a nested waterfall with a researcher sub-agent and the drawer for one of its model calls](./screenshots/run-detail-dark.png)
+![Run detail in the dark theme: a nested waterfall with a researcher sub-agent and the drawer for its first model call, showing the question it was given and the search_kb call it requested](./screenshots/run-detail-dark.png)
 
 ### Conversation and sub-agents
 
@@ -185,7 +188,7 @@ and the reply. A sub-agent appears as a card with its tool calls, duration,
 tokens and cost; open it to see what it was asked, the tools it used and its
 output. Turns that share a conversation id are grouped.
 
-![Conversation tab with a lookup_order tool call and an expanded researcher sub-agent card showing its search_kb calls and output](./screenshots/conversation-subagent.png)
+![Conversation tab with two turns of one conversation: a lookup_order tool call, a researcher sub-agent card with two tool calls, duration, tokens and cost, and the agent's replies](./screenshots/conversation-subagent.png)
 
 ### Playground
 
