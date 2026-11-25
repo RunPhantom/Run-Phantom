@@ -62,7 +62,8 @@ export interface OverviewLiveRun { runId: string; name: string; agent: string | 
 export interface Overview {
   version: typeof OVERVIEW_VERSION;
   asOf: number;
-  window: { selection: OverviewWindow; from: number; to: number; previousFrom: number; previousTo: number; bucketMs: number; tzOffsetMinutes: number; field: "startedAt" };
+  /** With `timeZone`, buckets start on local boundaries, so `bucketMs` is nominal: a day across a clock change lasts 23 or 25 hours. */
+  window: { selection: OverviewWindow; from: number; to: number; previousFrom: number; previousTo: number; bucketMs: number; tzOffsetMinutes: number; timeZone: string | null; field: "startedAt" };
   filters: { agent: string | null; model: string | null };
   /** Unreported model calls are estimated from the bundled list-price table (src/pricing/list-prices.ts). */
   pricing: { estimateMode: "list-prices"; rateCount: number; revision: string; asOf: string };

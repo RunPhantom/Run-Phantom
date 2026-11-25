@@ -20,8 +20,15 @@ export function localTzOffsetMinutes(date = new Date()): number {
   return Object.is(offset, -0) ? 0 : offset;
 }
 
+/** The browser's IANA zone, so buckets follow local midnight across clock changes; undefined when the runtime does not expose one. */
+export function localTimeZone(): string | undefined {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined; } catch { return undefined; }
+}
+
 export function getOverview(window: OverviewWindow, signal?: AbortSignal): Promise<Overview> {
   const params = new URLSearchParams({ window, tz_offset_minutes: String(localTzOffsetMinutes()) });
+  const timeZone = localTimeZone();
+  if (timeZone) params.set("tz", timeZone);
   return apiJson<Overview>(`/api/overview?${params}`, { signal });
 }
 

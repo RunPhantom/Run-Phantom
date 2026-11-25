@@ -33,7 +33,7 @@ export function sampleOverview(now: number): Overview {
   return {
     version: "runphantom-overview/1",
     asOf: now,
-    window: { selection: "24h", from, to: now, previousFrom: from - 24 * HOUR, previousTo: from, bucketMs: HOUR, tzOffsetMinutes: 0, field: "startedAt" },
+    window: { selection: "24h", from, to: now, previousFrom: from - 24 * HOUR, previousTo: from, bucketMs: HOUR, tzOffsetMinutes: 0, timeZone: null, field: "startedAt" },
     filters: { agent: null, model: null },
     pricing: { estimateMode: "list-prices", rateCount: 0, revision: "sample", asOf: new Date(now).toISOString().slice(0, 10) },
     kpis: {

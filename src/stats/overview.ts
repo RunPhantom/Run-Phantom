@@ -4,12 +4,13 @@ import { percentile, queryString, roundUsd, runAgent, runDisplayName, runUsesMod
 import { loadRunRows, runRowStatus, selectRunAggregates, type GenerationFact, type RunRow } from "./run-facts";
 import { AGENT_FILTER_CHARS } from "../run-agent";
 import { FINISHED_RUN_OUTCOMES, RUN_OUTCOMES, runOutcome, type RunOutcome } from "../run-status";
+import { bucketEdges, bucketIndex, isTimeZone, zoneOffsetMs, type BucketClock } from "./time-buckets";
 import { OVERVIEW_LIMITS, OVERVIEW_VERSION, OVERVIEW_WINDOWS, type CostKpi, type DurationKpi, type Kpi, type Overview, type OverviewAgentRow, type OverviewBucket, type OverviewFailingTool, type OverviewFailure, type OverviewGroupStats, type OverviewLiveRun, type OverviewModelRow, type OverviewWindow, type TokenKpi } from "./overview-types";
 
 export { OVERVIEW_LIMITS, OVERVIEW_VERSION, OVERVIEW_WINDOWS };
 export type { CostKpi, DurationKpi, Kpi, Overview, OverviewAgentRow, OverviewBucket, OverviewFailingTool, OverviewFailure, OverviewGroupStats, OverviewLiveRun, OverviewModelRow, OverviewWindow, TokenKpi };
 
-interface OverviewQuery { selection: OverviewWindow; agent?: string; model?: string; tzOffsetMinutes: number }
+interface OverviewQuery { selection: OverviewWindow; agent?: string; model?: string; tzOffsetMinutes: number; timeZone?: string }
 
 function parseOverviewQuery(query: Record<string, unknown>): OverviewQuery {
   const selection = (queryString(query, "window", 8) || "24h") as OverviewWindow;
@@ -18,7 +19,9 @@ function parseOverviewQuery(query: Record<string, unknown>): OverviewQuery {
   if (rawOffset && !/^-?\d{1,3}$/.test(rawOffset)) throw new StatsRequestError("tz_offset_minutes must be an integer from -840 to 840");
   const tzOffsetMinutes = rawOffset ? Number(rawOffset) : 0;
   if (!Number.isInteger(tzOffsetMinutes) || tzOffsetMinutes < -840 || tzOffsetMinutes > 840) throw new StatsRequestError("tz_offset_minutes must be an integer from -840 to 840");
-  return { selection, agent: queryString(query, "agent", AGENT_FILTER_CHARS) || undefined, model: queryString(query, "model") || undefined, tzOffsetMinutes };
+  const timeZone = queryString(query, "tz", 64) || undefined;
+  if (timeZone !== undefined && !isTimeZone(timeZone)) throw new StatsRequestError("tz must be an IANA time zone such as Europe/London");
+  return { selection, agent: queryString(query, "agent", AGENT_FILTER_CHARS) || undefined, model: queryString(query, "model") || undefined, tzOffsetMinutes, timeZone };
 }
 
 type OutcomeRow = RunRow & { readonly outcome: RunOutcome };
@@ -86,14 +89,15 @@ export function computeOverview(db: Database, dbPath: string, rawQuery: Record<s
   const now_ = summarize(current, query.model), before = summarize(previous, query.model);
   const kpi = (value: number | null, prior: number | null): Kpi => ({ value, previous: prior });
 
-  const offsetMs = query.tzOffsetMinutes * 60_000;
-  const firstBucket = Math.floor((from + offsetMs) / bucketMs) * bucketMs - offsetMs;
+  const clock: BucketClock = query.timeZone ? { timeZone: query.timeZone } : { offsetMinutes: query.tzOffsetMinutes };
+  const edges = bucketEdges(from, to, bucketMs, clock);
   const buckets: Array<Omit<OverviewBucket, "costUsd"> & { costUsd: number; costKnownCalls: number; durations: number[] }> = [];
-  for (let start = firstBucket; start < to; start += bucketMs) {
-    buckets.push({ start, end: start + bucketMs, partial: start < from || start + bucketMs > to, runs: 0, finished: 0, failed: 0, completedWithErrors: 0, inputTokens: 0, outputTokens: 0, tokenUnknownCalls: 0, costUsd: 0, costKnownCalls: 0, costUnknownCalls: 0, durationP95Ms: null, durations: [] });
+  for (let index = 0; index < edges.length - 1; index++) {
+    const start = edges[index], end = edges[index + 1];
+    buckets.push({ start, end, partial: start < from || end > to, runs: 0, finished: 0, failed: 0, completedWithErrors: 0, inputTokens: 0, outputTokens: 0, tokenUnknownCalls: 0, costUsd: 0, costKnownCalls: 0, costUnknownCalls: 0, durationP95Ms: null, durations: [] });
   }
   for (const row of current) {
-    const bucket = buckets[Math.floor((row.started_at - firstBucket) / bucketMs)];
+    const bucket = buckets[bucketIndex(edges, row.started_at)];
     bucket.runs++;
     if (finished(row.outcome)) bucket.finished++;
     if (row.outcome === "failed") bucket.failed++;
@@ -165,7 +169,7 @@ export function computeOverview(db: Database, dbPath: string, rawQuery: Record<s
 
   return {
     version: OVERVIEW_VERSION, asOf: now,
-    window: { selection: query.selection, from, to, previousFrom, previousTo: from, bucketMs, tzOffsetMinutes: query.tzOffsetMinutes, field: "startedAt" },
+    window: { selection: query.selection, from, to, previousFrom, previousTo: from, bucketMs, tzOffsetMinutes: query.timeZone ? Math.round(zoneOffsetMs(query.timeZone, now) / 60_000) : query.tzOffsetMinutes, timeZone: query.timeZone ?? null, field: "startedAt" },
     filters: { agent: query.agent ?? null, model: query.model ?? null },
     pricing: { estimateMode: "list-prices", rateCount: LIST_PRICE_REVISIONS.length, revision: PRICE_TABLE_REVISION, asOf: PRICE_TABLE_AS_OF },
     kpis: {

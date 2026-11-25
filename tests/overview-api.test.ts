@@ -34,7 +34,7 @@ describe("GET /api/overview computation", () => {
   test("KPIs and previous-window values match the hand-counted fixture", () => {
     seedMetricsFixture(getDrizzleDb().$client);
     const result = overview();
-    expect(result.window).toEqual({ selection: "24h", from: FIXTURE_NOW - 24 * HOUR, to: FIXTURE_NOW, previousFrom: FIXTURE_NOW - 48 * HOUR, previousTo: FIXTURE_NOW - 24 * HOUR, bucketMs: HOUR, tzOffsetMinutes: 0, field: "startedAt" });
+    expect(result.window).toEqual({ selection: "24h", from: FIXTURE_NOW - 24 * HOUR, to: FIXTURE_NOW, previousFrom: FIXTURE_NOW - 48 * HOUR, previousTo: FIXTURE_NOW - 24 * HOUR, bucketMs: HOUR, tzOffsetMinutes: 0, timeZone: null, field: "startedAt" });
     expect(result.pricing).toEqual({ estimateMode: "list-prices", rateCount: LIST_PRICE_REVISIONS.length, revision: "runphantom-list-prices/2026-11-25", asOf: "2026-11-25" });
     expect(result.kpis).toEqual({
       runs: { value: 5, previous: 2 },
@@ -108,6 +108,42 @@ describe("GET /api/overview computation", () => {
     expect(month.timeseries).toHaveLength(31);
     expect(month.timeseries[0].start).toBe(Date.UTC(2026, 11, 16) - 330 * 60_000);
     expect(month.kpis.runs).toEqual({ value: 8, previous: 0 });
+  });
+
+  test("an IANA time zone keeps day buckets on local midnight across a clock change", () => {
+    const now = Date.parse("2026-11-25T20:00:00Z");
+    const night = Date.parse("2026-10-28T07:30:00Z");
+    getDrizzleDb().$client.query("INSERT INTO runs(id,name,started_at,last_updated_at) VALUES('night','night',?,?)").run(night, night);
+    const zoned = overview({ window: "30d", tz: "America/Los_Angeles", tz_offset_minutes: "-480" }, now);
+    expect(zoned.window).toMatchObject({ timeZone: "America/Los_Angeles", tzOffsetMinutes: -480, bucketMs: 24 * HOUR });
+    expect(zoned.timeseries).toHaveLength(31);
+    expect(zoned.timeseries[0].start).toBe(Date.parse("2026-10-26T07:00:00Z"));
+    expect(zoned.timeseries.at(-1)!.start).toBe(Date.parse("2026-11-25T08:00:00Z"));
+    const counted = zoned.timeseries.find(bucket => bucket.runs === 1)!;
+    expect([counted.start, counted.end]).toEqual([Date.parse("2026-10-28T07:00:00Z"), Date.parse("2026-10-29T07:00:00Z")]);
+    const change = zoned.timeseries.find(bucket => bucket.start === Date.parse("2026-11-01T07:00:00Z"))!;
+    expect(change.end - change.start).toBe(25 * HOUR);
+    for (let index = 1; index < zoned.timeseries.length; index++) expect(zoned.timeseries[index].start).toBe(zoned.timeseries[index - 1].end);
+
+    const fixed = overview({ window: "30d", tz_offset_minutes: "-480" }, now);
+    expect(fixed.window.timeZone).toBeNull();
+    expect(fixed.timeseries.find(bucket => bucket.runs === 1)!.start).toBe(Date.parse("2026-10-27T08:00:00Z"));
+  });
+
+  test("zone buckets shorten across a spring change and follow half-hour offsets", () => {
+    const spring = overview({ window: "7d", tz: "Europe/London" }, Date.parse("2027-03-30T12:00:00Z")).timeseries;
+    const short = spring.find(bucket => bucket.start === Date.parse("2027-03-28T00:00:00Z"))!;
+    expect(short.end).toBe(Date.parse("2027-03-28T05:00:00Z"));
+    expect(spring.at(-1)!.start).toBe(Date.parse("2027-03-30T11:00:00Z"));
+    const kolkata = overview({ window: "24h", tz: "Asia/Kolkata" }, Date.parse("2027-01-15T12:00:00Z")).timeseries;
+    expect(kolkata).toHaveLength(25);
+    expect(kolkata[0].start).toBe(Date.parse("2027-01-14T11:30:00Z"));
+    expect(kolkata.every(bucket => bucket.end - bucket.start === HOUR)).toBe(true);
+  });
+
+  test("tz must name a real IANA zone", () => {
+    expect(() => overview({ tz: "Mars/Olympus_Mons" })).toThrow("tz must be an IANA time zone");
+    expect(() => overview({ tz: "../etc" })).toThrow("tz must be an IANA time zone");
   });
 
   test("models rank by calls, the measure the Home panel shows", () => {
