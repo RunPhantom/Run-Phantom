@@ -343,7 +343,9 @@ test("settings data shows where runs live, downloads a backup and deletes runs o
   await remove.click();
   await dialog.getByRole("button", { name: `Delete ${runs(before.runs)}`, exact: true }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(panel.getByRole("status").filter({ hasText: `Deleted ${runs(before.runs)} and their results.` })).toBeVisible();
+  const deleted = panel.getByRole("status").filter({ hasText: "Deleted all runs and their results." });
+  await expect(deleted).toBeVisible();
+  await expect(deleted).toBeFocused();
   const after = await (await page.request.get(`${local.url}/api/data`)).json() as { runs: number; savedRuns: number };
   expect(after).toMatchObject({ runs: 0, savedRuns: before.savedRuns });
   await expect(stored.getByRole("listitem").filter({ hasText: /^Runs/ })).toContainText("0");

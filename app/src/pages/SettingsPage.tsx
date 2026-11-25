@@ -52,7 +52,6 @@ const TABS: { id: Tab; label: string; eyebrow: string; description: string }[] =
 function hashTab(hash: string): Tab | null {
   if (hash === "#pricing" || hash === "#providers") return "keys";
   if (hash === "#data") return "debug";
-  if (hash === "#agents") return "agents";
   return null;
 }
 
@@ -701,13 +700,14 @@ function DataAndDebugSection() {
   const [reset, setReset] = useState(false);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const deleteButton = useRef<HTMLButtonElement>(null);
+  const noticeRef = useRef<HTMLParagraphElement>(null);
   const generation = useRef(0);
   const mounted = useRef(true);
 
   const load = useCallback(() => {
     const owner = ++generation.current;
     setSummaryError(null);
-    getDataSummary()
+    return getDataSummary()
       .then(next => { if (mounted.current && owner === generation.current) setSummary(next); })
       .catch(error => { if (mounted.current && owner === generation.current) setSummaryError(error instanceof Error ? error.message : "Local data details are unavailable."); });
   }, []);
@@ -732,12 +732,11 @@ function DataAndDebugSection() {
   }, []);
 
   const deleteAll = async () => {
-    const count = summary?.runs ?? 0;
     await clearRuns();
     await queryClient.invalidateQueries();
     window.dispatchEvent(new CustomEvent("runphantom:run-removed", { detail: { runIds: [] } }));
-    load();
-    setNotice(`Deleted ${plural(count, "run")} and their results. Saved runs and settings were kept.`);
+    setNotice("Deleted all runs and their results. Saved runs and settings were kept.");
+    await load();
   };
 
   const tiles: { label: string; value: string; detail: string }[] = summary ? [
@@ -797,12 +796,12 @@ function DataAndDebugSection() {
               <p className="text-[14px] font-medium text-rp-ink">Delete all runs</p>
               <p className="mt-1 text-[13px] leading-5 text-rp-ink-muted">Removes every captured run with its steps, notes, test sets, review queues and verification reports. Saved runs, prompts, keys and settings stay.</p>
             </div>
-            <Button ref={deleteButton} type="button" variant="destructive-outline" className="self-start" disabled={!summary || summary.runs === 0} title={summary?.runs === 0 ? "There are no runs to delete" : undefined} onClick={() => setConfirmOpen(true)}>
+            <Button ref={deleteButton} type="button" variant="destructive-outline" className="self-start" disabled={!summary || summary.runs === 0} title={summary?.runs === 0 ? "There are no runs to delete" : undefined} onClick={() => { void load(); setConfirmOpen(true); }}>
               <Trash2 aria-hidden="true" />Delete all runs…
             </Button>
           </div>
         </div>
-        {notice && <p role="status" className="settings-feedback mt-3">{notice}</p>}
+        {notice && <p ref={noticeRef} tabIndex={-1} role="status" className="settings-feedback mt-3 focus:outline-none focus-visible:ring-1 focus-visible:ring-rp-blue">{notice}</p>}
         <ConfirmDialog
           open={confirmOpen}
           onOpenChange={setConfirmOpen}
@@ -811,7 +810,7 @@ function DataAndDebugSection() {
           confirmLabel={`Delete ${plural(summary?.runs ?? 0, "run")}`}
           busyLabel="Deleting…"
           onConfirm={deleteAll}
-          returnFocus={() => deleteButton.current}
+          returnFocus={() => noticeRef.current ?? deleteButton.current}
         >
           <ul className="mt-4 space-y-1 rounded-sm border border-rp-line bg-rp-canvas p-3 text-[13px] text-rp-ink-soft">
             <li><span className="font-medium text-rp-ink">Deleted:</span> {plural(summary?.runs ?? 0, "run")}, {plural(summary?.steps ?? 0, "step")}, notes, test sets, review queues, verification reports.</li>
