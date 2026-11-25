@@ -69,9 +69,9 @@ describe("connect commands", () => {
     const [claude, codex, cursor] = codingAgentGuides({ port: 6540, runtime: "source" });
     const flat = (command: string) => command.replace(/ \\\n\s+/g, " ");
     expect(flat(claude.command)).toBe("RUNPHANTOM_PORT=6540 bun x runphantom-dev hooks install claude --global --cwd /path/to/your/project");
-    expect(flat(codex.command)).toBe("RUNPHANTOM_PORT=6540 bun x runphantom-dev hooks install codex --local --cwd /path/to/your/project --full --consent-full --port 6540");
+    expect(flat(codex.command)).toBe("chmod 700 ~/.runphantom && RUNPHANTOM_PORT=6540 bun x runphantom-dev hooks install codex --local --cwd /path/to/your/project --full --consent-full --port 6540");
     expect(flat(cursor.command)).toBe("RUNPHANTOM_PORT=6540 bun x runphantom-dev hooks install cursor --local --cwd /path/to/your/project");
-    expect(flat(codingAgentGuides({ port: 5947, runtime: "binary" })[1].command)).toBe("runphantom hooks install codex --local --cwd /path/to/your/project --full --consent-full");
+    expect(flat(codingAgentGuides({ port: 5947, runtime: "binary" })[1].command)).toBe("chmod 700 ~/.runphantom && runphantom hooks install codex --local --cwd /path/to/your/project --full --consent-full");
     expect(flat(claude.fullCapture!)).toContain("--local --cwd /path/to/your/project --full --consent-full");
   });
 

@@ -65,7 +65,7 @@ test("a test span goes through the OTLP route and arrives live as a run", async 
 
   const result = check.locator("[data-test-span-result]");
   await expect(result).toHaveAttribute("data-test-span-result", "arrived", { timeout: 10_000 });
-  await expect(result).toContainText(/Test span stored and shown live after \d+ ms\./);
+  await expect(result).toContainText(/Test span stored and shown live after \d+\sms\./);
   await expect.poll(() => runNames(runPhantom.url)).toContain("Connection test");
 
   await result.getByRole("link", { name: "Open the test run" }).click();

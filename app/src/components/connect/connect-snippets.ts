@@ -185,8 +185,8 @@ export function codingAgentGuides(service: Pick<LocalService, "port" | "runtime"
     {
       id: "codex",
       name: "Codex",
-      command: wrapCommand(cliCommand(service, `hooks install codex --local --cwd ${PROJECT} --full --consent-full${service.port === DEFAULT_LOCAL_PORT ? "" : ` --port ${service.port}`}`)),
-      then: "Open Codex in that project, run /hooks and trust the new hooks. Codex capture is per project and includes message content.",
+      command: wrapCommand(`chmod 700 ~/.runphantom && ${cliCommand(service, `hooks install codex --local --cwd ${PROJECT} --full --consent-full${service.port === DEFAULT_LOCAL_PORT ? "" : ` --port ${service.port}`}`)}`),
+      then: "Codex capture needs Run Phantom's state folder to be private, hence the chmod. Then open Codex in that project, run /hooks and trust the new hooks. Capture is per project and includes message content.",
     },
     {
       id: "cursor",

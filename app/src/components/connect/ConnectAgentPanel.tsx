@@ -144,7 +144,10 @@ function TabBody({ tab, service, compact }: { tab: ConnectTabId; service: LocalS
           ))}
           <Step index={guides.length + 1} title="Or let your agent instrument your app">
             <CodeBlock code={setupCommand(service)} label="Copy setup command" caption="Shell" />
-            <Hint>This adds the Run Phantom skills to your coding agents. Then type <Code>/instrument-agent</Code> in Claude Code, Codex or Cursor inside your project.</Hint>
+            <Hint>
+              This adds the Run Phantom skills to your coding agents. Then type <Code>/instrument-agent</Code> in Claude Code, Codex or Cursor inside your project.
+              {service.port !== DEFAULT_LOCAL_PORT && <> The skill assumes port {DEFAULT_LOCAL_PORT}, so give the agent the endpoint above.</>}
+            </Hint>
           </Step>
         </div>
       );
@@ -297,11 +300,13 @@ function TestSpanResult({ state }: { state: ReturnType<typeof useTestSpan>["stat
     return <p role="alert" className="mt-2 text-13 text-rp-danger" data-test-span-result="failed">The test span was not stored: {state.message}</p>;
   }
   return (
-    <p role="status" className="mt-2 flex flex-wrap items-center gap-x-2 text-13 text-rp-ink" data-test-span-result={state.phase}>
-      <span aria-hidden="true" className={cn("size-2 rounded-full", state.phase === "arrived" ? "bg-rp-mark-success" : "bg-rp-mark-warning")} />
-      {state.phase === "arrived"
-        ? <>Test span stored and shown live after <span className="font-mono">{state.ms} ms</span>.</>
-        : <>Test span stored, but no live update arrived. Reload if the run list looks stale.</>}
+    <p role="status" className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-13 leading-5 text-rp-ink" data-test-span-result={state.phase}>
+      <span aria-hidden="true" className={cn("size-2 shrink-0 translate-y-[-1px] rounded-full", state.phase === "arrived" ? "bg-rp-mark-success" : "bg-rp-mark-warning")} />
+      <span>
+        {state.phase === "arrived"
+          ? <>Test span stored and shown live after <span className="font-mono">{state.ms}&nbsp;ms</span>.</>
+          : <>Test span stored, but no live update arrived. Reload if the run list looks stale.</>}
+      </span>
       <Link to={runPath(state.traceId)} className="inline-flex items-center gap-1 font-medium text-rp-blue underline-offset-4 hover:underline">Open the test run<ArrowRight aria-hidden="true" className="size-3.5" /></Link>
     </p>
   );
