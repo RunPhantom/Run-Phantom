@@ -148,7 +148,7 @@ test("release audit: run detail is usable at a 390px viewport", async ({ page, r
     || backLabelBox!.x >= sidebarToggleBox!.x + sidebarToggleBox!.width + 4;
   expect(clearsToggle, "the back label must not sit under the sidebar trigger").toBe(true);
 
-  for (const name of ["Annotate", "Debug", "Download", "Save", "Replay", "More actions"]) {
+  for (const name of ["Save", "Debug", "Replay", "More actions"]) {
     const button = page.getByRole("button", { name, exact: true });
     await expect(button).toBeVisible();
     const box = await button.boundingBox();
@@ -508,6 +508,8 @@ test("release audit: timeline labels remain readable and replay options are name
   const moreActions = page.getByRole("button", { name: "More actions" });
   await moreActions.click();
   await expect(page.getByRole("menu", { name: "Run actions" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Annotate" })).toBeFocused();
+  await page.keyboard.press("End");
   await expect(page.getByRole("menuitem", { name: "Delete run" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu", { name: "Run actions" })).toHaveCount(0);

@@ -40,7 +40,8 @@ async function independentStore() {
 
 async function downloadTrace(page: Page) {
   const pending = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Download", exact: true }).click();
+  await page.getByRole("button", { name: "More actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Download", exact: true }).click();
   const download = await pending, file = await download.path();
   if (!file) throw new Error("Actual downloaded trace has no file");
   expect(download.suggestedFilename()).toBe(`trace-${fidelityTraceId}.json`);

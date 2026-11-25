@@ -10,7 +10,8 @@ import type { Comparison, DatasetRevision, Experiment, Snapshot } from "../../sr
 test("evaluations: user creates a regression case, compares frozen candidates, reviews results and imports an export", async ({ page, request, runPhantom }) => {
   await seedEvaluationRuns(request, runPhantom.url);
   await page.goto(`${runPhantom.url}/runs/${EVALUATION_RUNS.baseline}`);
-  await page.getByRole("link", { name: "Evaluate run", exact: true }).click();
+  await page.getByRole("button", { name: "More actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Evaluate run", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Evaluations", exact: true })).toBeVisible();
   await page.getByRole("textbox", { name: "Dataset name", exact: true }).fill("UI checkout dataset");
   await page.getByRole("button", { name: "Create dataset", exact: true }).click();

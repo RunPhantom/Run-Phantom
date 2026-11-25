@@ -54,7 +54,8 @@ test("investigation annotations: edited drafts persist through real routes and r
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`${runPhantom.url}/runs/${runId}/span/${spanId}`);
   await expectCapturedDetail();
-  await page.getByRole("button", { name: "Annotate", exact: true }).click();
+  await page.getByRole("button", { name: "More actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Annotate", exact: true }).click();
   const runComposer = page.getByRole("dialog", { name: "Annotate run", exact: true });
   await runComposer.getByRole("textbox", { name: "Annotation note", exact: true }).fill("An unfinished run-note draft");
   await runComposer.getByRole("textbox", { name: "Annotation note", exact: true }).fill(runNote);
