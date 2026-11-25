@@ -118,6 +118,8 @@ const COLLAPSE_PREVIEW_WIDTH = MIN_WIDTH - 24;
 const COLLAPSE_COMMIT_WIDTH = MIN_WIDTH - 78;
 const COLLAPSE_HOLD_MS = 220;
 const COLLAPSE_EXIT_MS = 160;
+/** Without a composer (no coding agent connected yet) Ask lands on the connect action, then on any enabled pane control. */
+const PANE_FALLBACK_FOCUS = ["[data-pane-autofocus]:not(:disabled)", "button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex=\"-1\"])"];
 
 function loadCollapsed(): boolean {
   try {
@@ -262,9 +264,13 @@ export function MessagePane({ activeRunId, launcherSlot }: MessagePaneProps) {
     run: () => {
       focusAfterOverlayClose(() => {
         const composer = composerRef.current;
-        if (!composer?.isConnected) return false;
-        composer.focus();
-        return document.activeElement === composer;
+        const pane = paneRef.current;
+        const target = composer?.isConnected
+          ? composer
+          : PANE_FALLBACK_FOCUS.map(selector => pane?.querySelector<HTMLElement>(selector)).find(Boolean) ?? null;
+        if (!target) return false;
+        target.focus();
+        return document.activeElement === target;
       });
       if (collapsed) openFromLauncher();
     },
@@ -1783,6 +1789,7 @@ function AgentConnectCard({
         type="button"
         disabled={busy}
         onClick={() => onProviderChange(selectedProvider)}
+        data-pane-autofocus=""
         // The hover here repeated the base border and background verbatim, so it
         // was a guaranteed no-op; a stronger wash is what makes it read.
         className="rp-primary-control mt-3 flex min-h-10 w-full items-center justify-center rounded-control border border-rp-blue bg-rp-blue px-4 text-[13px] font-medium text-white transition-[background-color,border-color,opacity] duration-250 ease-standard hover:border-rp-blue-hover hover:bg-rp-blue-hover disabled:cursor-not-allowed disabled:opacity-55"

@@ -216,13 +216,15 @@ test("Cmd/Ctrl+J opens and closes the compact Ask pane, and Ask focuses the comp
   await expect(page.locator("[data-connection-status]")).toHaveAttribute("data-connection-status", "connected");
   const launcher = page.locator("[data-workspace-header]").getByRole("button", { name: /^Ask (Claude Code|Codex)$/ });
   await expect(launcher).toHaveAttribute("aria-keyshortcuts", `${mod}+J`);
-  await page.locator("body").press(`${mod}+j`);
+  await launcher.focus();
+  await page.keyboard.press(`${mod}+j`);
   const pane = page.getByRole("dialog", { name: "Coding-agent debug chat", exact: true });
   await expect(pane).toBeVisible();
   await expect.poll(() => pane.evaluate(element => element.contains(document.activeElement))).toBe(true);
   await page.keyboard.press(`${mod}+j`);
   await expect(pane).toBeHidden();
   await expect(launcher).toBeVisible();
+  await expect(launcher).toBeFocused();
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.getByRole("button", { name: "Debug", exact: true }).click();
@@ -238,4 +240,38 @@ test("Cmd/Ctrl+J opens and closes the compact Ask pane, and Ask focuses the comp
   await page.keyboard.press("Enter");
   await expect(palette).toBeHidden();
   await expect(composer).toBeFocused();
+});
+
+async function askFromPalette(page: Page, mod: string) {
+  const trigger = page.getByRole("button", { name: "Search runs, steps, commands", exact: true });
+  await trigger.focus();
+  await page.keyboard.press(`${mod}+k`);
+  const palette = page.getByRole("dialog", { name: "Command palette", exact: true });
+  await palette.getByRole("combobox").fill("ask");
+  await expect(palette.getByRole("option").first()).toHaveAccessibleName(/^Ask (Claude Code|Codex)$/);
+  await page.keyboard.press("Enter");
+  await expect(palette).toBeHidden();
+}
+
+test("Ask from the palette opens a collapsed pane and moves focus into it, with or without a connected agent", async ({ page, runPhantom }) => {
+  await seedRunPhantomFixtures(runPhantom.url);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${runPhantom.url}/runs/${FIXTURE_PRIMARY_RUN_ID}`);
+  const mod = await modKey(page);
+  await expect(page.locator("[data-connection-status]")).toHaveAttribute("data-connection-status", "connected");
+  const aside = page.locator('aside[aria-label="Coding-agent debug chat"]');
+  await expect(aside).toHaveCount(0);
+
+  // A fresh profile opens on "Connect your coding agent", which has no composer.
+  await askFromPalette(page, mod);
+  await expect(aside.getByText("Connect your coding agent", { exact: true })).toBeVisible();
+  await expect(aside.getByRole("button", { name: /^Connect (Claude Code|Codex|OpenCode)$/ })).toBeFocused();
+
+  await page.locator("[data-workspace-header]").getByRole("button", { name: /^Ask (Claude Code|Codex)$/ }).click();
+  await expect(aside).toHaveCount(0);
+  await page.evaluate(() => localStorage.setItem("runphantom:messagePane:providerIntroSeen", "1"));
+  await page.reload();
+  await expect(page.locator("[data-connection-status]")).toHaveAttribute("data-connection-status", "connected");
+  await askFromPalette(page, mod);
+  await expect(aside.getByRole("combobox", { name: "Ask about this trace", exact: true })).toBeFocused();
 });
