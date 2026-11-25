@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { once } from "node:events";
 import type http from "node:http";
-import { closeDb, insertSpan, upsertRun } from "../src/db";
+import { closeDb, getDrizzleDb, insertSpan, upsertRun } from "../src/db";
 import { createServer } from "../src/server";
 
 const envNames = ["RUNPHANTOM_DB_PATH", "RUNPHANTOM_SECRET_STORE_PATH", "OPENAI_API_KEY", "RUNPHANTOM_OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"];
@@ -91,7 +91,64 @@ describe.serial("settings provider and data endpoints", () => {
     const headers = { Origin: "https://example.test" };
     expect((await fetch(`${base}/api/secrets/openai/test`, { method: "POST", headers })).status).toBe(403);
     expect((await fetch(`${base}/api/data`, { headers })).status).toBe(403);
-    expect((await fetch(`${base}/api/data/backup`, { headers })).status).toBe(403);
+    expect((await fetch(`${base}/api/data/backup`, { method: "POST", headers })).status).toBe(403);
+  });
+
+  test("a cross-site page cannot trigger a backup, even without Origin or Referer", async () => {
+    for (const site of ["cross-site", "same-site"]) {
+      for (const method of ["GET", "POST"]) {
+        const response = await fetch(`${base}/api/data/backup`, { method, headers: { "Sec-Fetch-Site": site } });
+        expect(response.status).toBe(403);
+        expect(response.headers.get("content-disposition")).toBeNull();
+      }
+    }
+  });
+
+  test("the backup is no longer served over GET", async () => {
+    const response = await fetch(`${base}/api/data/backup`);
+    expect(response.status).not.toBe(200);
+    expect(response.headers.get("content-disposition")).toBeNull();
+  });
+
+  test("other /api routes reject cross-site and same-site fetch metadata for every method", async () => {
+    for (const site of ["cross-site", "same-site"]) {
+      expect((await fetch(`${base}/api/data`, { headers: { "Sec-Fetch-Site": site } })).status).toBe(403);
+      expect((await fetch(`${base}/api/secrets/openai/test`, { method: "POST", headers: { "Sec-Fetch-Site": site } })).status).toBe(403);
+    }
+    expect((await fetch(`${base}/api/data`, { headers: { "Sec-Fetch-Site": "same-origin" } })).status).toBe(200);
+    expect((await fetch(`${base}/api/data`, { headers: { "Sec-Fetch-Site": "none" } })).status).toBe(200);
+  });
+
+  test("OTLP ingest is unaffected by the /api fetch-metadata check", async () => {
+    const response = await fetch(`${base}/v1/traces`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "chrome-extension://abcdefghijklmnop", "Sec-Fetch-Site": "cross-site" },
+      body: JSON.stringify({ resourceSpans: [] }),
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("access-control-allow-origin")).toBe("chrome-extension://abcdefghijklmnop");
+  });
+
+  test("only one backup is written at a time", async () => {
+    // Larger than the socket buffers, so the first download cannot finish until its body is read.
+    const client = getDrizzleDb().$client;
+    client.run("CREATE TABLE backup_padding (data BLOB)");
+    client.run("INSERT INTO backup_padding (data) VALUES (randomblob(16 * 1024 * 1024))");
+    const first = await fetch(`${base}/api/data/backup`, { method: "POST", headers: { "Sec-Fetch-Site": "same-origin" } });
+    expect(first.status).toBe(200);
+    const second = await fetch(`${base}/api/data/backup`, { method: "POST" });
+    expect(second.status).toBe(429);
+    expect(second.headers.get("cache-control")).toBe("no-store");
+    await first.arrayBuffer();
+    let third: Response | null = null;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      third = await fetch(`${base}/api/data/backup`, { method: "POST" });
+      if (third.status !== 429) break;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    expect(third?.status).toBe(200);
+    await third?.arrayBuffer();
+    client.run("DROP TABLE backup_padding");
   });
 
   test("the data summary counts what is stored and where", async () => {
@@ -110,8 +167,9 @@ describe.serial("settings provider and data endpoints", () => {
     const previousTmp = process.env.TMPDIR;
     process.env.TMPDIR = scratch;
     let response: Response;
-    try { response = await fetch(`${base}/api/data/backup`); } finally { if (previousTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previousTmp; }
+    try { response = await fetch(`${base}/api/data/backup`, { method: "POST", headers: { "Sec-Fetch-Site": "same-origin", Origin: base } }); } finally { if (previousTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previousTmp; }
     expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("content-disposition")).toMatch(/attachment; filename="runphantom-backup-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}\.db"/);
     const copy = path.join(directory, "copy.db");
     writeFileSync(copy, new Uint8Array(await response.arrayBuffer()));

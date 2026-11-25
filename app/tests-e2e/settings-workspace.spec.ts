@@ -322,7 +322,7 @@ test("settings data shows where runs live, downloads a backup and deletes runs o
   await expect(panel.getByText(/^http:\/\/127\.0\.0\.1:\d+\/v1\/traces$/)).toBeVisible();
 
   const downloading = page.waitForEvent("download");
-  await panel.getByRole("link", { name: "Download backup", exact: true }).click();
+  await panel.getByRole("button", { name: "Download backup", exact: true }).click();
   const download = await downloading;
   expect(download.suggestedFilename()).toMatch(/^runphantom-backup-[\d-]+\.db$/);
   const file = testInfo.outputPath("backup.db");
