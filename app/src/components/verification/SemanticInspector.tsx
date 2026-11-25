@@ -84,7 +84,7 @@ export function SemanticInspector({ sessionId, connected, capable, disabled = fa
   const chosen = result?.elements.find(item => item.ref === selected);
   return <section aria-labelledby="semantic-heading" className={cn(panel, "space-y-5")}>
     <SectionHead eyebrow="Inspect / Live elements" title="Find a live element" id="semantic-heading" />
-    <p className={lede}>Search visible labels and roles, then act on the exact element found. Handles expire after 60 seconds and disappear on reconnect. Names use a partial ARIA approximation; observations are SDK-reported.</p>
+    <p className={lede}>Find an element by its visible label or role, then click or fill exactly that element. A found element stays usable for 60 seconds or until the app reconnects. Names are approximate accessible names reported by your app.</p>
     {unavailable && <p role="status" className={warningNote}>{connected ? "This runtime has no semantic reference capability. Reconnect with the current SDK." : "Connect an app to discover live elements."}</p>}
     <fieldset disabled={busy || disabled || unavailable} className="space-y-4">
       <div className="flex flex-wrap items-start gap-4">
