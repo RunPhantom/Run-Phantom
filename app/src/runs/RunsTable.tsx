@@ -6,7 +6,7 @@ import type { RunListRow } from "../api/runs";
 import { ago, runDisplayName, runStatus, runStatusTone } from "../utils/helpers";
 import { runPath } from "../utils/navigation";
 import type { RunsTableColumn, RunsViewFilters, RunsViewSort } from "../../../src/saved-views-protocol";
-import { CHECKBOX_TRACK_PX, COLUMN_META, ROW_HEIGHT, minTableWidth, absoluteTime, costCell, durationCell, isSampleRun, modelCell, tokensCell, type CellText, type RunsDensity } from "./table-model";
+import { CHECKBOX_TRACK_PX, COLUMN_META, ROW_HEIGHT, minTableWidth, absoluteTime, agentCell, costCell, durationCell, errorsCell, isSampleRun, modelCell, tokensCell, type CellText, type RunsDensity } from "./table-model";
 
 const OVERSCAN = 12;
 const LOAD_MORE_AHEAD = 30;
@@ -286,14 +286,16 @@ function RunsTableRow({ row, index, columns, rowHeight, shortId, selected, activ
             );
           case "run":
             return (
-              <div key={column} role="gridcell" className="flex min-w-0 items-center gap-2 px-2">
+              <div key={column} role="gridcell" className="rp-run-cell flex min-w-0 items-center gap-2 px-2">
                 <Link to={runPath(row.id)} tabIndex={-1} data-run-name className="min-w-0 truncate font-medium text-rp-ink hover:text-rp-blue hover:underline" onClick={event => event.stopPropagation()}>
                   {name}
                 </Link>
-                <span className="shrink-0 font-mono text-[11px] text-rp-ink-subtle" title={row.id}>{shortId}</span>
+                <span className="rp-run-short-id shrink-0 font-mono text-[11px] text-rp-ink-subtle" title={row.id}>{shortId}</span>
                 {sample && <span className="shrink-0 rounded-sm border border-rp-line px-1 font-mono text-[11px] uppercase leading-4 tracking-[0.06em] text-rp-ink-subtle">Sample</span>}
               </div>
             );
+          case "agent":
+            return <div key={column} role="gridcell" className="flex min-w-0 px-2 text-[12px]"><Cell cell={agentCell(row)} mono={false} /></div>;
           case "input":
             return (
               <div key={column} role="gridcell" className="min-w-0 truncate px-2 text-rp-ink-muted" title={row.input_preview ?? undefined}>
@@ -310,8 +312,8 @@ function RunsTableRow({ row, index, columns, rowHeight, shortId, selected, activ
             const cell = durationCell(row, status.status === "live" || status.status === "quiet" ? "Still running" : "Duration unknown: the run has no finished steps");
             const share = row.duration_ms !== null && maxDuration > 0 ? row.duration_ms / maxDuration : 0;
             return (
-              <div key={column} role="gridcell" className="flex min-w-0 items-center justify-end gap-2 px-2 text-[12px]">
-                {share > 0 && <span aria-hidden="true" className="h-1 w-7 shrink-0 overflow-hidden rounded-full bg-rp-line-muted"><span className="block h-full rounded-full bg-rp-mark opacity-40" style={{ width: `${Math.max(4, share * 100)}%` }} /></span>}
+              <div key={column} role="gridcell" className="rp-duration-cell flex min-w-0 items-center justify-end gap-2 px-2 text-[12px]">
+                {share > 0 && <span aria-hidden="true" className="rp-duration-bar h-1 w-7 shrink-0 overflow-hidden rounded-full bg-rp-line-muted"><span className="block h-full rounded-full bg-rp-mark opacity-40" style={{ width: `${Math.max(4, share * 100)}%` }} /></span>}
                 <Cell cell={cell} />
               </div>
             );
@@ -320,12 +322,15 @@ function RunsTableRow({ row, index, columns, rowHeight, shortId, selected, activ
             return <div key={column} role="gridcell" className="flex min-w-0 justify-end px-2 text-[12px]"><Cell cell={tokensCell(row)} /></div>;
           case "cost":
             return <div key={column} role="gridcell" className="flex min-w-0 justify-end px-2 text-[12px]"><Cell cell={costCell(row)} /></div>;
-          case "errors":
+          case "errors": {
+            const cell = errorsCell(row);
             return (
-              <div key={column} role="gridcell" className="px-2 text-right font-mono text-[12px] tabular-nums" title={row.error_count ? `${row.error_count} steps ended in an error` : "No step ended in an error"}>
-                <span className={row.error_count ? "font-semibold text-rp-danger" : "text-rp-ink-subtle"}>{row.error_count ?? 0}</span>
+              <div key={column} role="gridcell" className="px-2 text-right font-mono text-[12px] tabular-nums" title={cell.title}>
+                <span className={row.error_count ? "font-semibold text-rp-danger" : "text-rp-ink-subtle"}>{cell.text}</span>
+                {!row.error_count && <span className="sr-only">: {cell.title}</span>}
               </div>
             );
+          }
           case "started":
             return <div key={column} role="gridcell" className="truncate px-2 text-right text-[12px] text-rp-ink-muted" title={absoluteTime(row.started_at)}>{ago(row.started_at)}</div>;
         }

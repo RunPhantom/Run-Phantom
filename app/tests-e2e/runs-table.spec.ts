@@ -61,6 +61,11 @@ test("runs table sorts on the server and keeps the sort in the URL", async ({ pa
   await page.goto(`${runPhantom.url}/runs`);
   await expect(rows(page)).toHaveCount(3);
   await expect.poll(() => rowIds(page)).toEqual([BROKEN, PRICEY, CHEAP]);
+  await expect(page.getByRole("columnheader", { name: "Agent", exact: true })).toBeVisible();
+  const cheapCells = page.locator(`[data-run-id="${CHEAP}"]`).getByRole("gridcell");
+  await expect(cheapCells.nth(3)).toHaveText("billing_agent");
+  await expect(cheapCells.nth(9)).toContainText("—");
+  await expect(page.locator(`[data-run-id="${BROKEN}"]`).getByRole("gridcell").nth(9)).toHaveText("1");
 
   const cost = page.getByRole("button", { name: /^Sort by cost/ });
   await cost.click();

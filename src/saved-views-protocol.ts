@@ -14,7 +14,7 @@ export const RUNS_VIEW_WINDOWS = { "1h": 3_600_000, "24h": 86_400_000, "7d": 604
 export type RunsViewWindow = keyof typeof RUNS_VIEW_WINDOWS;
 const WINDOW_KEYS = Object.keys(RUNS_VIEW_WINDOWS) as RunsViewWindow[];
 
-export const RUNS_TABLE_COLUMNS = ["status", "run", "input", "model", "steps", "duration", "tokens", "cost", "errors", "started"] as const;
+export const RUNS_TABLE_COLUMNS = ["status", "run", "agent", "input", "model", "steps", "duration", "tokens", "cost", "errors", "started"] as const;
 export type RunsTableColumn = typeof RUNS_TABLE_COLUMNS[number];
 /** "run" names the row and is always shown; the chooser cannot hide it. */
 export const RUNS_TABLE_REQUIRED_COLUMNS: readonly RunsTableColumn[] = ["run"];

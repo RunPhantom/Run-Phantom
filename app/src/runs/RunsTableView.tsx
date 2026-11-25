@@ -453,9 +453,14 @@ function RunCards({ rows, shortIds, flashIds, hasMore, loadingMore, onLoadMore, 
                 </span>
                 {row.input_preview && <span className="mt-1 block truncate text-[13px] text-rp-ink-muted">{row.input_preview}</span>}
                 <span className="mt-1 flex flex-wrap gap-x-3 font-mono text-[12px] tabular-nums text-rp-ink-muted">
-                  <span title={model.title}>{model.text}</span>
-                  <span title={duration.title}>{duration.text}</span>
-                  <span title={cost.title}>{cost.text}{cost.marker ? ` ${cost.marker}` : ""}</span>
+                  {row.agent && <span className="font-sans">{row.agent}</span>}
+                  {row.llm_calls === 0 ? <span className="font-sans">No model calls</span> : (
+                    <>
+                      <span title={model.title}>{model.unknown ? <span className="font-sans">Model unknown</span> : model.text}</span>
+                      <span title={cost.title}>{cost.unknown ? <span className="font-sans">Cost unknown</span> : `${cost.text}${cost.marker ? ` ${cost.marker}` : ""}`}</span>
+                    </>
+                  )}
+                  {!duration.unknown && <span title={duration.title}>{duration.text}</span>}
                   {!!row.error_count && <span className="font-semibold text-rp-danger">{plural(row.error_count, "error")}</span>}
                 </span>
               </button>

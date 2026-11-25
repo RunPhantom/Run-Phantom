@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { RunListRow } from "../app/src/api/runs";
 import {
+  agentCell,
   compactNumber,
   costCell,
   durationCell,
+  errorsCell,
   exportRowsJson,
   minTableWidth,
   modelCell,
@@ -61,11 +63,22 @@ describe("runs table cells", () => {
     expect(modelCell(row({ primary_model: "gpt-5-nano-2025-08-07", models: ["gpt-5-nano-2025-08-07", "gpt-5-nano"] }))).toEqual({ text: "gpt-5-nano", title: "gpt-5-nano-2025-08-07, gpt-5-nano" });
     expect(modelCell(row({ primary_model: null, model: null, llm_calls: 0 }))).toMatchObject({ text: "—", unknown: true });
   });
+
+  test("agent and errors cells say what a dash means", () => {
+    expect(agentCell({ agent: "billing_agent" })).toEqual({ text: "billing_agent", title: "billing_agent" });
+    expect(agentCell({ agent: null })).toMatchObject({ text: "—", unknown: true, title: "Agent unknown: the run did not name an agent" });
+    expect(errorsCell({ error_count: 0 })).toEqual({ text: "—", title: "No step ended in an error" });
+    expect(errorsCell({ error_count: 1 })).toEqual({ text: "1", title: "1 step ended in an error" });
+    expect(errorsCell({ error_count: 3 })).toEqual({ text: "3", title: "3 steps ended in an error" });
+  });
 });
 
 describe("runs table columns and sort", () => {
   test("column choice keeps canonical order and the run column", () => {
-    expect(toggleColumn(RUNS_TABLE_DEFAULT_COLUMNS, "steps")).toEqual(["status", "run", "input", "model", "steps", "duration", "tokens", "cost", "errors", "started"]);
+    expect(toggleColumn(RUNS_TABLE_DEFAULT_COLUMNS, "steps")).toEqual(["status", "run", "agent", "input", "model", "steps", "duration", "tokens", "cost", "errors", "started"]);
+    const storedBeforeAgent = ["status", "run", "input", "model", "duration", "tokens", "cost", "errors", "started"];
+    expect(normalizeColumns(storedBeforeAgent)).toEqual(storedBeforeAgent);
+    expect(toggleColumn(normalizeColumns(storedBeforeAgent), "agent")).toEqual(RUNS_TABLE_DEFAULT_COLUMNS);
     expect(toggleColumn(["run", "cost"], "run")).toEqual(["run", "cost"]);
     expect(normalizeColumns(["cost", "bogus", "cost"])).toEqual(["run", "cost"]);
     expect(normalizeColumns("nope")).toEqual([...RUNS_TABLE_DEFAULT_COLUMNS]);

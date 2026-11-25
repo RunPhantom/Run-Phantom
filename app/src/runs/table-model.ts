@@ -26,16 +26,17 @@ export interface ColumnMeta {
 }
 
 export const COLUMN_META: Record<RunsTableColumn, ColumnMeta> = {
-  status: { id: "status", label: "Status", align: "left", track: "minmax(168px, 0.8fr)" },
-  run: { id: "run", label: "Run", align: "left", track: "minmax(184px, 1.5fr)" },
-  input: { id: "input", label: "Input", align: "left", track: "minmax(84px, 1.8fr)" },
-  model: { id: "model", label: "Model", align: "left", track: "minmax(120px, 1.1fr)" },
+  status: { id: "status", label: "Status", align: "left", track: "minmax(164px, 0.6fr)" },
+  run: { id: "run", label: "Run", align: "left", track: "minmax(168px, 2fr)" },
+  agent: { id: "agent", label: "Agent", align: "left", track: "minmax(104px, 1fr)" },
+  input: { id: "input", label: "Input", align: "left", track: "minmax(72px, 1.3fr)" },
+  model: { id: "model", label: "Model", align: "left", track: "minmax(112px, 0.8fr)" },
   steps: { id: "steps", label: "Steps", align: "right", track: "60px" },
-  duration: { id: "duration", label: "Duration", sort: "duration", align: "right", track: "96px" },
-  tokens: { id: "tokens", label: "Tokens in / out", header: "Tokens", sort: "tokens", align: "right", track: "104px" },
-  cost: { id: "cost", label: "Cost", sort: "cost", align: "right", track: "104px" },
-  errors: { id: "errors", label: "Errors", sort: "errors", align: "right", track: "64px" },
-  started: { id: "started", label: "Started", sort: "started_at", align: "right", track: "80px" },
+  duration: { id: "duration", label: "Duration", sort: "duration", align: "right", track: "minmax(64px, 88px)" },
+  tokens: { id: "tokens", label: "Tokens in / out", header: "Tokens", sort: "tokens", align: "right", track: "minmax(88px, 96px)" },
+  cost: { id: "cost", label: "Cost", sort: "cost", align: "right", track: "minmax(92px, 100px)" },
+  errors: { id: "errors", label: "Errors", sort: "errors", align: "right", track: "60px" },
+  started: { id: "started", label: "Started", sort: "started_at", align: "right", track: "76px" },
 };
 
 export const CHECKBOX_TRACK_PX = 36;
@@ -152,6 +153,17 @@ export function costCell(row: RunListRow): CellText {
 export function durationCell(row: RunListRow, runningLabel: string): CellText {
   if (row.duration_ms === null) return { text: "—", title: runningLabel, unknown: true };
   return { text: fmt(row.duration_ms), title: `${grouped.format(row.duration_ms)} ms from the first step's start to the last step's end` };
+}
+
+export function agentCell(row: Pick<RunListRow, "agent">): CellText {
+  if (!row.agent) return { text: "—", title: "Agent unknown: the run did not name an agent", unknown: true };
+  return { text: row.agent, title: row.agent };
+}
+
+/** Clean runs show "—" so the runs with errors stand out. */
+export function errorsCell(row: Pick<RunListRow, "error_count">): CellText {
+  if (!row.error_count) return { text: "—", title: "No step ended in an error" };
+  return { text: String(row.error_count), title: `${plural(row.error_count, "step")} ended in an error` };
 }
 
 /** "gpt-5-nano-2025-08-07" reads as "gpt-5-nano" in a narrow cell; the tooltip keeps the exact id. */
