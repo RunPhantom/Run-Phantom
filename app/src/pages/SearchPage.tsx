@@ -293,7 +293,7 @@ export function SearchPage() {
           </div>
           <SearchFilters query={params.toString()} onChange={submitParams} scopeKey={scopeKey} suggestions={searchSuggestions}/>
         </div>
-        <div ref={searchListRef} aria-label="Search results" aria-busy={loading || loadingMore} className="flex-1 space-y-1.5 overflow-auto bg-rp-canvas px-3 py-3 rp-list-scroll">
+        <div ref={searchListRef} aria-label="Search results" aria-busy={loading || loadingMore} className="flex-1 space-y-1.5 overflow-auto bg-rp-canvas px-3 py-3">
           <div role="status" className="rp-meta px-2 pb-1 uppercase tracking-[0.12em]">
             {loading ? "Searching local traces…" : currentResult && !error ? `${count} ${resource === "span-hits" ? "spans" : count === 1 ? "run" : "runs"} loaded${currentResult.hasMore ? "; more available" : ""}` : ""}
           </div>

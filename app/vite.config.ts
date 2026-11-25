@@ -33,6 +33,7 @@ export default defineConfig({
     proxy: {
       "/api": backendUrl,
       "/v1": backendUrl,
+      "/health": backendUrl,
       "/ws": { target: backendUrl.replace(/^http/, "ws"), ws: true },
     },
   },

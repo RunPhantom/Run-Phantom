@@ -395,7 +395,7 @@ export function SavedPage() {
           <ActiveFilterChips filters={filters} onUpdate={update} />
         </div>
 
-        <div ref={savedListRef} className="flex-1 space-y-1 overflow-auto bg-rp-canvas p-3 sb rp-list-scroll">
+        <div ref={savedListRef} className="flex-1 space-y-1 overflow-auto bg-rp-canvas p-3 sb">
           {filtered.map(evt => (
             <SavedListItem
               key={evt.id}

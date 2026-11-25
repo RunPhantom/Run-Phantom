@@ -6,36 +6,25 @@ import {
   SidebarGroupContent,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { Activity, Bookmark, Search, Settings, CheckCircle2, FlaskConical, Coins, ClipboardCheck, FileCode2 } from "lucide-react";
+import { Settings } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { RunPhantomMark } from "./RunPhantomMark";
+import { NAV_GROUPS, NAV_ITEMS, SETTINGS_NAV, isNavPathActive } from "../shell/navigation";
+import { useNavCounts } from "../shell/use-nav-counts";
 
-export type Page = "runs" | "search" | "saved" | "settings" | "verification" | "evaluations" | "costs" | "review-queues" | "prompts";
-
-export const NAV_ITEMS: { id: Page; label: string; path: string; icon: typeof Activity }[] = [
-  { id: "runs", label: "Runs", path: "/runs", icon: Activity },
-  { id: "search", label: "Search", path: "/search", icon: Search },
-  { id: "saved", label: "Saved", path: "/saved", icon: Bookmark },
-  { id: "verification", label: "Verification", path: "/verification", icon: CheckCircle2 },
-  { id: "evaluations", label: "Evaluations", path: "/evaluations", icon: FlaskConical },
-  { id: "costs", label: "Cost & usage", path: "/costs", icon: Coins },
-  { id: "review-queues", label: "Review queues", path: "/review-queues", icon: ClipboardCheck },
-  { id: "prompts", label: "Prompts", path: "/prompts", icon: FileCode2 },
-];
-
-function isNavPathActive(pathname: string, path: string): boolean {
-  return pathname === path || pathname.startsWith(`${path}/`);
-}
+export { NAV_ITEMS } from "../shell/navigation";
 
 export function NavSidebar() {
   const location = useLocation();
-  const onSettings = location.pathname === "/settings";
+  const onSettings = isNavPathActive(location.pathname, SETTINGS_NAV.path);
   const { isMobile, setOpenMobile } = useSidebar();
+  const counts = useNavCounts();
   const closeMobile = () => {
     if (isMobile) setOpenMobile(false);
   };
@@ -64,43 +53,60 @@ export function NavSidebar() {
 
       <SidebarContent>
         <nav aria-label="Primary navigation">
-          <SidebarGroup className="px-3 pt-5 group-data-[collapsible=icon]:px-2">
-            <p className="rp-eyebrow px-2 pb-3 group-data-[collapsible=icon]:hidden">Workspace</p>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {NAV_ITEMS.map(({ id, label, path, icon: Icon }, index) => {
-                  const active = isNavPathActive(location.pathname, path);
-                  return (
-                    <SidebarMenuItem key={id}>
-                      <SidebarMenuButton tooltip={label} asChild isActive={active} className="h-11 gap-3 px-2.5 lg:h-10">
-                        {/* replace when already inside this section: a plain
-                            push added a history entry per click, so after a few
-                            taps on the current tab the Back button did nothing
-                            visible several presses in a row. */}
-                        <NavLink to={path} end={false} replace={active} onClick={closeMobile}>
-                          <Icon aria-hidden="true" className="hidden size-4 shrink-0 group-data-[collapsible=icon]:block" />
-                          <span aria-hidden="true" className={`w-5 shrink-0 font-mono text-[11px] tabular-nums group-data-[collapsible=icon]:hidden ${active ? "text-rp-blue" : "text-rp-index"}`}>
-                            {String(index + 1).padStart(2, "0")}
-                          </span>
-                          <span className="text-sm">
-                            {label}
-                          </span>
-                        </NavLink>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  );
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+          {NAV_GROUPS.map(group => {
+            const items = NAV_ITEMS.filter(item => item.group === group.id);
+            if (items.length === 0) return null;
+            return (
+              <SidebarGroup key={group.id} className="px-3 pb-1 pt-4 group-data-[collapsible=icon]:px-2 group-data-[collapsible=icon]:pt-2">
+                <p id={`rp-nav-group-${group.id}`} className="rp-eyebrow px-2 pb-1.5 group-data-[collapsible=icon]:hidden">{group.label}</p>
+                <SidebarGroupContent>
+                  <SidebarMenu aria-labelledby={`rp-nav-group-${group.id}`}>
+                    {items.map(({ id, label, path, icon: Icon }) => {
+                      const active = isNavPathActive(location.pathname, path);
+                      const count = counts[id];
+                      const index = NAV_ITEMS.findIndex(item => item.id === id);
+                      return (
+                        <SidebarMenuItem key={id}>
+                          <SidebarMenuButton tooltip={label} asChild isActive={active} className="h-11 gap-3 px-2.5 lg:[@media(pointer:fine)]:h-8">
+                            {/* replace when already inside this section: a plain
+                                push added a history entry per click, so after a few
+                                taps on the current tab the Back button did nothing
+                                visible several presses in a row. */}
+                            <NavLink to={path} end={false} replace={active} onClick={closeMobile} aria-describedby={count ? `rp-nav-count-${id}` : undefined}>
+                              <Icon aria-hidden="true" className="hidden size-4 shrink-0 group-data-[collapsible=icon]:block" />
+                              <span aria-hidden="true" className={`w-5 shrink-0 font-mono text-[11px] tabular-nums group-data-[collapsible=icon]:hidden ${active ? "text-rp-blue" : "text-rp-index"}`}>
+                                {String(index + 1).padStart(2, "0")}
+                              </span>
+                              <span className={count ? "pr-8 text-sm" : "text-sm"}>
+                                {label}
+                              </span>
+                            </NavLink>
+                          </SidebarMenuButton>
+                          {count && (
+                            <SidebarMenuBadge
+                              id={`rp-nav-count-${id}`}
+                              className={`top-1/2 -translate-y-1/2 font-mono text-[11px] font-medium ${count.tone === "danger" ? "text-rp-danger" : "text-rp-ink-subtle"}`}
+                            >
+                              <span aria-hidden="true">{count.text}</span>
+                              <span className="sr-only">{count.description}</span>
+                            </SidebarMenuBadge>
+                          )}
+                        </SidebarMenuItem>
+                      );
+                    })}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            );
+          })}
         </nav>
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border px-3 py-3 group-data-[collapsible=icon]:px-2">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton tooltip="Settings" isActive={onSettings} asChild className="h-11 gap-3 px-2.5 lg:h-10">
-              <NavLink to="/settings" replace={isNavPathActive(location.pathname, "/settings")} onClick={closeMobile}>
+            <SidebarMenuButton tooltip="Settings" isActive={onSettings} asChild className="h-11 gap-3 px-2.5 lg:[@media(pointer:fine)]:h-8">
+              <NavLink to={SETTINGS_NAV.path} replace={onSettings} onClick={closeMobile}>
                 <Settings aria-hidden="true" className="size-4 shrink-0" />
                 <span className="text-sm">
                   Settings

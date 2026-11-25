@@ -372,7 +372,7 @@ export function RunsPage() {
           )}
         </div>
 
-        <div ref={listRef} className="flex-1 overflow-auto p-2 space-y-0.5 sb rp-list-scroll">
+        <div ref={listRef} className="flex-1 overflow-auto p-2 space-y-0.5 sb">
           {runsError
               ? <div role="alert" className="mx-2 mt-6 rounded-sm border border-rp-danger-border bg-rp-danger-soft px-3 py-3">
                   <div className="text-[13px] font-medium text-rp-danger">Couldn&rsquo;t load runs</div>

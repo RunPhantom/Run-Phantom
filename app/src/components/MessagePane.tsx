@@ -1,5 +1,6 @@
 import { AlertTriangle, ArrowRight, Brain, Check, ChevronDown, ChevronLeft, Copy, ExternalLink, Folder as FolderIcon, Home, KeyRound, Loader2, Plus, Send, Terminal, Wrench, X } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type SyntheticEvent } from "react";
+import { createPortal } from "react-dom";
 import { useIsCompactWorkspace } from "../hooks/use-mobile";
 import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
 import { useDialogFocus } from "../hooks/use-dialog-focus";
@@ -13,6 +14,8 @@ import { AcpProviderState } from "./AcpProviderState";
 import { Markdown } from "./Markdown";
 import { RunPhantomMark } from "./RunPhantomMark";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { useRegisterCommands, useRegisterShortcuts } from "../shell/commands";
+import { formatKeys } from "../shell/keyboard";
 
 type Role = "user" | "assistant";
 
@@ -152,9 +155,11 @@ function saveProviderIntroSeen(): void {
 interface MessagePaneProps {
   /** If set, messages sent from the pane will carry this run_id. */
   activeRunId?: string | null;
+  /** Header element the "Ask …" launcher is portalled into. */
+  launcherSlot?: HTMLElement | null;
 }
 
-export function MessagePane({ activeRunId }: MessagePaneProps) {
+export function MessagePane({ activeRunId, launcherSlot }: MessagePaneProps) {
   const isOverlay = useIsCompactWorkspace();
   const prefersReducedMotion = usePrefersReducedMotion();
   const [collapsed, setCollapsedState] = useState<boolean>(loadCollapsed);
@@ -226,6 +231,33 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
     }, prefersReducedMotion ? 0 : COLLAPSE_EXIT_MS);
   }, [closing, prefersReducedMotion, setCollapsed]);
   const closeOverlay = useCallback(() => setCollapsed(true), [setCollapsed]);
+  const openFromLauncher = useCallback(() => {
+    setWidth(loadWidth());
+    setShowList(showProviderIntro);
+    setCollapsed(false);
+  }, [setCollapsed, showProviderIntro]);
+  const toggleFromShortcut = useCallback(() => {
+    if (collapsed) openFromLauncher();
+    else setCollapsed(true);
+  }, [collapsed, openFromLauncher, setCollapsed]);
+  useRegisterShortcuts([{
+    id: "ask-agent",
+    keys: "mod+j",
+    scope: "Global",
+    description: `Open or hide ${providerLabel(provider)}`,
+    allowInInputs: true,
+    handler: toggleFromShortcut,
+  }], [provider]);
+  useRegisterCommands([{
+    id: "action:ask-agent",
+    group: "Actions",
+    label: `Ask ${providerLabel(provider)}`,
+    keywords: ["chat", "debug", "coding agent", "claude", "codex"],
+    icon: Terminal,
+    shortcut: "mod+j",
+    order: 6,
+    run: () => { if (collapsed) openFromLauncher(); },
+  }], [provider]);
   useDialogFocus(isOverlay && !collapsed && !closing, paneRef, closeOverlay);
 
   function dismissProviderIntro() {
@@ -693,24 +725,24 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
     });
   }
 
-  if (collapsed) {
-    return (
-      <FloatingAskButton
-        provider={provider}
-        onOpen={() => {
-          setWidth(loadWidth());
-          setShowList(showProviderIntro);
-          setCollapsed(false);
-        }}
-      />
-    );
-  }
+  const launcher = launcherSlot ? createPortal(
+    <HeaderAskButton
+      provider={provider}
+      expanded={!collapsed}
+      onOpen={openFromLauncher}
+    />,
+    launcherSlot,
+  ) : null;
+
+  if (collapsed) return launcher;
 
   const paneWidth = isOverlay
     ? "min(420px, calc(100vw - 24px))"
     : width;
 
   return (
+    <>
+    {launcher}
     <aside
       ref={paneRef}
       role={isOverlay ? "dialog" : undefined}
@@ -1005,20 +1037,29 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
         />
       )}
     </aside>
+    </>
   );
 }
 
-function FloatingAskButton({ provider, onOpen }: { provider: AgentProviderId; onOpen: () => void }) {
+/**
+ * Hidden, not unmounted, while the pane is open: the header cluster keeps its width, and
+ * the open pane (an overlay below 1280px that covers the header) owns its own Hide control.
+ */
+function HeaderAskButton({ provider, expanded, onOpen }: { provider: AgentProviderId; expanded: boolean; onOpen: () => void }) {
+  const label = `Ask ${providerLabel(provider)}`;
   return (
-    <div data-debug-launcher className="fixed bottom-3 right-4 z-40 lg:right-8">
+    <div data-debug-launcher className={expanded ? "invisible flex" : "flex"}>
       <button
         type="button"
         onClick={onOpen}
-        className="flex h-10 items-center gap-2 rounded-control border border-rp-line bg-rp-surface px-4 text-[13px] font-medium text-rp-ink transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-wash-border hover:bg-rp-wash"
-        title={`Ask ${providerLabel(provider)}`}
+        aria-expanded={expanded}
+        aria-keyshortcuts="Meta+J Control+J"
+        className="flex size-11 items-center justify-center gap-2 rounded-control border border-rp-line bg-rp-surface text-[13px] font-medium text-rp-ink transition-[background-color,border-color] duration-fast ease-out hover:border-rp-wash-border hover:bg-rp-wash lg:h-9 lg:w-auto lg:px-3"
+        title={`Open the ${providerLabel(provider)} debug chat (${formatKeys("mod+j")})`}
       >
-        <Terminal aria-hidden="true" className="h-4 w-4 text-rp-blue" />
-        <span>{`Ask ${providerLabel(provider)}`}</span>
+        <Terminal aria-hidden="true" className="size-4 shrink-0 text-rp-blue" />
+        <span className="sr-only lg:not-sr-only lg:whitespace-nowrap">{label}</span>
+        <kbd aria-hidden="true" className="rp-kbd hidden xl:inline-flex">{formatKeys("mod+j")}</kbd>
       </button>
     </div>
   );

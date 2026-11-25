@@ -773,20 +773,6 @@ h1, h2, h3 {
   outline-offset: -4px !important;
 }
 
-.rp-launcher-band:has([data-debug-launcher]) {
-  position: relative;
-  padding-bottom: 65px;
-}
-.rp-launcher-band:has([data-debug-launcher])::after {
-  content: "";
-  position: absolute;
-  inset-inline: 0;
-  bottom: 0;
-  height: 65px;
-  border-top: 1px solid var(--rp-line);
-  background: var(--rp-surface);
-}
-
 .rp-disclosure { list-style: none; }
 .rp-disclosure::-webkit-details-marker { display: none; }
 .rp-disclosure::before {
@@ -1095,12 +1081,6 @@ pre { white-space: pre-wrap; word-break: break-word; font-family: var(--font-mon
 /* visibility, not display: the hidden separator keeps its width, so hiding it
    cannot let the next stat move back up and undo the wrap StatsLine measured. */
 .rp-meta-metrics > [data-line-end] > [data-separator] { visibility: hidden; }
-
-/* The Ask-agent button is fixed to the bottom-right corner, so the last row of a
-   scrollable list ends up underneath it and cannot be tapped. Reserve enough
-   scroll space for the button plus a margin; this only pads the scroll extent, so
-   nothing moves visually until the user reaches the end of the list. */
-.rp-list-scroll { padding-bottom: 60px; }
 
 [data-meridian-key] {
   transition: box-shadow var(--rp-motion-state) var(--rp-ease-out);
