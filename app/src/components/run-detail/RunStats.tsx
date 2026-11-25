@@ -2,18 +2,18 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import NumberFlow from "@number-flow/react";
 import { ArrowDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { fmt, plural, spanErrorReason } from "../../utils/helpers";
+import { fmt, plural } from "../../utils/helpers";
 import type { Span } from "../../utils/types";
 import { getPricingSnapshot, getRunCostRows, subscribePricing, summarizeRunCost, fmtCost, fmtRate, type ModelCostRow } from "../../utils/costs";
 import { PRICE_TABLE_AS_OF } from "../../../../src/pricing/list-prices";
-import { countedLlmSpans, distinctModels } from "./trace-model";
+import { countedLlmSpans, distinctModels, shortModelName, spanErrorText } from "./trace-model";
 
 const TOKEN_NUMBER_FLOW_TIMING = {
   spinTiming: { duration: 450, easing: "ease-out" },
   transformTiming: { duration: 250, easing: "ease-out" },
 } as const;
 function ErrorMessage({ span }: { span: Span }) {
-  const msg = spanErrorReason(span);
+  const msg = spanErrorText(span);
   if (!msg) return null;
   return (
     <div className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] leading-[18px] text-rp-danger">
@@ -144,7 +144,7 @@ function Stat({ children, last }: { children: React.ReactNode; last?: boolean })
   return <span className="inline-flex items-center gap-1.5">{children}{!last && <Dot />}</span>;
 }
 
-export function Badge({ label, copyValue }: { label: string; copyValue?: string }) {
+export function Badge({ label, copyValue, className }: { label: string; copyValue?: string; className?: string }) {
   const [copied, setCopied] = useState(false);
   const resetRef = useRef<number | null>(null);
 
@@ -163,7 +163,7 @@ export function Badge({ label, copyValue }: { label: string; copyValue?: string 
   return (
     <button
       type="button"
-      className={cn("rp-meta-label rp-meta-copy rounded-sm font-mono text-11 font-medium uppercase leading-4 tracking-[0.08em] transition-[color,background-color] duration-250 ease-standard", copied && "!bg-rp-success-soft !text-rp-success")}
+      className={cn("rp-meta-label rp-meta-copy rounded-sm font-mono text-11 font-medium uppercase leading-4 tracking-[0.08em] transition-[color,background-color] duration-250 ease-standard", copied && "!bg-rp-success-soft !text-rp-success", className)}
       title={`Copy ${label}`}
       aria-label={`Copy ${label}`}
       onClick={(event) => {
@@ -192,8 +192,7 @@ export function runStatsFor(spans: Span[], base: Omit<RunStats, "llmCalls" | "mo
   };
 }
 
-export function StatsLine({ stats, model, spans, active, startedAt, completionUnavailable, hideModels }: {
-  hideModels?: boolean;
+export function StatsLine({ stats, model, spans, active, startedAt, completionUnavailable }: {
   stats: RunStats;
   model?: string | null;
   spans?: Span[];
@@ -290,7 +289,7 @@ export function StatsLine({ stats, model, spans, active, startedAt, completionUn
   // to whole seconds it read "6s" beside a span tree root of "6.2s", "0s"
   // beside "420ms", and "205m" for a 3h run. Only the live tick animates;
   // everything else goes through fmt(), exactly like the span tree.
-  if (models.length && !hideModels) items.push({ key: "model", node: <><Badge label={models.length > 1 ? "models" : "model"} copyValue={models.join(", ")} /><span className="max-w-[28ch] truncate" title={models.join(", ")}>{models.join(", ")}</span></> });
+  if (models.length) items.push({ key: "model", node: <><Badge label={models.length > 1 ? "models" : "model"} copyValue={models.join(", ")} className="-my-0.5" /><span data-run-models className="max-w-[28ch] truncate" title={models.join(", ")}>{models.map(shortModelName).join(", ")}</span></> });
   items.push({ key: "duration", node: <><Badge label="duration" /><span data-run-duration>{
     completionUnavailable
       ? "Unavailable"

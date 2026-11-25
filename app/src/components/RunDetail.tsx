@@ -54,7 +54,8 @@ import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
 import { useDialogFocus } from "../hooks/use-dialog-focus";
 import { Badge, StatsLine, runStatsFor, type RunStats } from "./run-detail/RunStats";
 import { AttachedReportsLink, HEADER_ACTION, MoreMenu } from "./run-detail/RunActionsMenu";
-import { failureSentence, type FailureSentence } from "./run-detail/trace-model";
+import { countedToolSpans, failureSentence, type FailureSentence } from "./run-detail/trace-model";
+import "./run-detail/run-detail.css";
 
 type SpansBroadcast = {
   runIds?: string[];
@@ -430,7 +431,6 @@ function ViewHeader({
     };
   }, [optionsOpen]);
   const displayTitle = cleanTitle(title);
-  const headerModels = stats.models ?? (model ? [model] : []);
   const completionUnavailable = run?.capture_completion === "unavailable" || allSpans?.some(span => captureCompletion(span.normalized?.capture) === "unavailable") === true;
   const statusLabel = status.label;
   const statusPillClass = cn(badgeVariants({ tone: runStatusTone(status.status) }), "shrink-0");
@@ -471,7 +471,7 @@ function ViewHeader({
         </div>
       ) : (
         <>
-          <div data-run-header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+          <div data-run-header className="rp-run-header flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
             <div data-run-header-title className="flex min-w-[12rem] flex-1 items-center gap-2">
               {status.status === "live" && <span aria-hidden="true" className="pulse-dot size-2 flex-shrink-0 rounded-full bg-rp-mark-success" />}
               <span className="flex min-w-[3rem]">
@@ -492,12 +492,6 @@ function ViewHeader({
               >
                 {statusLabel}
               </span>
-              {headerModels.length > 0 && (
-                <span data-run-models className="hidden min-w-0 items-center gap-1 lg:inline-flex" title={headerModels.join(", ")}>
-                  <span className="min-w-0 truncate rounded-sm border border-rp-line px-1.5 py-px font-mono text-12 text-rp-ink-subtle">{headerModels[0]}</span>
-                  {headerModels.length > 1 && <span className="shrink-0 text-12 text-rp-ink-subtle">+{headerModels.length - 1}</span>}
-                </span>
-              )}
             </div>
             {run && (
               <div ref={optionsRef} data-run-actions className="relative flex min-w-0 flex-wrap items-center gap-1.5">
@@ -510,9 +504,10 @@ function ViewHeader({
                     setSavePopoverOpen(true);
                   }}
                   title={isSaved ? "Move folder or unsave" : "Save run"}
+                  aria-label={isSaved ? "Saved" : "Save"}
                 >
                   <Bookmark aria-hidden="true" className={cn(isSaved && "fill-current")} />
-                  {isSaved ? "Saved" : "Save"}
+                  <span data-action-label>{isSaved ? "Saved" : "Save"}</span>
                 </button>
                 {savePopoverOpen && (
                   <SavePopover
@@ -532,9 +527,10 @@ function ViewHeader({
                     window.dispatchEvent(new CustomEvent("runphantom:open-message-pane", { detail: { runId: run?.id } }));
                   }}
                   title="Ask your coding agent about this run"
+                  aria-label="Debug"
                 >
                   <MessageCircle aria-hidden="true" />
-                  Debug
+                  <span data-action-label>Debug</span>
                 </button>
                 {onFork && (() => {
                   return <>
@@ -688,7 +684,8 @@ function ViewHeader({
             <button
               type="button"
               data-run-failure={failure.tone}
-              title={onOpenStep ? `${failure.text}. Open this step.` : failure.text}
+              title={failure.fullText}
+              aria-description={onOpenStep ? "Opens this step" : undefined}
               onClick={onOpenStep ? () => onOpenStep(failure.spanId) : undefined}
               disabled={!onOpenStep}
               className={cn("mt-0.5 flex max-w-full items-center gap-1.5 rounded-control text-left text-13 font-medium leading-5 underline-offset-4 enabled:hover:underline disabled:cursor-default",
@@ -702,7 +699,7 @@ function ViewHeader({
           {/* Not on the stats row after a separator: at laptop widths the ids
               wrapped and left the separator dangling at the end of the stats. */}
           <div className="mt-1 flex flex-col gap-0.5 text-12">
-            <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} hideModels />
+            <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} completionUnavailable={completionUnavailable} />
             {run && (run.id || run.user_id || run.convo_id) && (
               // Ids are one tap away in the step details; on a phone this row cost the trace two lines.
               <span className="rp-meta-ids hidden min-w-0 max-w-full flex-wrap items-center gap-x-3 gap-y-1 text-rp-ink-muted md:flex">
@@ -1336,6 +1333,27 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
   const runStatusSummary = useRunStatus(data?.run ? runStatusEvidence(data.run, data.spans) : null);
   const subAgentList = data?.subAgents;
   const agentRootIds = useMemo(() => new Set((subAgentList ?? []).map(agent => agent.root_span_id)), [subAgentList]);
+  // Live runs re-render on every websocket merge; the header facts only change with the spans.
+  const headerStatus = data?.run ? (runStatusSummary ?? deriveRunStatus(runStatusEvidence(data.run, data.spans))) : null;
+  const failureOutcome = !headerStatus ? "other" : headerStatus.status === "failed" ? "failed" : runInProgress(headerStatus.status) ? "running" : "other";
+  const headerSpans = data?.spans;
+  const failure = useMemo(() => headerSpans ? failureSentence(headerSpans, failureOutcome) : null, [headerSpans, failureOutcome]);
+  const headerRun = data?.run;
+  const subAgentCount = subAgentList?.length ?? 0;
+  const headerStats = useMemo(() => {
+    if (!headerSpans || !headerRun) return null;
+    const tokens = [...getTokensByModel(headerSpans).values()];
+    return runStatsFor(headerSpans, {
+      spans: headerSpans.length,
+      tools: countedToolSpans(headerSpans, agentRootIds).length,
+      llms: headerSpans.filter(s => s.span_type?.includes("LLM")).length,
+      errors: headerSpans.filter(s => s.status === "ERROR").length,
+      dur: headerRun.last_updated_at - headerRun.started_at,
+      agents: subAgentCount,
+      inTokens: tokens.reduce((sum, value) => sum + value.inTok, 0),
+      outTokens: tokens.reduce((sum, value) => sum + value.outTok, 0),
+    });
+  }, [headerSpans, headerRun, agentRootIds, subAgentCount]);
 
   if (loading) return <div role="status" className="flex h-full items-center justify-center gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-rp-ink-muted">Loading run <Dots /></div>;
   if (notFound || !data?.run) return <TraceNotFound runId={runId} backPath={routeBase ?? "/runs"} />;
@@ -1353,7 +1371,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
     const agentSpanSet = new Set(agent.span_ids);
     // Exclude the root tool call span — it's the parent invocation, not part of the sub-agent's work
     const agentSpans = paneSpans.filter(s => agentSpanSet.has(s.id) && s.id !== agent.root_span_id);
-    const agentTools = agentSpans.filter(s => s.span_type === "TOOL_CALL");
+    const agentTools = countedToolSpans(agentSpans, agentRootIds);
     const agentLLMs = agentSpans.filter(s => s.span_type?.includes("LLM"));
     const agentErrs = agentSpans.filter(s => s.status === "ERROR");
 
@@ -1399,12 +1417,8 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
 
   // Normal run view
   const replayUnavailable = spans.some(span => observationReplayUnavailable(span.normalized?.capture));
-  const status = runStatusSummary ?? deriveRunStatus(runStatusEvidence(run, spans));
+  const status = headerStatus ?? deriveRunStatus(runStatusEvidence(run, spans));
   const active = runInProgress(status.status);
-  const tools = spans.filter(s => s.span_type === "TOOL_CALL");
-  const llms = spans.filter(s => s.span_type?.includes("LLM"));
-  const errs = spans.filter(s => s.status === "ERROR");
-  const dur = run.last_updated_at - run.started_at;
   const model = spans.find(s => s.model)?.model;
   const downloadTrace = async () => {
     try {
@@ -1437,14 +1451,9 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
         // for a 6.2s run). Once finished, the header shows the recorded span.
         startedAt={run.finished ? undefined : run.started_at}
         anthropicModels={anthropicModels}
-        stats={runStatsFor(spans, {
-          spans: spans.length, tools: tools.length, llms: llms.length, errors: errs.length, dur,
-          agents: subAgents.length,
-          inTokens: [...getTokensByModel(spans).values()].reduce((s, v) => s + v.inTok, 0),
-          outTokens: [...getTokensByModel(spans).values()].reduce((s, v) => s + v.outTok, 0),
-        })}
+        stats={headerStats!}
         // The status pill already says "Completed · 1 tool error", so the sentence only says where.
-        failure={failureSentence(spans, status.status === "failed" ? "failed" : active ? "running" : "other")}
+        failure={failure}
         onOpenStep={selectSpan}
         allSpans={spans}
         run={run}

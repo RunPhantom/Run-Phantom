@@ -74,3 +74,15 @@
   .rp-sheet-in { animation: none; }
 }
 html[data-nav="key"] .rp-sheet-in { animation: none; }
+
+/* The title row is measured as a container so Save and Debug drop their
+   labels (keeping their accessible names) before the run title has to
+   truncate: at 1280 wide the row is about 740px. */
+.rp-run-header {
+  container-type: inline-size;
+}
+@container (max-width: 860px) {
+  .rp-run-header [data-action-label] {
+    display: none;
+  }
+}
