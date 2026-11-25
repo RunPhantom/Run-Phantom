@@ -83,7 +83,7 @@ export function ModelPicker({ id, label, target, providers, disabled, onChange, 
       </div>
       {missingKey ? (
         <p id={hintId} className="mt-1.5 text-[12px] leading-[18px] text-rp-ink-muted">
-          Add a {provider.label} key in <Link to="/settings" className="font-medium text-rp-blue underline-offset-2 hover:underline">Settings</Link> to run this model.
+          Add {/^[AEIOU]/.test(provider.label) ? "an" : "a"} {provider.label} key in <Link to="/settings" className="font-medium text-rp-blue underline-offset-2 hover:underline">Settings</Link> to run this model.
         </p>
       ) : keyNote && (
         <p id={hintId} className="mt-1.5 truncate text-[12px] leading-[18px] text-rp-ink-muted" title={keyNote}>{keyNote}</p>
