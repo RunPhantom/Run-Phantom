@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readSse, ResponseLimitError } from "../src/playground/sse";
-import { classifyHttpError, sanitizeProviderMessage } from "../src/playground/providers";
+import { classifyHttpError, playgroundError, sanitizeProviderMessage } from "../src/playground/providers";
 import { parsePlaygroundRunRequest } from "../src/playground/protocol";
 
 function body(chunks: string[]): ReadableStream<Uint8Array> {
@@ -28,6 +28,13 @@ describe("event-stream parser", () => {
 });
 
 describe("provider error classification", () => {
+  test("drops the provider's text for auth errors so a masked key fragment never reaches the UI", () => {
+    const target = { provider: "openai", model: "gpt-5-nano" } as const;
+    const masked = "Incorrect API key provided: zzBOGUSK********************XYZW.";
+    expect(playgroundError("auth", target, { providerMessage: masked, httpStatus: 401 })).toMatchObject({ kind: "auth", providerMessage: null, httpStatus: 401 });
+    expect(playgroundError("quota", target, { providerMessage: "You exceeded your current quota.", httpStatus: 429 }).providerMessage).toBe("You exceeded your current quota.");
+  });
+
   test("separates auth, quota, rate limit, model, overload and request errors", () => {
     expect(classifyHttpError("openai", 401, "{}").kind).toBe("auth");
     expect(classifyHttpError("gemini", 403, JSON.stringify({ error: { status: "PERMISSION_DENIED", message: "denied" } })).kind).toBe("auth");

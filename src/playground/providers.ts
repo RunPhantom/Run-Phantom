@@ -439,7 +439,8 @@ export function playgroundError(kind: PlaygroundErrorKind, target: PlaygroundTar
   return {
     kind,
     message: origin ? `${label} rejected the API key ${origin.source === "store" ? "saved in Settings" : origin.envVar ? `in ${origin.envVar}` : "from the environment"}.` : PLAIN_MESSAGES[kind](label, target.model, status),
-    providerMessage: sanitizeProviderMessage(options.providerMessage, options.key ?? null), httpStatus: status, retryable: RETRYABLE.has(kind),
+    // Auth failures can echo a masked fragment of the rejected key; the plain message is enough to act on.
+    providerMessage: kind === "auth" ? null : sanitizeProviderMessage(options.providerMessage, options.key ?? null), httpStatus: status, retryable: RETRYABLE.has(kind),
     ...(origin ? { key: origin } : {}),
   };
 }
