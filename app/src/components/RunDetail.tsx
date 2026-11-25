@@ -667,10 +667,10 @@ function InlineEdit({ value, onConfirm, className, style, inputStyle }: {
     );
   }
   return (
-    <button type="button" aria-label={`Rename ${value}`} className={`group/edit inline-flex items-center gap-1 cursor-pointer bg-transparent text-left ${className ?? ""}`} style={style}
+    <button type="button" aria-label={`Rename ${value}`} title={value} className={`group/edit inline-flex min-w-0 max-w-full items-center gap-1 cursor-pointer bg-transparent text-left ${className ?? ""}`} style={style}
       onClick={() => setEditing(true)}>
-      {value}
-      <Pencil aria-hidden="true" className="size-3 text-rp-ink-muted opacity-0 transition-opacity duration-250 ease-standard group-hover/edit:opacity-100" />
+      <span className="min-w-0 truncate">{value}</span>
+      <Pencil aria-hidden="true" className="size-3 shrink-0 text-rp-ink-muted opacity-0 transition-opacity duration-250 ease-standard group-hover/edit:opacity-100" />
     </button>
   );
 }
@@ -886,7 +886,7 @@ function ViewHeader({
   const displayTitle = cleanTitle(title);
   const completionUnavailable = run?.capture_completion === "unavailable" || allSpans?.some(span => captureCompletion(span.normalized?.capture) === "unavailable") === true;
   const statusLabel = status.label;
-  const statusPillClass = badgeVariants({ tone: runStatusTone(status.status) });
+  const statusPillClass = cn(badgeVariants({ tone: runStatusTone(status.status) }), "shrink-0");
   return (
     <div className={cn("flex-shrink-0 bg-rp-surface", isReplay ? "px-4 py-2.5" : "px-4 pb-3 pt-4 sm:px-5")}>
       {parentName && onBack ? (
@@ -933,7 +933,7 @@ function ViewHeader({
                   className="truncate font-display text-[20px] font-semibold leading-7 tracking-[-0.02em] text-rp-ink"
                   inputStyle={{ fontSize: 20, fontWeight: 600 }} />
               ) : (
-                <h2 className="truncate font-display text-[20px] font-semibold leading-7 tracking-[-0.02em] text-rp-ink">{displayTitle}</h2>
+                <h2 title={displayTitle} className="min-w-0 truncate font-display text-[20px] font-semibold leading-7 tracking-[-0.02em] text-rp-ink">{displayTitle}</h2>
               )}
               <span
                 data-run-status
