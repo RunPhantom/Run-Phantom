@@ -38,6 +38,8 @@ export const PLAYGROUND_DEFAULT_MODEL: Readonly<Record<PlaygroundProvider, strin
 export const PLAYGROUND_LIMITS = Object.freeze({
   requestBytes: 512 * 1024,
   targets: 3,
+  /** Provider calls in flight across all Playground requests; each may hold a paid call open for callTimeoutMs. */
+  concurrentCalls: 6,
   messages: 100,
   systemChars: 32_000,
   messageChars: 64_000,

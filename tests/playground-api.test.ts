@@ -380,6 +380,21 @@ describe.serial("POST /api/playground/runs", () => {
     ]);
   });
 
+  test("refuses new calls with 429 while too many paid calls are in flight", async () => {
+    const releases: Array<() => void> = [];
+    upstream = () => new Promise<Response>(resolve => { releases.push(() => resolve(openAiText("late"))); });
+    const three = { ...userTurn, targets: [{ provider: "openai", model: "gpt-5-nano" }, { provider: "openai", model: "gpt-5-mini" }, { provider: "openai", model: "gpt-4o-mini" }] };
+    const held = [post(three), post(three)];
+    while (releases.length < 6) await Bun.sleep(5);
+    const refused = await post({ ...userTurn, provider: "openai", model: "gpt-4.1-mini" });
+    expect(refused.status).toBe(429);
+    expect(((await refused.json()) as { error: string }).error).toContain("already running 6 model calls");
+    for (const release of releases) release();
+    expect((await Promise.all(held)).map(response => response.status)).toEqual([200, 200]);
+    upstream = () => openAiText("free again");
+    expect((await post({ ...userTurn, provider: "openai", model: "gpt-4.1-mini" })).status).toBe(200);
+  });
+
   test("refuses invalid requests before contacting any provider", async () => {
     const refusals: Array<[unknown, string]> = [
       [{ ...userTurn, provider: "openai", model: "gpt-6.1-terra" }, "not available in the Playground"],
@@ -403,6 +418,7 @@ describe.serial("POST /api/playground/runs", () => {
     expect(notJson.status).toBe(415);
     const foreign = await post({ ...userTurn, provider: "openai", model: "gpt-5-nano" }, { Origin: "https://evil.example" });
     expect(foreign.status).toBe(403);
+    expect(await foreign.json()).toEqual({ error: "forbidden" });
     expect(calls).toHaveLength(0);
   });
 });

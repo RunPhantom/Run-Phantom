@@ -25,6 +25,7 @@ const SPAN_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 export function createPlaygroundRouter(deps: PlaygroundRouterDeps): express.Router {
   const router = express.Router();
   const providerFetch: PlaygroundFetch = deps.fetch ?? ((url, init) => fetch(url, init));
+  let callsInFlight = 0;
 
   router.use((req, res, next) => {
     res.setHeader("Cache-Control", "no-store");
@@ -43,7 +44,7 @@ export function createPlaygroundRouter(deps: PlaygroundRouterDeps): express.Rout
         };
       }),
       limits: {
-        targets: PLAYGROUND_LIMITS.targets, messages: PLAYGROUND_LIMITS.messages, systemChars: PLAYGROUND_LIMITS.systemChars, messageChars: PLAYGROUND_LIMITS.messageChars,
+        targets: PLAYGROUND_LIMITS.targets, concurrentCalls: PLAYGROUND_LIMITS.concurrentCalls, messages: PLAYGROUND_LIMITS.messages, systemChars: PLAYGROUND_LIMITS.systemChars, messageChars: PLAYGROUND_LIMITS.messageChars,
         totalTextChars: PLAYGROUND_LIMITS.totalTextChars, tools: PLAYGROUND_LIMITS.tools, defaultMaxOutputTokens: PLAYGROUND_LIMITS.defaultMaxOutputTokens,
         maxOutputTokens: PLAYGROUND_LIMITS.maxOutputTokens, callTimeoutMs: PLAYGROUND_LIMITS.callTimeoutMs, requestBytes: PLAYGROUND_LIMITS.requestBytes,
       },
@@ -74,6 +75,19 @@ export function createPlaygroundRouter(deps: PlaygroundRouterDeps): express.Rout
       if (error instanceof PlaygroundRequestError) { res.status(error.status).json({ error: error.message }); return; }
       throw error;
     }
+    if (callsInFlight + request.targets.length > PLAYGROUND_LIMITS.concurrentCalls) {
+      res.status(429).json({ error: `The Playground is already running ${callsInFlight} model calls. Wait for them to finish, then try again.` });
+      return;
+    }
+    callsInFlight += request.targets.length;
+    try {
+      await runTargets(request, res);
+    } finally {
+      callsInFlight -= request.targets.length;
+    }
+  }
+
+  async function runTargets(request: PlaygroundRunRequest, res: Response): Promise<void> {
     const comparisonId = randomUUID();
     const cancel = new AbortController();
     // `close` on the response fires when the client goes away before we finish, including after the request body was read.
