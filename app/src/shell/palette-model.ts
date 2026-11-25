@@ -1,7 +1,7 @@
 import { commandDetail, type PaletteCommand } from "./commands";
 import { fuzzyMatchEntry } from "./fuzzy";
 
-const GROUP_ORDER = ["Go to", "Recent runs", "Search", "Actions", "Help"];
+const GROUP_ORDER = ["Go to", "Recent runs", "Runs", "Search", "Actions", "Help"];
 const MAX_RESULTS = 60;
 
 export interface PaletteRow {
@@ -20,6 +20,16 @@ function groupRank(group: string): number {
   return index === -1 ? GROUP_ORDER.length : index;
 }
 
+/** Ranks just below a contiguous fuzzy hit, so a run found by its words is not buried under scattered-letter matches. */
+const WORD_MATCH_SCORE = 900;
+
+/** True when every whitespace-separated word of the query appears in the text, in any order. */
+export function matchesWords(query: string, text: string): boolean {
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const haystack = text.toLowerCase();
+  return words.length > 0 && words.every(word => haystack.includes(word));
+}
+
 export function buildSections(commands: readonly PaletteCommand[], query: string): PaletteSection[] {
   const trimmed = query.trim();
   const rows: PaletteRow[] = [];
@@ -29,6 +39,7 @@ export function buildSections(commands: readonly PaletteCommand[], query: string
     const detail = commandDetail(command);
     const match = fuzzyMatchEntry(trimmed, command.label, [...(command.keywords ?? []), ...(detail ? [detail] : [])]);
     if (match) rows.push({ command, indices: match.indices, score: match.score });
+    else if (command.searchText && matchesWords(trimmed, command.searchText)) rows.push({ command, indices: [], score: WORD_MATCH_SCORE });
   }
   const byGroup = new Map<string, PaletteRow[]>();
   for (const row of rows) {

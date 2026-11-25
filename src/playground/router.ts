@@ -111,8 +111,9 @@ export function createPlaygroundRouter(deps: PlaygroundRouterDeps): express.Rout
 
     const results = await Promise.all(request.targets.map(async (target, index): Promise<PlaygroundCallResult> => {
       const key = deps.resolveKey(target.provider);
+      const { source, envVar } = deps.keyStatus(target.provider);
       const executed = await executePlaygroundCall({
-        request, target, index, key, fetch: providerFetch, signal: cancel.signal,
+        request, target, index, key, keyOrigin: source ? { source, envVar: source === "env" ? envVar : null } : null, fetch: providerFetch, signal: cancel.signal,
         onDelta: streaming ? text => send("delta", { index, text }) : undefined,
       });
       let runId: string | null = null, spanId: string | null = null;

@@ -1,6 +1,6 @@
 import { estimateListPriceCost, PRICE_TABLE_AS_OF, type ListPriceEstimate } from "../../../../src/pricing/list-prices";
 import type {
-  PlaygroundCallResult, PlaygroundDraft, PlaygroundHistoryRun, PlaygroundErrorKind, PlaygroundMessage, PlaygroundProvider, PlaygroundRunBody, PlaygroundTool,
+  PlaygroundCallResult, PlaygroundDraft, PlaygroundHistoryRun, PlaygroundErrorKind, PlaygroundKeyOrigin, PlaygroundMessage, PlaygroundProvider, PlaygroundProviderInfo, PlaygroundRunBody, PlaygroundTool,
   PlaygroundToolCall, ReasoningEffort,
 } from "../../api/playground";
 
@@ -34,6 +34,8 @@ export interface OpenedFrom {
   runName: string | null;
   spanName: string;
   capturedModel: string | null;
+  /** The Playground model opened in place of capturedModel, which the Playground does not offer; null when it was the same model. */
+  substitutedModel: string | null;
   warnings: string[];
 }
 
@@ -115,6 +117,7 @@ export function parseStoredDraft(raw: string | null): PlaygroundDraftState | nul
       runName: typeof value.openedFrom.runName === "string" ? value.openedFrom.runName : null,
       spanName: str(value.openedFrom.spanName),
       capturedModel: typeof value.openedFrom.capturedModel === "string" ? value.openedFrom.capturedModel : null,
+      substitutedModel: typeof value.openedFrom.substitutedModel === "string" ? value.openedFrom.substitutedModel : null,
       warnings: Array.isArray(value.openedFrom.warnings) ? value.openedFrom.warnings.filter((item): item is string => typeof item === "string") : [],
     }
     : null;
@@ -164,10 +167,36 @@ export function stateFromDraft(draft: PlaygroundDraft, current: PlaygroundDraftS
     toolsEnabled: draft.tools.length > 0,
     toolsText: draft.tools.length ? JSON.stringify(draft.tools, null, 2) : current.toolsText,
     targets: options.targets?.length ? options.targets.slice(0, MAX_COMPARE_COLUMNS) : [{ provider: draft.provider, model: draft.model }],
-    openedFrom: options.openedFrom
-      ? { runId: draft.source.runId, spanId: draft.source.spanId, runName: draft.source.runName, spanName: draft.source.spanName, capturedModel: draft.capturedModel, warnings: draft.warnings }
-      : null,
+    openedFrom: options.openedFrom ? openedFromDraft(draft) : null,
   };
+}
+
+function openedFromDraft(draft: PlaygroundDraft): OpenedFrom {
+  const substituted = draft.modelSubstituted && draft.capturedModel ? draft.capturedModel : null;
+  // The substitution gets its own notice, so its line in the daemon's warning list would only repeat it.
+  const repeat = substituted ? `${substituted} is not available in the Playground` : null;
+  return {
+    runId: draft.source.runId, spanId: draft.source.spanId, runName: draft.source.runName, spanName: draft.source.spanName,
+    capturedModel: draft.capturedModel, substitutedModel: substituted ? draft.model : null,
+    warnings: repeat ? draft.warnings.filter(warning => !warning.startsWith(repeat)) : draft.warnings,
+  };
+}
+
+/**
+ * The model a new compare column starts on: another keyed provider's default first, then any other keyed model, and a
+ * provider without a key only when every keyed model is already shown.
+ */
+export function nextTarget(existing: readonly PlaygroundTarget[], providers: readonly PlaygroundProviderInfo[] | undefined): PlaygroundTarget {
+  const used = new Set(existing.map(target => `${target.provider}/${target.model}`));
+  const free = (provider: PlaygroundProviderInfo, model: string) => !used.has(`${provider.id}/${model}`);
+  for (const configured of [true, false]) {
+    const group = (providers ?? []).filter(provider => provider.configured === configured);
+    const shown = new Set(existing.map(target => target.provider));
+    const ordered = [...group.filter(provider => !shown.has(provider.id)), ...group.filter(provider => shown.has(provider.id))];
+    for (const provider of ordered) if (free(provider, provider.defaultModel)) return { provider: provider.id, model: provider.defaultModel };
+    for (const provider of ordered) for (const model of provider.models) if (free(provider, model.id)) return { provider: provider.id, model: model.id };
+  }
+  return existing[0] ?? { provider: "openai", model: "gpt-5-nano" };
 }
 
 export type ToolsParse = { ok: true; tools: PlaygroundTool[] } | { ok: false; error: string };
@@ -316,8 +345,18 @@ export interface ErrorHelp {
   settings: boolean;
 }
 
-/** A short heading and the next step for each failure kind the daemon reports. */
-export function errorHelp(kind: PlaygroundErrorKind): ErrorHelp {
+/**
+ * A short heading and the next step for each failure kind the daemon reports. A key saved in Settings is used before
+ * the environment variable, so saving a working key fixes a rejected key from either source.
+ */
+export function errorHelp(kind: PlaygroundErrorKind, key?: PlaygroundKeyOrigin | null): ErrorHelp {
+  if (kind === "auth" && key?.source === "store") {
+    return { title: "Key rejected", hint: "Replace the key saved in Settings, or check with the provider that it has not been revoked.", settings: true };
+  }
+  if (kind === "auth" && key?.source === "env") {
+    const variable = key.envVar ?? "the environment variable";
+    return { title: "Key rejected", hint: `No key is saved in Settings, so this one was used. Save a working key in Settings, which takes priority, or fix ${variable} and restart Run Phantom.`, settings: true };
+  }
   switch (kind) {
     case "missing_key": return { title: "No API key", hint: "Add a key for this provider in Settings, or set its API key variable before starting Run Phantom, then run again.", settings: true };
     case "auth": return { title: "Key rejected", hint: "The provider refused the key. Replace it in Settings or check it has not been revoked.", settings: true };

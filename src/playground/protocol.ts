@@ -135,6 +135,13 @@ export interface PlaygroundError {
   providerMessage: string | null;
   httpStatus: number | null;
   retryable: boolean;
+  /** Where the rejected key came from; set on "auth" errors. `envVar` names the variable, never its value. */
+  key?: PlaygroundKeyOrigin;
+}
+
+export interface PlaygroundKeyOrigin {
+  source: "store" | "env";
+  envVar: string | null;
 }
 
 export interface PlaygroundCallResult {

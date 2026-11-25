@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
   PLAYGROUND_LIMITS, emptyUsage, findPlaygroundModel,
-  type PlaygroundError, type PlaygroundErrorKind, type PlaygroundFinishReason, type PlaygroundMessage, type PlaygroundProvider,
+  type PlaygroundError, type PlaygroundErrorKind, type PlaygroundFinishReason, type PlaygroundKeyOrigin, type PlaygroundMessage, type PlaygroundProvider,
   type PlaygroundRunRequest, type PlaygroundTarget, type PlaygroundToolCall, type PlaygroundUsage,
 } from "./protocol";
 import type { SseEvent } from "./sse";
@@ -97,6 +97,15 @@ function geminiResponse(content: string): Record<string, unknown> {
   return { result: content };
 }
 
+/**
+ * Gemini 3 rejects a replayed model turn whose first functionCall part has no thoughtSignature (HTTP 400 "Function call
+ * is missing a thought_signature"). Calls captured from OpenAI, Anthropic or OTel GenAI traces never carry one, so the
+ * turn is sent with the placeholder Google documents for function calls the model did not produce itself (Gemini API
+ * "Thought signatures"). Gemini checks only the first call of each step, so the placeholder goes on that call alone and
+ * any real signatures on later calls are kept.
+ */
+export const GEMINI_UNSIGNED_CALL_SIGNATURE = "skip_thought_signature_validator";
+
 function geminiContents(messages: PlaygroundMessage[]): unknown[] {
   const names = new Map<string, string>();
   const out: Array<{ role: "user" | "model"; parts: unknown[] }> = [];
@@ -108,10 +117,14 @@ function geminiContents(messages: PlaygroundMessage[]): unknown[] {
   for (const message of messages) {
     if (message.role === "user") push("user", [{ text: message.content }]);
     else if (message.role === "assistant") {
-      for (const call of message.toolCalls ?? []) names.set(call.id, call.name);
+      const calls = message.toolCalls ?? [];
+      for (const call of calls) names.set(call.id, call.name);
       push("model", [
         ...(message.content.trim() ? [{ text: message.content }] : []),
-        ...(message.toolCalls ?? []).map(call => ({ functionCall: { ...geminiCallId(call.id), name: call.name, args: call.arguments }, ...(call.signature ? { thoughtSignature: call.signature } : {}) })),
+        ...calls.map((call, position) => ({
+          functionCall: { ...geminiCallId(call.id), name: call.name, args: call.arguments },
+          ...(call.signature ? { thoughtSignature: call.signature } : position === 0 ? { thoughtSignature: GEMINI_UNSIGNED_CALL_SIGNATURE } : {}),
+        })),
       ]);
     } else push("user", [{ functionResponse: { ...geminiCallId(message.toolCallId), name: message.name ?? names.get(message.toolCallId) ?? "tool", response: geminiResponse(message.content) } }]);
   }
@@ -392,7 +405,7 @@ export function createAccumulator(provider: PlaygroundProvider): StreamAccumulat
 
 const PLAIN_MESSAGES: Record<PlaygroundErrorKind, (label: string, model: string, status: number | null) => string> = {
   missing_key: label => `No ${label} API key is configured. Add one in Settings under API keys.`,
-  auth: label => `${label} rejected the API key. Check the key in Settings.`,
+  auth: label => `${label} rejected the API key.`,
   rate_limit: label => `${label} rate-limited this request. Wait a moment and try again.`,
   quota: label => `${label} reports that the account is out of credit or quota.`,
   invalid_model: (label, model) => `${label} does not offer ${model} to this API key.`,
@@ -419,11 +432,15 @@ export function sanitizeProviderMessage(value: string | null | undefined, key: s
   return cleaned || null;
 }
 
-export function playgroundError(kind: PlaygroundErrorKind, target: PlaygroundTarget, options: { providerMessage?: string | null; httpStatus?: number | null; key?: string | null } = {}): PlaygroundError {
+export function playgroundError(kind: PlaygroundErrorKind, target: PlaygroundTarget, options: { providerMessage?: string | null; httpStatus?: number | null; key?: string | null; keyOrigin?: PlaygroundKeyOrigin | null } = {}): PlaygroundError {
   const status = options.httpStatus ?? null;
+  const label = PROVIDER_LABEL[target.provider];
+  const origin = kind === "auth" ? options.keyOrigin ?? null : null;
   return {
-    kind, message: PLAIN_MESSAGES[kind](PROVIDER_LABEL[target.provider], target.model, status),
+    kind,
+    message: origin ? `${label} rejected the API key ${origin.source === "store" ? "saved in Settings" : origin.envVar ? `in ${origin.envVar}` : "from the environment"}.` : PLAIN_MESSAGES[kind](label, target.model, status),
     providerMessage: sanitizeProviderMessage(options.providerMessage, options.key ?? null), httpStatus: status, retryable: RETRYABLE.has(kind),
+    ...(origin ? { key: origin } : {}),
   };
 }
 

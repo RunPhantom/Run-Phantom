@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpRight, ClockArrowUp, Play, Square, X } from "lucide-react";
+import { ArrowUpRight, ClockArrowUp, Play, Square, TriangleAlert, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/input";
@@ -14,26 +14,13 @@ import { effectiveMaxTemperature, ModelPicker, modelLabel, PlaygroundEditor } fr
 import { ResultColumn, type ColumnState } from "../components/playground/PlaygroundOutput";
 import { PLAYGROUND_HISTORY_KEY, PlaygroundHistory } from "../components/playground/PlaygroundHistory";
 import {
-  appendToolRound, buildRunBody, draftHasContent, loadDraft, MAX_COMPARE_COLUMNS, metricLeaders, saveDraft, stateFromDraft,
+  appendToolRound, buildRunBody, draftHasContent, loadDraft, MAX_COMPARE_COLUMNS, metricLeaders, nextTarget, saveDraft, stateFromDraft,
   type BuildResult, type PlaygroundDraftState, type PlaygroundTarget,
 } from "../components/playground/playground-model";
 import { useRegisterShortcuts } from "../shell/commands";
 import { ariaKeyShortcuts, formatKeys, isMacPlatform } from "../shell/keyboard";
 
 const RUN_KEYS = "mod+enter";
-
-function nextTarget(existing: readonly PlaygroundTarget[], providers: readonly PlaygroundProviderInfo[] | undefined): PlaygroundTarget {
-  const used = new Set(existing.map(target => `${target.provider}/${target.model}`));
-  const ordered = [...(providers ?? [])].sort((a, b) => Number(b.configured) - Number(a.configured));
-  for (const provider of ordered) {
-    const candidate = { provider: provider.id, model: provider.defaultModel };
-    if (!used.has(`${candidate.provider}/${candidate.model}`)) return candidate;
-  }
-  for (const provider of ordered) for (const model of provider.models) {
-    if (!used.has(`${provider.id}/${model.id}`)) return { provider: provider.id, model: model.id };
-  }
-  return existing[0] ?? { provider: "openai", model: "gpt-5-nano" };
-}
 
 const BUILD_FIELD_SELECTOR: Record<Exclude<BuildResult, { ok: true }>["field"], string> = {
   messages: "[data-playground-message] textarea",
@@ -331,6 +318,15 @@ export function PlaygroundPage() {
                     <X aria-hidden="true" className="size-4" />
                   </button>
                 </div>
+                {opened.substitutedModel && opened.capturedModel && (
+                  <p className="mt-1.5 flex items-start gap-1.5 text-[12px] leading-[18px] text-rp-ink" data-playground-model-substituted>
+                    <TriangleAlert aria-hidden="true" className="mt-px size-3.5 shrink-0 text-rp-warning" />
+                    <span>
+                      <span className="font-semibold">Different model.</span> This step called <code className="font-mono text-[11.5px]">{opened.capturedModel}</code>, which
+                      the Playground does not offer, so it opened on {providers?.flatMap(group => group.models).find(model => model.id === opened.substitutedModel)?.label ?? opened.substitutedModel} instead. Results can differ from the captured call.
+                    </span>
+                  </p>
+                )}
                 {replaced && (
                   <p className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[12px] leading-[18px] text-rp-ink-soft" data-playground-replaced>
                     This replaced your previous draft.

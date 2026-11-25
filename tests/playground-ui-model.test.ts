@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { createSseParser, toStreamEvent, type PlaygroundCallResult, type PlaygroundDraft } from "../app/src/api/playground";
+import { createSseParser, toStreamEvent, type PlaygroundCallResult, type PlaygroundDraft, type PlaygroundProviderInfo } from "../app/src/api/playground";
 import {
-  appendToolRound, buildRunBody, defaultDraft, draftHasContent, errorHelp, estimateResultCost, groupHistory, metricLeaders, orderByColumn,
+  appendToolRound, buildRunBody, defaultDraft, draftHasContent, errorHelp, estimateResultCost, groupHistory, metricLeaders, nextTarget, orderByColumn,
   parseStoredDraft, parseToolsText, recordedCostUsd, stateFromDraft, targetIndexOf, type PlaygroundDraftState,
 } from "../app/src/components/playground/playground-model";
 import { diffStats, wordDiff } from "../app/src/components/playground/word-diff";
@@ -26,7 +26,7 @@ describe("buildRunBody", () => {
     const built = buildRunBody(draft({
       system: "Be brief.", temperature: "0.3", maxOutputTokens: "256", reasoningEffort: "low", toolsEnabled: true,
       targets: [{ provider: "openai", model: "gpt-5-nano" }, { provider: "anthropic", model: "claude-haiku-4-5-20251001" }],
-      openedFrom: { runId: "run_1", spanId: "span_1", runName: "Triage", spanName: "chat", capturedModel: null, warnings: [] },
+      openedFrom: { runId: "run_1", spanId: "span_1", runName: "Triage", spanName: "chat", capturedModel: null, substitutedModel: null, warnings: [] },
     }));
     expect(built.ok).toBe(true);
     if (!built.ok) return;
@@ -112,7 +112,9 @@ describe("drafts", () => {
     };
     const state = stateFromDraft(source, defaultDraft(), { openedFrom: true });
     expect(state).toMatchObject({ system: "Triage tickets.", temperature: "0.2", maxOutputTokens: "200", toolsEnabled: true, targets: [{ provider: "openai", model: "gpt-5-nano" }] });
-    expect(state.openedFrom).toEqual({ runId: "support_triage_0613", spanId: "support_triage_0613_llm-2", runName: "Customer support triage", spanName: "ai.generateText", capturedModel: "gpt-4-0613", warnings: source.warnings });
+    expect(state.openedFrom).toEqual({ runId: "support_triage_0613", spanId: "support_triage_0613_llm-2", runName: "Customer support triage", spanName: "ai.generateText", capturedModel: "gpt-4-0613", substitutedModel: "gpt-5-nano", warnings: [] });
+    expect(stateFromDraft({ ...source, model: "gpt-4.1-mini", capturedModel: "gpt-4.1-mini-2025-04-14", modelSubstituted: false, warnings: ["Reasoning blocks from the captured call were left out."] }, defaultDraft(), { openedFrom: true }).openedFrom)
+      .toMatchObject({ capturedModel: "gpt-4.1-mini-2025-04-14", substitutedModel: null, warnings: ["Reasoning blocks from the captured call were left out."] });
     const built = buildRunBody(state);
     expect(built.ok && built.body.messages).toEqual(source.messages);
     expect(built.ok && built.body.source).toEqual({ runId: "support_triage_0613", spanId: "support_triage_0613_llm-2" });
@@ -175,6 +177,41 @@ describe("result facts", () => {
     }
     expect(errorHelp("auth").settings).toBe(true);
     expect(errorHelp("quota").settings).toBe(false);
+  });
+
+  test("a rejected key says which key was used and how to fix that source", () => {
+    expect(errorHelp("auth", { source: "store", envVar: null }).hint).toBe("Replace the key saved in Settings, or check with the provider that it has not been revoked.");
+    expect(errorHelp("auth", { source: "env", envVar: "OPENAI_API_KEY" })).toEqual({
+      title: "Key rejected", settings: true,
+      hint: "No key is saved in Settings, so this one was used. Save a working key in Settings, which takes priority, or fix OPENAI_API_KEY and restart Run Phantom.",
+    });
+    expect(errorHelp("quota", { source: "env", envVar: "OPENAI_API_KEY" }).title).toBe("Out of quota");
+  });
+});
+
+describe("nextTarget", () => {
+  const provider = (id: PlaygroundProviderInfo["id"], configured: boolean, models: string[]): PlaygroundProviderInfo => ({
+    id, label: id, configured, keySource: configured ? "store" : null, defaultModel: models[0]!,
+    models: models.map(model => ({ id: model, label: model, temperature: true, maxTemperature: 2, reasoningEffort: false })),
+  });
+  const openai = (configured: boolean) => provider("openai", configured, ["gpt-5-nano", "gpt-5-mini", "gpt-4.1-mini"]);
+  const anthropic = (configured: boolean) => provider("anthropic", configured, ["claude-haiku-4-5-20251001", "claude-haiku-5-5"]);
+  const gemini = (configured: boolean) => provider("gemini", configured, ["gemini-3.8-flash"]);
+
+  test("stays on keyed models before offering a provider without a key", () => {
+    const providers = [openai(true), anthropic(false), gemini(false)];
+    expect(nextTarget([{ provider: "openai", model: "gpt-5-nano" }], providers)).toEqual({ provider: "openai", model: "gpt-5-mini" });
+    expect(nextTarget([{ provider: "openai", model: "gpt-5-nano" }, { provider: "openai", model: "gpt-5-mini" }], providers)).toEqual({ provider: "openai", model: "gpt-4.1-mini" });
+    expect(nextTarget([{ provider: "openai", model: "gpt-5-nano" }, { provider: "openai", model: "gpt-5-mini" }, { provider: "openai", model: "gpt-4.1-mini" }], providers))
+      .toEqual({ provider: "anthropic", model: "claude-haiku-4-5-20251001" });
+  });
+
+  test("prefers another keyed provider's default for a cross-provider compare", () => {
+    const providers = [openai(true), anthropic(true), gemini(true)];
+    expect(nextTarget([{ provider: "openai", model: "gpt-5-nano" }], providers)).toEqual({ provider: "anthropic", model: "claude-haiku-4-5-20251001" });
+    expect(nextTarget([{ provider: "openai", model: "gpt-5-nano" }, { provider: "anthropic", model: "claude-haiku-4-5-20251001" }], providers)).toEqual({ provider: "gemini", model: "gemini-3.8-flash" });
+    expect(nextTarget([{ provider: "anthropic", model: "claude-haiku-5-5" }], [openai(false), anthropic(true), gemini(true)])).toEqual({ provider: "gemini", model: "gemini-3.8-flash" });
+    expect(nextTarget([{ provider: "openai", model: "gpt-5-nano" }], undefined)).toEqual({ provider: "openai", model: "gpt-5-nano" });
   });
 });
 

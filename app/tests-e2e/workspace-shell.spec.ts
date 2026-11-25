@@ -53,7 +53,7 @@ test("command palette opens from the keyboard, filters, navigates and restores f
 
   await page.keyboard.press(`${await modKey(page)}+k`);
   await input.fill("zzzz-no-such-command");
-  await expect(palette.getByText("No pages, runs or commands match", { exact: false })).toBeVisible();
+  await expect(palette.getByText("No pages, commands or recent runs match “zzzz-no-such-command”. Search below looks through every run and step.", { exact: true })).toBeVisible();
   await expect(listbox.getByRole("group", { name: "Search", exact: true })).toBeVisible();
   await input.fill("agent.turn");
   await page.getByRole("option", { name: /^Search steps for/ }).click();

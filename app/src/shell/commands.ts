@@ -29,6 +29,8 @@ export interface PaletteCommand {
   group: CommandGroup;
   /** Extra words the fuzzy filter matches against, e.g. synonyms or the route path. */
   keywords?: readonly string[];
+  /** Text matched word by word in any order when the fuzzy filter misses, e.g. every name a run is known by. */
+  searchText?: string;
   /**
    * Secondary text shown on the right of the row and matched by the filter. Pass a
    * function for text that ages, such as relative times; the palette calls it on render.
