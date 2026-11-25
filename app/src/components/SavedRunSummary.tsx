@@ -22,7 +22,7 @@ export function SavedRunSummary({ event }: { event: SavedEvent }) {
   const [keyConfigured, setKeyConfigured] = useState<boolean | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ tone: "error" | "ok"; text: string } | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
     getSecretStatuses().then(keys => { if (live) setKeyConfigured(!!keys[PROVIDER_SUMMARY.provider]?.configured); }, () => { if (live) setKeyConfigured(false); });
@@ -35,9 +35,9 @@ export function SavedRunSummary({ event }: { event: SavedEvent }) {
     setBusy(true); setMessage(null);
     try {
       const result = await requestProviderSummary(event);
-      setMessage("reason" in result ? { tone: "error", text: failureCopy[result.reason] ?? "The summary could not be written." } : { tone: "ok", text: `Summary written by ${PROVIDER_SUMMARY.providerLabel}.` });
+      if ("reason" in result) setMessage(failureCopy[result.reason] ?? "The summary could not be written.");
     } catch (cause) {
-      setMessage({ tone: "error", text: cause instanceof Error ? cause.message : "The summary could not be written." });
+      setMessage(cause instanceof Error ? cause.message : "The summary could not be written.");
     } finally { setBusy(false); setOpen(false); }
   };
   return (
@@ -46,7 +46,7 @@ export function SavedRunSummary({ event }: { event: SavedEvent }) {
         <h2 className="rp-meta uppercase tracking-[0.12em]">Summary</h2>
         <p className="mt-1 text-[13px] leading-5 text-rp-ink">{event.summary || "No summary yet."}</p>
         <p className="rp-field-hint mt-1">{source === "provider" ? `Written by ${PROVIDER_SUMMARY.providerLabel} (${PROVIDER_SUMMARY.model}) at your request.` : "Written on this machine from the captured run. Nothing was sent to a provider."}</p>
-        {message && <p role={message.tone === "error" ? "alert" : "status"} className={message.tone === "error" ? "mt-1 text-xs text-rp-danger" : "mt-1 text-xs text-rp-ink-soft"}>{message.text}</p>}
+        {message && <p role="alert" className="mt-1 text-xs text-rp-danger">{message}</p>}
       </div>
       <div className="flex flex-col items-start gap-1">
         <Button type="button" variant="outline" size="sm" disabled={!keyConfigured || busy || !content.trim()} loading={busy} onClick={() => setOpen(true)}>
