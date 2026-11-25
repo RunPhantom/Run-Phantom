@@ -10,6 +10,7 @@ import { randomUUID } from "crypto";
 import { normalizeOtelId } from "./ids";
 import { searchRuns, RunSearchError } from "./run-search";
 import { hasProviderSummaryConsent, PROVIDER_SUMMARY } from "./summary-protocol";
+import { scrubSecretText } from "./verification/redaction";
 import { searchSpanHits, searchSuggestions, localSearchScope, SearchResourceError } from "./local-search-resources";
 import { getRunComparison, RunComparisonError } from "./run-comparison";
 import { publicCaptureMetadata } from "./spans/adapters/capture-visibility";
@@ -2780,7 +2781,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
           model: PROVIDER_SUMMARY.model,
           max_tokens: 200,
           system: "Summarize this AI agent interaction in 1-2 sentences. Focus on what user asked and what happened (tools used, outcome). Be specific and brief. Avoid unnecessary articles like 'the', 'a', 'an' — write in a terse, telegraphic style. If the trace is sparse or incomplete, summarize whatever is present in one short phrase; NEVER ask for more information or reply with a request for clarification.",
-          messages: [{ role: "user", content: content.slice(0, PROVIDER_SUMMARY.maxFieldChars * 3) }],
+          messages: [{ role: "user", content: scrubSecretText(content).slice(0, PROVIDER_SUMMARY.maxContentChars) }],
         }),
       });
       if (!r.ok) {

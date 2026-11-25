@@ -46,7 +46,10 @@ test("the summary route never contacts a provider without explicit consent for t
     expect(await accepted.json()).toEqual({ summary: "Reviewed PR; tests failed." });
     expect(providerCalls).toHaveLength(1);
     expect(providerCalls[0].body.model).toBe(PROVIDER_SUMMARY.model);
-    expect(providerCalls[0].body.messages[0].content).toHaveLength(PROVIDER_SUMMARY.maxFieldChars * 3);
+    expect(providerCalls[0].body.messages[0].content).toHaveLength(PROVIDER_SUMMARY.maxContentChars);
+    const secret = `sk-proj-${"A1b2C3d4".repeat(4)}`;
+    expect((await post({ content: `User: deploy with ${secret}`, consent: { provider: "anthropic", model: PROVIDER_SUMMARY.model } })).status).toBe(200);
+    expect(providerCalls[1].body.messages[0].content).toBe("User: deploy with [REDACTED]");
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
   }

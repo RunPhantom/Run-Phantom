@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import { z } from "zod";
 import { apiJson, apiJsonOrNull, jsonInit } from "./request";
 import { PROVIDER_SUMMARY, type ProviderSummaryConsent, type ProviderSummaryResult } from "../../../src/summary-protocol";
+import { scrubSecretText } from "../../../src/verification/redaction";
 import type { LiveEvent, Run, Span, SubAgent } from "../utils/types";
 export const SAVED_RUNS_REFRESH_EVENT = "runphantom:saved-runs:updated";
 
@@ -280,15 +281,25 @@ export function savedSummarySource(event: SavedEvent): SummarySource | null {
   return source === "local" || source === "provider" ? source : null;
 }
 
-/** Exactly what a provider summary sends; shown to the user before they confirm. */
+/** The deterministic summary written on this machine, kept after a provider summary replaces it. */
+export function savedLocalSummary(event: SavedEvent): string | null {
+  const kept = event.properties?.local_summary;
+  if (typeof kept === "string" && kept.trim()) return kept;
+  return savedSummarySource(event) === "local" && event.summary ? event.summary : null;
+}
+
+/** Exactly what a provider summary sends, after the same scrub and cap the daemon applies; shown before the user confirms. */
 export function providerSummaryContent(event: SavedEvent): string {
   const max = PROVIDER_SUMMARY.maxFieldChars;
-  return [
+  const steps = savedLocalSummary(event);
+  const content = [
     `Event: ${event.event_name}`,
+    steps ? `Recorded steps: ${steps}` : null,
     event.user_input ? `User: ${event.user_input.slice(0, max)}` : null,
     event.assistant_output ? `Assistant: ${event.assistant_output.slice(0, max)}` : null,
     event.signals?.length ? `Signals: ${event.signals.map(s => s.name).join(", ")}` : null,
   ].filter(Boolean).join("\n\n");
+  return scrubSecretText(content).slice(0, PROVIDER_SUMMARY.maxContentChars);
 }
 
 /** Sends the run excerpt to the provider only after the user confirmed in the UI. */
@@ -296,7 +307,10 @@ export async function requestProviderSummary(event: SavedEvent): Promise<Provide
   const content = providerSummaryContent(event);
   const consent: ProviderSummaryConsent = { provider: PROVIDER_SUMMARY.provider, model: PROVIDER_SUMMARY.model };
   const result = await apiJson<ProviderSummaryResult>("/api/summarize", jsonInit("POST", { content, consent }));
-  if (result.summary) updateSavedEvent(event.id, { summary: result.summary, properties: { ...event.properties, summary_source: "provider" } });
+  if (result.summary) {
+    const localSummary = savedLocalSummary(event);
+    updateSavedEvent(event.id, { summary: result.summary, properties: { ...event.properties, summary_source: "provider", ...(localSummary ? { local_summary: localSummary } : {}) } });
+  }
   return result;
 }
 

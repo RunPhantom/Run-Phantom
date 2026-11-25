@@ -727,6 +727,7 @@ function buildSavedEventFromRun({
   const outputSpan = llmSpans.find(s => s.output_payload);
   if (outputSpan?.output_payload) assistantOutput = outputSpan.output_payload;
   const eventName = run.event_name ?? run.name ?? run.id.slice(0, 12);
+  const summary = localRunSummary({ name: eventName, userInput, spans });
 
   return {
     id: run.id,
@@ -738,8 +739,8 @@ function buildSavedEventFromRun({
     assistant_output: assistantOutput,
     saved_at: Date.now(),
     folder,
-    summary: localRunSummary({ name: eventName, userInput, spans }),
-    properties: { summary_source: "local", ...(annotationPreview ? { annotation_preview: annotationPreview } : {}) },
+    summary,
+    properties: { summary_source: "local", local_summary: summary, ...(annotationPreview ? { annotation_preview: annotationPreview } : {}) },
   };
 }
 

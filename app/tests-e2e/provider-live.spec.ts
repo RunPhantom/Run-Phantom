@@ -53,7 +53,7 @@ test("live providers: saving writes a local summary and Anthropic is called only
   await expect.poll(async () => {
     const response = await request.get(savedFixtureUrl);
     const saved = await response.json();
-    return saved.event?.summary === result.summary && saved.event?.properties?.summary_source === "provider";
+    return saved.event?.summary === result.summary && saved.event?.properties?.summary_source === "provider" && typeof saved.event?.properties?.local_summary === "string";
   }, { timeout: 10_000 }).toBe(true);
 });
 
