@@ -65,7 +65,9 @@ import {
 } from "./db";
 import { StatsRequestError } from "./stats/common";
 import { computeOverview } from "./stats/overview";
-import { listRuns } from "./stats/runs-list";
+import { countRuns, listRuns } from "./stats/runs-list";
+import { createSavedView, deleteSavedView, listSavedViews, savedViewsWithCounts, updateSavedView } from "./saved-views";
+import { RunsViewError, parseSavedViewCreate, parseSavedViewUpdate } from "./saved-views-protocol";
 import { sliceSpanPayload } from "./payload-slice";
 import { startCodingHookOwner } from "./coding-hooks/owner";
 import { CodingHookController } from "./coding-hooks/service";
@@ -2669,6 +2671,40 @@ export async function createServer(port: number, options: { comparisons?: Compar
     const id = (req.params as unknown as string[])[0];
     deleteCachedRun(id);
     res.json({ ok: true });
+  });
+
+  const savedViewError = (res: Response, error: unknown) => {
+    if (error instanceof RunsViewError) { res.status(error.status).json({ error: error.message }); return; }
+    console.error("[runphantom] Saved views failed:", error);
+    res.status(500).json({ error: "Saved views unavailable" });
+  };
+  app.get("/api/saved-views", (_req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      const views = savedViewsWithCounts(listSavedViews(getDbPath()), queries => countRuns(getDrizzleDb().$client, getDbPath(), queries));
+      res.json({ views });
+    } catch (error) { savedViewError(res, error); }
+  });
+  app.post("/api/saved-views", (req, res) => {
+    try {
+      const view = createSavedView(getDbPath(), parseSavedViewCreate(req.body));
+      broadcast("saved_views", { id: view.id });
+      res.status(201).json({ view });
+    } catch (error) { savedViewError(res, error); }
+  });
+  app.patch("/api/saved-views/:id", (req, res) => {
+    try {
+      const view = updateSavedView(getDbPath(), req.params.id, parseSavedViewUpdate(req.body));
+      broadcast("saved_views", { id: view.id });
+      res.json({ view });
+    } catch (error) { savedViewError(res, error); }
+  });
+  app.delete("/api/saved-views/:id", (req, res) => {
+    try {
+      deleteSavedView(getDbPath(), req.params.id);
+      broadcast("saved_views", { id: req.params.id });
+      res.json({ ok: true });
+    } catch (error) { savedViewError(res, error); }
   });
 
   // Saved events index + folders — server-side store so saves are visible
