@@ -64,9 +64,11 @@ export function detectSubAgents(spans: SpanRow[]): SubAgent[] {
     // Detect sub-agent patterns:
     // 1. Classic agentic loop: TOOL > LLM > TOOL (tool contains LLM that uses tools)
     // 2. Named sub-agent: TOOL > agent.subagent (Claude Agent SDK pattern — may not have tool children)
+    // 3. OpenTelemetry GenAI: TOOL > invoke_agent > LLM, where the agent's model and tool calls are siblings
     const kids = children.get(span.id) ?? [];
     const llmKids = kids.filter(k => k.span_type?.includes("LLM"));
-    let hasAgenticLoop = false;
+    let hasAgenticLoop = kids.some(kid => kid.span_type === "AGENT_ROOT"
+      && (children.get(kid.id) ?? []).some(grandkid => grandkid.span_type?.includes("LLM")));
     for (const llm of llmKids) {
       // Pattern 1: LLM child has TOOL grandchildren
       const grandkids = children.get(llm.id) ?? [];
