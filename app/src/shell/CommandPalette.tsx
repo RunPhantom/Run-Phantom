@@ -31,6 +31,8 @@ function Highlighted({ text, indices }: { text: string; indices: number[] }): Re
 }
 
 const DETAIL_REFRESH_MS = 30_000;
+/** /api/runs returns up to 5000 metrics-enriched rows, so a palette opened again within this window reuses the list. */
+const RECENT_RUNS_FRESH_MS = 10_000;
 
 const STATUS_DOTS: Record<PaletteStatus["tone"], string> = {
   ok: "bg-rp-ink-faint",
@@ -75,7 +77,8 @@ function PaletteBody() {
   const [, setTick] = useState(0);
 
   useEffect(() => {
-    void queryClient.invalidateQueries({ queryKey: ["runs"], exact: true });
+    const updatedAt = queryClient.getQueryState(["runs"])?.dataUpdatedAt ?? 0;
+    if (Date.now() - updatedAt > RECENT_RUNS_FRESH_MS) void queryClient.invalidateQueries({ queryKey: ["runs"], exact: true });
     const timer = window.setInterval(() => setTick(tick => tick + 1), DETAIL_REFRESH_MS);
     return () => window.clearInterval(timer);
   }, [queryClient]);
