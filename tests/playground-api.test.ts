@@ -426,14 +426,38 @@ describe.serial("POST /api/playground/runs", () => {
 describe.serial("GET /api/playground/models", () => {
   test("lists the allow-listed models and key status without exposing keys", async () => {
     delete process.env.ANTHROPIC_API_KEY;
-    const body = await (await fetch(`${base}/api/playground/models`)).json() as { providers: Array<{ id: string; configured: boolean; keySource: string | null; models: Array<{ id: string }> }>; limits: { maxOutputTokens: number } };
-    expect(body.providers.map(item => [item.id, item.configured, item.keySource, item.models.map(model => model.id)])).toEqual([
-      ["openai", true, "env", ["gpt-5-nano", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"]],
-      ["anthropic", false, null, ["claude-haiku-4-5-20251001", "claude-haiku-5-5", "claude-sonnet-5-5"]],
-      ["gemini", true, "env", ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]],
+    const body = await (await fetch(`${base}/api/playground/models`)).json() as { providers: Array<{ id: string; configured: boolean; keySource: string | null; keyEnvVar: string | null; models: Array<{ id: string }> }>; limits: { maxOutputTokens: number } };
+    expect(body.providers.map(item => [item.id, item.configured, item.keySource, item.keyEnvVar, item.models.map(model => model.id)])).toEqual([
+      ["openai", true, "env", "OPENAI_API_KEY", ["gpt-5-nano", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"]],
+      ["anthropic", false, null, null, ["claude-haiku-4-5-20251001", "claude-haiku-5-5", "claude-sonnet-5-5"]],
+      ["gemini", true, "env", "GEMINI_API_KEY", ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]],
     ]);
     expect(body.limits.maxOutputTokens).toBe(8192);
     expect(JSON.stringify(body)).not.toContain(KEYS.openai);
+  });
+
+  test("reads GOOGLE_API_KEY, and a key saved in Settings wins over the environment", async () => {
+    delete process.env.GEMINI_API_KEY;
+    process.env.GOOGLE_API_KEY = "synthetic-google-env-key";
+    try {
+      const models = async () => (await (await fetch(`${base}/api/playground/models`)).json() as { providers: Array<{ id: string; keySource: string | null; keyEnvVar: string | null }> }).providers;
+      expect((await models()).find(item => item.id === "gemini")).toMatchObject({ keySource: "env", keyEnvVar: "GOOGLE_API_KEY" });
+      const saved = await fetch(`${base}/api/secrets/openai`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value: "synthetic-saved-openai-key" }) });
+      expect(saved.status).toBe(200);
+      expect(await saved.json()).toEqual({ key: "openai", status: { configured: true, source: "store", env_var: "OPENAI_API_KEY", stored: true, env_available: true } });
+      expect((await models()).find(item => item.id === "openai")).toMatchObject({ keySource: "store", keyEnvVar: null });
+
+      upstream = () => openAiText("Hello there");
+      const response = await post({ ...userTurn, provider: "openai", model: "gpt-5-nano" });
+      const [result] = (await response.json() as { results: Array<{ runId: string; status: string }> }).results;
+      expect(result.status).toBe("ok");
+      expect(calls[0].headers.Authorization).toBe("Bearer synthetic-saved-openai-key");
+      const trace = JSON.stringify(getRunWithSpans(result.runId));
+      for (const value of ["synthetic-saved-openai-key", KEYS.openai, "synthetic-google-env-key"]) expect(trace).not.toContain(value);
+    } finally {
+      await fetch(`${base}/api/secrets/openai`, { method: "DELETE" });
+      delete process.env.GOOGLE_API_KEY;
+    }
   });
 });
 

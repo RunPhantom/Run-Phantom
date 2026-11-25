@@ -319,7 +319,7 @@ export interface ErrorHelp {
 /** A short heading and the next step for each failure kind the daemon reports. */
 export function errorHelp(kind: PlaygroundErrorKind): ErrorHelp {
   switch (kind) {
-    case "missing_key": return { title: "No API key", hint: "Add a key for this provider in Settings, then run again.", settings: true };
+    case "missing_key": return { title: "No API key", hint: "Add a key for this provider in Settings, or set its API key variable before starting Run Phantom, then run again.", settings: true };
     case "auth": return { title: "Key rejected", hint: "The provider refused the key. Replace it in Settings or check it has not been revoked.", settings: true };
     case "quota": return { title: "Out of quota", hint: "The account has no credit or quota left. Add billing with the provider, or pick another model.", settings: false };
     case "rate_limit": return { title: "Rate limited", hint: "Too many requests in a short time. Wait a minute and run again.", settings: false };

@@ -23,6 +23,8 @@ export interface PlaygroundProviderInfo {
   label: string;
   configured: boolean;
   keySource: "env" | "store" | null;
+  /** The variable the key is read from when keySource is "env", e.g. OPENAI_API_KEY. */
+  keyEnvVar?: string | null;
   defaultModel: string;
   models: PlaygroundModelInfo[];
 }

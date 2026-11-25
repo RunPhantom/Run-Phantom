@@ -108,6 +108,28 @@ test("the editor builds a prompt, validates it and keeps the draft", async ({ pa
   });
 });
 
+test("a key from the daemon's environment is named by its variable, never shown", async ({ page, runPhantom }) => {
+  await page.route("**/api/playground/models", async (route: Route) => {
+    const response = await route.fetch();
+    const body = await response.json() as { providers: Array<Record<string, unknown>> };
+    body.providers = body.providers.map(provider => provider.id === "openai" ? { ...provider, configured: true, keySource: "env", keyEnvVar: "OPENAI_API_KEY" }
+      : provider.id === "anthropic" ? { ...provider, configured: true, keySource: "store", keyEnvVar: null } : provider);
+    await route.fulfill({ response, json: body });
+  });
+  await openPlayground(page, runPhantom.url);
+
+  const model = page.getByRole("combobox", { name: "Model", exact: true });
+  await expect(model).toHaveValue("openai/gpt-5-nano");
+  await expect(page.locator("#playground-model-0-key")).toHaveText("Using OPENAI_API_KEY from the environment");
+  await expect(model).toHaveAttribute("aria-describedby", "playground-model-0-key");
+  await expect(page.getByText("No key saved")).toHaveCount(0);
+  await expect(model.locator("optgroup").first()).toHaveAttribute("label", "OpenAI · key from environment");
+  await expect(model.locator("optgroup").nth(1)).toHaveAttribute("label", "Anthropic · key saved");
+
+  await model.selectOption("anthropic/claude-haiku-4-5-20251001");
+  await expect(page.locator("#playground-model-0-key")).toHaveText("Using the Anthropic key saved in Settings");
+});
+
 test("compare runs stream into side-by-side columns with metrics, run links and a word diff", async ({ page, runPhantom }) => {
   const requests = await mockRuns(page, body => {
     const targets = body.targets as Array<{ provider: "openai" | "anthropic" | "gemini"; model: string }>;

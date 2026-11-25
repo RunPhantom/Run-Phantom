@@ -473,7 +473,8 @@ function KeysSection() {
     (key: SecretKey, fallback: string) => {
       const status = statuses?.[key];
       if (!status?.configured) return fallback;
-      return status.source === "env" ? "Configured from environment." : undefined;
+      if (status.source === "env") return `Using ${status.env_var} from the environment. Save a key here to use it instead.`;
+      return status.env_available ? `Using the saved key. ${status.env_var} is also set; clear the saved key to use it.` : undefined;
     },
     [statuses],
   );

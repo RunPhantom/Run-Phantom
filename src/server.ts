@@ -1152,7 +1152,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
   app.use("/api/review-queues", createReviewQueueRouter());
   app.use("/api/playground", createPlaygroundRouter({
     resolveKey: provider => getEffectiveSecret(provider),
-    keySource: provider => getSecretStatus(provider).source,
+    keyStatus: provider => { const status = getSecretStatus(provider); return { source: status.source, envVar: status.env_var }; },
     recordOtlp: body => {
       const spans = parseOtlpRequest(body);
       const { updatedRunIds, spansPersisted } = persistParsedSpans(spans);

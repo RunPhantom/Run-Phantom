@@ -32,26 +32,30 @@ describe.serial("Google Gemini key slot", () => {
     expect(parseSecretKey("gemini")).toBe("gemini");
     expect(parseSecretKey("google")).toBeNull();
     expect(Object.keys(getSecretStatuses()).sort()).toEqual(["anthropic", "gemini", "openai"]);
-    expect(getSecretStatus("gemini")).toEqual({ configured: false, source: null, env_var: "GEMINI_API_KEY", stored: false });
+    expect(getSecretStatus("gemini")).toEqual({ configured: false, source: null, env_var: "GEMINI_API_KEY", stored: false, env_available: false });
   });
 
   test("stores, reports and clears a key without exposing its value", () => {
     setStoredSecret("gemini", "AIza-fixture-store-value");
     expect(getEffectiveSecret("gemini")).toBe("AIza-fixture-store-value");
     const status = getSecretStatus("gemini");
-    expect(status).toEqual({ configured: true, source: "store", env_var: "GEMINI_API_KEY", stored: true });
+    expect(status).toEqual({ configured: true, source: "store", env_var: "GEMINI_API_KEY", stored: true, env_available: false });
     expect(JSON.stringify(status)).not.toContain("AIza-fixture");
     deleteStoredSecret("gemini");
     expect(getEffectiveSecret("gemini")).toBeNull();
   });
 
-  test("falls back to GEMINI_API_KEY, then GOOGLE_API_KEY, with the environment taking precedence like other providers", () => {
+  test("falls back to GEMINI_API_KEY, then GOOGLE_API_KEY, and a saved key takes precedence over both", () => {
     process.env.GOOGLE_API_KEY = "google-env-fixture";
     expect(getEffectiveSecret("gemini")).toBe("google-env-fixture");
-    expect(getSecretStatus("gemini")).toMatchObject({ source: "env", env_var: "GOOGLE_API_KEY" });
+    expect(getSecretStatus("gemini")).toEqual({ configured: true, source: "env", env_var: "GOOGLE_API_KEY", stored: false, env_available: true });
     process.env.GEMINI_API_KEY = "gemini-env-fixture";
     expect(getEffectiveSecret("gemini")).toBe("gemini-env-fixture");
     setStoredSecret("gemini", "stored-fixture");
-    expect(getSecretStatus("gemini")).toEqual({ configured: true, source: "env", env_var: "GEMINI_API_KEY", stored: true });
+    expect(getEffectiveSecret("gemini")).toBe("stored-fixture");
+    expect(getSecretStatus("gemini")).toEqual({ configured: true, source: "store", env_var: "GEMINI_API_KEY", stored: true, env_available: true });
+    deleteStoredSecret("gemini");
+    expect(getEffectiveSecret("gemini")).toBe("gemini-env-fixture");
+    expect(JSON.stringify(getSecretStatuses())).not.toMatch(/env-fixture|stored-fixture/);
   });
 });
