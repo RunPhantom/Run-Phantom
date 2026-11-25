@@ -29,7 +29,7 @@ const RADIUS = 2;
  * baseline; later series stack on top, separated by a 2px surface gap. Hover or
  * arrow keys show every series for that bucket; click or Enter calls `onActivate`.
  */
-export function StackedBars({ buckets, series, axisLabels, height: fixedHeight, minHeight = 160, emptyLabel = "No runs in this window", onActivate, activateHint, onActiveChange }: {
+export function StackedBars({ buckets, series, axisLabels, height: fixedHeight, minHeight = 160, emptyLabel = "No runs in this window", onActivate, activateHint }: {
   buckets: readonly StackBucket[];
   series: readonly StackSeries[];
   /** Labels for the endpoint ticks, indexed like `buckets`. */
@@ -40,12 +40,10 @@ export function StackedBars({ buckets, series, axisLabels, height: fixedHeight, 
   emptyLabel?: string;
   onActivate?: (index: number) => void;
   activateHint?: string;
-  onActiveChange?: (index: number | null) => void;
 }) {
   const [ref, { width, height: measured }] = useElementSize<HTMLDivElement>();
   const height = fixedHeight ?? Math.max(minHeight, measured);
-  const [active, setActiveState] = useState<number | null>(null);
-  const setActive = (index: number | null) => { setActiveState(index); onActiveChange?.(index); };
+  const [active, setActive] = useState<number | null>(null);
   const totals = buckets.map(bucket => bucket.values.reduce((sum, value) => sum + Math.max(0, value), 0));
   const max = Math.max(0, ...totals);
   const ticks = niceTicks(max || 1, 3, true);

@@ -242,9 +242,9 @@ function OverviewError({ message, onRetry }: { message: string; onRetry: () => v
 function HomeSkeleton() {
   return (
     <div className="flex flex-col gap-4" aria-label="Loading overview" role="status" data-home-loading>
-      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-rp-line bg-rp-line sm:grid-cols-3 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-rp-line bg-rp-line sm:grid-cols-6 xl:grid-cols-5">
         {Array.from({ length: 5 }, (_, index) => (
-          <div key={index} className="bg-rp-surface px-4 pb-3 pt-3.5">
+          <div key={index} className={cn("bg-rp-surface px-4 pb-3 pt-3 xl:col-span-1", index === 0 && "col-span-2", index < 3 ? "sm:col-span-2" : "sm:col-span-3")}>
             <Skeleton className="h-3 w-16" />
             <Skeleton className="mt-3 h-7 w-20" />
             <Skeleton className="mt-3 h-3 w-28" />

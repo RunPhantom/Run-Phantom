@@ -295,7 +295,7 @@ export function ActivityPanel({ runs, liveCount }: { runs: readonly LatestRunRow
     >
       {runs.length === 0
         ? <p className="py-2 text-13 text-rp-ink-subtle">New runs appear here as their steps arrive.</p>
-        : <ul className="-mx-2 flex flex-col" aria-live="off">{runs.map(run => <ActivityRow key={run.id} run={run} fresh={fresh.has(run.id)} />)}</ul>}
+        : <ul className="-mx-2 flex flex-col">{runs.map(run => <ActivityRow key={run.id} run={run} fresh={fresh.has(run.id)} />)}</ul>}
     </Panel>
   );
 }
