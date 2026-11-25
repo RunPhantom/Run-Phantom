@@ -193,11 +193,11 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
   });
   const changeDensity = (next: RunsDensity) => { setDensity(next); saveDensity(next); };
 
+  // Leaving pause is enough: useRunsTable reloads the head and highlights the waiting runs.
   const resume = () => {
     clearSelection();
     scrollRef.current?.scrollTo({ top: 0 });
     setScrolled(false);
-    data.resume();
   };
 
   const viewModified = !!activeView && (!filtersEqual(activeView.filters, filters) || !sameColumns(activeView.columns, columns));

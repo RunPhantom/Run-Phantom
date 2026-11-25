@@ -26,7 +26,7 @@ export interface RunsTableData {
   flashIds: ReadonlySet<string>;
   loadMore: () => void;
   retry: () => void;
-  /** Leave pause: reload the head of the list and highlight what was waiting. */
+  /** Reload the head of the list and highlight what was waiting. Runs by itself when `paused` turns false. */
   resume: () => void;
   removeLocal: (ids: readonly string[]) => void;
 }
@@ -46,9 +46,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error && error.message ? error.message : "Could not load runs";
 }
 
-async function readRow(id: string): Promise<RunListRow | null> {
-  const page = await listRunsPage({ q: id, limit: "50" });
-  return page.runs.find(row => row.id === id) ?? null;
+/** Same fields as the daemon's `q` match (runMatchesQuery in src/stats/runs-list.ts). */
+function matchesText(row: RunListRow, q: string): boolean {
+  const needle = q.toLowerCase();
+  return [row.id, row.display_name, row.name, row.event_name, row.input_preview].some(field => field?.toLowerCase().includes(needle));
+}
+
+/** One run as the current filters see it; null when it is gone or no longer matches them. */
+async function readRow(id: string, filters: RunsViewFilters): Promise<RunListRow | null> {
+  // `q` carries the id here, so the filters' own text search is re-checked on the returned row.
+  const page = await listRunsPage({ ...runsListQuery(filters, Date.now()), q: id, limit: "50" });
+  const row = page.runs.find(item => item.id === id) ?? null;
+  return row && (!filters.q || matchesText(row, filters.q)) ? row : null;
 }
 
 /**
@@ -72,6 +81,10 @@ export function useRunsTable(filters: RunsViewFilters, paused: boolean, pageSize
   const filtersRef = useRef(filters);
   filtersRef.current = filters;
   const flashTimer = useRef<number | null>(null);
+  const pendingRef = useRef(pendingNew);
+  pendingRef.current = pendingNew;
+  /** Something changed while paused, so the rows on screen may be out of order or incomplete. */
+  const staleWhilePaused = useRef(false);
 
   // Superseded reads are ignored by generation rather than aborted: an aborted list read shows up as a failed request,
   // and the deletion-race specs hold list responses across a delete and expect them to land harmlessly.
@@ -94,6 +107,7 @@ export function useRunsTable(filters: RunsViewFilters, paused: boolean, pageSize
       // A slow earlier read must not overwrite a newer one (it may still list a run deleted in between).
       if (run !== generation.current || sequence < appliedHead.current) return;
       appliedHead.current = sequence;
+      staleWhilePaused.current = false;
       const before = snapshotRef.current.rows;
       headQuery.current = query;
       setLoadMoreError(null);
@@ -155,7 +169,7 @@ export function useRunsTable(filters: RunsViewFilters, paused: boolean, pageSize
       const known = new Set(rows.map(row => row.id));
       const fresh = new Map(head.runs.map(row => [row.id, row]));
       const outside = [...eventIds].filter(id => known.has(id) && !fresh.has(id)).slice(0, PAUSED_ROW_REFRESH_LIMIT);
-      const reread = await Promise.all(outside.map(async id => [id, await readRow(id)] as const));
+      const reread = await Promise.all(outside.map(async id => [id, await readRow(id, filtersRef.current)] as const));
       if (run !== generation.current) return;
       for (const [id, row] of reread) if (row) fresh.set(id, row);
       const removed = new Set(reread.filter(([, row]) => row === null).map(([id]) => id));
@@ -176,7 +190,10 @@ export function useRunsTable(filters: RunsViewFilters, paused: boolean, pageSize
       flushTimer.current = null;
       const ids = eventIds.current;
       eventIds.current = new Set();
-      if (pausedRef.current && snapshotRef.current.status === "ready") void refreshPaused(ids);
+      if (pausedRef.current && snapshotRef.current.status === "ready") {
+        staleWhilePaused.current = true;
+        void refreshPaused(ids);
+      }
       else void loadHead(snapshotRef.current.rows.length > 0 ? "live" : "reset");
     }, LIVE_FLUSH_MS);
   }, [loadHead, refreshPaused]);
@@ -201,22 +218,34 @@ export function useRunsTable(filters: RunsViewFilters, paused: boolean, pageSize
 
   useEffect(() => {
     const onRemoved = (event: Event) => {
-      const runId = (event as CustomEvent<{ runId?: string }>).detail?.runId;
-      if (!runId) return;
+      const detail = (event as CustomEvent<{ runId?: string; runIds?: string[] }>).detail;
+      const runIds = detail?.runIds ?? (detail?.runId ? [detail.runId] : []);
+      if (runIds.length === 0) return;
       // A list read started before the delete may still contain the run; drop it and read again.
       generation.current += 1;
-      removeLocal([runId]);
-      if (!pausedRef.current) void loadHead("live");
+      removeLocal([...runIds]);
+      if (pausedRef.current) staleWhilePaused.current = true;
+      else void loadHead("live");
     };
     window.addEventListener("runphantom:run-removed", onRemoved);
     return () => window.removeEventListener("runphantom:run-removed", onRemoved);
   }, [loadHead, removeLocal]);
 
   const resume = useCallback(() => {
-    const waiting = pendingNew;
+    const waiting = pendingRef.current;
     generation.current += 1;
     void loadHead("reset").then(() => flash(waiting));
-  }, [flash, loadHead, pendingNew]);
+  }, [flash, loadHead]);
+
+  // Leaving pause by any route (the pill, Esc, unticking, scrolling back up) catches the list up at once, even when
+  // no further event arrives to trigger a read.
+  const wasPaused = useRef(paused);
+  useEffect(() => {
+    const was = wasPaused.current;
+    wasPaused.current = paused;
+    if (!was || paused) return;
+    if (pendingRef.current.length > 0 || staleWhilePaused.current) resume();
+  }, [paused, resume]);
 
   const retry = useCallback(() => {
     generation.current += 1;

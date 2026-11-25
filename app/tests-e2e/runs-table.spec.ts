@@ -242,6 +242,36 @@ test("live tail streams new runs in, pauses while rows are selected and resumes 
   await expect.poll(() => rowIds(page), { timeout: 10_000 }).toEqual([second, first, BROKEN, PRICEY, CHEAP]);
   await expect(page.getByRole("region", { name: "Selected runs" })).toHaveCount(0);
   await expect(page.getByText("Live", { exact: true })).toBeVisible();
+
+  // Clearing the selection with Esc resumes too, and the waiting run appears without another event.
+  await page.getByRole("checkbox", { name: "Select billing_agent" }).first().check();
+  await expect(page.getByText("Paused", { exact: true })).toBeVisible();
+  const third = "a1000000000000000000000000000012";
+  await postRun(runPhantom.url, { id: third, agent: "triage_agent", input: "Third ticket", inputTokens: 50, outputTokens: 5, durationMs: 400, startedAgoMs: 20 });
+  await expect(page.getByRole("button", { name: "1 new run", exact: true })).toBeVisible({ timeout: 10_000 });
+  await page.keyboard.press("Escape");
+  await expect(page.getByText("Live", { exact: true })).toBeVisible();
+  await expect.poll(() => rowIds(page), { timeout: 5_000 }).toEqual([third, second, first, BROKEN, PRICEY, CHEAP]);
+});
+
+test("live tail catches up when the reader scrolls back to the top", async ({ page, runPhantom }) => {
+  await page.setViewportSize({ width: 1440, height: 600 });
+  for (let index = 0; index < 30; index++) {
+    await postRun(runPhantom.url, { id: `b20000000000000000000000000000${String(index).padStart(2, "0")}`, agent: "batch_agent", input: `Batch ${index}`,
+      inputTokens: 10, outputTokens: 2, durationMs: 200, startedAgoMs: HOUR + index * 1000 });
+  }
+  await page.goto(`${runPhantom.url}/runs`);
+  await expect(page.getByText("30 runs", { exact: true })).toBeVisible();
+  const grid = page.getByRole("grid", { name: "Runs" });
+  await grid.evaluate(element => { element.parentElement!.scrollTop = 400; element.parentElement!.dispatchEvent(new Event("scroll")); });
+  await expect(page.getByText("Paused", { exact: true })).toBeVisible();
+
+  const fresh = "a1000000000000000000000000000020";
+  await postRun(runPhantom.url, { id: fresh, agent: "triage_agent", input: "Arrived while scrolled", inputTokens: 50, outputTokens: 5, durationMs: 400, startedAgoMs: 10 });
+  await expect(page.getByRole("button", { name: "1 new run", exact: true })).toBeVisible({ timeout: 10_000 });
+  await grid.evaluate(element => { element.parentElement!.scrollTop = 0; element.parentElement!.dispatchEvent(new Event("scroll")); });
+  await expect(page.getByText("Live", { exact: true })).toBeVisible();
+  await expect.poll(async () => (await rowIds(page))[0], { timeout: 5_000 }).toBe(fresh);
 });
 
 test("opening a run keeps a collapsible run rail with the table's filters", async ({ page, runPhantom }) => {
