@@ -5,7 +5,7 @@ import {
 } from "../app/src/components/charts/scale";
 import { ChartFrame } from "../app/src/components/charts/ChartFrame";
 import { BarList, CellBar } from "../app/src/components/charts/BarList";
-import { Sparkline } from "../app/src/components/charts/Sparkline";
+import { Sparkline, sparklineTrend } from "../app/src/components/charts/Sparkline";
 import { StackedBars, stackReadout } from "../app/src/components/charts/StackedBars";
 import { TimeSeries, seriesReadout } from "../app/src/components/charts/TimeSeries";
 import { Histogram } from "../app/src/components/charts/Histogram";
@@ -247,6 +247,52 @@ describe("sparkline gaps and partial buckets", () => {
     expect(count(html, "data-partial-point")).toBe(1);
     const end = /<circle cx="([\d.]+)"[^>]*data-sparkline-end/.exec(html)?.[1];
     expect(Number(end)).toBeLessThan(90);
+  });
+
+  test("when only the partial bucket has activity, it carries the emphasis instead of the empty history", () => {
+    const html = render(Sparkline, { values: [0, 0, 0, 21], partial: [false, false, false, true], label: "Runs", width: 100 });
+    expect(count(html, 'data-sparkline-end="true"')).toBe(1);
+    expect(html).toContain('data-sparkline-end-partial="true"');
+    expect(count(html, "data-partial-point")).toBe(0);
+    const end = /<circle cx="([\d.]+)" cy="([\d.]+)"[^>]*data-sparkline-end/.exec(html);
+    expect(Number(end?.[1])).toBeGreaterThan(90);
+    expect(Number(end?.[2])).toBeLessThan(10);
+  });
+
+  test("a single known value draws no trend at all", () => {
+    const html = render(Sparkline, { values: [null, null, null, 0.2], partial: [false, false, false, true], label: "Error rate", width: 100 });
+    expect(html).not.toContain("<circle");
+    expect(html).not.toContain("<path");
+  });
+
+  test("a rate keeps the emphasis on the last full bucket, since its partial value can still fall", () => {
+    const html = render(Sparkline, { values: [0, 0.3, 0, 0.5], partial: [false, false, false, true], label: "Error rate", width: 100 });
+    expect(html).not.toContain("data-sparkline-end-partial");
+    expect(count(html, "data-partial-point")).toBe(1);
+  });
+
+  test("a cumulative partial bucket at or above the last full one carries the emphasis; a lower one does not", () => {
+    const rising = render(Sparkline, { values: [0, 3, 0, 5], partial: [false, false, false, true], cumulative: true, label: "Runs", width: 100 });
+    expect(rising).toContain('data-sparkline-end-partial="true"');
+    expect(count(rising, "data-partial-point")).toBe(0);
+    const early = render(Sparkline, { values: [0, 3, 4, 1], partial: [false, false, false, true], cumulative: true, label: "Runs", width: 100 });
+    expect(early).not.toContain("data-sparkline-end-partial");
+    expect(count(early, "data-partial-point")).toBe(1);
+  });
+
+  test("a rate whose complete points are never joined draws nothing rather than unconnected dots", () => {
+    const sparse = render(Sparkline, { values: [null, 1, null, null, 0.46], partial: [false, false, false, false, true], label: "Error rate", width: 100 });
+    expect(sparse).not.toContain("<circle");
+    expect(sparse).not.toContain("<path");
+    expect(sparklineTrend([null, 1, null, null, 0.46], [false, false, false, false, true])).toBeNull();
+    expect(render(Sparkline, { values: [null, 1, 0.5, null, 0.46], partial: [false, false, false, false, true], label: "Error rate", width: 100 })).toContain("data-sparkline-end");
+  });
+
+  test("the trend word reads up to the emphasised point, so a leading partial bucket is not called a fall", () => {
+    expect(sparklineTrend([0, 0, 0, 21], [false, false, false, true], true)).toBe("rising");
+    expect(sparklineTrend([2, 3, 0, 5], [false, false, false, true], true)).toBe("rising");
+    expect(sparklineTrend([2, 3, 4, 1], [false, false, false, true], true)).toBe("rising");
+    expect(sparklineTrend([4, 4, 4, 1], [false, false, false, true])).toBe("flat");
   });
 });
 

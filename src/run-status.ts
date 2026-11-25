@@ -57,6 +57,15 @@ export function rootFailed(counts: RootSpanCounts): boolean {
   return counts.roots > 0 && counts.rootErrors === counts.roots;
 }
 
+/**
+ * Errors shown for a run. An errored AGENT_ROOT stands for the run's outcome ("Run failed"); when an errored
+ * span beneath it explains the failure, counting the root as well would report one rejected call as 2 errors.
+ * run-status-sql.ts errorCountSql mirrors this for search.
+ */
+export function countedErrors(errors: number, agentRootErrors: number): number {
+  return agentRootErrors > 0 && errors > agentRootErrors ? errors - agentRootErrors : errors;
+}
+
 /** Error evidence from spans already in memory; db.ts derives the same counts in SQL for run lists. */
 export function runErrorEvidenceFromSpans(spans: readonly { parent_span_id?: string | null; span_type?: string | null; status?: string | null }[]) {
   let errors = 0, toolErrors = 0, roots = 0, rootErrors = 0, agentRoots = 0, agentRootErrors = 0;
@@ -69,7 +78,7 @@ export function runErrorEvidenceFromSpans(spans: readonly { parent_span_id?: str
     if (errored) rootErrors++;
     if (span.span_type === "AGENT_ROOT") { agentRoots++; if (errored) agentRootErrors++; }
   }
-  return { error_count: errors, tool_error_count: toolErrors, root_failed: rootFailed({ roots, rootErrors, agentRoots, agentRootErrors }) };
+  return { error_count: countedErrors(errors, agentRootErrors), tool_error_count: toolErrors, root_failed: rootFailed({ roots, rootErrors, agentRoots, agentRootErrors }) };
 }
 
 /**
@@ -125,6 +134,39 @@ function silence(ms: number): string {
 /** Live and quiet runs have not recorded their end yet; actions that need a finished run wait for them. */
 export function runInProgress(status: RunStatus): boolean {
   return status === "live" || status === "quiet";
+}
+
+/**
+ * The coarse status run lists, saved views and the overview count by. It is a
+ * projection of `RunStatus`, never derived separately: live and quiet runs share
+ * `running`, `complete` keeps its older list name `completed`, and every other
+ * status is its own bucket.
+ */
+export const RUN_OUTCOMES = ["running", "completed", "completed_with_errors", "failed", "interrupted", "cancelled", "unknown"] as const;
+export type RunOutcome = typeof RUN_OUTCOMES[number];
+
+export function runOutcome(status: RunStatus): RunOutcome {
+  if (status === "live" || status === "quiet") return "running";
+  if (status === "complete") return "completed";
+  return status;
+}
+
+/** Outcomes that recorded how the run ended, the denominator of failure and error rates. */
+export const FINISHED_RUN_OUTCOMES: readonly RunOutcome[] = Object.freeze(["completed", "completed_with_errors", "failed"]);
+
+/**
+ * Status filter values accepted by GET /api/runs, run search, typed search
+ * filters and MCP: every RunStatus, plus each RunOutcome as the group of
+ * statuses that project onto it.
+ */
+export const RUN_STATUS_FILTER_GROUPS: Readonly<Record<string, readonly RunStatus[]>> = Object.freeze({
+  ...Object.fromEntries(RUN_OUTCOMES.map(outcome => [outcome, Object.freeze(RUN_STATUSES.filter(status => runOutcome(status) === outcome))])),
+  ...Object.fromEntries(RUN_STATUSES.map(status => [status, Object.freeze([status])])),
+});
+export const RUN_STATUS_FILTER_VALUES: readonly string[] = Object.freeze(Object.keys(RUN_STATUS_FILTER_GROUPS));
+
+export function runStatusFilterMembers(value: string): readonly RunStatus[] {
+  return Object.prototype.hasOwnProperty.call(RUN_STATUS_FILTER_GROUPS, value) ? RUN_STATUS_FILTER_GROUPS[value] : [];
 }
 
 export function runStatusTone(status: RunStatus): "success" | "warning" | "danger" | "neutral" {

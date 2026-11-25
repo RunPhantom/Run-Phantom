@@ -1,10 +1,9 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { queryString, queryTime, roundUsd, runAgent, runUsesModel, StatsRequestError } from "./common";
-import { loadRunRows, selectRunAggregates, type CostSource, type RunRow } from "./run-facts";
+import { loadRunRows, runRowStatus, selectRunAggregates, type CostSource, type RunRow } from "./run-facts";
 import { AGENT_FILTER_CHARS } from "../run-agent";
-import { RUN_STATUSES, type RunStatus } from "./run-status";
-import { deriveRunStatus as deriveSharedRunStatus, type RunStatus as SharedRunStatus } from "../run-status";
+import { RUN_STATUS_FILTER_VALUES, runOutcome, runStatusFilterMembers, type RunOutcome, type RunStatus } from "../run-status";
 
 export const RUN_LIST_SORTS = ["last_updated_at", "started_at", "duration", "cost", "tokens", "errors"] as const;
 export type RunListSort = typeof RUN_LIST_SORTS[number];
@@ -31,11 +30,12 @@ export interface LegacyRunListRow {
   tool_error_count: number;
   root_failed: boolean;
   /** The shared deriveRunStatus status (src/run-status.ts); time-dependent, so derived per request. */
-  run_status: SharedRunStatus;
+  run_status: RunStatus;
 }
 
 export interface RunListRow extends LegacyRunListRow {
-  status: RunStatus;
+  /** `runOutcome(run_status)`: the coarse bucket the status filter and the overview count by. */
+  status: RunOutcome;
   agent: string | null;
   duration_ms: number | null;
   input_tokens: number | null;
@@ -65,7 +65,8 @@ export interface RunListPage {
 
 export interface RunListQuery {
   limit: number;
-  statuses: RunStatus[] | null;
+  /** Accepted filter values (RUN_STATUS_FILTER_VALUES); each stands for the statuses in its group. */
+  statuses: string[] | null;
   agent?: string;
   model?: string;
   q?: string;
@@ -86,10 +87,10 @@ export function parseRunListQuery(query: Record<string, unknown>): RunListQuery 
   // Legacy callers sent arbitrary limits and were clamped rather than rejected.
   const limit = rawLimit !== undefined && Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(Math.floor(parsedLimit), RUN_LIST_LIMITS.maxLimit) : RUN_LIST_LIMITS.defaultLimit;
   const rawStatus = queryString(query, "status", 128);
-  let statuses: RunStatus[] | null = null;
+  let statuses: string[] | null = null;
   if (rawStatus && rawStatus !== "all") {
-    statuses = rawStatus.split(",").map(item => item.trim()) as RunStatus[];
-    if (statuses.some(item => !RUN_STATUSES.includes(item))) throw new StatsRequestError(`status must be all or a comma-separated list of ${RUN_STATUSES.join(", ")}`);
+    statuses = rawStatus.split(",").map(item => item.trim());
+    if (statuses.some(item => !RUN_STATUS_FILTER_VALUES.includes(item))) throw new StatsRequestError(`status must be all or a comma-separated list of ${RUN_STATUS_FILTER_VALUES.join(", ")}`);
   }
   const sort = (queryString(query, "sort", 32) || "last_updated_at") as RunListSort;
   if (!RUN_LIST_SORTS.includes(sort)) throw new StatsRequestError(`sort must be one of ${RUN_LIST_SORTS.join(", ")}`);
@@ -160,16 +161,14 @@ function compare(a: { value: number | null; id: string }, b: { value: number | n
   return a.id === b.id ? 0 : (a.id < b.id ? -1 : 1) * direction;
 }
 
-export function toRunListRow(row: RunRow, now: number = Date.now()): RunListRow {
+export function toRunListRow(row: RunRow, now: number = Date.now(), runStatus: RunStatus = runRowStatus(row, now).status): RunListRow {
   const facts = row.facts;
-  const runStatus = deriveSharedRunStatus({ last_updated_at: row.last_updated_at, finished: facts.finished, span_count: facts.spanCount, metadata: row.metadata,
-    capture_completion: facts.captureCompletion, error_count: facts.errorCount, tool_error_count: facts.toolErrorCount, root_failed: facts.rootFailed }, now).status;
   return {
     id: row.id, event_id: row.event_id, name: row.name, event_name: row.event_name, display_name: row.display_name, user_id: row.user_id, convo_id: row.convo_id,
     started_at: row.started_at, last_updated_at: row.last_updated_at, metadata: row.metadata, model: row.legacy_model, finished: facts.finished,
     span_count: facts.spanCount, live_event_count: row.live_event_count, capture_completion: facts.captureCompletion, error_count: facts.errorCount,
     tool_error_count: facts.toolErrorCount, root_failed: facts.rootFailed, run_status: runStatus,
-    status: facts.status, agent: runAgent(row), duration_ms: facts.durationMs, input_tokens: facts.inputTokens, output_tokens: facts.outputTokens,
+    status: runOutcome(runStatus), agent: runAgent(row), duration_ms: facts.durationMs, input_tokens: facts.inputTokens, output_tokens: facts.outputTokens,
     est_cost_usd: facts.costUsd === null ? null : roundUsd(facts.costUsd), cost_source: facts.costSource, tool_count: facts.toolCount,
     primary_model: facts.primaryModel, provider: facts.provider, models: [...facts.models], input_preview: facts.inputPreview,
     llm_calls: facts.llmCalls, known_input_tokens: facts.knownInputTokens, known_output_tokens: facts.knownOutputTokens, token_unknown_calls: facts.tokenUnknownCalls,
@@ -177,16 +176,30 @@ export function toRunListRow(row: RunRow, now: number = Date.now()): RunListRow 
   };
 }
 
-/** The filter half of GET /api/runs: everything except sort, cursor and limit. */
-export function runMatchesQuery(row: RunRow, query: Pick<RunListQuery, "statuses" | "agent" | "model" | "q" | "since" | "until"> & { ids?: readonly string[] }): boolean {
+function statusMatches(status: RunStatus, filters: readonly string[]): boolean {
+  return filters.some(filter => runStatusFilterMembers(filter).includes(status));
+}
+
+/** Each row's derived status, computed at most once per request with one `now`. */
+function statusCache(now: number): (row: RunRow) => RunStatus {
+  const statuses = new Map<RunRow, RunStatus>();
+  return row => {
+    let status = statuses.get(row);
+    if (status === undefined) statuses.set(row, status = runRowStatus(row, now).status);
+    return status;
+  };
+}
+
+/** The filter half of GET /api/runs: everything except sort, cursor and limit. Status is checked last because deriving it parses metadata. */
+export function runMatchesQuery(row: RunRow, query: Pick<RunListQuery, "statuses" | "agent" | "model" | "q" | "since" | "until"> & { ids?: readonly string[] }, statusOf: (row: RunRow) => RunStatus): boolean {
   const needle = query.q?.toLowerCase();
   return (!query.ids || query.ids.includes(row.id))
     && (query.since === undefined || row.started_at >= query.since)
     && (query.until === undefined || row.started_at < query.until)
-    && (!query.statuses || query.statuses.includes(row.facts.status))
     && (!query.agent || runAgent(row) === query.agent)
     && (!query.model || runUsesModel(row, query.model))
-    && (!needle || [row.id, row.display_name, row.name, row.event_name, runAgent(row), row.facts.inputPreview].some(field => field?.toLowerCase().includes(needle)));
+    && (!needle || [row.id, row.display_name, row.name, row.event_name, runAgent(row), row.facts.inputPreview].some(field => field?.toLowerCase().includes(needle)))
+    && (!query.statuses || statusMatches(statusOf(row), query.statuses));
 }
 
 /**
@@ -202,12 +215,14 @@ export function countRuns(db: Database, dbPath: string, rawQueries: readonly Rec
   if (queries.every(query => query.since !== undefined)) { where.push("r.started_at >= ?"); params.push(Math.min(...queries.map(query => query.since!))); }
   if (queries.every(query => query.until !== undefined)) { where.push("r.started_at < ?"); params.push(Math.max(...queries.map(query => query.until!))); }
   const rows = loadRunRows(db, dbPath, selectRunAggregates(db, where.join(" AND "), params));
-  return queries.map(query => rows.reduce((count, row) => count + (runMatchesQuery(row, query) ? 1 : 0), 0));
+  const statusOf = statusCache(Date.now());
+  return queries.map(query => rows.reduce((count, row) => count + (runMatchesQuery(row, query, statusOf) ? 1 : 0), 0));
 }
 
 export function listRuns(db: Database, dbPath: string, rawQuery: Record<string, unknown>): RunListPage & { envelope: boolean } {
   const query = parseRunListQuery(rawQuery);
   const now = Date.now();
+  const statusOf = statusCache(now);
   const where: string[] = ["1 = 1"];
   const params: (string | number)[] = [];
   if (query.ids) {
@@ -216,7 +231,7 @@ export function listRuns(db: Database, dbPath: string, rawQuery: Record<string, 
   }
   if (query.since !== undefined) { where.push("r.started_at >= ?"); params.push(query.since); }
   if (query.until !== undefined) { where.push("r.started_at < ?"); params.push(query.until); }
-  const matching = loadRunRows(db, dbPath, selectRunAggregates(db, where.join(" AND "), params)).filter(row => runMatchesQuery(row, query));
+  const matching = loadRunRows(db, dbPath, selectRunAggregates(db, where.join(" AND "), params)).filter(row => runMatchesQuery(row, query, statusOf));
   const keyed = matching.map(row => ({ row, value: sortValue(row, query.sort), id: row.id }));
   keyed.sort((a, b) => compare(a, b, query.order));
   const start = query.cursor ? keyed.findIndex(item => compare(item, query.cursor!, query.order) > 0) : 0;
@@ -225,7 +240,7 @@ export function listRuns(db: Database, dbPath: string, rawQuery: Record<string, 
   const hasMore = remaining.length > page.length;
   const last = page[page.length - 1];
   return {
-    runs: page.map(item => toRunListRow(item.row, now)),
+    runs: page.map(item => toRunListRow(item.row, now, statusOf(item.row))),
     total: matching.length,
     hasMore,
     nextCursor: hasMore && last ? Buffer.from(JSON.stringify([1, query.filterKey, last.value, last.id])).toString("base64url") : null,

@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Overview } from "../../api/overview";
-import { Sparkline, compact, trendWord } from "../../components/charts";
+import { Sparkline, compact, sparklineTrend } from "../../components/charts";
 import { fmt } from "../../utils/helpers";
 import { fmtCost } from "../../utils/costs";
 import { WINDOW_COPY, costLabel, formatRate, kpiDelta, kpiSeries, runsLink, sumKnown, type Delta } from "./home-model";
@@ -19,6 +19,7 @@ interface Tile {
   series: readonly (number | null)[];
   partial: readonly boolean[];
   sparkTone?: "accent" | "danger";
+  cumulative?: boolean;
   title?: string;
 }
 
@@ -28,9 +29,9 @@ export function splitUnit(text: string): { value: string; unit?: string } {
   return match ? { value: match[1], unit: match[2] } : { value: text };
 }
 
-/** Partial buckets are left out of the trend: a bucket that is half over would read as a fall. */
-function sparkLabel(name: string, values: readonly (number | null)[], partial: readonly boolean[], window: string): string {
-  const word = trendWord(values.map((value, index) => (partial[index] ? null : value)));
+/** The trend word is read up to the point the sparkline emphasises, so the label and the line agree. */
+export function sparkLabel(name: string, values: readonly (number | null)[], partial: readonly boolean[], window: string, cumulative = false): string {
+  const word = sparklineTrend(values, partial, cumulative);
   return word ? `${name} trend ${window}: ${word}` : `${name} trend ${window}: not enough data`;
 }
 
@@ -61,6 +62,7 @@ export function buildTiles(overview: Overview): Tile[] {
       href: runsLink({ window }),
       series: series.runs,
       partial: series.partial,
+      cumulative: true,
       title: `Runs that started ${copy.phrase}`,
     },
     {
@@ -96,6 +98,7 @@ export function buildTiles(overview: Overview): Tile[] {
       href: runsLink({ window, sort: "tokens" }),
       series: series.tokens,
       partial: series.partial,
+      cumulative: true,
       title: "Input plus output tokens of every model call",
     },
     {
@@ -110,6 +113,7 @@ export function buildTiles(overview: Overview): Tile[] {
       href: runsLink({ window, sort: "cost" }),
       series: series.cost,
       partial: series.partial,
+      cumulative: true,
       title: cost.estimatedCalls
         ? `Estimated from the bundled list prices (${overview.pricing.revision}); reported costs are used where a call carried one. Cache storage, audio, image and tool fees are not included.`
         : "Costs reported by the model calls",
@@ -148,7 +152,7 @@ export function KpiStrip({ overview, interactive = true }: { overview: Overview;
                 <span className="rp-type-kpi" data-kpi-value>{tile.value}</span>
                 {tile.unit && <span className="text-14 font-medium text-rp-ink-muted">{tile.unit}</span>}
               </span>
-              <Sparkline className={cn("mb-1 w-[64px] shrink-0 2xl:w-[88px]", index > 0 && "max-sm:hidden")} values={tile.series} partial={tile.partial} tone={tile.sparkTone} label={sparkLabel(tile.label, tile.series, tile.partial, WINDOW_COPY[overview.window.selection].phrase)} />
+              <Sparkline className={cn("mb-1 w-[64px] shrink-0 2xl:w-[88px]", index > 0 && "max-sm:hidden")} values={tile.series} partial={tile.partial} cumulative={tile.cumulative} tone={tile.sparkTone} label={sparkLabel(tile.label, tile.series, tile.partial, WINDOW_COPY[overview.window.selection].phrase, tile.cumulative)} />
             </span>
             <span className="mt-1.5 flex min-h-5 flex-wrap items-center gap-x-1 text-12"><DeltaBadge delta={tile.delta} window={window} /></span>
             <span className="mt-0.5 truncate text-12 text-rp-ink-subtle" title={typeof tile.detail === "string" ? tile.detail : undefined}>{tile.detail}</span>

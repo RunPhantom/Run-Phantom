@@ -1,4 +1,5 @@
 import type { Kpi, Overview, OverviewBucket, OverviewWindow } from "../../api/overview";
+import type { RunsViewStatus } from "../../../../src/saved-views-protocol";
 import { compact } from "../../components/charts/scale";
 import { fmt } from "../../utils/helpers";
 import { fmtCost } from "../../utils/costs";
@@ -25,11 +26,14 @@ export function headlineParts(overview: Overview, timeZone?: string): HeadlinePa
   const failed = overview.kpis.failed.value ?? 0;
   const withErrors = overview.kpis.completedWithErrors.value ?? 0;
   const running = overview.kpis.running.value ?? 0;
+  const interrupted = overview.kpis.interrupted.value ?? 0;
+  const cancelled = overview.kpis.cancelled.value ?? 0;
+  const unknown = overview.kpis.unknown.value ?? 0;
   const phrase = WINDOW_COPY[window].phrase;
   if (runs === 0) return [{ text: `No runs ${phrase}.` }];
 
   const parts: HeadlinePart[] = [{ text: String(runs), digits: true }, { text: ` ${plural(runs, "run", "runs")} ${phrase}.` }];
-  const ended = runs - running;
+  const ended = failed + withErrors + (overview.kpis.completed.value ?? 0);
   if (failed > 0) {
     parts.push({ text: " " }, { text: String(failed), digits: true, tone: "danger" }, { text: " failed", tone: "danger" });
     const since = failureOnset(overview.timeseries, failed);
@@ -45,6 +49,9 @@ export function headlineParts(overview: Overview, timeZone?: string): HeadlinePa
     parts.push({ text: " None failed." });
   }
   if (running > 0) parts.push({ text: " " }, { text: String(running), digits: true }, { text: " still running." });
+  if (interrupted > 0) parts.push({ text: " " }, { text: String(interrupted), digits: true }, { text: ` ${plural(interrupted, "was", "were")} interrupted.` });
+  if (cancelled > 0) parts.push({ text: " " }, { text: String(cancelled), digits: true }, { text: ` ${plural(cancelled, "was", "were")} cancelled.` });
+  if (unknown > 0) parts.push({ text: " " }, { text: String(unknown), digits: true }, { text: ` ${plural(unknown, "has", "have")} no recorded end.` });
   return parts;
 }
 
@@ -152,7 +159,7 @@ export function kpiSeries(buckets: readonly OverviewBucket[]) {
   return {
     partial: buckets.map(bucket => bucket.partial),
     runs: buckets.map(bucket => bucket.runs),
-    errorRate: buckets.map(bucket => bucket.runs ? (bucket.failed + bucket.completedWithErrors) / bucket.runs : null),
+    errorRate: buckets.map(bucket => bucket.finished ? (bucket.failed + bucket.completedWithErrors) / bucket.finished : null),
     p95: buckets.map(bucket => bucket.durationP95Ms),
     tokens: buckets.map(bucket => bucket.runs ? bucket.inputTokens + bucket.outputTokens : 0),
     cost: buckets.map(bucket => bucket.costUsd),
@@ -160,7 +167,7 @@ export function kpiSeries(buckets: readonly OverviewBucket[]) {
 }
 
 export interface RunsLinkFilters {
-  status?: readonly ("running" | "completed" | "completed_with_errors" | "failed")[];
+  status?: readonly RunsViewStatus[];
   agent?: string | null;
   model?: string | null;
   window?: OverviewWindow;

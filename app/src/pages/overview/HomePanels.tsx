@@ -36,16 +36,19 @@ export const RUN_SERIES: readonly StackSeries[] = [
   { id: "ok", label: "No errors", color: "var(--rp-chart-ok)" },
   { id: "errors", label: "With errors", color: "var(--rp-chart-warn)" },
   { id: "failed", label: "Failed", color: "var(--rp-chart-fail)" },
+  { id: "open", label: "Running, stopped or unknown", color: "var(--rp-chart-history)" },
 ];
 
 export function RunsOverTimePanel({ overview, interactive = true }: { overview: Overview; interactive?: boolean }) {
   const navigate = useNavigate();
   const window = overview.window.selection;
   const buckets = overview.timeseries;
+  const anyOpen = buckets.some(bucket => bucket.runs > bucket.finished);
+  const series = anyOpen ? RUN_SERIES : RUN_SERIES.filter(item => item.id !== "open");
   const stack = buckets.map(bucket => ({
     key: bucket.start,
     title: bucketTitle(bucket, window),
-    values: [Math.max(0, bucket.runs - bucket.failed - bucket.completedWithErrors), bucket.completedWithErrors, bucket.failed],
+    values: [Math.max(0, bucket.finished - bucket.failed - bucket.completedWithErrors), bucket.completedWithErrors, bucket.failed, ...(anyOpen ? [bucket.runs - bucket.finished] : [])],
     partial: bucket.partial,
     notes: bucket.runs ? [bucketUsage(bucket)] : undefined,
   }));
@@ -63,15 +66,16 @@ export function RunsOverTimePanel({ overview, interactive = true }: { overview: 
         className="flex-1"
         title={<h2 id={titleId} className="text-14 font-semibold text-rp-ink">Runs per {BUCKET_NOUN[window]}</h2>}
         summary={summary}
-        legend={RUN_SERIES.map(item => ({ label: item.label, color: item.color }))}
+        legend={series.map(item => ({ label: item.label, color: item.color }))}
         table={{
           caption: `Runs per ${BUCKET_NOUN[window]}`,
-          columns: ["Time", "Runs", "With errors", "Failed", "Tokens", "Cost"],
+          columns: ["Time", "Runs", "With errors", "Failed", ...(anyOpen ? ["Running, stopped or unknown"] : []), "Tokens", "Cost"],
           rows: buckets.filter(bucket => bucket.runs > 0).map(bucket => [
             `${bucketTitle(bucket, window)}${bucket.partial ? " (partial)" : ""}`,
             bucket.runs,
             bucket.completedWithErrors,
             bucket.failed,
+            ...(anyOpen ? [bucket.runs - bucket.finished] : []),
             compact(bucket.inputTokens + bucket.outputTokens) + (bucket.tokenUnknownCalls ? ` + ${bucket.tokenUnknownCalls} unknown` : ""),
             bucket.costUsd === null ? "Unknown" : fmtCost(bucket.costUsd) + (bucket.costUnknownCalls ? ` + ${bucket.costUnknownCalls} unknown` : ""),
           ]),
@@ -80,7 +84,7 @@ export function RunsOverTimePanel({ overview, interactive = true }: { overview: 
         <StackedBars
           label={summary}
           buckets={stack}
-          series={RUN_SERIES}
+          series={series}
           minHeight={160}
           axisLabels={index => index === buckets.length - 1 ? "now"
             : relativeTimeLabel(index === 0 ? overview.window.from : (overview.window.from + overview.window.to) / 2, overview.window.to)}
@@ -240,7 +244,10 @@ export function ModelsPanel({ overview }: { overview: Overview }) {
         barPlacement="under"
         columns={[
           { id: "calls", header: "Calls", cell: row => row.calls },
-          { id: "tokens", header: "Tokens", headerTitle: "Input plus output tokens", cell: row => <span title={row.tokenUnknownCalls ? `${row.tokenUnknownCalls} calls did not report tokens` : undefined}>{formatTokens(sumKnown(row.inputTokens, row.outputTokens))}{row.tokenUnknownCalls ? "+" : ""}</span> },
+          { id: "tokens", header: "Tokens", headerTitle: "Input plus output tokens", cell: row => {
+            const known = sumKnown(row.inputTokens, row.outputTokens);
+            return <span title={row.tokenUnknownCalls ? `${row.tokenUnknownCalls} of ${row.calls} ${row.calls === 1 ? "call" : "calls"} did not report tokens` : undefined}>{formatTokens(known)}{known !== null && row.tokenUnknownCalls ? "+" : ""}</span>;
+          } },
           { id: "cost", header: anyEstimated ? "Est." : "Cost", headerTitle: anyEstimated ? "Estimated cost" : "Reported cost", cell: row => <span title={row.costUnknownCalls ? `${row.costUnknownCalls} of ${row.calls} calls have no price` : undefined}>{row.costUsd === null ? "—" : fmtCost(row.costUsd)}{row.costUsd !== null && row.costUnknownCalls ? "+" : ""}</span> },
         ]}
         emptyLabel={`No model calls ${WINDOW_COPY[window].phrase}.`}

@@ -34,7 +34,7 @@ describe("GET /api/overview computation", () => {
   test("KPIs and previous-window values match the hand-counted fixture", () => {
     seedMetricsFixture(getDrizzleDb().$client);
     const result = overview();
-    expect(result.window).toEqual({ selection: "24h", from: FIXTURE_NOW - 24 * HOUR, to: FIXTURE_NOW, previousFrom: FIXTURE_NOW - 48 * HOUR, previousTo: FIXTURE_NOW - 24 * HOUR, bucketMs: HOUR, tzOffsetMinutes: 0, field: "startedAt" });
+    expect(result.window).toEqual({ selection: "24h", from: FIXTURE_NOW - 24 * HOUR, to: FIXTURE_NOW, previousFrom: FIXTURE_NOW - 48 * HOUR, previousTo: FIXTURE_NOW - 24 * HOUR, bucketMs: HOUR, tzOffsetMinutes: 0, timeZone: null, field: "startedAt" });
     expect(result.pricing).toEqual({ estimateMode: "list-prices", rateCount: LIST_PRICE_REVISIONS.length, revision: "runphantom-list-prices/2026-11-25", asOf: "2026-11-25" });
     expect(result.kpis).toEqual({
       runs: { value: 5, previous: 2 },
@@ -42,6 +42,9 @@ describe("GET /api/overview computation", () => {
       completed: { value: 2, previous: 1 },
       completedWithErrors: { value: 1, previous: 0 },
       failed: { value: 1, previous: 1 },
+      interrupted: { value: 0, previous: 0 },
+      cancelled: { value: 0, previous: 0 },
+      unknown: { value: 0, previous: 0 },
       failureRate: { value: 0.25, previous: 0.5 },
       errorRate: { value: 0.5, previous: 0.5 },
       durationP50Ms: { value: 10_000, previous: 4_000, knownRuns: 4 },
@@ -69,7 +72,7 @@ describe("GET /api/overview computation", () => {
     ]);
     expect(result.recentFailures).toEqual([
       { runId: "r-tool-err", name: "alpha", agent: "alpha", status: "completed_with_errors", startedAt: FIXTURE_NOW - 2 * HOUR, errorCount: 1, error: { spanId: "tests", step: "run_tests", message: "Expected status 401, got 200." } },
-      { runId: "r-failed", name: "beta", agent: "beta", status: "failed", startedAt: FIXTURE_NOW - 3 * HOUR, errorCount: 2, error: { spanId: "tests", step: "run_tests", message: "FAIL suite auth" } },
+      { runId: "r-failed", name: "beta", agent: "beta", status: "failed", startedAt: FIXTURE_NOW - 3 * HOUR, errorCount: 1, error: { spanId: "tests", step: "run_tests", message: "FAIL suite auth" } },
     ]);
     expect(result.liveRuns).toEqual([
       { runId: "r-running", name: "beta", agent: "beta", startedAt: FIXTURE_NOW - 5 * 60_000, lastUpdatedAt: FIXTURE_NOW - 60_000, spanCount: 2, model: "gpt-4o-mini" },
@@ -86,7 +89,7 @@ describe("GET /api/overview computation", () => {
     expect(timeseries.reduce((sum, bucket) => sum + bucket.runs, 0)).toBe(5);
     const at = (hour: number) => timeseries.find(bucket => bucket.start === Date.UTC(2027, 0, 15, hour))!;
     expect(timeseries.map(bucket => bucket.partial)).toEqual([true, ...Array(23).fill(false), true]);
-    expect(at(11)).toEqual({ start: Date.UTC(2027, 0, 15, 11), end: Date.UTC(2027, 0, 15, 12), partial: false, runs: 1, failed: 0, completedWithErrors: 0, inputTokens: 100, outputTokens: 20, tokenUnknownCalls: 0, costUsd: 0.002, costUnknownCalls: 0, durationP95Ms: 10_000 });
+    expect(at(11)).toEqual({ start: Date.UTC(2027, 0, 15, 11), end: Date.UTC(2027, 0, 15, 12), partial: false, runs: 1, finished: 1, failed: 0, completedWithErrors: 0, inputTokens: 100, outputTokens: 20, tokenUnknownCalls: 0, costUsd: 0.002, costUnknownCalls: 0, durationP95Ms: 10_000 });
     expect(at(9)).toMatchObject({ runs: 1, failed: 1, inputTokens: 200, costUsd: 0.004, durationP95Ms: 30_000 });
     expect(at(10)).toMatchObject({ runs: 1, completedWithErrors: 1, costUsd: 0.00055, costUnknownCalls: 0 });
     expect(at(12)).toMatchObject({ runs: 1, inputTokens: 50, outputTokens: 0, tokenUnknownCalls: 1, durationP95Ms: null, costUsd: null, costUnknownCalls: 1 });
@@ -105,6 +108,54 @@ describe("GET /api/overview computation", () => {
     expect(month.timeseries).toHaveLength(31);
     expect(month.timeseries[0].start).toBe(Date.UTC(2026, 11, 16) - 330 * 60_000);
     expect(month.kpis.runs).toEqual({ value: 8, previous: 0 });
+  });
+
+  test("an IANA time zone keeps day buckets on local midnight across a clock change", () => {
+    const now = Date.parse("2026-11-25T20:00:00Z");
+    const night = Date.parse("2026-10-28T07:30:00Z");
+    getDrizzleDb().$client.query("INSERT INTO runs(id,name,started_at,last_updated_at) VALUES('night','night',?,?)").run(night, night);
+    const zoned = overview({ window: "30d", tz: "America/Los_Angeles", tz_offset_minutes: "-480" }, now);
+    expect(zoned.window).toMatchObject({ timeZone: "America/Los_Angeles", tzOffsetMinutes: -480, bucketMs: 24 * HOUR });
+    expect(zoned.timeseries).toHaveLength(31);
+    expect(zoned.timeseries[0].start).toBe(Date.parse("2026-10-26T07:00:00Z"));
+    expect(zoned.timeseries.at(-1)!.start).toBe(Date.parse("2026-11-25T08:00:00Z"));
+    const counted = zoned.timeseries.find(bucket => bucket.runs === 1)!;
+    expect([counted.start, counted.end]).toEqual([Date.parse("2026-10-28T07:00:00Z"), Date.parse("2026-10-29T07:00:00Z")]);
+    const change = zoned.timeseries.find(bucket => bucket.start === Date.parse("2026-11-01T07:00:00Z"))!;
+    expect(change.end - change.start).toBe(25 * HOUR);
+    for (let index = 1; index < zoned.timeseries.length; index++) expect(zoned.timeseries[index].start).toBe(zoned.timeseries[index - 1].end);
+
+    const fixed = overview({ window: "30d", tz_offset_minutes: "-480" }, now);
+    expect(fixed.window.timeZone).toBeNull();
+    expect(fixed.timeseries.find(bucket => bucket.runs === 1)!.start).toBe(Date.parse("2026-10-27T08:00:00Z"));
+  });
+
+  test("zone buckets shorten across a spring change and follow half-hour offsets", () => {
+    const spring = overview({ window: "7d", tz: "Europe/London" }, Date.parse("2027-03-30T12:00:00Z")).timeseries;
+    const short = spring.find(bucket => bucket.start === Date.parse("2027-03-28T00:00:00Z"))!;
+    expect(short.end).toBe(Date.parse("2027-03-28T05:00:00Z"));
+    expect(spring.at(-1)!.start).toBe(Date.parse("2027-03-30T11:00:00Z"));
+    const kolkata = overview({ window: "24h", tz: "Asia/Kolkata" }, Date.parse("2027-01-15T12:00:00Z")).timeseries;
+    expect(kolkata).toHaveLength(25);
+    expect(kolkata[0].start).toBe(Date.parse("2027-01-14T11:30:00Z"));
+    expect(kolkata.every(bucket => bucket.end - bucket.start === HOUR)).toBe(true);
+  });
+
+  test("tz must name a real IANA zone", () => {
+    expect(() => overview({ tz: "Mars/Olympus_Mons" })).toThrow("tz must be an IANA time zone");
+    expect(() => overview({ tz: "../etc" })).toThrow("tz must be an IANA time zone");
+    expect(overview({ tz: "europe/LONDON" }).window.timeZone).toBe("Europe/London");
+  });
+
+  test("models rank by calls, the measure the Home panel shows", () => {
+    seedMetricsFixture(getDrizzleDb().$client);
+    const client = getDrizzleDb().$client;
+    const at = FIXTURE_NOW - HOUR;
+    client.query("INSERT INTO runs(id,name,event_name,started_at,last_updated_at) VALUES('chatty','gamma','gamma',?,?)").run(at, at + 60_000);
+    const insert = client.prepare(`INSERT INTO spans(run_id,id,parent_span_id,name,span_type,status,start_time_ms,end_time_ms,duration_ms,model,provider) VALUES('chatty',?,?,?,?,?,?,?,?,?,?)`);
+    insert.run("root", null, "gamma", "AGENT_ROOT", "OK", at, at + 60_000, 60_000, null, null);
+    for (let index = 0; index < 6; index++) insert.run(`llm-${index}`, "root", "chat", "LLM_GENERATION", "OK", at + index * 100, at + index * 100 + 50, 50, "claude-haiku-4-5", "anthropic");
+    expect(overview().byModel.map(row => [row.model, row.calls, row.runs])).toEqual([["claude-haiku-4-5", 7, 2], ["gpt-4o-mini", 4, 4]]);
   });
 
   test("failing tools count every failure in a run, beyond the stored error sample", () => {

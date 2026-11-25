@@ -1,15 +1,16 @@
 import type { Database } from "bun:sqlite";
 import { LIST_PRICE_REVISIONS, PRICE_TABLE_AS_OF, PRICE_TABLE_REVISION } from "../pricing/list-prices";
 import { percentile, queryString, roundUsd, runAgent, runDisplayName, runUsesModel, sortedNumbers, StatsRequestError } from "./common";
-import { loadRunRows, selectRunAggregates, type GenerationFact, type RunRow } from "./run-facts";
+import { loadRunRows, runRowStatus, selectRunAggregates, type GenerationFact, type RunRow } from "./run-facts";
 import { AGENT_FILTER_CHARS } from "../run-agent";
-import type { RunStatus } from "./run-status";
+import { FINISHED_RUN_OUTCOMES, RUN_OUTCOMES, runOutcome, type RunOutcome } from "../run-status";
+import { bucketEdges, bucketIndex, canonicalTimeZone, zoneOffsetMs, type BucketClock } from "./time-buckets";
 import { OVERVIEW_LIMITS, OVERVIEW_VERSION, OVERVIEW_WINDOWS, type CostKpi, type DurationKpi, type Kpi, type Overview, type OverviewAgentRow, type OverviewBucket, type OverviewFailingTool, type OverviewFailure, type OverviewGroupStats, type OverviewLiveRun, type OverviewModelRow, type OverviewWindow, type TokenKpi } from "./overview-types";
 
 export { OVERVIEW_LIMITS, OVERVIEW_VERSION, OVERVIEW_WINDOWS };
 export type { CostKpi, DurationKpi, Kpi, Overview, OverviewAgentRow, OverviewBucket, OverviewFailingTool, OverviewFailure, OverviewGroupStats, OverviewLiveRun, OverviewModelRow, OverviewWindow, TokenKpi };
 
-interface OverviewQuery { selection: OverviewWindow; agent?: string; model?: string; tzOffsetMinutes: number }
+interface OverviewQuery { selection: OverviewWindow; agent?: string; model?: string; tzOffsetMinutes: number; timeZone?: string }
 
 function parseOverviewQuery(query: Record<string, unknown>): OverviewQuery {
   const selection = (queryString(query, "window", 8) || "24h") as OverviewWindow;
@@ -18,23 +19,27 @@ function parseOverviewQuery(query: Record<string, unknown>): OverviewQuery {
   if (rawOffset && !/^-?\d{1,3}$/.test(rawOffset)) throw new StatsRequestError("tz_offset_minutes must be an integer from -840 to 840");
   const tzOffsetMinutes = rawOffset ? Number(rawOffset) : 0;
   if (!Number.isInteger(tzOffsetMinutes) || tzOffsetMinutes < -840 || tzOffsetMinutes > 840) throw new StatsRequestError("tz_offset_minutes must be an integer from -840 to 840");
-  return { selection, agent: queryString(query, "agent", AGENT_FILTER_CHARS) || undefined, model: queryString(query, "model") || undefined, tzOffsetMinutes };
+  const rawZone = queryString(query, "tz", 64);
+  const timeZone = rawZone ? canonicalTimeZone(rawZone) ?? undefined : undefined;
+  if (rawZone && timeZone === undefined) throw new StatsRequestError("tz must be an IANA time zone such as Europe/London");
+  return { selection, agent: queryString(query, "agent", AGENT_FILTER_CHARS) || undefined, model: queryString(query, "model") || undefined, tzOffsetMinutes, timeZone };
 }
 
-const ended = (status: RunStatus) => status !== "running";
+type OutcomeRow = RunRow & { readonly outcome: RunOutcome };
+const finished = (outcome: RunOutcome) => FINISHED_RUN_OUTCOMES.includes(outcome);
 const rate = (part: number, whole: number) => whole ? part / whole : null;
 
 function generationsFor(row: RunRow, model: string | undefined): readonly GenerationFact[] {
   return model ? row.facts.generations.filter(item => item.model === model) : row.facts.generations;
 }
 
-function summarize(rows: readonly RunRow[], model: string | undefined) {
-  const counts = { running: 0, completed: 0, completed_with_errors: 0, failed: 0 } satisfies Record<RunStatus, number>;
+function summarize(rows: readonly OutcomeRow[], model: string | undefined) {
+  const counts = Object.fromEntries(RUN_OUTCOMES.map(outcome => [outcome, 0])) as Record<RunOutcome, number>;
   const agents = new Set<string>();
   const tokens = { input: 0, output: 0, inputUnknown: 0, outputUnknown: 0, inputKnown: 0, outputKnown: 0 };
   const cost = { usd: 0, known: 0, unknown: 0, reported: 0, estimated: 0 };
   for (const row of rows) {
-    counts[row.facts.status]++;
+    counts[row.outcome]++;
     const agent = runAgent(row);
     if (agent) agents.add(agent);
     for (const generation of generationsFor(row, model)) {
@@ -45,16 +50,16 @@ function summarize(rows: readonly RunRow[], model: string | undefined) {
     }
   }
   const durations = sortedNumbers(rows.map(row => row.facts.durationMs));
-  const endedRuns = rows.length - counts.running;
+  const endedRuns = FINISHED_RUN_OUTCOMES.reduce((sum, outcome) => sum + counts[outcome], 0);
   return {
     runs: rows.length, counts, activeAgents: agents.size, tokens, cost, durations,
     failureRate: rate(counts.failed, endedRuns), errorRate: rate(counts.failed + counts.completed_with_errors, endedRuns),
   };
 }
 
-function groupStats(rows: readonly RunRow[], generations: readonly GenerationFact[]): OverviewGroupStats {
-  const failed = rows.filter(row => row.facts.status === "failed").length;
-  const endedRuns = rows.filter(row => ended(row.facts.status)).length;
+function groupStats(rows: readonly OutcomeRow[], generations: readonly GenerationFact[]): OverviewGroupStats {
+  const failed = rows.filter(row => row.outcome === "failed").length;
+  const endedRuns = rows.filter(row => finished(row.outcome)).length;
   let inputTokens: number | null = null, outputTokens: number | null = null, tokenUnknownCalls = 0, costUsd = 0, costKnownCalls = 0, costUnknownCalls = 0;
   for (const generation of generations) {
     if (generation.inputTokens === null || generation.outputTokens === null) tokenUnknownCalls++;
@@ -63,13 +68,13 @@ function groupStats(rows: readonly RunRow[], generations: readonly GenerationFac
     if (generation.costUsd === null) costUnknownCalls++; else { costUsd += generation.costUsd; costKnownCalls++; }
   }
   return {
-    runs: rows.length, failed, completedWithErrors: rows.filter(row => row.facts.status === "completed_with_errors").length, failureRate: rate(failed, endedRuns),
+    runs: rows.length, failed, completedWithErrors: rows.filter(row => row.outcome === "completed_with_errors").length, failureRate: rate(failed, endedRuns),
     inputTokens, outputTokens, tokenUnknownCalls, costUsd: costKnownCalls ? roundUsd(costUsd) : null, costKnownCalls, costUnknownCalls,
   };
 }
 
-function byRunsThenName<T extends { runs: number }>(key: (row: T) => string | null) {
-  return (a: T, b: T) => b.runs - a.runs || (key(a) === null ? 1 : key(b) === null ? -1 : key(a)! < key(b)! ? -1 : key(a)! > key(b)! ? 1 : 0);
+function byCountThenName<T>(count: (row: T) => number, key: (row: T) => string | null) {
+  return (a: T, b: T) => count(b) - count(a) || (key(a) === null ? 1 : key(b) === null ? -1 : key(a)! < key(b)! ? -1 : key(a)! > key(b)! ? 1 : 0);
 }
 
 export function computeOverview(db: Database, dbPath: string, rawQuery: Record<string, unknown>, now = Date.now()): Overview {
@@ -77,22 +82,27 @@ export function computeOverview(db: Database, dbPath: string, rawQuery: Record<s
   const { durationMs, bucketMs } = OVERVIEW_WINDOWS[query.selection];
   const to = now, from = to - durationMs, previousFrom = from - durationMs;
   const liveSince = now - OVERVIEW_LIMITS.liveActivityMs;
-  const all = loadRunRows(db, dbPath, selectRunAggregates(db, "((r.started_at >= ? AND r.started_at < ?) OR r.last_updated_at >= ?)", [previousFrom, to, liveSince]))
-    .filter(row => (!query.agent || runAgent(row) === query.agent) && (!query.model || runUsesModel(row, query.model)));
+  const all: OutcomeRow[] = loadRunRows(db, dbPath, selectRunAggregates(db, "((r.started_at >= ? AND r.started_at < ?) OR r.last_updated_at >= ?)", [previousFrom, to, liveSince]))
+    .filter(row => (!query.agent || runAgent(row) === query.agent) && (!query.model || runUsesModel(row, query.model)))
+    .map(row => ({ ...row, outcome: runOutcome(runRowStatus(row, now).status) }));
   const current = all.filter(row => row.started_at >= from && row.started_at < to);
   const previous = all.filter(row => row.started_at >= previousFrom && row.started_at < from);
   const now_ = summarize(current, query.model), before = summarize(previous, query.model);
   const kpi = (value: number | null, prior: number | null): Kpi => ({ value, previous: prior });
 
-  const offsetMs = query.tzOffsetMinutes * 60_000;
-  const firstBucket = Math.floor((from + offsetMs) / bucketMs) * bucketMs - offsetMs;
+  const clock: BucketClock = query.timeZone ? { timeZone: query.timeZone } : { offsetMinutes: query.tzOffsetMinutes };
+  const edges = bucketEdges(from, to, bucketMs, clock);
   const buckets: Array<Omit<OverviewBucket, "costUsd"> & { costUsd: number; costKnownCalls: number; durations: number[] }> = [];
-  for (let start = firstBucket; start < to; start += bucketMs) buckets.push({ start, end: start + bucketMs, partial: start < from || start + bucketMs > to, runs: 0, failed: 0, completedWithErrors: 0, inputTokens: 0, outputTokens: 0, tokenUnknownCalls: 0, costUsd: 0, costKnownCalls: 0, costUnknownCalls: 0, durationP95Ms: null, durations: [] });
+  for (let index = 0; index < edges.length - 1; index++) {
+    const start = edges[index], end = edges[index + 1];
+    buckets.push({ start, end, partial: start < from || end > to, runs: 0, finished: 0, failed: 0, completedWithErrors: 0, inputTokens: 0, outputTokens: 0, tokenUnknownCalls: 0, costUsd: 0, costKnownCalls: 0, costUnknownCalls: 0, durationP95Ms: null, durations: [] });
+  }
   for (const row of current) {
-    const bucket = buckets[Math.floor((row.started_at - firstBucket) / bucketMs)];
+    const bucket = buckets[bucketIndex(edges, row.started_at)];
     bucket.runs++;
-    if (row.facts.status === "failed") bucket.failed++;
-    if (row.facts.status === "completed_with_errors") bucket.completedWithErrors++;
+    if (finished(row.outcome)) bucket.finished++;
+    if (row.outcome === "failed") bucket.failed++;
+    if (row.outcome === "completed_with_errors") bucket.completedWithErrors++;
     if (row.facts.durationMs !== null) bucket.durations.push(row.facts.durationMs);
     for (const generation of generationsFor(row, query.model)) {
       bucket.inputTokens += generation.inputTokens ?? 0;
@@ -105,7 +115,7 @@ export function computeOverview(db: Database, dbPath: string, rawQuery: Record<s
     ...bucket, costUsd: costKnownCalls || !bucket.costUnknownCalls ? roundUsd(bucket.costUsd) : null, durationP95Ms: percentile(sortedNumbers(durations), 0.95),
   }));
 
-  const agentGroups = new Map<string | null, RunRow[]>();
+  const agentGroups = new Map<string | null, OutcomeRow[]>();
   for (const row of current) {
     const agent = runAgent(row);
     const list = agentGroups.get(agent);
@@ -114,9 +124,9 @@ export function computeOverview(db: Database, dbPath: string, rawQuery: Record<s
   const byAgentAll = [...agentGroups].map(([agent, rows]): OverviewAgentRow => {
     const durations = sortedNumbers(rows.map(row => row.facts.durationMs));
     return { agent, ...groupStats(rows, rows.flatMap(row => generationsFor(row, query.model))), durationP50Ms: percentile(durations, 0.5), durationP95Ms: percentile(durations, 0.95) };
-  }).sort(byRunsThenName(row => row.agent));
+  }).sort(byCountThenName(row => row.runs, row => row.agent));
 
-  const modelGroups = new Map<string | null, { rows: Set<RunRow>; generations: GenerationFact[]; providers: Map<string, number> }>();
+  const modelGroups = new Map<string | null, { rows: Set<OutcomeRow>; generations: GenerationFact[]; providers: Map<string, number> }>();
   for (const row of current) for (const generation of generationsFor(row, query.model)) {
     let group = modelGroups.get(generation.model);
     if (!group) modelGroups.set(generation.model, group = { rows: new Set(), generations: [], providers: new Map() });
@@ -130,7 +140,7 @@ export function computeOverview(db: Database, dbPath: string, rawQuery: Record<s
     const provider = [...group.providers].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]?.[0] ?? null;
     return { model, provider, ...groupStats([...group.rows], group.generations), calls: group.generations.length, callP50Ms: percentile(calls, 0.5), callP95Ms: percentile(calls, 0.95),
       durationP50Ms: percentile(durations, 0.5), durationP95Ms: percentile(durations, 0.95) };
-  }).sort(byRunsThenName(row => row.model));
+  }).sort(byCountThenName(row => row.calls, row => row.model));
 
   const tools = new Map<string, OverviewFailingTool>();
   for (const row of current) {
@@ -146,21 +156,21 @@ export function computeOverview(db: Database, dbPath: string, rawQuery: Record<s
   for (const row of current) for (const [name, count] of Object.entries(row.facts.toolCalls)) { const tool = tools.get(name); if (tool) tool.calls += count; }
   const topFailingTools = [...tools.values()].sort((a, b) => b.failures - a.failures || (b.lastError.at ?? 0) - (a.lastError.at ?? 0) || (a.tool < b.tool ? -1 : 1)).slice(0, OVERVIEW_LIMITS.topFailingTools);
 
-  const recentFailures = current.filter(row => row.facts.status === "failed" || row.facts.status === "completed_with_errors")
+  const recentFailures = current.filter((row): row is OutcomeRow & { outcome: OverviewFailure["status"] } => row.outcome === "failed" || row.outcome === "completed_with_errors")
     .sort((a, b) => b.started_at - a.started_at || (a.id < b.id ? 1 : -1)).slice(0, OVERVIEW_LIMITS.recentFailures)
     .map((row): OverviewFailure => {
       const first = row.facts.errors.find(error => error.spanType !== "AGENT_ROOT") ?? row.facts.errors[0];
-      return { runId: row.id, name: runDisplayName(row), agent: runAgent(row), status: row.facts.status as OverviewFailure["status"], startedAt: row.started_at, errorCount: row.facts.errorCount,
+      return { runId: row.id, name: runDisplayName(row), agent: runAgent(row), status: row.outcome, startedAt: row.started_at, errorCount: row.facts.errorCount,
         error: first ? { spanId: first.spanId, step: first.name, message: first.message } : null };
     });
 
-  const liveRuns = all.filter(row => row.facts.status === "running" && row.last_updated_at >= liveSince)
+  const liveRuns = all.filter(row => row.outcome === "running" && row.last_updated_at >= liveSince)
     .sort((a, b) => b.last_updated_at - a.last_updated_at || (a.id < b.id ? 1 : -1)).slice(0, OVERVIEW_LIMITS.liveRuns)
     .map(row => ({ runId: row.id, name: runDisplayName(row), agent: runAgent(row), startedAt: row.started_at, lastUpdatedAt: row.last_updated_at, spanCount: row.facts.spanCount, model: row.facts.primaryModel }));
 
   return {
     version: OVERVIEW_VERSION, asOf: now,
-    window: { selection: query.selection, from, to, previousFrom, previousTo: from, bucketMs, tzOffsetMinutes: query.tzOffsetMinutes, field: "startedAt" },
+    window: { selection: query.selection, from, to, previousFrom, previousTo: from, bucketMs, tzOffsetMinutes: query.timeZone ? Math.round(zoneOffsetMs(query.timeZone, now) / 60_000) : query.tzOffsetMinutes, timeZone: query.timeZone ?? null, field: "startedAt" },
     filters: { agent: query.agent ?? null, model: query.model ?? null },
     pricing: { estimateMode: "list-prices", rateCount: LIST_PRICE_REVISIONS.length, revision: PRICE_TABLE_REVISION, asOf: PRICE_TABLE_AS_OF },
     kpis: {
@@ -169,6 +179,9 @@ export function computeOverview(db: Database, dbPath: string, rawQuery: Record<s
       completed: kpi(now_.counts.completed, before.counts.completed),
       completedWithErrors: kpi(now_.counts.completed_with_errors, before.counts.completed_with_errors),
       failed: kpi(now_.counts.failed, before.counts.failed),
+      interrupted: kpi(now_.counts.interrupted, before.counts.interrupted),
+      cancelled: kpi(now_.counts.cancelled, before.counts.cancelled),
+      unknown: kpi(now_.counts.unknown, before.counts.unknown),
       failureRate: kpi(now_.failureRate, before.failureRate),
       errorRate: kpi(now_.errorRate, before.errorRate),
       durationP50Ms: { ...kpi(percentile(now_.durations, 0.5), percentile(before.durations, 0.5)), knownRuns: now_.durations.length },

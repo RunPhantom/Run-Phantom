@@ -6,6 +6,7 @@ import { once } from "node:events";
 import type http from "node:http";
 import { closeDb, getRunWithSpans, upsertRun, insertSpan } from "../src/db";
 import { createServer } from "../src/server";
+import { deriveRunStatus } from "../src/run-status";
 
 const envNames = ["RUNPHANTOM_DB_PATH", "RUNPHANTOM_SECRET_STORE_PATH", "OPENAI_API_KEY", "RUNPHANTOM_OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"];
 const originalEnv = new Map<string, string | undefined>();
@@ -275,7 +276,10 @@ describe.serial("POST /api/playground/runs", () => {
       const { span, attributes } = llmSpan(result.runId);
       expect(span.status).toBe("ERROR");
       expect(attributes["error.type"]).toBe(item.kind);
-      expect(getRunWithSpans(result.runId).spans.filter(entry => (entry as { status?: string }).status === "ERROR")).toHaveLength(1);
+      expect(getRunWithSpans(result.runId).spans.filter(entry => (entry as { status?: string }).status === "ERROR")).toHaveLength(2);
+      const listed = await (await fetch(`${base}/api/runs?envelope=1&ids=${encodeURIComponent(result.runId)}`)).json() as { runs: Array<Parameters<typeof deriveRunStatus>[0] & { run_status: string; status: string }> };
+      expect(listed.runs.map(row => [row.run_status, row.status, row.error_count])).toEqual([["failed", "failed", 1]]);
+      expect(deriveRunStatus(listed.runs[0])).toMatchObject({ label: "Run failed", detail: "The run's root span errored.", errorCount: 1 });
       expect(JSON.stringify(getRunWithSpans(result.runId))).not.toContain(KEYS.openai);
     }
   });

@@ -16,6 +16,7 @@ export function sampleOverview(now: number): Overview {
     end: first + (index + 1) * HOUR,
     partial: index === 0 || index === RUNS.length - 1,
     runs,
+    finished: runs,
     failed: FAILED[index],
     completedWithErrors: index % 5 === 2 ? 1 : 0,
     inputTokens: runs * 21_000,
@@ -32,7 +33,7 @@ export function sampleOverview(now: number): Overview {
   return {
     version: "runphantom-overview/1",
     asOf: now,
-    window: { selection: "24h", from, to: now, previousFrom: from - 24 * HOUR, previousTo: from, bucketMs: HOUR, tzOffsetMinutes: 0, field: "startedAt" },
+    window: { selection: "24h", from, to: now, previousFrom: from - 24 * HOUR, previousTo: from, bucketMs: HOUR, tzOffsetMinutes: 0, timeZone: null, field: "startedAt" },
     filters: { agent: null, model: null },
     pricing: { estimateMode: "list-prices", rateCount: 0, revision: "sample", asOf: new Date(now).toISOString().slice(0, 10) },
     kpis: {
@@ -41,6 +42,9 @@ export function sampleOverview(now: number): Overview {
       completed: { value: 117, previous: 101 },
       completedWithErrors: { value: 7, previous: 6 },
       failed: { value: 9, previous: 8 },
+      interrupted: { value: 0, previous: 0 },
+      cancelled: { value: 0, previous: 0 },
+      unknown: { value: 0, previous: 0 },
       failureRate: { value: 0.068, previous: 0.07 },
       errorRate: { value: 0.12, previous: 0.122 },
       durationP50Ms: { value: 5_200, previous: 5_600, knownRuns: 133 },

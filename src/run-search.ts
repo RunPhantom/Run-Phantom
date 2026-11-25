@@ -8,7 +8,7 @@ import { deriveRunAgent, hintsFromRows, rootAgentHintsSql, type RootAgentHintRow
 import { compileSearchFilter, parseSearchFilter, SearchFilterError, type SearchFilter } from "./search-filter";
 import { hasDuplicateJsonKeys } from "./json-keys";
 import type { RunStatus } from "./run-status";
-import { RUN_STATUS_FILTER_VALUES, runStatusFilterSql, runStatusSql } from "./run-status-sql";
+import { RUN_STATUS_FILTER_VALUES, errorCountSql, runStatusFilterSql, runStatusSql } from "./run-status-sql";
 import { redactTeamText } from "./team/ingest";
 import type { RunSearchMatch, RunSearchMatchField, SearchSnippet } from "./search-protocol";
 
@@ -168,7 +168,7 @@ function buildQuery(input: SearchInput): { sql: string; params: (string | number
       ${derived.status} AS status,
       ${derived.replay} AS replay_outcome,
       ${derived.finished} AS finished,
-      (SELECT COUNT(*) FROM spans s WHERE s.run_id = r.id AND s.status = 'ERROR') AS error_count,
+      ${errorCountSql("r")} AS error_count,
       (SELECT COUNT(*) FROM spans s WHERE s.run_id = r.id AND s.status = 'ERROR' AND s.span_type = 'TOOL_CALL') AS tool_error_count,
       ${derived.rootFailed} AS root_failed,
       (SELECT COUNT(*) FROM spans s WHERE s.run_id = r.id) AS span_count,

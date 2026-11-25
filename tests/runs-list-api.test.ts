@@ -65,7 +65,7 @@ describe("GET /api/runs rows", () => {
       llm_calls: 1, known_input_tokens: 100, known_output_tokens: 20, token_unknown_calls: 0, known_cost_usd: 0.002, known_cost_source: "reported", cost_unknown_calls: 0,
     });
     expect(byId.get("r-tool-err")).toMatchObject({ status: "completed_with_errors", duration_ms: 20_000, input_tokens: 300, output_tokens: 50, est_cost_usd: 0.00055, cost_source: "estimated", error_count: 1, tool_count: 2, input_preview: "Review PR 842" });
-    expect(byId.get("r-failed")).toMatchObject({ status: "failed", duration_ms: 30_000, error_count: 2, est_cost_usd: 0.004, input_preview: null });
+    expect(byId.get("r-failed")).toMatchObject({ status: "failed", duration_ms: 30_000, error_count: 1, est_cost_usd: 0.004, input_preview: null });
     expect(byId.get("r-running")).toMatchObject({ status: "running", finished: 0, duration_ms: null, input_tokens: 50, output_tokens: null, est_cost_usd: null, cost_source: "unknown",
       llm_calls: 1, known_input_tokens: 50, known_output_tokens: null, token_unknown_calls: 1, known_cost_usd: null, cost_unknown_calls: 1 });
     expect(byId.get("r-tool-err")).toMatchObject({ llm_calls: 1, known_cost_usd: 0.00055, cost_unknown_calls: 0 });
@@ -148,7 +148,7 @@ describe("GET /api/runs parameters", () => {
     expect(ids({ sort: "cost", order: "asc" })).toEqual(["r-tool-err", "p-ok", "r-ok", "r-failed", "r-nested", "old", "p-failed", "r-running"]);
     expect(ids({ sort: "duration" })).toEqual(["r-failed", "r-tool-err", "r-ok", "p-failed", "r-nested", "p-ok", "old", "r-running"]);
     expect(ids({ sort: "tokens" })).toEqual(["r-nested", "r-tool-err", "r-failed", "r-ok", "p-ok", "r-running", "p-failed", "old"]);
-    expect(ids({ sort: "errors" }).slice(0, 3)).toEqual(["r-failed", "r-tool-err", "p-failed"]);
+    expect(ids({ sort: "errors" }).slice(0, 3)).toEqual(["r-tool-err", "r-failed", "p-failed"]);
   });
 
   test("cursor pages walk the sorted list exactly once", () => {

@@ -28,7 +28,7 @@ const TOOLS = [
       type: "object",
       properties: {
         q: { type: "string", maxLength: 256, description: "Literal substring; empty browses all runs. %, _ and quotes are literal." },
-        status: { type: "string", enum: ["all", ...RUN_STATUS_FILTER_VALUES], description: "A run status (live, quiet, complete, completed_with_errors, failed, cancelled, interrupted, unknown), or the groups running (live or quiet) and completed (with or without errors)." },
+        status: { type: "string", enum: ["all", ...RUN_STATUS_FILTER_VALUES], description: "A run status (live, quiet, complete, completed_with_errors, failed, cancelled, interrupted, unknown), or running (live or quiet) and completed (complete with no errors), the buckets the Runs page filters by." },
         model: { type: "string", maxLength: 256 },
         provider: { type: "string", maxLength: 256 },
         filter: {

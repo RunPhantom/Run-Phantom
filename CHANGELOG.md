@@ -81,6 +81,18 @@ Run Phantom has no tagged releases yet, so everything below is unreleased.
   tools now agree on status. A tool error under a successful run reads
   "completed with errors"; "failed" means the run itself failed.
   ([#169](https://github.com/RunPhantom/Run-Phantom/pull/169))
+- **`status=completed` no longer includes runs with errors.** Run search,
+  typed filters (including `status ne completed`), saved views and MCP tools
+  now use the same status filters as the Runs page: `completed` means finished
+  with no errors, and `completed_with_errors` is its own value. Saved searches,
+  bookmarked URLs and MCP clients that relied on the old meaning should add
+  `completed_with_errors`. Failed or cancelled replays, interrupted runs and
+  runs with no recorded end no longer count as running anywhere.
+- **Error counts no longer count a failed run twice.** When a run's root step
+  fails because a step inside it failed, the run reads "Run failed" with the
+  inner errors counted once, so a rejected Playground call shows 1 error.
+  Search treats a partial coding-hook capture by its span evidence, while the
+  Runs page shows it as "Completion unavailable".
 - **Cost estimates on by default.** Runs, the overview, the run list and Cost
   & usage all price a model call by the same rule. Costs under a cent keep two
   significant digits.

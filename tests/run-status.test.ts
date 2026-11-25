@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { closeDb, getRuns, getRunWithSpans, insertSpan, upsertRun } from "../src/db";
 import { searchRuns } from "../src/run-search";
-import { deriveRunStatus, RUN_INTERRUPTED_AFTER_MS, RUN_QUIET_AFTER_MS, runErrorEvidenceFromSpans, runInProgress, runStatusTone } from "../src/run-status";
+import { countedErrors, deriveRunStatus, RUN_INTERRUPTED_AFTER_MS, RUN_QUIET_AFTER_MS, runErrorEvidenceFromSpans, runInProgress, runStatusTone } from "../src/run-status";
 
 const NOW = Date.UTC(2026, 10, 25, 12);
 
@@ -59,6 +59,15 @@ describe("deriveRunStatus", () => {
     expect(runErrorEvidenceFromSpans(spans)).toEqual({ error_count: 1, tool_error_count: 1, root_failed: false });
     expect(runErrorEvidenceFromSpans(spans.map(span => ({ ...span, status: "ERROR" }))).root_failed).toBe(true);
     expect(runErrorEvidenceFromSpans([{ parent_span_id: null, span_type: "AGENT_ROOT", status: "ERROR" }, ...spans]).root_failed).toBe(true);
+  });
+
+  test("an errored agent root is not counted again when an error beneath it explains the failure", () => {
+    const root = { parent_span_id: null, span_type: "AGENT_ROOT", status: "ERROR" };
+    const call = { parent_span_id: "root", span_type: "LLM_GENERATION", status: "ERROR" };
+    expect(runErrorEvidenceFromSpans([root, call])).toEqual({ error_count: 1, tool_error_count: 0, root_failed: true });
+    expect(runErrorEvidenceFromSpans([root, { ...call, status: "OK" }])).toEqual({ error_count: 1, tool_error_count: 0, root_failed: true });
+    expect(runErrorEvidenceFromSpans([root, call, { ...call, span_type: "TOOL_CALL" }]).error_count).toBe(2);
+    expect(countedErrors(3, 0)).toBe(3);
   });
 });
 

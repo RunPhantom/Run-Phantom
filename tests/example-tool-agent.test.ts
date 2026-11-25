@@ -203,7 +203,7 @@ describe("tool-agent example: exported traces", () => {
     expect(llm).toMatchObject({ provider: "gcp.gemini", model: "gemini-3.8-flash", inputTokens: 500, outputTokens: 100 });
     expect(llm!.attributes["gen_ai.operation.name"]).toBe("generate_content");
     expect(byType(spans, "TOOL_CALL").map((tool) => [tool.name, tool.status])).toEqual([["lookup_order", "OK"], ["issue_refund", "ERROR"]]);
-    expect(evidence(spans)).toEqual({ error_count: 2, tool_error_count: 1, root_failed: true });
+    expect(evidence(spans)).toEqual({ error_count: 1, tool_error_count: 1, root_failed: true });
   });
 
   test("a provider error fails the run with the provider's message on the model span", async () => {

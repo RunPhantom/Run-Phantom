@@ -9,10 +9,10 @@ export const FILTER_FIELDS: Array<{value:SearchFilterField;label:string}> = [
   {value:"status",label:"Status"},{value:"model",label:"Model"},{value:"provider",label:"Provider"},
   {value:"duration_ms",label:"Duration (ms)"},{value:"captured_cost_usd",label:"Captured cost (USD)"},{value:"tag",label:"Tag"},
 ];
-/** `running` and `completed` are groups: live or quiet, and completed with or without errors. */
+/** The Runs page status buckets (RUN_OUTCOMES); `running` is the group of live and quiet runs. */
 export const STATUS_FILTER_OPTIONS = [
   {value:"running",label:"In progress"},{value:"completed",label:"Completed"},{value:"completed_with_errors",label:"Completed with errors"},
-  {value:"failed",label:"Failed"},{value:"interrupted",label:"Interrupted"},
+  {value:"failed",label:"Failed"},{value:"interrupted",label:"Interrupted"},{value:"cancelled",label:"Cancelled"},{value:"unknown",label:"Unknown"},
 ] as const;
 export const TEAM_STATUS_FILTER_OPTIONS = [{value:"running",label:"Running"},{value:"completed",label:"Completed"},{value:"failed",label:"Failed"}] as const;
 export const FILTER_OPERATORS = {eq:"equals",ne:"is not",lt:"less than",lte:"at most",gt:"greater than",gte:"at least"} as const;

@@ -5,8 +5,7 @@ import { generationCost, requestModel } from "../pricing/span-cost";
 import { normalizeUsage } from "../pricing/usage";
 import { normalizeStoredSpan } from "../spans/normalize";
 import { captureCompletion } from "../spans/normalized";
-import { deriveRunStatus, type RunStatus } from "./run-status";
-import { rootFailed } from "../run-status";
+import { countedErrors, deriveRunStatus, rootFailed, type RunStatusSummary } from "../run-status";
 import { selectRootAgentHints, type RootAgentHints } from "../run-agent";
 
 export type CostSource = "reported" | "estimated" | "unknown";
@@ -44,7 +43,6 @@ export interface RunFacts {
   readonly rootFailed: boolean;
   readonly toolCount: number;
   readonly finished: number;
-  readonly status: RunStatus;
   readonly durationMs: number | null;
   /** Null unless every counted model call reports it. */
   readonly inputTokens: number | null;
@@ -90,6 +88,16 @@ export interface RunRow {
   /** The legacy runs_with_hints `model`: the first span with a model column, in that view's lookup order. */
   readonly legacy_model: string | null;
   readonly facts: RunFacts;
+}
+
+/**
+ * The shared `deriveRunStatus` for a loaded run. It depends on the clock (live, quiet, interrupted) and on
+ * metadata (replay outcome), so it is derived per request and never cached with the facts.
+ */
+export function runRowStatus(row: RunRow, now: number): RunStatusSummary {
+  const facts = row.facts;
+  return deriveRunStatus({ last_updated_at: row.last_updated_at, finished: facts.finished, span_count: facts.spanCount, metadata: row.metadata,
+    capture_completion: facts.captureCompletion, error_count: facts.errorCount, tool_error_count: facts.toolErrorCount, root_failed: facts.rootFailed }, now);
 }
 
 export const RUN_FACT_LIMITS = Object.freeze({
@@ -233,7 +241,6 @@ function selectSpans(db: Database, runIds: readonly string[]): Map<string, SpanR
 
 function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[], agentHints: RootAgentHints): RunFacts {
   const runRootFailed = rootFailed({ roots: aggregate.root_count, rootErrors: aggregate.root_error_count, agentRoots: aggregate.agent_root_count, agentRootErrors: aggregate.agent_root_error_count });
-  const status = deriveRunStatus({ rootCount: aggregate.root_count, endedRootCount: aggregate.ended_root_count, rootErrorCount: aggregate.root_error_count, rootFailed: runRootFailed, errorCount: aggregate.error_count });
   const finished = aggregate.root_count > 0 && aggregate.ended_root_count === aggregate.root_count ? 1 : 0;
   const durationMs = finished && aggregate.min_start !== null && aggregate.max_end !== null && aggregate.max_end >= aggregate.min_start
     ? aggregate.max_end - aggregate.min_start : null;
@@ -279,7 +286,7 @@ function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[], agentH
   for (const [name, tool] of toolFailureSpans) toolFailures[name] = Object.freeze({ failures: tool.failures, last: errorFact(tool.last) });
   const root = spans.find(span => span.parent_span_id === null && span.span_type === "AGENT_ROOT") ?? null;
   return Object.freeze({
-    spanCount: aggregate.span_count, errorCount: aggregate.error_count, toolErrorCount: aggregate.tool_error_count, rootFailed: runRootFailed, toolCount: aggregate.tool_count, finished, status, durationMs,
+    spanCount: aggregate.span_count, errorCount: countedErrors(aggregate.error_count, aggregate.agent_root_error_count), toolErrorCount: aggregate.tool_error_count, rootFailed: runRootFailed, toolCount: aggregate.tool_count, finished, durationMs,
     inputTokens, outputTokens, costUsd, costSource,
     llmCalls: generations.length,
     knownInputTokens: partial(generations.map(item => item.inputTokens)), knownOutputTokens: partial(generations.map(item => item.outputTokens)),
