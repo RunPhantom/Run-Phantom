@@ -314,7 +314,7 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
         ) : empty ? (
           <div className="flex flex-1 flex-col items-center gap-3 border-t border-rp-line px-6 pt-16 text-center">
             <p className="text-[14px] font-medium text-rp-ink">No matching runs</p>
-            <p className="max-w-sm text-[13px] text-rp-ink-muted">Nothing matches these filters in {windowLabel.toLowerCase()}.</p>
+            <p className="max-w-sm text-[13px] text-rp-ink-muted">{windowLabel === "All time" ? "Nothing matches these filters." : `Nothing matches these filters in the ${windowLabel.toLowerCase()}.`}</p>
             <Button type="button" size="sm" variant="secondary" onClick={clearFilters}>Clear filters</Button>
           </div>
         ) : data.status === "loading" ? (
