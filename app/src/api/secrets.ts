@@ -1,4 +1,5 @@
 import { apiJson, jsonInit } from "./request";
+import type { ProviderCheckResult } from "../../../src/provider-connection-protocol";
 
 export type SecretKey = "anthropic" | "openai" | "gemini";
 export type SecretSource = "env" | "store" | null;
@@ -27,4 +28,16 @@ export async function saveSecret(key: SecretKey, value: string): Promise<SecretS
 export async function deleteSecret(key: SecretKey): Promise<SecretStatus> {
   const body = await apiJson<{ status: SecretStatus }>(`/api/secrets/${key}`, jsonInit("DELETE"));
   return body.status;
+}
+
+export type SecretHints = Record<SecretKey, string | null>;
+
+/** Statuses plus a masked hint ("sk-proj-…7Q2x") of each effective key; the key itself never reaches the browser. */
+export async function getSecretOverview(): Promise<{ keys: SecretStatuses; hints: SecretHints }> {
+  const body = await apiJson<{ keys: SecretStatuses; hints?: Partial<SecretHints> }>("/api/secrets");
+  return { keys: body.keys, hints: { anthropic: body.hints?.anthropic ?? null, openai: body.hints?.openai ?? null, gemini: body.hints?.gemini ?? null } };
+}
+
+export async function testSecret(key: SecretKey): Promise<ProviderCheckResult> {
+  return apiJson<ProviderCheckResult>(`/api/secrets/${key}/test`, jsonInit("POST"));
 }
