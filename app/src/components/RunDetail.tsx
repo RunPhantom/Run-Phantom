@@ -526,7 +526,7 @@ function CostRowDetail({ row }: { row: ModelCostRow }) {
         <div>Fetched: {row.catalogue.source.observedAt}</div>
       </>}
       {used > 1 && row.totalUsd !== null && <CostLine label="total" amount={row.totalUsd} strong />}
-      {row.unavailableReason && <p>{used > 0 ? "Some calls are unpriced. " : ""}{row.unavailableReason}</p>}
+      {row.unavailableReason && <p>{used > 0 ? `${row.unavailableCalls} of ${row.generations} calls ${row.unavailableCalls === 1 ? "is" : "are"} unpriced. ` : ""}{row.unavailableReason}</p>}
     </div>
   );
 }
