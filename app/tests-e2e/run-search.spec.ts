@@ -32,17 +32,21 @@ async function seedSearchRuns(request: APIRequestContext, url: string, count = 3
   expect(response.ok(), `Seed search traces (HTTP ${response.status()})`).toBe(true);
 }
 
-test("a new query moves the page's own selection to a matching run", async ({ page, request, runPhantom }) => {
+test("results open as a table; a new query moves an open run to a matching one", async ({ page, request, runPhantom }) => {
   await seedSearchRuns(request, runPhantom.url);
   await page.goto(`${runPhantom.url}/search`);
+  const grid = page.getByRole("grid", { name: "Matching runs", exact: true });
+  await expect(grid.locator(row(0))).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/search$`));
+  await grid.locator(row(0)).click();
   await expect(page).toHaveURL(new RegExp(`/search/${runId(0)}$`));
   await page.getByRole("textbox", { name: "Search captured runs", exact: true }).fill("cobalt-only");
   await expect(page.locator("[data-run-id]")).toHaveCount(1);
   await expect(page).toHaveURL(new RegExp(`/search/${runId(1)}\\?q=cobalt-only$`));
   await page.getByRole("textbox", { name: "Search captured runs", exact: true }).fill("no-run-has-this-zz");
   await expect(page.getByText("No matching runs", { exact: true })).toBeVisible();
-  await expect(page.getByText("No result to open", { exact: true })).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`/search\\?q=no-run-has-this-zz$`));
+  await expect(page.getByRole("tab", { name: "Overview", exact: true })).toHaveCount(0);
 });
 
 test("search finds payload-only evidence and persists filters through a direct link", async ({ page, request, runPhantom }) => {
@@ -63,10 +67,10 @@ test("search finds payload-only evidence and persists filters through a direct l
   await expect(page.getByLabel("Search captured runs", { exact: true })).toHaveValue("cobalt-only");
   await expect(page.getByLabel("Provider", { exact: true })).toHaveValue("anthropic");
   await expect(page.locator(row(1))).toBeVisible();
+  await page.getByText("Filters · 3 on", { exact: true }).click();
   await page.getByLabel("Provider", { exact: true }).fill("openai");
   await expect(page.getByText("No matching runs", { exact: true })).toBeVisible();
   // The detail pane never shows a run that is not in the current results.
-  await expect(page.getByText("No result to open", { exact: true })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Overview", exact: true })).toHaveCount(0);
   await expect(page).toHaveURL(/\/search\?/);
   mkdirSync(evidencePath, { recursive: true });
@@ -76,13 +80,14 @@ test("search finds payload-only evidence and persists filters through a direct l
 test("search loads another server page without duplicates and opens an older direct link", async ({ page, request, runPhantom }) => {
   await seedSearchRuns(request, runPhantom.url, 55);
   await page.goto(`${runPhantom.url}/search`);
-  await expect(page.locator("[data-run-id]")).toHaveCount(50);
-  await expect(page.locator(row(54))).toHaveCount(0);
+  // The results table renders only the rows in view, so the loaded count is read from the status line.
+  await expect(page.getByRole("status").filter({ hasText: "50 runs loaded; more available" })).toBeVisible();
+  await expect(page.getByRole("grid", { name: "Matching runs", exact: true })).toHaveAttribute("aria-rowcount", "51");
   await page.getByRole("button", { name: "Load more runs", exact: true }).click();
-  await expect(page.locator("[data-run-id]")).toHaveCount(55);
+  await expect(page.getByRole("status").filter({ hasText: /^55 runs loaded$/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "Load more runs", exact: true })).toHaveCount(0);
-  const ids = await page.locator("[data-run-id]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-run-id")));
-  expect(new Set(ids).size).toBe(55);
+  await page.getByRole("grid", { name: "Matching runs", exact: true }).locator("..").evaluate(element => element.scrollTo(0, element.scrollHeight));
+  await expect(page.locator(row(54))).toBeVisible();
   await page.goto(`${runPhantom.url}/search/${runId(54)}?q=Search+fixture+54`);
   await expect(page.locator(row(54))).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`/search/${runId(54)}\\?q=Search\\+fixture\\+54$`));
@@ -102,12 +107,34 @@ test("searching error finds the failed run, explains the match and opens it", as
   const failed = page.locator(row(1));
   await expect(failed.locator('[data-run-match="failed_span"]')).toContainText("Failed step: Search fixture 1");
   await expect(failed.locator('[data-run-match="failed_span"]')).toContainText("cobalt-only payload response");
+  await expect(failed.locator('[data-run-list-status="failed"]')).toBeVisible();
+  await failed.click();
   await expect(page).toHaveURL(new RegExp(`/search/${runId(1)}\\?q=error$`));
   await expect(page.getByRole("tab", { name: "Overview", exact: true })).toBeVisible();
   await page.getByRole("textbox", { name: "Search captured runs", exact: true }).fill("amber");
   const amber = page.locator(row(0)).locator('[data-run-match="input"]');
   await expect(amber.locator("mark")).toHaveText("amber");
   await expect(page).toHaveURL(new RegExp(`/search/${runId(0)}\\?q=amber$`));
+});
+
+test("the results table explains each match, remembers searches and opens from the keyboard", async ({ page, request, runPhantom }) => {
+  await seedSearchRuns(request, runPhantom.url);
+  await page.goto(`${runPhantom.url}/search`);
+  await page.getByRole("group", { name: "Find failures", exact: true }).getByRole("button", { name: "error", exact: true }).click();
+  await expect(page).toHaveURL(/\/search\?q=error$/);
+  const grid = page.getByRole("grid", { name: "Matching runs", exact: true });
+  await expect(grid.locator(row(1)).locator('[data-run-match="failed_span"]')).toContainText("Failed step: Search fixture 1");
+  await expect(page.getByText("Most relevant first", { exact: true })).toBeVisible();
+  await page.getByLabel("Search captured runs", { exact: true }).press("Enter");
+  await expect(page.getByLabel("Recent searches", { exact: true })).toContainText("error");
+  await grid.focus();
+  await expect(grid.locator(row(1))).toHaveAttribute("data-active", "true");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`/search/${runId(1)}\\?q=error$`));
+  await expect(page.getByRole("tab", { name: "Overview", exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "All results", exact: true }).click();
+  await expect(page).toHaveURL(/\/search\?q=error$/);
+  await expect(grid.locator(row(1))).toBeVisible();
 });
 
 test("search distinguishes loading, failures, empty workspace, and no matching results", async ({ page, request, runPhantom }) => {
@@ -185,6 +212,7 @@ test("mobile search keeps direct links and keyboard controls usable", async ({ p
   await expect(search).toBeVisible();
   await expect(search).toHaveValue("cobalt-only");
   await expect(page.locator(row(1))).toBeVisible();
+  await page.getByText("Filters", { exact: true }).click();
   await expect(page.getByRole("combobox", { name: "Status", exact: true })).toBeVisible();
   await expect(page.getByLabel("Model", { exact: true })).toBeVisible();
   const bounds = await page.getByLabel("Search results", { exact: true }).boundingBox();
@@ -238,14 +266,15 @@ test("an imported trace older than the loaded page stays open, with or without a
   };
 
   await page.goto(`${runPhantom.url}/search`);
-  await expect(page.locator("[data-run-id]")).toHaveCount(50);
+  await expect(page.getByRole("status").filter({ hasText: "50 runs loaded; more available" })).toBeVisible();
   await importAndSettle("imported-old-checkout", "Imported old checkout");
   await expect(page).toHaveURL(/\/search\/imported-old-checkout$/);
   await expect(page.getByText("Imported old checkout", { exact: true }).first()).toBeVisible();
   await expect(page.locator(`[data-run-id="imported-old-checkout"]`)).toHaveCount(0);
 
   await page.goto(`${runPhantom.url}/search?q=cobalt-only`);
-  await expect(page).toHaveURL(new RegExp(`/search/${runId(1)}\\?q=cobalt-only$`));
+  await expect(page.locator(row(1))).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/search\\?q=cobalt-only$`));
   await importAndSettle("imported-old-refund", "Imported old refund");
   await expect(page).toHaveURL(/\/search\/imported-old-refund\?q=cobalt-only$/);
   await expect(page.getByText("Imported old refund", { exact: true }).first()).toBeVisible();
@@ -253,6 +282,45 @@ test("an imported trace older than the loaded page stays open, with or without a
   // Changing the query releases the imported run back to the results rule.
   await page.getByRole("textbox", { name: "Search captured runs", exact: true }).fill("amber-only");
   await expect(page).toHaveURL(new RegExp(`/search/${runId(0)}\\?q=amber-only$`));
+});
+
+test("runs whose ids hold commas or run to 1024 characters are found and listed with their facts", async ({ page, request, runPhantom }) => {
+  await seedSearchRuns(request, runPhantom.url, 3);
+  const ids = ["imported,with,commas", `imported-long-${"q".repeat(1010)}`];
+  expect(ids[1]).toHaveLength(1024);
+  for (const id of ids) {
+    const at = Date.now() - 5_000;
+    const imported = await request.post(`${runPhantom.url}/api/import-run`, { data: {
+      run: { id, name: "odd-id", event_name: "Odd id import", display_name: "Odd id import", started_at: at, last_updated_at: at + 100 },
+      spans: [{ id: `${id.slice(0, 40)}-span`, run_id: id, name: "ledger_lookup", span_type: "TOOL_CALL", status: "ERROR",
+        input_payload: '{"note":"saffron-marker"}', output_payload: '{"error":"saffron-marker timeout"}', start_time_ms: at, end_time_ms: at + 100, duration_ms: 100 }],
+      liveEvents: [] } });
+    expect(imported.ok(), `Import ${id.slice(0, 24)} (HTTP ${imported.status()})`).toBe(true);
+  }
+  await page.goto(`${runPhantom.url}/search`);
+  await expect(page.getByRole("status").filter({ hasText: "5 runs loaded" })).toBeVisible();
+  await expect(page.getByText("Search unavailable")).toHaveCount(0);
+  for (const id of ids) await expect(page.locator(`[data-run-id="${id}"]`)).toBeVisible();
+
+  await page.goto(`${runPhantom.url}/search?q=saffron-marker`);
+  await expect(page.getByRole("status").filter({ hasText: "2 runs loaded" })).toBeVisible();
+  for (const id of ids) {
+    const result = page.locator(`[data-run-id="${id}"]`);
+    await expect(result).toContainText("Odd id import");
+    await expect(result.locator("[data-run-list-status]")).toHaveAttribute("data-run-list-status", "failed");
+    await expect(result.locator("[data-run-match]")).toBeVisible();
+  }
+  await expect(page.locator("[data-search-facts-unavailable]")).toHaveCount(0);
+});
+
+test("a failed run-facts lookup still lists every search result, with facts shown as unknown", async ({ page, request, runPhantom }) => {
+  await seedSearchRuns(request, runPhantom.url, 3);
+  await page.route(url => url.pathname === "/api/runs" && url.searchParams.has("ids"), route => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Run list unavailable" }) }));
+  await page.goto(`${runPhantom.url}/search?q=cobalt-only`);
+  await expect(page.locator(row(1))).toBeVisible();
+  await expect(page.getByText("Search unavailable")).toHaveCount(0);
+  await expect(page.locator("[data-search-facts-unavailable]")).toContainText("Run details could not be loaded");
+  await expect(page.locator(row(1)).locator('[role="gridcell"]').filter({ hasText: "—" }).first()).toBeVisible();
 });
 
 test("search import reports malformed and oversized files before contacting the server", async ({ page, runPhantom }) => {

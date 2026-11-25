@@ -58,6 +58,8 @@ export interface RunFacts {
   /** Model calls missing input or output tokens. */
   readonly tokenUnknownCalls: number;
   readonly knownCostUsd: number | null;
+  /** Where knownCostUsd came from: every priced call reported it, every one was list-priced, or both; null when none. */
+  readonly knownCostSource: "reported" | "estimated" | "mixed" | null;
   readonly costUnknownCalls: number;
   /** Normalized model of the first counted model call, else the first span model column in start order. */
   readonly primaryModel: string | null;
@@ -250,6 +252,8 @@ function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[], agentH
   const inputTokens = known(generations.map(item => item.inputTokens));
   const outputTokens = known(generations.map(item => item.outputTokens));
   const costUsd = known(generations.map(item => item.costUsd));
+  const priced = generations.filter(item => item.costUsd !== null);
+  const knownCostSource = !priced.length ? null : priced.every(item => item.costSource === "reported") ? "reported" : priced.some(item => item.costSource === "reported") ? "mixed" : "estimated";
   const costSource: CostSource = costUsd === null ? "unknown" : generations.every(item => item.costSource === "reported") ? "reported" : "estimated";
   const models: string[] = [];
   for (const generation of generations) if (generation.model && !models.includes(generation.model)) models.push(generation.model);
@@ -280,7 +284,7 @@ function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[], agentH
     llmCalls: generations.length,
     knownInputTokens: partial(generations.map(item => item.inputTokens)), knownOutputTokens: partial(generations.map(item => item.outputTokens)),
     tokenUnknownCalls: generations.filter(item => item.inputTokens === null || item.outputTokens === null).length,
-    knownCostUsd: partial(generations.map(item => item.costUsd)), costUnknownCalls: generations.filter(item => item.costUsd === null).length,
+    knownCostUsd: partial(generations.map(item => item.costUsd)), knownCostSource, costUnknownCalls: generations.filter(item => item.costUsd === null).length,
     primaryModel: lead?.model ?? fallbackModel, provider: lead?.provider ?? spans.find(span => span.provider)?.provider ?? null, models: Object.freeze(models),
     inputPreview: inputPreview(firstGeneration, spans.find(span => span.parent_span_id === null) ?? null),
     captureCompletion: rootCaptureCompletion(root),

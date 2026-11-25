@@ -39,7 +39,10 @@ export interface RunListRow extends Run {
   known_output_tokens: number | null;
   token_unknown_calls: number;
   known_cost_usd: number | null;
+  known_cost_source: "reported" | "estimated" | "mixed" | null;
   cost_unknown_calls: number;
+  /** Client-only: the row came from search and its run-list facts could not be loaded, so every fact is unknown. */
+  facts_unavailable?: true;
 }
 
 export interface RunListPage {
@@ -55,6 +58,47 @@ export async function listRunsPage(query: Record<string, string>, signal?: Abort
   const page = await apiJson<RunListPage>(`/api/runs?${params}`, { signal, cache: "no-store" });
   if (!page || !Array.isArray(page.runs)) throw new Error("Run list response was not a page");
   return page;
+}
+
+/** Encoded `ids=` bytes per request, well under the 16 KiB request-header limit of Node's HTTP server. */
+const IDS_URL_BUDGET = 6_000;
+const IDS_PER_REQUEST = 100;
+
+/**
+ * The run-list rows for exactly these run ids, keyed by id. Ids are sent as repeated `ids` params (they may hold
+ * commas) and split across requests to keep each URL short. Runs that no longer exist are absent from the map.
+ */
+export async function lookupRunFacts(ids: readonly string[], signal?: AbortSignal): Promise<Map<string, RunListRow>> {
+  const unique = [...new Set(ids)];
+  const batches: string[][] = [];
+  let batch: string[] = [], size = 0;
+  for (const id of unique) {
+    const cost = encodeURIComponent(id).length + 5;
+    if (batch.length && (size + cost > IDS_URL_BUDGET || batch.length >= IDS_PER_REQUEST)) { batches.push(batch); batch = []; size = 0; }
+    batch.push(id);
+    size += cost;
+  }
+  if (batch.length) batches.push(batch);
+  const pages = await Promise.all(batches.map(group => {
+    const params = new URLSearchParams([["envelope", "1"], ["limit", String(IDS_PER_REQUEST)], ...group.map(id => ["ids", id] as [string, string])]);
+    return apiJson<RunListPage>(`/api/runs?${params}`, { signal, cache: "no-store" });
+  }));
+  const rows = new Map<string, RunListRow>();
+  for (const page of pages) {
+    if (!page || !Array.isArray(page.runs)) throw new Error("Run list response was not a page");
+    for (const row of page.runs) rows.set(row.id, row);
+  }
+  return rows;
+}
+
+/** A search row whose run-list facts could not be loaded: the run's own fields, every fact unknown. */
+export function runWithoutFacts(run: Run): RunListRow {
+  return {
+    ...run, agent: null, duration_ms: null, input_tokens: null, output_tokens: null, est_cost_usd: null, cost_source: "unknown",
+    tool_count: 0, primary_model: null, provider: null, models: [], input_preview: null, llm_calls: 0,
+    known_input_tokens: null, known_output_tokens: null, token_unknown_calls: 0, known_cost_usd: null, known_cost_source: null, cost_unknown_calls: 0,
+    facts_unavailable: true,
+  };
 }
 
 export interface RunSearchOptions {

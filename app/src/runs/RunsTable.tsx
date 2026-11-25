@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ArrowDown, ArrowUp } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -46,13 +46,25 @@ export interface RunsTableProps {
   onOpen: (id: string) => void;
   onLoadMore: () => void;
   onScroll: (scrollTop: number) => void;
+  /** Accessible name of the grid. */
+  label?: string;
+  /** Checkbox column and bulk selection; off for read-only lists such as search results. */
+  selectable?: boolean;
+  /** Column headers sort the list; off when the order is fixed (search relevance). */
+  sortable?: boolean;
+  rowHref?: (id: string) => string;
+  /** A second line under each row spanning every column, such as why a search result matched. */
+  renderDetail?: (row: RunListRow) => ReactNode;
+  detailHeight?: number;
+  /** Grid tracks that differ from COLUMN_META for this table. */
+  tracks?: Partial<Record<RunsTableColumn, string>>;
 }
 
 function Cell({ cell, className, mono = true }: { cell: CellText; className?: string; mono?: boolean }) {
   return (
-    <span title={cell.title} className={cn("truncate", mono && "font-mono tabular-nums", cell.unknown ? "text-rp-ink-subtle" : "text-rp-ink", className)}>
-      {cell.text}
-      {cell.marker && <span className="ml-1 font-sans text-[11px] text-rp-ink-subtle">{cell.marker}</span>}
+    <span title={cell.title} className={cn("flex min-w-0 items-baseline", mono && "font-mono tabular-nums", cell.unknown ? "text-rp-ink-subtle" : "text-rp-ink", className)}>
+      <span className="truncate">{cell.text}</span>
+      {cell.marker && <span className="ml-1 shrink-0 font-sans text-[11px] text-rp-ink-subtle">{cell.marker}</span>}
       {cell.unknown && <span className="sr-only">: {cell.title}</span>}
     </span>
   );
@@ -60,9 +72,11 @@ function Cell({ cell, className, mono = true }: { cell: CellText; className?: st
 
 export function RunsTable(props: RunsTableProps) {
   const { rows, total, columns, density, filters, shortIds, selected, activeIndex, flashIds, hasMore, loadingMore, loadMoreError, scrollRef, gridRef } = props;
-  const rowHeight = ROW_HEIGHT[density];
+  const { label = "Runs", selectable = true, sortable = true, rowHref = runPath, renderDetail, detailHeight = 0, tracks } = props;
+  const lineHeight = ROW_HEIGHT[density];
+  const rowHeight = lineHeight + (renderDetail ? detailHeight : 0);
   const [viewport, setViewport] = useState({ top: 0, height: 800 });
-  const template = useMemo(() => `${CHECKBOX_TRACK_PX}px ${columns.map(column => COLUMN_META[column].track).join(" ")}`, [columns]);
+  const template = useMemo(() => `${selectable ? `${CHECKBOX_TRACK_PX}px ` : ""}${columns.map(column => tracks?.[column] ?? COLUMN_META[column].track).join(" ")}`, [columns, selectable, tracks]);
   const maxDuration = useMemo(() => rows.reduce((max, row) => Math.max(max, row.duration_ms ?? 0), 0), [rows]);
   const sort = filters.sort ?? "last_updated_at";
   const order = filters.order ?? "desc";
@@ -110,12 +124,12 @@ export function RunsTable(props: RunsTableProps) {
     else if (event.key === "End") move(rows.length - 1);
     else if (event.key === "PageDown") move(activeIndex + Math.max(1, Math.floor(viewport.height / rowHeight) - 1));
     else if (event.key === "PageUp") move(activeIndex - Math.max(1, Math.floor(viewport.height / rowHeight) - 1));
-    else if (event.key === " " && activeIndex >= 0 && rows[activeIndex]) { event.preventDefault(); props.onToggle(rows[activeIndex]!.id); }
+    else if (event.key === " " && selectable && activeIndex >= 0 && rows[activeIndex]) { event.preventDefault(); props.onToggle(rows[activeIndex]!.id); }
   };
 
   const rowClick = (event: ReactMouseEvent, row: RunListRow, index: number) => {
     if ((event.target as HTMLElement).closest("input,a,button")) return;
-    if (event.shiftKey || event.metaKey || event.ctrlKey) {
+    if (selectable && (event.shiftKey || event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       props.onActiveIndexChange(index);
       props.onToggle(row.id, { range: event.shiftKey });
@@ -136,18 +150,18 @@ export function RunsTable(props: RunsTableProps) {
         ref={gridRef}
         role="grid"
         tabIndex={0}
-        aria-label="Runs"
+        aria-label={label}
         aria-rowcount={(total ?? rows.length) + 1}
-        aria-colcount={columns.length + 1}
-        aria-multiselectable="true"
+        aria-colcount={columns.length + (selectable ? 1 : 0)}
+        aria-multiselectable={selectable ? "true" : undefined}
         aria-activedescendant={activeRow ? `runs-row-${activeIndex}` : undefined}
         onKeyDown={onGridKeyDown}
         onFocus={event => { if (event.target === event.currentTarget && activeIndex < 0 && rows.length > 0) props.onActiveIndexChange(0); }}
         className="rp-runs-grid text-[13px] outline-none focus-visible:outline-none"
-        style={{ "--rp-runs-cols": template, minWidth: minTableWidth(columns) } as CSSProperties}
+        style={{ "--rp-runs-cols": template, minWidth: minTableWidth(columns, tracks) - (selectable ? 0 : CHECKBOX_TRACK_PX) } as CSSProperties}
       >
         <div role="row" aria-rowindex={1} className="sticky top-0 z-10 grid h-8 items-center border-b border-rp-line bg-rp-canvas" style={{ gridTemplateColumns: "var(--rp-runs-cols)" }}>
-          <div role="columnheader" className="flex items-center justify-center">
+          {selectable && <div role="columnheader" className="flex items-center justify-center">
             <input
               ref={headerCheckbox}
               type="checkbox"
@@ -158,19 +172,19 @@ export function RunsTable(props: RunsTableProps) {
               onChange={props.onToggleAll}
               className="rp-checkbox"
             />
-          </div>
+          </div>}
           {columns.map(column => {
             const meta = COLUMN_META[column];
-            const sorted = meta.sort !== undefined && meta.sort === sort;
+            const sorted = sortable && meta.sort !== undefined && meta.sort === sort;
             const label = meta.header ?? meta.label;
             return (
               <div
                 key={column}
                 role="columnheader"
-                aria-sort={sorted ? (order === "asc" ? "ascending" : "descending") : meta.sort ? "none" : undefined}
+                aria-sort={sorted ? (order === "asc" ? "ascending" : "descending") : sortable && meta.sort ? "none" : undefined}
                 className={cn("min-w-0 px-2", meta.align === "right" && "text-right")}
               >
-                {meta.sort ? (
+                {sortable && meta.sort ? (
                   <button
                     type="button"
                     onClick={() => props.onSort(meta.sort!)}
@@ -202,6 +216,10 @@ export function RunsTable(props: RunsTableProps) {
               index={index}
               columns={columns}
               rowHeight={rowHeight}
+              lineHeight={lineHeight}
+              selectable={selectable}
+              href={rowHref(row.id)}
+              detail={renderDetail?.(row)}
               shortId={shortIds.get(row.id) ?? row.id}
               selected={selected.has(row.id)}
               active={index === activeIndex}
@@ -230,11 +248,15 @@ export function RunsTable(props: RunsTableProps) {
   );
 }
 
-function RunsTableRow({ row, index, columns, rowHeight, shortId, selected, active, flash, maxDuration, onClick, onToggle }: {
+function RunsTableRow({ row, index, columns, rowHeight, lineHeight, selectable, href, detail, shortId, selected, active, flash, maxDuration, onClick, onToggle }: {
   row: RunListRow;
   index: number;
   columns: readonly RunsTableColumn[];
   rowHeight: number;
+  lineHeight: number;
+  selectable: boolean;
+  href: string;
+  detail: ReactNode;
   shortId: string;
   selected: boolean;
   active: boolean;
@@ -252,11 +274,11 @@ function RunsTableRow({ row, index, columns, rowHeight, shortId, selected, activ
       id={`runs-row-${index}`}
       role="row"
       aria-rowindex={index + 2}
-      aria-selected={selected}
+      aria-selected={selectable ? selected : undefined}
       data-run-id={row.id}
       data-active={active || undefined}
       onClick={onClick}
-      style={{ height: rowHeight, gridTemplateColumns: "var(--rp-runs-cols)" }}
+      style={{ height: rowHeight, gridTemplateColumns: "var(--rp-runs-cols)", gridTemplateRows: detail ? `${lineHeight}px minmax(0, 1fr)` : undefined }}
       className={cn(
         "group/row grid cursor-pointer items-center border-b border-rp-line-muted transition-colors duration-fast ease-out",
         selected ? "bg-rp-wash" : "hover:bg-rp-row-hover",
@@ -264,7 +286,7 @@ function RunsTableRow({ row, index, columns, rowHeight, shortId, selected, activ
         flash && "rp-row-new",
       )}
     >
-      <div role="gridcell" className="flex items-center justify-center">
+      {selectable && <div role="gridcell" className="flex items-center justify-center">
         <input
           type="checkbox"
           tabIndex={-1}
@@ -274,7 +296,7 @@ function RunsTableRow({ row, index, columns, rowHeight, shortId, selected, activ
           onClick={event => { event.stopPropagation(); onToggle(event.shiftKey); }}
           className="rp-checkbox"
         />
-      </div>
+      </div>}
       {columns.map(column => {
         switch (column) {
           case "status":
@@ -287,7 +309,7 @@ function RunsTableRow({ row, index, columns, rowHeight, shortId, selected, activ
           case "run":
             return (
               <div key={column} role="gridcell" className="rp-run-cell flex min-w-0 items-center gap-2 px-2">
-                <Link to={runPath(row.id)} tabIndex={-1} data-run-name className="min-w-0 truncate font-medium text-rp-ink hover:text-rp-blue hover:underline" onClick={event => event.stopPropagation()}>
+                <Link to={href} tabIndex={-1} data-run-name className="min-w-0 truncate font-medium text-rp-ink hover:text-rp-blue hover:underline" onClick={event => event.stopPropagation()}>
                   {name}
                 </Link>
                 <span className="rp-run-short-id min-w-0 max-w-[9ch] shrink-0 truncate font-mono text-[11px] text-rp-ink-subtle" title={row.id}>{shortId}</span>
@@ -335,6 +357,7 @@ function RunsTableRow({ row, index, columns, rowHeight, shortId, selected, activ
             return <div key={column} role="gridcell" className="truncate px-2 text-right text-[12px] text-rp-ink-muted" title={absoluteTime(row.started_at)}>{ago(row.started_at)}</div>;
         }
       })}
+      {detail && <div role="gridcell" aria-colspan={columns.length + (selectable ? 1 : 0)} className="min-w-0 self-start px-2" style={{ gridColumn: "1 / -1" }} data-row-detail>{detail}</div>}
     </div>
   );
 }
