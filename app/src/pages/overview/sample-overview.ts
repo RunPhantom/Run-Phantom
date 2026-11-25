@@ -59,7 +59,7 @@ export function sampleOverview(now: number): Overview {
       { agent: "planner", ...group(7, 0), durationP50Ms: 1_600, durationP95Ms: 3_200 },
     ],
     byModel: [
-      { model: "claude-sonnet-4-5", provider: "anthropic", ...group(80, 3), calls: 212, callP50Ms: 1_900, callP95Ms: 6_100, durationP50Ms: 6_000, durationP95Ms: 15_000 },
+      { model: "claude-sonnet-5-5", provider: "anthropic", ...group(80, 3), calls: 212, callP50Ms: 1_900, callP95Ms: 6_100, durationP50Ms: 6_000, durationP95Ms: 15_000 },
       { model: "gpt-5-mini", provider: "openai", ...group(51, 1), calls: 128, callP50Ms: 1_200, callP95Ms: 3_900, durationP50Ms: 4_000, durationP95Ms: 9_000 },
       { model: "gemini-3.8-flash", provider: "gcp.gemini", ...group(30, 0), calls: 72, callP50Ms: 900, callP95Ms: 2_400, durationP50Ms: 3_000, durationP95Ms: 7_000 },
     ],
