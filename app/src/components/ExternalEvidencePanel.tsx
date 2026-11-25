@@ -60,7 +60,7 @@ export function ExternalEvidencePanel({ datasets, experiments }: { datasets: Dat
   const runs = useRuns(), checks = useQuery({ queryKey: ["evidence", "checks"], queryFn: () => verificationApi.reports(), refetchInterval: 5_000 });
   const capabilities = useQuery({ queryKey: ["evidence", "capabilities"], queryFn: evidenceApi.capabilities, staleTime: 0 });
   const roster = useQuery({ queryKey: ["evidence", "inventory", rosterKey, contextKey, authorityKey], enabled: !!rosterAnchor && !refused, gcTime: 0, retry: false, refetchInterval: 3_000,
-    queryFn: ({ signal }) => authorizedRead(async () => { try { return await evidenceApi.inventory(rosterAnchor!, signal); } catch (cause) { if (cause instanceof Error && cause.message === "Inventory revision not found") return null; throw cause; } }, signal) });
+    queryFn: ({ signal }) => authorizedRead(() => evidenceApi.inventory(rosterAnchor!, signal), signal) });
   const history = useQuery({ queryKey: ["evidence", "history", contextKey, authorityKey], enabled: !!attachment && !refused, gcTime: 0, retry: false, refetchInterval: 5_000, queryFn: ({ signal }) => authorizedRead(() => evidenceApi.sets(attachment!, signal), signal) });
   const setId = params.get("evidenceSet") ?? "", requestedRevision = params.get("evidenceRevision"), selectedRevision = requestedRevision && /^[1-9][0-9]*$/.test(requestedRevision) ? Number(requestedRevision) : undefined;
   const report = useQuery({ queryKey: ["evidence", "set", contextKey, authorityKey, setId, selectedRevision], enabled: !!attachment && !!setId && !refused, gcTime: 0, retry: false, refetchInterval: 5_000, queryFn: ({ signal }) => authorizedRead(() => evidenceApi.set(setId, selectedRevision, signal), signal) });
@@ -79,6 +79,7 @@ export function ExternalEvidencePanel({ datasets, experiments }: { datasets: Dat
       if (job.setId !== setId) patch({ evidenceSet: job.setId, evidenceRevision: null });
       void client.invalidateQueries({ queryKey: ["evidence", "history", contextKey] });
       void client.invalidateQueries({ queryKey: ["evidence", "set", contextKey] });
+      void client.invalidateQueries({ queryKey: ["evidence", "run-reports"] });
     }
   }, [job?.id, job?.status, job?.setId, setId, contextKey, client, patch]);
   async function perform(action: (key: string) => Promise<void>): Promise<boolean> {

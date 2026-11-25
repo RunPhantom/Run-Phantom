@@ -35,6 +35,28 @@ test("Evaluate run opens Evaluations with that run preselected as the source of 
   expect(errors.filter(text => /404|Inventory revision not found/.test(text))).toEqual([]);
 });
 
+test("attaching a test report to a run links it from the run with the current count", async ({ page, request, runPhantom }) => {
+  await seedEvaluationRuns(request, runPhantom.url);
+  await page.goto(`${runPhantom.url}/runs/${EVALUATION_RUNS.baseline}`);
+  await expect(page.getByRole("tab", { name: "Overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Attached test reports/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "More actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Attach test report", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`anchorKind=run&anchorId=${EVALUATION_RUNS.baseline}`));
+  const workspace = page.getByTestId("evidence-workspace");
+  await workspace.getByLabel("Report files", { exact: true }).setInputFiles({ name: "unit.xml", mimeType: "application/xml", buffer: Buffer.from('<testsuite tests="1"><testcase name="checkout total"/></testsuite>') });
+  await workspace.getByRole("button", { name: "Import reports", exact: true }).click();
+  await expect(workspace.getByRole("region", { name: "Persisted evidence report", exact: true })).toBeVisible();
+
+  // Back in the same page session, so a cached empty lookup would hide the link.
+  await page.goBack();
+  const link = page.getByRole("link", { name: "Attached test reports (1)", exact: true });
+  await expect(link).toBeVisible();
+  await link.click();
+  await expect(page).toHaveURL(new RegExp(`/evaluations\\?view=evidence&anchorKind=run&anchorId=${EVALUATION_RUNS.baseline}$`));
+  await expect(page.getByTestId("evidence-workspace").getByRole("combobox", { name: "Evidence attachment", exact: true })).toHaveValue(EVALUATION_RUNS.baseline);
+});
+
 test("agent markdown keeps glyph bullets as a list and ordered markers beside their text", async ({ page, request, runPhantom }) => {
   const traceId = "ab".repeat(16), start = Date.now() - 10_000;
   const attribute = (key: string, value: string) => ({ key, value: { stringValue: value } });
