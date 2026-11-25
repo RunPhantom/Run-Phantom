@@ -21,7 +21,7 @@ test("saving a run writes a local summary and never calls a provider without con
   await expect(summary.getByRole("button", { name: "Summarize with Anthropic…", exact: true })).toBeDisabled();
   await expect(summary.getByRole("link", { name: "Settings", exact: true })).toBeVisible();
 
-  expect((await request.put(`${runPhantom.url}/api/secrets/anthropic`, { data: { value: "sk-ant-placeholder-for-consent-test" } })).ok()).toBe(true);
+  expect((await request.put(`${runPhantom.url}/api/secrets/anthropic`, { data: { value: "placeholder-anthropic-key-for-consent-test" } })).ok()).toBe(true);
   await page.reload();
   await summary.getByRole("button", { name: "Summarize with Anthropic…", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Send this run to Anthropic?", exact: true });
@@ -52,7 +52,7 @@ test("a saved run with a secret in its input previews the excerpt with the secre
   expect((await request.put(`${runPhantom.url}/api/saved-runs/events/legacy-summary`, { data: {
     event_name: "legacy_agent", timestamp: new Date().toISOString(), user_input: "Old question", summary: "Old summary text.",
   } })).ok()).toBe(true);
-  expect((await request.put(`${runPhantom.url}/api/secrets/anthropic`, { data: { value: "sk-ant-placeholder-for-consent-test" } })).ok()).toBe(true);
+  expect((await request.put(`${runPhantom.url}/api/secrets/anthropic`, { data: { value: "placeholder-anthropic-key-for-consent-test" } })).ok()).toBe(true);
 
   await page.goto(`${runPhantom.url}/saved/${id}`);
   const summary = page.getByRole("region", { name: "Saved run summary", exact: true });
