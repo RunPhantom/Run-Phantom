@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createInterface } from "node:readline/promises";
+import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 import { loadWorkspaceEnv } from "../loadEnv";
 import {
@@ -308,7 +308,7 @@ const USAGE = `Usage: bun agent.ts [options]
   --provider openai|anthropic|gemini   Model provider (default openai)
   --model <id>                         Override the default model for the provider
   --prompt <text>                      A user turn; repeat for a multi-turn conversation
-  --interactive                        Chat in the terminal; every turn shares one conversation id
+  --interactive                        Chat in the terminal (exit or Ctrl-D to stop); turns share one conversation id
   --subagent                           Let the agent delegate policy research to a nested researcher agent
   --help                               Show this message`;
 
@@ -344,15 +344,18 @@ async function main(): Promise<number> {
 
   if (values.interactive) {
     const terminal = createInterface({ input: process.stdin, output: process.stdout });
-    try {
-      while (true) {
-        const text = (await terminal.question("\nyou> ")).trim();
-        if (!text || text === "exit" || text === "quit") break;
-        await turn(text);
-      }
-    } finally {
-      terminal.close();
+    let inputEnded = false;
+    terminal.once("close", () => { inputEnded = true; });
+    terminal.setPrompt("\nyou> ");
+    terminal.prompt();
+    // The async iterator buffers lines that arrive while a turn is running, so piped input is not dropped.
+    for await (const line of terminal) {
+      const text = line.trim();
+      if (text === "exit" || text === "quit") break;
+      if (text) await turn(text);
+      if (!inputEnded) terminal.prompt();
     }
+    terminal.close();
     return failures ? 1 : 0;
   }
 
