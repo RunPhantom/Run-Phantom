@@ -17,7 +17,7 @@ export interface StackBucket {
   notes?: readonly string[];
 }
 
-const AXIS_W = 40;
+const AXIS_MIN_W = 40;
 const AXIS_H = 20;
 const TOP = 6;
 const GAP = 2;
@@ -29,7 +29,7 @@ const RADIUS = 2;
  * baseline; later series stack on top, separated by a 2px surface gap. Hover or
  * arrow keys show every series for that bucket; click or Enter calls `onActivate`.
  */
-export function StackedBars({ label, buckets, series, axisLabels, width: fixedWidth, height: fixedHeight, minHeight = 160, emptyLabel = "No runs in this window", onActivate, activateHint }: {
+export function StackedBars({ label, buckets, series, axisLabels, width: fixedWidth, height: fixedHeight, minHeight = 160, emptyLabel = "No runs in this window", onActivate, activateHint, format = compact, integer = true }: {
   /** One-sentence summary; the chart's accessible name. */
   label: string;
   buckets: readonly StackBucket[];
@@ -45,15 +45,21 @@ export function StackedBars({ label, buckets, series, axisLabels, width: fixedWi
   onActivate?: (index: number) => void;
   /** Pointer hint in the tooltip, e.g. "Click to open these runs"; keyboard users hear "Press Enter to …". */
   activateHint?: string;
+  /** Axis and tooltip values; counts by default. */
+  format?: (value: number) => string;
+  /** Whole-number ticks, for counts. Turn off for money. */
+  integer?: boolean;
 }) {
   const [ref, { width, height: measured }] = useElementSize<HTMLDivElement>(fixedWidth);
   const height = fixedHeight ?? Math.max(minHeight, measured);
   const [active, setActive] = useState<number | null>(null);
   const totals = buckets.map(bucket => bucket.values.reduce((sum, value) => sum + Math.max(0, value), 0));
   const max = Math.max(0, ...totals);
-  const ticks = niceTicks(max || 1, 3, true);
+  const ticks = niceTicks(max || 1, 3, integer);
   const top = ticks[ticks.length - 1];
-  const plotW = Math.max(0, width - AXIS_W);
+  // Geist Mono at 11px is about 7px per character; money ticks such as "$0.025" outgrow the default gutter.
+  const axisW = Math.max(AXIS_MIN_W, Math.max(...ticks.map(tick => format(tick).length)) * 7 + 12);
+  const plotW = Math.max(0, width - axisW);
   const plotH = Math.max(0, height - AXIS_H - TOP);
   const y = linear([0, top], [TOP + plotH, TOP]);
   const slot = buckets.length ? plotW / buckets.length : 0;
@@ -62,8 +68,8 @@ export function StackedBars({ label, buckets, series, axisLabels, width: fixedWi
 
   const pointer = (event: PointerEvent<HTMLDivElement>) => {
     const box = event.currentTarget.getBoundingClientRect();
-    const index = slotAt(event.clientX - box.left - AXIS_W, plotW, buckets.length);
-    setActive(event.clientX - box.left < AXIS_W ? null : index);
+    const index = slotAt(event.clientX - box.left - axisW, plotW, buckets.length);
+    setActive(event.clientX - box.left < axisW ? null : index);
   };
   const key = (event: KeyboardEvent<HTMLDivElement>) => {
     if ((event.key === "Enter" || event.key === " ") && active !== null && onActivate) { event.preventDefault(); onActivate(active); return; }
@@ -74,11 +80,11 @@ export function StackedBars({ label, buckets, series, axisLabels, width: fixedWi
   };
 
   const activeBucket = active !== null ? buckets[active] : null;
-  const activeX = active !== null ? AXIS_W + slot * (active + 0.5) : 0;
+  const activeX = active !== null ? axisW + slot * (active + 0.5) : 0;
   const activeLabel = activateHint ? activateHint.replace(/^Click/, "Press Enter") : "";
   const a11y = useChartA11y({
     label,
-    readout: activeBucket && !empty ? stackReadout(activeBucket, series, onActivate ? activeLabel : "") : "",
+    readout: activeBucket && !empty ? stackReadout(activeBucket, series, onActivate ? activeLabel : "", format) : "",
     hint: empty ? "" : `Use the left and right arrow keys to read each bar${onActivate ? "; press Enter to open its runs" : ""}.`,
   });
 
@@ -101,15 +107,15 @@ export function StackedBars({ label, buckets, series, axisLabels, width: fixedWi
         <svg width={width} height={height} aria-hidden="true" focusable="false" className="block" style={{ cursor: onActivate && !empty ? "pointer" : undefined }}>
           {ticks.map(tick => (
             <g key={tick}>
-              <line x1={AXIS_W} x2={width} y1={y(tick)} y2={y(tick)} stroke="var(--rp-chart-grid)" strokeWidth={1} shapeRendering="crispEdges" />
-              <text x={AXIS_W - 8} y={y(tick)} dy="0.32em" textAnchor="end" className="fill-[color:var(--rp-chart-axis)] font-mono text-11 tabular-nums">{compact(tick)}</text>
+              <line x1={axisW} x2={width} y1={y(tick)} y2={y(tick)} stroke="var(--rp-chart-grid)" strokeWidth={1} shapeRendering="crispEdges" />
+              <text x={axisW - 8} y={y(tick)} dy="0.32em" textAnchor="end" className="fill-[color:var(--rp-chart-axis)] font-mono text-11 tabular-nums">{format(tick)}</text>
             </g>
           ))}
           {active !== null && !empty && (
-            <rect x={AXIS_W + slot * active} y={TOP} width={slot} height={plotH} fill="var(--rp-chart-hover)" />
+            <rect x={axisW + slot * active} y={TOP} width={slot} height={plotH} fill="var(--rp-chart-hover)" />
           )}
           {buckets.map((bucket, index) => {
-            const x = AXIS_W + slot * index + (slot - columnW) / 2;
+            const x = axisW + slot * index + (slot - columnW) / 2;
             let base = 0;
             const visible = bucket.values.map((value, seriesIndex) => ({ value: Math.max(0, value), seriesIndex })).filter(item => item.value > 0);
             return (
@@ -127,11 +133,11 @@ export function StackedBars({ label, buckets, series, axisLabels, width: fixedWi
               </g>
             );
           })}
-          <line x1={AXIS_W} x2={width} y1={TOP + plotH} y2={TOP + plotH} stroke="var(--rp-chart-baseline)" strokeWidth={1} shapeRendering="crispEdges" />
+          <line x1={axisW} x2={width} y1={TOP + plotH} y2={TOP + plotH} stroke="var(--rp-chart-baseline)" strokeWidth={1} shapeRendering="crispEdges" />
           {endpointIndices(buckets.length).map((index, position, all) => (
             <text
               key={index}
-              x={AXIS_W + slot * (index + 0.5)}
+              x={axisW + slot * (index + 0.5)}
               y={height - 4}
               textAnchor={position === 0 && all.length > 1 ? "start" : position === all.length - 1 && all.length > 1 ? "end" : "middle"}
               dx={position === 0 && all.length > 1 ? -slot / 2 : position === all.length - 1 && all.length > 1 ? slot / 2 : 0}
@@ -141,7 +147,7 @@ export function StackedBars({ label, buckets, series, axisLabels, width: fixedWi
             </text>
           ))}
           {empty && (
-            <text x={AXIS_W + plotW / 2} y={TOP + plotH / 2} textAnchor="middle" dy="0.32em" className="fill-[color:var(--rp-ink-subtle)] text-13">{emptyLabel}</text>
+            <text x={axisW + plotW / 2} y={TOP + plotH / 2} textAnchor="middle" dy="0.32em" className="fill-[color:var(--rp-ink-subtle)] text-13">{emptyLabel}</text>
           )}
         </svg>
       )}
@@ -149,7 +155,7 @@ export function StackedBars({ label, buckets, series, axisLabels, width: fixedWi
         <ChartTooltip x={activeX} width={width}>
           <p className="mb-1 font-mono text-11 text-rp-ink-subtle">{activeBucket.title}</p>
           {series.map((item, index) => (
-            <TooltipRow key={item.id} color={item.color} shape="square" label={item.label} value={compact(activeBucket.values[index] ?? 0)} />
+            <TooltipRow key={item.id} color={item.color} shape="square" label={item.label} value={format(activeBucket.values[index] ?? 0)} />
           ))}
           {activeBucket.partial && <p className="mt-1 text-11 text-rp-ink-subtle">Partial: only part of this span is in the window.</p>}
           {activeBucket.notes?.map(note => <p key={note} className="mt-1 text-11 text-rp-ink-subtle">{note}</p>)}
@@ -162,8 +168,8 @@ export function StackedBars({ label, buckets, series, axisLabels, width: fixedWi
 }
 
 /** The tooltip as one sentence, for the live region. */
-export function stackReadout(bucket: StackBucket, series: readonly StackSeries[], hint = ""): string {
-  const values = series.map((item, index) => `${item.label} ${compact(bucket.values[index] ?? 0)}`).join(", ");
+export function stackReadout(bucket: StackBucket, series: readonly StackSeries[], hint = "", format: (value: number) => string = compact): string {
+  const values = series.map((item, index) => `${item.label} ${format(bucket.values[index] ?? 0)}`).join(", ");
   return [`${bucket.title}: ${values}.`, bucket.partial ? "Partial: only part of this span is in the window." : "", ...(bucket.notes ?? []).map(note => `${note}.`), hint ? `${hint}.` : ""]
     .filter(Boolean).join(" ");
 }

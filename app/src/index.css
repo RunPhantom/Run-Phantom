@@ -309,6 +309,8 @@
   --rp-chart-hover: rgb(14 18 27 / 0.04);
   --rp-chart-p50: #9AABF5;
   --rp-chart-p95: #0021CC;
+  --rp-chart-input: #9AABF5;
+  --rp-chart-output: var(--rp-chart-1);
   --rp-chart-kind-model: #2747E8;
   --rp-chart-kind-tool: #0F8C7C;
   --rp-chart-kind-search: #A88300;
@@ -540,6 +542,8 @@
   --rp-chart-hover: rgb(232 235 242 / 0.05);
   --rp-chart-p50: #4A5BB0;
   --rp-chart-p95: #8C9EFF;
+  --rp-chart-input: #9DADFF;
+  --rp-chart-output: #4A62E8;
   --rp-chart-kind-model: #5B74F5;
   --rp-chart-kind-tool: #169C8A;
   --rp-chart-kind-search: #A8870F;
