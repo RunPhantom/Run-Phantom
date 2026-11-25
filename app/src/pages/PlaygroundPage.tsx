@@ -226,6 +226,10 @@ export function PlaygroundPage() {
     { id: "playground:run", keys: RUN_KEYS, scope: "Playground", description: "Run the prompt", allowInInputs: true, handler: event => { event.preventDefault(); void run(); } },
   ], [run]);
 
+  const focusFirstMessage = () => {
+    document.querySelector<HTMLTextAreaElement>("[data-playground-message] textarea")?.focus();
+  };
+
   const loadFromHistory = async (runs: RunSearchRun[]) => {
     const loaded = await Promise.all(runs.map(async item => {
       const column = await recordedColumn(item.id);
@@ -461,7 +465,7 @@ export function PlaygroundPage() {
         </section>
       </div>
       <p role="status" aria-live="polite" className="sr-only">{announcement}</p>
-      <PlaygroundHistory open={historyOpen} onOpenChange={setHistoryOpen} onLoad={loadFromHistory} />
+      <PlaygroundHistory open={historyOpen} onOpenChange={setHistoryOpen} onLoad={loadFromHistory} onStart={focusFirstMessage} />
     </div>
   );
 }

@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUpRight } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { TeachingEmptyState } from "../empty/TeachingEmptyState";
 import { listPlaygroundHistory, recordedColumn, type PlaygroundHistoryRun } from "../../api/playground";
 import type { RunSearchRun } from "../../api/runs";
 import { groupHistory, orderByColumn, recordedCostUsd, type HistoryGroup } from "./playground-model";
@@ -60,25 +61,70 @@ function HistoryRow({ group, loading, onLoad }: { group: HistoryGroup; loading: 
   );
 }
 
-export function PlaygroundHistory({ open, onOpenChange, onLoad }: {
+/** Illustrative rows for the labelled ghost only. */
+const GHOST_HISTORY = [
+  { models: "GPT-5 nano · Claude Haiku 4.5", input: "Summarise this support ticket in one line", meta: "4m ago · 2 models compared · $0.0004 est." },
+  { models: "Gemini 3.8 Flash", input: "Classify: refund, shipping or warranty?", meta: "1h ago · 1 model · $0.0001 est." },
+];
+
+function HistoryGhost() {
+  return (
+    <ul className="divide-y divide-rp-line-muted border-y border-rp-line-muted">
+      {GHOST_HISTORY.map(row => (
+        <li key={row.models} className="flex items-center gap-3 py-2.5">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-13 font-medium text-rp-ink">{row.models}</p>
+            <p className="mt-0.5 truncate text-13 text-rp-ink-soft">{row.input}</p>
+            <p className="mt-0.5 text-12 text-rp-ink-muted">{row.meta}</p>
+          </div>
+          <span className="inline-flex h-8 items-center rounded-control border border-rp-line px-3 text-12">Load</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function PlaygroundHistory({ open, onOpenChange, onLoad, onStart }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onLoad: (runs: RunSearchRun[]) => Promise<void>;
+  /** Called after the empty history closes, to put the cursor where a first prompt goes. */
+  onStart?: () => void;
 }) {
   const history = useQuery({ queryKey: PLAYGROUND_HISTORY_KEY, queryFn: ({ signal }) => listPlaygroundHistory(60, signal), enabled: open, staleTime: 0 });
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const groups = history.data ? groupHistory(history.data) : [];
+  const startAfterClose = useRef(false);
 
   return (
     <Dialog open={open} onOpenChange={value => { if (!value) { setError(null); setLoading(null); } onOpenChange(value); }}>
-      <DialogContent title="Recent Playground runs" description="Every Playground call is a recorded run. Load one to edit and run it again." className="max-w-2xl">
+      <DialogContent
+        title="Recent Playground runs"
+        description="Every Playground call is a recorded run. Load one to edit and run it again."
+        className="max-w-2xl"
+        onCloseAutoFocus={event => {
+          if (!startAfterClose.current) return;
+          startAfterClose.current = false;
+          event.preventDefault();
+          onStart?.();
+        }}
+      >
         {error && <p role="alert" className="mt-4 rounded-sm border border-rp-danger-border bg-rp-danger-soft px-3 py-2 text-[13px] text-rp-danger">{error}</p>}
         <div className="mt-4">
           {history.isPending && <p className="text-[13px] text-rp-ink-muted">Loading recent runs…</p>}
           {history.isError && <p role="alert" className="text-[13px] text-rp-danger">Recent runs could not be loaded: {history.error instanceof Error ? history.error.message : "unknown error"}.</p>}
           {history.isSuccess && groups.length === 0 && (
-            <p className="text-[13px] text-rp-ink-muted">No Playground runs yet. Runs appear here after you run a prompt.</p>
+            <TeachingEmptyState
+              size="inline"
+              ghost={<HistoryGhost />}
+              title="No Playground runs yet"
+              titleId="playground-history-empty"
+              titleAs="h3"
+              lede="Each prompt you run is saved here with its model, cost and output, ready to load again."
+              actions={<Button type="button" size="sm" className="h-11 [@media(pointer:fine)]:h-8" onClick={() => { startAfterClose.current = true; onOpenChange(false); }}>Write a prompt</Button>}
+              data-playground-history-empty
+            />
           )}
           {groups.length > 0 && (
             <ul className="divide-y divide-rp-line-muted border-y border-rp-line-muted" aria-label="Recent Playground runs">

@@ -73,6 +73,22 @@ test("a test span goes through the OTLP route and arrives live as a run", async 
   await expect(page.getByText("Connection test").first()).toBeVisible();
 });
 
+test("the empty Runs page teaches with a labelled sample and fills in when a test span arrives", async ({ page, runPhantom }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${runPhantom.url}/runs`);
+  const card = page.getByRole("region", { name: "No runs captured yet." });
+  await expect(card).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator("[data-empty-ghost]")).toHaveAttribute("aria-hidden", "true");
+  await expect(page.locator("[data-empty-ghost]")).toContainText("Sample · not your data");
+  await expect(card.getByText("Waiting for your first run…")).toBeVisible();
+  await expect(card.locator("[data-otlp-snippet]")).toContainText(`http://127.0.0.1:${runPhantom.port}/v1/traces`);
+
+  await card.getByRole("button", { name: "Send a test span" }).click();
+  await expect(page.getByRole("grid", { name: "Runs" }).locator("[data-run-id]")).toHaveCount(1, { timeout: 10_000 });
+  await expect(page.getByRole("grid", { name: "Runs" })).toContainText("Connection test");
+  await expect(card).toHaveCount(0);
+});
+
 test("the command palette offers Connect an agent", async ({ page, runPhantom }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`${runPhantom.url}/runs`);
@@ -104,6 +120,19 @@ test("the connect guide fits a phone without sideways scrolling and keeps 44px t
   } finally {
     await context.close();
   }
+});
+
+test("an empty Playground history shows a sample and returns to the prompt", async ({ page, runPhantom }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${runPhantom.url}/playground`);
+  await page.getByRole("button", { name: "History" }).click();
+  const dialog = page.getByRole("dialog", { name: "Recent Playground runs" });
+  const empty = dialog.getByRole("region", { name: "No Playground runs yet" });
+  await expect(empty).toBeVisible({ timeout: 10_000 });
+  await expect(dialog.locator("[data-empty-ghost]")).toHaveAttribute("aria-hidden", "true");
+  await empty.getByRole("button", { name: "Write a prompt" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator("[data-playground-message] textarea").first()).toBeFocused();
 });
 
 test("loading sample runs from the connect guide links to the first one", async ({ page, runPhantom }) => {
