@@ -38,6 +38,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
 
 export const SETTINGS_NAV = { id: "settings", label: "Settings", path: "/settings", shortcut: "g ,", keywords: ["api keys", "agent endpoints", "preferences"] } as const;
 
+export const CONNECT_NAV = { id: "connect", label: "Connect an agent", path: "/connect", keywords: ["instrument", "setup", "onboarding", "opentelemetry", "test span", "hooks", "claude code", "codex", "cursor"] } as const;
+
 export function isNavPathActive(pathname: string, path: string): boolean {
   if (path === "/") return pathname === "/";
   return pathname === path || pathname.startsWith(`${path}/`);
@@ -45,5 +47,6 @@ export function isNavPathActive(pathname: string, path: string): boolean {
 
 export function sectionLabel(pathname: string): string {
   if (isNavPathActive(pathname, SETTINGS_NAV.path)) return SETTINGS_NAV.label;
+  if (isNavPathActive(pathname, CONNECT_NAV.path)) return CONNECT_NAV.label;
   return NAV_ITEMS.find(item => isNavPathActive(pathname, item.path))?.label ?? "Not found";
 }

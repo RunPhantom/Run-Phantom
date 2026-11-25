@@ -81,7 +81,8 @@ export function getDbPath(): string {
 export function getDrizzleDb(): RunPhantomDb {
   if (_drizzleDb) return _drizzleDb;
   const dbPath = resolveDbPath();
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  // Traces, keys and hook capabilities live here; Codex hook install refuses a group- or world-readable state folder.
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
   // Trusted startup resolves the real parent once so OS aliases such as /var
   // cannot create a second lifetime-lease identity for the same owner file.
   const actualDbPath = path.join(fs.realpathSync(path.dirname(dbPath)), path.basename(dbPath));

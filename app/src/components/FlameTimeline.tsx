@@ -6,6 +6,7 @@ import { setMeridian, clearMeridian } from "../utils/meridian";
 import type { Span, SubAgent } from "../utils/types";
 import { buildCondensedTimeline, hasTimelineInterval, linkToVisibleAncestors, type TimelineEntry } from "../utils/condensed-timeline";
 import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
+import { useCoarsePointer } from "../hooks/use-mobile";
 
 // Half the width of a typical axis label at 12px mono. A label
 // whose centre falls within this of the right edge is right-aligned instead.
@@ -192,6 +193,7 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
   const layout = useMemo(() => buildCondensedTimeline(vizSpans, subAgents, 0, undrawnParentIds), [vizSpans, subAgents, undrawnParentIds]);
   const hasVizSpans = layout.entries.length > 0;
   const [compact, setCompact] = useState(false);
+  const coarsePointer = useCoarsePointer();
   const [selected, setSelected] = useState<{ key: string; id: string } | null>(null);
   const prefersReducedMotion = usePrefersReducedMotion();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -293,7 +295,7 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
   };
   const selectedEntry = selected && layout.entries.find(entry => entry.key === selected.key && entry.span.id === selected.id);
 
-  const ROW = compact ? 44 : 28;
+  const ROW = compact || coarsePointer ? 44 : 28;
   const BAR_H = 14;
   const BAR_Y_OFF = (ROW - BAR_H) / 2;
   const MIN_LABEL_W = 120;
@@ -477,7 +479,7 @@ export function FlameTimeline({ spans, subAgents = EMPTY_AGENTS, onDiveIn }: { s
                   data-meridian-key={entry.identityAvailable ? span.id : undefined}
                   data-timeline-span-id={span.id}
                   data-timeline-key={entry.key}
-                  className="absolute cursor-pointer"
+                  className="timeline-marker absolute cursor-pointer"
                   style={{ left: Math.min(left, chartW - triSize), top: row * ROW + (ROW - triSize) / 2, width: triSize, height: triSize, zIndex: idx }}
                   onMouseEnter={(e) => handleBarEnter(entry, e)}
                   onMouseLeave={handleBarLeave}

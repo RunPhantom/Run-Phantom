@@ -163,7 +163,7 @@ export function Badge({ label, copyValue, className }: { label: string; copyValu
   return (
     <button
       type="button"
-      className={cn("rp-meta-label rp-meta-copy rounded-sm font-mono text-11 font-medium uppercase leading-4 tracking-[0.08em] transition-[color,background-color] duration-250 ease-standard", copied && "!bg-rp-success-soft !text-rp-success", className)}
+      className={cn("rp-meta-label rp-meta-copy rounded-sm font-mono [@media(pointer:coarse)]:min-w-11 text-11 font-medium uppercase leading-4 tracking-[0.08em] transition-[color,background-color] duration-250 ease-standard", copied && "!bg-rp-success-soft !text-rp-success", className)}
       title={`Copy ${label}`}
       aria-label={`Copy ${label}`}
       onClick={(event) => {

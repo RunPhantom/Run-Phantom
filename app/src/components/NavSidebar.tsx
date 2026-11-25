@@ -12,12 +12,12 @@ import {
   SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { Settings } from "lucide-react";
+import { Cable, Settings } from "lucide-react";
 import { Link, NavLink, useLocation, useSearchParams } from "react-router-dom";
 import { useSavedViews } from "../api/saved-views";
 import { savedViewPath } from "../../../src/saved-views-protocol";
 import { RunPhantomMark } from "./RunPhantomMark";
-import { NAV_GROUPS, NAV_ITEMS, SETTINGS_NAV, isNavPathActive } from "../shell/navigation";
+import { CONNECT_NAV, NAV_GROUPS, NAV_ITEMS, SETTINGS_NAV, isNavPathActive } from "../shell/navigation";
 import { useNavCounts } from "../shell/use-nav-counts";
 
 export { NAV_ITEMS } from "../shell/navigation";
@@ -25,6 +25,7 @@ export { NAV_ITEMS } from "../shell/navigation";
 export function NavSidebar() {
   const location = useLocation();
   const onSettings = isNavPathActive(location.pathname, SETTINGS_NAV.path);
+  const onConnect = isNavPathActive(location.pathname, CONNECT_NAV.path);
   const { isMobile, setOpenMobile } = useSidebar();
   const counts = useNavCounts();
   const savedViews = useSavedViews();
@@ -135,6 +136,14 @@ export function NavSidebar() {
 
       <SidebarFooter className="border-t border-sidebar-border px-3 py-3 group-data-[collapsible=icon]:px-2">
         <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton tooltip={CONNECT_NAV.label} isActive={onConnect} asChild className="h-11 gap-3 px-2.5 lg:[@media(pointer:fine)]:h-8">
+              <NavLink to={CONNECT_NAV.path} replace={onConnect} onClick={closeMobile} data-connect-agent-link>
+                <Cable aria-hidden="true" className="size-4 shrink-0" />
+                <span className="text-sm">{CONNECT_NAV.label}</span>
+              </NavLink>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton tooltip="Settings" isActive={onSettings} asChild className="h-11 gap-3 px-2.5 lg:[@media(pointer:fine)]:h-8">
               <NavLink to={SETTINGS_NAV.path} replace={onSettings} onClick={closeMobile}>

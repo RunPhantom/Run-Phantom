@@ -310,7 +310,7 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
         {samplesOnly && (
           <p className="flex flex-wrap items-center gap-x-2 rounded-sm border border-rp-wash-border bg-rp-canvas-blue px-3 py-2 text-[13px] text-rp-ink">
             These are sample runs.
-            <Link to="/settings" className="font-medium text-rp-blue underline-offset-4 hover:underline">Connect your agent →</Link>
+            <Link to="/connect" className="rp-touch-target font-medium text-rp-blue underline-offset-4 hover:underline">Connect your agent →</Link>
           </p>
         )}
         {message && <p role="status" className="text-[12px] text-rp-ink-muted">{message}</p>}

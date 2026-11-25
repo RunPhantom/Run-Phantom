@@ -83,7 +83,7 @@ export function ModelPicker({ id, label, target, providers, disabled, onChange, 
       </div>
       {missingKey ? (
         <p id={hintId} className="mt-1.5 text-[12px] leading-[18px] text-rp-ink-muted">
-          Add a {provider.label} key in <Link to="/settings" className="font-medium text-rp-blue underline-offset-2 hover:underline">Settings</Link> to run this model.
+          Add {/^[AEIOU]/.test(provider.label) ? "an" : "a"} {provider.label} key in <Link to="/settings" className="font-medium text-rp-blue underline-offset-2 hover:underline">Settings</Link> to run this model.
         </p>
       ) : keyNote && (
         <p id={hintId} className="mt-1.5 truncate text-[12px] leading-[18px] text-rp-ink-muted" title={keyNote}>{keyNote}</p>
@@ -109,7 +109,7 @@ function MessageEditor({ message, index, count, onChange, onRemove, onMove }: {
   const base = useId();
   const roleId = `${base}-role`, contentId = `${base}-content`;
   const position = `message ${index + 1}`;
-  const iconButton = "flex size-8 items-center justify-center rounded-control text-rp-ink-muted transition-colors duration-fast ease-out hover:bg-rp-row-hover hover:text-rp-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rp-blue disabled:pointer-events-none disabled:opacity-40";
+  const iconButton = "flex size-8 [@media(pointer:coarse)]:size-11 items-center justify-center rounded-control text-rp-ink-muted transition-colors duration-fast ease-out hover:bg-rp-row-hover hover:text-rp-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rp-blue disabled:pointer-events-none disabled:opacity-40";
   return (
     <li className="rounded-sm border border-rp-line bg-rp-surface" data-playground-message={index}>
       <div className="flex items-center gap-2 border-b border-rp-line-muted px-2.5 py-1.5">
