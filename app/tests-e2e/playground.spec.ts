@@ -258,10 +258,10 @@ test("Open in Playground fills the editor from a captured model call", async ({ 
 
   const banner = page.locator("[data-playground-opened-from]");
   await expect(banner).toContainText("Opened from Customer support triage › ai.generateText");
-  await expect(banner).toContainText("claude-sonnet-4-5 is not available in the Playground, so claude-haiku-4-5-20251001 was selected instead.");
+  await expect(banner).not.toContainText("is not available in the Playground");
   await expect(banner.getByRole("link")).toHaveAttribute("href", "/runs/demo_triage/span/demo_triage_llm-2");
   await expect(page).toHaveURL(/\/playground$/);
-  await expect(page.getByRole("combobox", { name: "Model", exact: true })).toHaveValue("anthropic/claude-haiku-4-5-20251001");
+  await expect(page.getByRole("combobox", { name: "Model", exact: true })).toHaveValue("anthropic/claude-sonnet-5-5");
   await expect(page.getByLabel("System")).toHaveValue(/^You triage incoming support tickets\./);
   await expect(page.getByRole("textbox", { name: "Content of message 1" })).toHaveValue(/export keeps timing out/);
   await expect(page.getByText("3 messages")).toBeVisible();
