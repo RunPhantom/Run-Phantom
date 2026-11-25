@@ -485,7 +485,7 @@ function RunCards({ rows, shortIds, flashIds, hasMore, loadingMore, onLoadMore, 
               <button type="button" onClick={() => onOpen(row.id)} className="block w-full px-4 py-3 text-left transition-colors duration-fast ease-out hover:bg-rp-row-hover focus-visible:bg-rp-row-hover focus-visible:outline-none">
                 <span className="flex items-center gap-2">
                   <span data-run-name className="min-w-0 truncate text-[14px] font-medium text-rp-ink">{runDisplayName(row)}</span>
-                  <span className="shrink-0 font-mono text-[11px] text-rp-ink-subtle">{shortIds.get(row.id) ?? row.id}</span>
+                  <span className="min-w-0 max-w-[9ch] shrink-0 truncate font-mono text-[11px] text-rp-ink-subtle" title={row.id}>{shortIds.get(row.id) ?? row.id}</span>
                   <span className="ml-auto shrink-0 text-[12px] text-rp-ink-muted">{ago(row.started_at)}</span>
                 </span>
                 <span className="mt-1 flex items-center gap-1.5 text-[12px]" data-run-list-status={status.status}>
