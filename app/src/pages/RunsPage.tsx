@@ -15,7 +15,7 @@ import { fieldClassName } from "@/components/ui/input";
 import { fetchPrices, modelPricingConsentEnabled } from "../utils/costs";
 import { parseReplayMetadata } from "../utils/types";
 import type { Run } from "../utils/types";
-import { runAgentName, runDisplayName, safeDecodeParam } from "../utils/helpers";
+import { plural, runAgentName, runDisplayName, safeDecodeParam } from "../utils/helpers";
 import { useRunPhantomConnected, useRunPhantomMessage } from "../hooks/use-runphantom-ws";
 import { useIsMobile } from "../hooks/use-mobile";
 import { useScrollRestoration } from "../hooks/use-scroll-restoration";
@@ -515,6 +515,8 @@ export function RunsPage() {
                     />
                   </div>
                 )
+              : runsLoaded && runs.length > 0
+                ? <PickRunPanel runs={runs} onOpen={handleSelectRun} />
               : runsLoaded
                 ? <EmptyState onSeeDemoTraces={openDemoTrace} />
                 : (
@@ -524,6 +526,29 @@ export function RunsPage() {
                 )
         }
       </div>
+    </div>
+  );
+}
+
+function PickRunPanel({ runs, onOpen }: { runs: Run[]; onOpen: (runId: string) => void }) {
+  const mostRecent = runs.reduce((latest, run) => run.started_at > latest.started_at ? run : latest, runs[0]!);
+  const samplesOnly = runs.every(isDefaultDemoRun);
+  return (
+    <div className="flex h-full items-start justify-center overflow-auto rp-page">
+      <EmptyPanel
+        className="w-full max-w-xl"
+        eyebrow={`Runs / ${plural(runs.length, "run")}`}
+        title="Pick a run to inspect"
+        description={samplesOnly
+          ? "These are sample runs. Choose one from the list, or open the most recent one. Connect your agent to see your own runs here."
+          : "Choose a run from the list, or open the most recent one."}
+        action={(
+          <Button type="button" variant="primary" onClick={() => onOpen(mostRecent.id)}>
+            Open most recent run
+            <ArrowRight aria-hidden="true" className="size-3.5" />
+          </Button>
+        )}
+      />
     </div>
   );
 }
