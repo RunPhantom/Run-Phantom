@@ -62,8 +62,8 @@ describe("GET /api/overview computation", () => {
       { agent: "beta", runs: 2, failed: 1, completedWithErrors: 0, failureRate: 1, inputTokens: 250, outputTokens: 40, tokenUnknownCalls: 1, costUsd: 0.004, costKnownCalls: 1, costUnknownCalls: 1, durationP50Ms: 30_000, durationP95Ms: 30_000 },
     ]);
     expect(result.byModel).toEqual([
-      { model: "gpt-4o-mini", provider: "openai", runs: 4, failed: 1, completedWithErrors: 0, failureRate: 1 / 3, inputTokens: 1350, outputTokens: 160, tokenUnknownCalls: 1, costUsd: 0.016, costKnownCalls: 3, costUnknownCalls: 1, calls: 4, callP50Ms: 1_000, callP95Ms: 4_000 },
-      { model: "claude-haiku-4-5", provider: "anthropic", runs: 1, failed: 0, completedWithErrors: 1, failureRate: 0, inputTokens: 300, outputTokens: 50, tokenUnknownCalls: 0, costUsd: null, costKnownCalls: 0, costUnknownCalls: 1, calls: 1, callP50Ms: 1_500, callP95Ms: 1_500 },
+      { model: "gpt-4o-mini", provider: "openai", runs: 4, failed: 1, completedWithErrors: 0, failureRate: 1 / 3, inputTokens: 1350, outputTokens: 160, tokenUnknownCalls: 1, costUsd: 0.016, costKnownCalls: 3, costUnknownCalls: 1, calls: 4, callP50Ms: 1_000, callP95Ms: 4_000, durationP50Ms: 10_000, durationP95Ms: 30_000 },
+      { model: "claude-haiku-4-5", provider: "anthropic", runs: 1, failed: 0, completedWithErrors: 1, failureRate: 0, inputTokens: 300, outputTokens: 50, tokenUnknownCalls: 0, costUsd: null, costKnownCalls: 0, costUnknownCalls: 1, calls: 1, callP50Ms: 1_500, callP95Ms: 1_500, durationP50Ms: 20_000, durationP95Ms: 20_000 },
     ]);
     expect(result.topFailingTools).toEqual([
       { tool: "run_tests", failures: 2, calls: 2, failedRuns: 2, lastError: { message: "Expected status 401, got 200.", runId: "r-tool-err", spanId: "tests", at: FIXTURE_NOW - 2 * HOUR + 2_000 } },
@@ -86,16 +86,21 @@ describe("GET /api/overview computation", () => {
     expect(timeseries[24].start).toBe(Date.UTC(2027, 0, 15, 12));
     expect(timeseries.reduce((sum, bucket) => sum + bucket.runs, 0)).toBe(5);
     const at = (hour: number) => timeseries.find(bucket => bucket.start === Date.UTC(2027, 0, 15, hour))!;
-    expect(at(11)).toEqual({ start: Date.UTC(2027, 0, 15, 11), end: Date.UTC(2027, 0, 15, 12), runs: 1, failed: 0, completedWithErrors: 0, inputTokens: 100, outputTokens: 20, costUsd: 0.002, costUnknownCalls: 0, durationP95Ms: 10_000 });
+    expect(timeseries.map(bucket => bucket.partial)).toEqual([true, ...Array(23).fill(false), true]);
+    expect(at(11)).toEqual({ start: Date.UTC(2027, 0, 15, 11), end: Date.UTC(2027, 0, 15, 12), partial: false, runs: 1, failed: 0, completedWithErrors: 0, inputTokens: 100, outputTokens: 20, tokenUnknownCalls: 0, costUsd: 0.002, costUnknownCalls: 0, durationP95Ms: 10_000 });
     expect(at(9)).toMatchObject({ runs: 1, failed: 1, inputTokens: 200, costUsd: 0.004, durationP95Ms: 30_000 });
     expect(at(10)).toMatchObject({ runs: 1, completedWithErrors: 1, costUsd: null, costUnknownCalls: 1 });
-    expect(at(12)).toMatchObject({ runs: 1, durationP95Ms: null, costUsd: null, costUnknownCalls: 1 });
+    expect(at(12)).toMatchObject({ runs: 1, inputTokens: 50, outputTokens: 0, tokenUnknownCalls: 1, durationP95Ms: null, costUsd: null, costUnknownCalls: 1 });
     expect(at(3)).toMatchObject({ runs: 0, costUsd: 0, costUnknownCalls: 0, durationP95Ms: null });
   });
 
   test("bucket sizes per window and local-day alignment", () => {
     seedMetricsFixture(getDrizzleDb().$client);
-    expect(overview({ window: "1h" }).timeseries.map(bucket => bucket.end - bucket.start)).toEqual(Array(12).fill(300_000));
+    expect(overview({ window: "1h" }).timeseries.map(bucket => [bucket.end - bucket.start, bucket.partial])).toEqual(Array(12).fill([300_000, false]));
+    const unaligned = overview({ window: "1h" }, FIXTURE_NOW + 60_000).timeseries;
+    expect(unaligned).toHaveLength(13);
+    expect(unaligned.map(bucket => bucket.partial)).toEqual([true, ...Array(11).fill(false), true]);
+    expect([unaligned[0].start, unaligned[12].end]).toEqual([FIXTURE_NOW - HOUR, FIXTURE_NOW + 5 * 60_000]);
     expect(overview({ window: "7d" }).window.bucketMs).toBe(6 * HOUR);
     const month = overview({ window: "30d", tz_offset_minutes: "330" });
     expect(month.timeseries).toHaveLength(31);
@@ -165,7 +170,7 @@ describe("GET /api/overview over HTTP", () => {
       expect(response.headers.get("cache-control")).toBe("no-store");
       const body = await response.json();
       expect(body).toMatchObject({ version: "runphantom-overview/1", kpis: { runs: { value: 5, previous: 2 } } });
-      for (const bad of ["window=2h", "window=24h&window=7d", "tz_offset_minutes=900", "tz_offset_minutes=1.5"]) {
+      for (const bad of ["window=2h", "window=24h&window=7d", "tz_offset_minutes=900", "tz_offset_minutes=1.5", "tz_offset_minutes=0x10", "tz_offset_minutes=1e2", "tz_offset_minutes=+60", "tz_offset_minutes=%2060"]) {
         const rejected = await fetch(`${origin}/api/overview?${bad}`);
         expect(rejected.status).toBe(400);
         expect(typeof (await rejected.json()).error).toBe("string");

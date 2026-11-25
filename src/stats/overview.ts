@@ -25,8 +25,13 @@ export interface OverviewBucket {
   runs: number;
   failed: number;
   completedWithErrors: number;
+  /** True for the first and last buckets when they extend past the window: the first holds only runs from window.from on, the last only up to window.to. */
+  partial: boolean;
+  /** Sum of the known counts; calls missing a count add nothing and are counted in tokenUnknownCalls. */
   inputTokens: number;
   outputTokens: number;
+  /** Model calls missing input or output tokens. */
+  tokenUnknownCalls: number;
   /** Known spend; null when the bucket has model calls but none with a known cost. */
   costUsd: number | null;
   costUnknownCalls: number;
@@ -46,7 +51,8 @@ interface GroupStats {
   costUnknownCalls: number;
 }
 export interface OverviewAgentRow extends GroupStats { agent: string | null; durationP50Ms: number | null; durationP95Ms: number | null }
-export interface OverviewModelRow extends GroupStats { model: string | null; provider: string | null; calls: number; callP50Ms: number | null; callP95Ms: number | null }
+/** durationP50Ms/P95Ms are run durations of the runs that called the model; callP50Ms/P95Ms are per-call latencies. */
+export interface OverviewModelRow extends GroupStats { model: string | null; provider: string | null; calls: number; callP50Ms: number | null; callP95Ms: number | null; durationP50Ms: number | null; durationP95Ms: number | null }
 export interface OverviewFailingTool { tool: string; failures: number; calls: number; failedRuns: number; lastError: { message: string | null; runId: string; spanId: string; at: number | null } }
 export interface OverviewFailure { runId: string; name: string; agent: string | null; status: Extract<RunStatus, "failed" | "completed_with_errors">; startedAt: number; errorCount: number; error: { spanId: string; step: string; message: string | null } | null }
 export interface OverviewLiveRun { runId: string; name: string; agent: string | null; startedAt: number; lastUpdatedAt: number; spanCount: number; model: string | null }
@@ -87,7 +93,8 @@ function parseOverviewQuery(query: Record<string, unknown>): OverviewQuery {
   const selection = (queryString(query, "window", 8) || "24h") as OverviewWindow;
   if (!Object.hasOwn(OVERVIEW_WINDOWS, selection)) throw new StatsRequestError(`window must be one of ${Object.keys(OVERVIEW_WINDOWS).join(", ")}`);
   const rawOffset = queryString(query, "tz_offset_minutes", 8);
-  const tzOffsetMinutes = rawOffset === undefined || rawOffset === "" ? 0 : Number(rawOffset);
+  if (rawOffset && !/^-?\d{1,3}$/.test(rawOffset)) throw new StatsRequestError("tz_offset_minutes must be an integer from -840 to 840");
+  const tzOffsetMinutes = rawOffset ? Number(rawOffset) : 0;
   if (!Number.isInteger(tzOffsetMinutes) || tzOffsetMinutes < -840 || tzOffsetMinutes > 840) throw new StatsRequestError("tz_offset_minutes must be an integer from -840 to 840");
   return { selection, agent: queryString(query, "agent") || undefined, model: queryString(query, "model") || undefined, tzOffsetMinutes };
 }
@@ -159,7 +166,7 @@ export function computeOverview(db: Database, dbPath: string, rawQuery: Record<s
   const offsetMs = query.tzOffsetMinutes * 60_000;
   const firstBucket = Math.floor((from + offsetMs) / bucketMs) * bucketMs - offsetMs;
   const buckets: Array<Omit<OverviewBucket, "costUsd"> & { costUsd: number; costKnownCalls: number; durations: number[] }> = [];
-  for (let start = firstBucket; start < to; start += bucketMs) buckets.push({ start, end: start + bucketMs, runs: 0, failed: 0, completedWithErrors: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, costKnownCalls: 0, costUnknownCalls: 0, durationP95Ms: null, durations: [] });
+  for (let start = firstBucket; start < to; start += bucketMs) buckets.push({ start, end: start + bucketMs, partial: start < from || start + bucketMs > to, runs: 0, failed: 0, completedWithErrors: 0, inputTokens: 0, outputTokens: 0, tokenUnknownCalls: 0, costUsd: 0, costKnownCalls: 0, costUnknownCalls: 0, durationP95Ms: null, durations: [] });
   for (const row of current) {
     const bucket = buckets[Math.floor((row.started_at - firstBucket) / bucketMs)];
     bucket.runs++;
@@ -169,6 +176,7 @@ export function computeOverview(db: Database, dbPath: string, rawQuery: Record<s
     for (const generation of generationsFor(row, query.model)) {
       bucket.inputTokens += generation.inputTokens ?? 0;
       bucket.outputTokens += generation.outputTokens ?? 0;
+      if (generation.inputTokens === null || generation.outputTokens === null) bucket.tokenUnknownCalls++;
       if (generation.costUsd === null) bucket.costUnknownCalls++; else { bucket.costUsd += generation.costUsd; bucket.costKnownCalls++; }
     }
   }
@@ -197,8 +205,10 @@ export function computeOverview(db: Database, dbPath: string, rawQuery: Record<s
   }
   const byModelAll = [...modelGroups].map(([model, group]): OverviewModelRow => {
     const calls = sortedNumbers(group.generations.map(item => item.durationMs));
+    const durations = sortedNumbers([...group.rows].map(row => row.facts.durationMs));
     const provider = [...group.providers].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]?.[0] ?? null;
-    return { model, provider, ...groupStats([...group.rows], group.generations), calls: group.generations.length, callP50Ms: percentile(calls, 0.5), callP95Ms: percentile(calls, 0.95) };
+    return { model, provider, ...groupStats([...group.rows], group.generations), calls: group.generations.length, callP50Ms: percentile(calls, 0.5), callP95Ms: percentile(calls, 0.95),
+      durationP50Ms: percentile(durations, 0.5), durationP95Ms: percentile(durations, 0.95) };
   }).sort(byRunsThenName(row => row.model));
 
   const tools = new Map<string, OverviewFailingTool>();
