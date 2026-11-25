@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { resolve as resolvePath } from "node:path";
 import { getDbPath } from "./db";
 import { runSearchWorker, type RunSearchWork } from "./run-search-worker";
+import { deriveRunAgent, hintsFromRows, rootAgentHintsSql, type RootAgentHintRow } from "./run-agent";
 import { compileSearchFilter, parseSearchFilter, SearchFilterError, type SearchFilter } from "./search-filter";
 import { hasDuplicateJsonKeys } from "./json-keys";
 import type { RunStatus } from "./run-status";
@@ -18,6 +19,8 @@ export interface RunSearchSummary {
   id: string;
   name: string | null;
   event_name: string | null;
+  /** deriveRunAgent (src/run-agent.ts), the rule the run list and overview use. */
+  agent: string | null;
   display_name: string | null;
   user_id: string | null;
   convo_id: string | null;
@@ -272,7 +275,7 @@ export async function searchRuns(value: unknown = {}, options: ExecutionOptions 
   const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(1, Math.min(RUN_SEARCH_LIMITS.timeoutMs, options.timeoutMs!)) : RUN_SEARCH_LIMITS.timeoutMs;
   const maxBytes = Number.isFinite(options.maxBytes) ? Math.max(1024, Math.min(RUN_SEARCH_LIMITS.responseBytes, options.maxBytes!)) : RUN_SEARCH_LIMITS.responseBytes;
   const cancellation = new SharedArrayBuffer(4);
-  const workerData: RunSearchWork = { ...buildQuery(input), matchBytes: RUN_MATCH_BYTES, dbPath, cursorKey: input.cursorKey, limit: input.limit, maxBytes, started, deadline: started + timeoutMs, cancellation };
+  const workerData: RunSearchWork = { ...buildQuery(input), matchBytes: RUN_MATCH_BYTES, agentSql: rootAgentHintsSql("?"), dbPath, cursorKey: input.cursorKey, limit: input.limit, maxBytes, started, deadline: started + timeoutMs, cancellation };
   let worker: Worker;
   try { worker = new Worker(`(${runSearchWorker.toString()})()`, { eval: true, workerData }); }
   catch (error) { release(); throw error; }
@@ -299,8 +302,9 @@ export async function searchRuns(value: unknown = {}, options: ExecutionOptions 
       if (response?.ok && response.result) {
         const result = response.result;
         result.runs = result.runs.map(row => {
-          const { match_json: raw, ...summary } = row as RunSearchSummary & { match_json?: unknown };
-          return { ...summary, match: input.q ? runSearchMatch(raw, input.q) : null, matched_span_count: input.q ? summary.matched_span_count : null };
+          const { match_json: raw, agent_roots: roots, ...summary } = row as RunSearchSummary & { match_json?: unknown; agent_roots?: RootAgentHintRow[] };
+          const agent = deriveRunAgent({ event_name: summary.event_name, name: summary.name, finished: summary.finished, hints: hintsFromRows(roots ?? []) });
+          return { ...summary, agent, match: input.q ? runSearchMatch(raw, input.q) : null, matched_span_count: input.q ? summary.matched_span_count : null };
         });
         settle(undefined, result);
       } else if (response) settle(new RunSearchError(response.error ?? "Search failed", response.code ?? "query_failed", response.code === "timeout" ? 504 : 500));

@@ -14,6 +14,8 @@ export interface Run {
   last_updated_at: number;
   metadata: string | null;
   model?: string | null;
+  /** Server-derived by deriveRunAgent (src/run-agent.ts); absent on rows that did not come from GET /api/runs. */
+  agent?: string | null;
   finished?: number | null; // 1 if root span has OK/ERROR status
   error_count?: number | null;
   tool_error_count?: number | null;

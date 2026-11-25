@@ -44,6 +44,7 @@ import {
   getSpanPayloadColumn,
   getSpanContext,
   getMostRecentlyTouchedRun,
+  runAgentFor,
   getRunById,
   getRunOutline,
   listSpansFiltered,
@@ -1587,7 +1588,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
   app.get("/api/runs/active", (_req, res) => {
     const run = getMostRecentlyTouchedRun();
     if (!run) { res.status(404).json({ error: "No runs yet" }); return; }
-    res.json(run);
+    res.json({ ...run, agent: runAgentFor(run) });
   });
   app.post("/api/traces/query", async (req, res) => {
     const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
@@ -1630,7 +1631,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
     const selected_span = selectedSpan?.run_id === view.run_id
       ? { ...selectedSpan, attributes: undefined, attributes_chars: selectedSpan.attributes?.length ?? 0 }
       : null;
-    if (run) { res.json({ ...run, run_id: view.run_id, selected_span_id: view.selected_span_id, selected_span, ts: view.ts }); return; }
+    if (run) { res.json({ ...run, agent: runAgentFor(run), run_id: view.run_id, selected_span_id: view.selected_span_id, selected_span, ts: view.ts }); return; }
     res.json({ run_id: view.run_id, selected_span_id: view.selected_span_id, selected_span, ts: view.ts });
   });
 

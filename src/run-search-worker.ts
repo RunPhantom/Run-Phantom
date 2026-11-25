@@ -13,6 +13,8 @@ export interface RunSearchWork {
   /** Rows carry `match_rank` (kept in the cursor) and a raw `match_json` window replaced by the caller. */
   ranked: boolean;
   matchBytes: number;
+  /** rootAgentHintsSql for one run id; each row gains `agent_roots`, replaced by the caller with `agent`. */
+  agentSql: string;
 }
 
 // Keep this function self-contained: its compiled JavaScript is also the worker
@@ -46,6 +48,7 @@ export async function runSearchWorker(): Promise<void> {
       if (runs.length === work.limit) { hasMore = true; break; }
       if (!row.id || row.id.length > 1024 || row.id.includes("\0") || !Number.isFinite(row.started_at)) throw new Error("Run identity cannot be represented by a search cursor");
       if (work.ranked) ranks.set(row.id, Number(rank) || 0);
+      (row as typeof row & { agent_roots?: unknown[] }).agent_roots = db.query(work.agentSql).all(row.id);
       const candidate: RunSearchResult = { runs: [...runs, row], nextCursor: cursorFor(row), hasMore: true, elapsedMs: Date.now() - work.started };
       // The raw match window is replaced by a match object of at most matchBytes.
       const size = Buffer.byteLength(JSON.stringify(candidate, (key, item) => key === "match_json" ? undefined : item), "utf8") + (work.ranked ? (runs.length + 1) * work.matchBytes : 0);

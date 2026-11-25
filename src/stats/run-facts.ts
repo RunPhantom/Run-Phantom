@@ -7,6 +7,7 @@ import { normalizeStoredSpan } from "../spans/normalize";
 import { captureCompletion } from "../spans/normalized";
 import { deriveRunStatus, type RunStatus } from "./run-status";
 import { rootFailed } from "../run-status";
+import { AGENT_HINT_ATTRIBUTE_BYTES, rootAgentHints, type RootAgentHints } from "../run-agent";
 
 export type CostSource = "reported" | "estimated" | "unknown";
 
@@ -69,6 +70,7 @@ export interface RunFacts {
   readonly errors: readonly ErrorFact[];
   readonly toolCalls: Readonly<Record<string, number>>;
   readonly toolFailures: Readonly<Record<string, ToolFailureFact>>;
+  readonly agentHints: RootAgentHints;
 }
 
 export interface RunRow {
@@ -212,7 +214,7 @@ function remember(key: string, value: string, facts: RunFacts): void {
 function selectSpans(db: Database, runIds: readonly string[]): Map<string, SpanRow[]> {
   const rows = db.query(`SELECT run_id, id, parent_span_id, name, span_type, status, start_time_ms, end_time_ms, duration_ms, model, provider, input_tokens, output_tokens,
       octet_length(attributes) AS attributes_bytes,
-      CASE WHEN (span_type = 'LLM_GENERATION' OR status = 'ERROR' OR (parent_span_id IS NULL AND span_type = 'AGENT_ROOT')) AND octet_length(attributes) <= ${3 * RUN_FACT_LIMITS.attributeChars} THEN attributes END AS attributes,
+      CASE WHEN (span_type = 'LLM_GENERATION' OR status = 'ERROR' OR parent_span_id IS NULL) AND octet_length(attributes) <= ${AGENT_HINT_ATTRIBUTE_BYTES} THEN attributes END AS attributes,
       CASE WHEN (span_type = 'LLM_GENERATION' OR parent_span_id IS NULL) AND octet_length(input_payload) <= ${RUN_FACT_LIMITS.previewSourceBytes} THEN input_payload END AS input_payload,
       CASE WHEN status = 'ERROR' THEN substr(output_payload, 1, 4000) END AS output_payload
     FROM spans WHERE run_id IN (${runIds.map(() => "?").join(",")})
@@ -281,6 +283,7 @@ function computeRunFacts(aggregate: Aggregate, spans: readonly SpanRow[]): RunFa
     inputPreview: inputPreview(firstGeneration, spans.find(span => span.parent_span_id === null) ?? null),
     captureCompletion: rootCaptureCompletion(root),
     generations: Object.freeze(generations), errors: Object.freeze(errors), toolCalls: Object.freeze(toolCalls), toolFailures: Object.freeze(toolFailures),
+    agentHints: Object.freeze(rootAgentHints(spans.filter(span => span.parent_span_id === null).map(span => ({ name: span.name, span_type: span.span_type, attributes: plainAttributes(span.attributes) })))),
   });
 }
 
@@ -337,6 +340,14 @@ function ancestry(span: SpanRow, byId: ReadonlyMap<string, SpanRow>): "root" | "
     current = byId.get(current.parent_span_id);
   }
   return "unavailable";
+}
+
+function plainAttributes(raw: string | null): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  } catch { return null; }
 }
 
 function rootCaptureCompletion(root: SpanRow | null): "unavailable" | null {

@@ -163,7 +163,7 @@ export function runMatchesQuery(row: RunRow, query: Pick<RunListQuery, "statuses
     && (!query.statuses || query.statuses.includes(row.facts.status))
     && (!query.agent || runAgent(row) === query.agent)
     && (!query.model || runUsesModel(row, query.model))
-    && (!needle || [row.id, row.display_name, row.name, row.event_name, row.facts.inputPreview].some(field => field?.toLowerCase().includes(needle)));
+    && (!needle || [row.id, row.display_name, row.name, row.event_name, runAgent(row), row.facts.inputPreview].some(field => field?.toLowerCase().includes(needle)));
 }
 
 /**
