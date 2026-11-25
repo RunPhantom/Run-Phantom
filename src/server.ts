@@ -23,6 +23,7 @@ import { decodeOtlpProtobuf } from "./otlp-protobuf";
 import {
   upsertRun,
   insertSpan,
+  getDbPath,
   getRuns,
   getDrizzleDb,
   closeDb,
@@ -59,6 +60,8 @@ import {
   runInTransaction,
   queryTracesBounded,
 } from "./db";
+import { StatsRequestError } from "./stats/common";
+import { listRuns } from "./stats/runs-list";
 import { sliceSpanPayload } from "./payload-slice";
 import { startCodingHookOwner } from "./coding-hooks/owner";
 import { CodingHookController } from "./coding-hooks/service";
@@ -1479,9 +1482,17 @@ export async function createServer(port: number, options: { comparisons?: Compar
   });
 
   app.get("/api/runs", (req, res) => {
-    const raw = Number(req.query.limit);
-    const limit = Number.isFinite(raw) && raw > 0 ? Math.min(Math.floor(raw), 5000) : 5000;
-    res.json(getRuns(limit));
+    try {
+      const page = listRuns(getDrizzleDb().$client, getDbPath(), req.query as Record<string, unknown>);
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("X-Total-Count", String(page.total));
+      if (page.nextCursor) res.setHeader("X-Next-Cursor", page.nextCursor);
+      res.json(page.envelope ? { runs: page.runs, total: page.total, nextCursor: page.nextCursor, hasMore: page.hasMore } : page.runs);
+    } catch (error) {
+      if (error instanceof StatsRequestError) { res.status(error.status).json({ error: error.message }); return; }
+      console.error("[runphantom] Run list failed:", error);
+      res.status(500).json({ error: "Run list unavailable" });
+    }
   });
   for (const [resource, read] of [["search-hits", searchSpanHits], ["search-suggestions", searchSuggestions]] as const) app.get(`/api/runs/${resource}`, async (req, res) => {
     const cancellation = new AbortController();
