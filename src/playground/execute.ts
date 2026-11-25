@@ -1,4 +1,4 @@
-import { PLAYGROUND_LIMITS, emptyUsage, type PlaygroundCallResult, type PlaygroundError, type PlaygroundRunRequest, type PlaygroundTarget } from "./protocol";
+import { PLAYGROUND_LIMITS, emptyUsage, type PlaygroundCallResult, type PlaygroundError, type PlaygroundKeyOrigin, type PlaygroundRunRequest, type PlaygroundTarget } from "./protocol";
 import { ProviderStreamError, buildProviderRequest, classifyHttpError, createAccumulator, playgroundError, type ProviderRequest } from "./providers";
 import { ResponseLimitError, readBoundedText, readSse } from "./sse";
 
@@ -18,6 +18,8 @@ export interface ExecuteOptions {
   target: PlaygroundTarget;
   index: number;
   key: string | null;
+  /** Where `key` was read from, so a rejected key can be named in the error. */
+  keyOrigin?: PlaygroundKeyOrigin | null;
   fetch: PlaygroundFetch;
   signal: AbortSignal;
   onDelta?: (text: string) => void;
@@ -52,7 +54,7 @@ export async function executePlaygroundCall(options: ExecuteOptions): Promise<Ex
     if (!response.ok) {
       const body = await readBoundedText(response, 64 * 1024);
       const classified = classifyHttpError(target.provider, response.status, body);
-      error = playgroundError(classified.kind, target, { providerMessage: classified.providerMessage, httpStatus: response.status, key });
+      error = playgroundError(classified.kind, target, { providerMessage: classified.providerMessage, httpStatus: response.status, key, keyOrigin: options.keyOrigin });
     } else if (!response.body) {
       error = playgroundError("invalid_response", target, { httpStatus: response.status });
     } else {
@@ -65,7 +67,7 @@ export async function executePlaygroundCall(options: ExecuteOptions): Promise<Ex
   } catch (cause) {
     if (timeout.signal.aborted) error = playgroundError("timeout", target);
     else if (options.signal.aborted) error = playgroundError("cancelled", target);
-    else if (cause instanceof ProviderStreamError) error = playgroundError(cause.kind, target, { providerMessage: cause.providerMessage, key });
+    else if (cause instanceof ProviderStreamError) error = playgroundError(cause.kind, target, { providerMessage: cause.providerMessage, key, keyOrigin: options.keyOrigin });
     else if (cause instanceof ResponseLimitError) error = playgroundError("response_limit", target);
     else if (cause instanceof TypeError || (cause instanceof Error && /fetch|network|socket|ECONN|ENOTFOUND|EAI_AGAIN/i.test(cause.message))) error = playgroundError("network", target, { providerMessage: cause instanceof Error ? cause.message : null, key });
     else error = playgroundError("invalid_response", target);

@@ -1,6 +1,6 @@
 import { estimateListPriceCost, PRICE_TABLE_AS_OF, type ListPriceEstimate } from "../../../../src/pricing/list-prices";
 import type {
-  PlaygroundCallResult, PlaygroundDraft, PlaygroundHistoryRun, PlaygroundErrorKind, PlaygroundMessage, PlaygroundProvider, PlaygroundProviderInfo, PlaygroundRunBody, PlaygroundTool,
+  PlaygroundCallResult, PlaygroundDraft, PlaygroundHistoryRun, PlaygroundErrorKind, PlaygroundKeyOrigin, PlaygroundMessage, PlaygroundProvider, PlaygroundProviderInfo, PlaygroundRunBody, PlaygroundTool,
   PlaygroundToolCall, ReasoningEffort,
 } from "../../api/playground";
 
@@ -345,8 +345,18 @@ export interface ErrorHelp {
   settings: boolean;
 }
 
-/** A short heading and the next step for each failure kind the daemon reports. */
-export function errorHelp(kind: PlaygroundErrorKind): ErrorHelp {
+/**
+ * A short heading and the next step for each failure kind the daemon reports. A key saved in Settings is used before
+ * the environment variable, so saving a working key fixes a rejected key from either source.
+ */
+export function errorHelp(kind: PlaygroundErrorKind, key?: PlaygroundKeyOrigin | null): ErrorHelp {
+  if (kind === "auth" && key?.source === "store") {
+    return { title: "Key rejected", hint: "Run Phantom used the key saved in Settings. Replace it there, or check with the provider that it has not been revoked.", settings: true };
+  }
+  if (kind === "auth" && key?.source === "env") {
+    const variable = key.envVar ?? "the provider's API key variable";
+    return { title: "Key rejected", hint: `Run Phantom used the key in ${variable} because none is saved in Settings. Save a working key in Settings, which takes priority, or fix ${variable} and restart Run Phantom.`, settings: true };
+  }
   switch (kind) {
     case "missing_key": return { title: "No API key", hint: "Add a key for this provider in Settings, or set its API key variable before starting Run Phantom, then run again.", settings: true };
     case "auth": return { title: "Key rejected", hint: "The provider refused the key. Replace it in Settings or check it has not been revoked.", settings: true };

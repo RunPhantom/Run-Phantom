@@ -178,6 +178,15 @@ describe("result facts", () => {
     expect(errorHelp("auth").settings).toBe(true);
     expect(errorHelp("quota").settings).toBe(false);
   });
+
+  test("a rejected key says which key was used and how to fix that source", () => {
+    expect(errorHelp("auth", { source: "store", envVar: null }).hint).toBe("Run Phantom used the key saved in Settings. Replace it there, or check with the provider that it has not been revoked.");
+    expect(errorHelp("auth", { source: "env", envVar: "OPENAI_API_KEY" })).toEqual({
+      title: "Key rejected", settings: true,
+      hint: "Run Phantom used the key in OPENAI_API_KEY because none is saved in Settings. Save a working key in Settings, which takes priority, or fix OPENAI_API_KEY and restart Run Phantom.",
+    });
+    expect(errorHelp("quota", { source: "env", envVar: "OPENAI_API_KEY" }).title).toBe("Out of quota");
+  });
 });
 
 describe("nextTarget", () => {

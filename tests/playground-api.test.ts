@@ -284,6 +284,20 @@ describe.serial("POST /api/playground/runs", () => {
     }
   });
 
+  test("a rejected key names where it came from", async () => {
+    upstream = () => json(401, { error: { message: "Incorrect API key provided.", type: "invalid_request_error", code: "invalid_api_key" } });
+    const rejected = async () => ((await (await post({ ...userTurn, provider: "openai", model: "gpt-5-nano" })).json()) as { results: Array<Record<string, any>> }).results[0].error;
+    expect(await rejected()).toMatchObject({ kind: "auth", message: "OpenAI rejected the API key in OPENAI_API_KEY.", key: { source: "env", envVar: "OPENAI_API_KEY" } });
+    try {
+      expect((await fetch(`${base}/api/secrets/openai`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value: "synthetic-saved-openai-key" }) })).status).toBe(200);
+      expect(await rejected()).toMatchObject({ kind: "auth", message: "OpenAI rejected the API key saved in Settings.", key: { source: "store", envVar: null } });
+    } finally {
+      await fetch(`${base}/api/secrets/openai`, { method: "DELETE" });
+    }
+    upstream = () => json(429, { error: { message: "Rate limit reached for requests", code: "rate_limit_exceeded" } });
+    expect((await rejected()).key).toBeUndefined();
+  });
+
   test("reports in-band stream errors and truncated streams instead of a silent success", async () => {
     upstream = () => sse([
       { event: "message_start", data: { type: "message_start", message: { id: "msg_e", model: "claude-haiku-4-5-20251001", usage: { input_tokens: 5, output_tokens: 1 } } } },

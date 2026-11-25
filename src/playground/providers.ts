@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
   PLAYGROUND_LIMITS, emptyUsage, findPlaygroundModel,
-  type PlaygroundError, type PlaygroundErrorKind, type PlaygroundFinishReason, type PlaygroundMessage, type PlaygroundProvider,
+  type PlaygroundError, type PlaygroundErrorKind, type PlaygroundFinishReason, type PlaygroundKeyOrigin, type PlaygroundMessage, type PlaygroundProvider,
   type PlaygroundRunRequest, type PlaygroundTarget, type PlaygroundToolCall, type PlaygroundUsage,
 } from "./protocol";
 import type { SseEvent } from "./sse";
@@ -405,7 +405,7 @@ export function createAccumulator(provider: PlaygroundProvider): StreamAccumulat
 
 const PLAIN_MESSAGES: Record<PlaygroundErrorKind, (label: string, model: string, status: number | null) => string> = {
   missing_key: label => `No ${label} API key is configured. Add one in Settings under API keys.`,
-  auth: label => `${label} rejected the API key. Check the key in Settings.`,
+  auth: label => `${label} rejected the API key.`,
   rate_limit: label => `${label} rate-limited this request. Wait a moment and try again.`,
   quota: label => `${label} reports that the account is out of credit or quota.`,
   invalid_model: (label, model) => `${label} does not offer ${model} to this API key.`,
@@ -432,11 +432,15 @@ export function sanitizeProviderMessage(value: string | null | undefined, key: s
   return cleaned || null;
 }
 
-export function playgroundError(kind: PlaygroundErrorKind, target: PlaygroundTarget, options: { providerMessage?: string | null; httpStatus?: number | null; key?: string | null } = {}): PlaygroundError {
+export function playgroundError(kind: PlaygroundErrorKind, target: PlaygroundTarget, options: { providerMessage?: string | null; httpStatus?: number | null; key?: string | null; keyOrigin?: PlaygroundKeyOrigin | null } = {}): PlaygroundError {
   const status = options.httpStatus ?? null;
+  const label = PROVIDER_LABEL[target.provider];
+  const origin = kind === "auth" ? options.keyOrigin ?? null : null;
   return {
-    kind, message: PLAIN_MESSAGES[kind](PROVIDER_LABEL[target.provider], target.model, status),
+    kind,
+    message: origin ? `${label} rejected the API key ${origin.source === "store" ? "saved in Settings" : origin.envVar ? `in ${origin.envVar}` : "from the environment"}.` : PLAIN_MESSAGES[kind](label, target.model, status),
     providerMessage: sanitizeProviderMessage(options.providerMessage, options.key ?? null), httpStatus: status, retryable: RETRYABLE.has(kind),
+    ...(origin ? { key: origin } : {}),
   };
 }
 

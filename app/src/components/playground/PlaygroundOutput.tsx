@@ -103,7 +103,7 @@ export function ResultColumn({ index, title, subtitle, state, diffBase, leads = 
 }) {
   const result = state.status === "done" ? state.result : null;
   const error = result?.error ?? null;
-  const help = error ? errorHelp(error.kind) : null;
+  const help = error ? errorHelp(error.kind, error.key) : null;
   const text = state.status === "idle" ? "" : state.text;
   const headingId = `playground-column-${index}`;
   return (

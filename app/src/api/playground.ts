@@ -6,7 +6,7 @@ import type {
 } from "../../../src/playground/protocol";
 
 export type {
-  PlaygroundCallResult, PlaygroundError, PlaygroundErrorKind, PlaygroundMessage, PlaygroundProvider, PlaygroundRunResponse,
+  PlaygroundCallResult, PlaygroundError, PlaygroundErrorKind, PlaygroundKeyOrigin, PlaygroundMessage, PlaygroundProvider, PlaygroundRunResponse,
   PlaygroundTool, PlaygroundToolCall, PlaygroundUsage, ReasoningEffort,
 } from "../../../src/playground/protocol";
 

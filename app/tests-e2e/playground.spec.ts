@@ -200,7 +200,7 @@ test("provider failures read as plain errors with the next step", async ({ page,
     } : {
       body: sse([
         ["start", { comparisonId: "e", targets: [] }],
-        ["result", callResult({ index: 0, provider: "openai", model: "gpt-5-nano", status: "error", finishReason: "error", output: { text: "", toolCalls: [] }, usage: { inputTokens: null, outputTokens: null, cachedInputTokens: null, cacheWriteInputTokens: null, reasoningTokens: null, totalTokens: null }, timeToFirstTokenMs: null, error: { kind: "auth", message: "OpenAI rejected the API key.", providerMessage: "Incorrect API key provided: sk-…", httpStatus: 401, retryable: false } })],
+        ["result", callResult({ index: 0, provider: "openai", model: "gpt-5-nano", status: "error", finishReason: "error", output: { text: "", toolCalls: [] }, usage: { inputTokens: null, outputTokens: null, cachedInputTokens: null, cacheWriteInputTokens: null, reasoningTokens: null, totalTokens: null }, timeToFirstTokenMs: null, error: { kind: "auth", message: "OpenAI rejected the API key in OPENAI_API_KEY.", providerMessage: "Incorrect API key provided: sk-…", httpStatus: 401, retryable: false, key: { source: "env", envVar: "OPENAI_API_KEY" } } })],
         ["result", callResult({ index: 1, provider: "anthropic", model: "claude-haiku-4-5-20251001", status: "error", finishReason: "error", output: { text: "", toolCalls: [] }, usage: { inputTokens: null, outputTokens: null, cachedInputTokens: null, cacheWriteInputTokens: null, reasoningTokens: null, totalTokens: null }, error: { kind: "rate_limit", message: "Anthropic is rate limiting this key.", providerMessage: null, httpStatus: 429, retryable: true } })],
         ["result", callResult({ index: 2, provider: "gemini", model: "gemini-2.5-flash", status: "error", finishReason: "error", output: { text: "", toolCalls: [] }, usage: { inputTokens: null, outputTokens: null, cachedInputTokens: null, cacheWriteInputTokens: null, reasoningTokens: null, totalTokens: null }, runId: null, spanId: null, error: { kind: "invalid_model", message: "Google Gemini does not offer gemini-2.5-flash to this API key.", providerMessage: "This model models/gemini-2.5-flash is no longer available to new users.", httpStatus: 404, retryable: false } })],
         ["done", { comparisonId: "e" }],
@@ -214,7 +214,8 @@ test("provider failures read as plain errors with the next step", async ({ page,
 
   const auth = page.locator("[data-playground-error='auth']");
   await expect(auth).toContainText("Key rejected");
-  await expect(auth).toContainText("OpenAI rejected the API key.");
+  await expect(auth).toContainText("OpenAI rejected the API key in OPENAI_API_KEY.");
+  await expect(auth).toContainText("Save a working key in Settings, which takes priority, or fix OPENAI_API_KEY and restart Run Phantom.");
   await expect(auth.getByRole("link", { name: "Open Settings" })).toHaveAttribute("href", "/settings");
   await auth.getByText("Provider message · HTTP 401").click();
   await expect(auth).toContainText("Incorrect API key provided");
