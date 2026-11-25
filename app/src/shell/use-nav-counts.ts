@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRuns } from "../hooks/use-runs";
-import { useRunPhantomMessage } from "../hooks/use-runphantom-ws";
+import { useRunPhantomEvent } from "../hooks/use-runphantom-ws";
+import type { Run } from "../utils/types";
 import { useSavedRuns } from "../api/saved-runs";
 import { reviewQueuesApi } from "../components/review-queues/client";
 
@@ -14,7 +15,7 @@ export interface NavCount {
 
 /** /api/runs caps its response at this many rows (src/server.ts GET /api/runs). */
 const RUN_LIST_CAP = 5000;
-const RUN_COUNT_REFRESH_MS = 1500;
+const RUN_COUNT_REFRESH_MS = 5000;
 const REVIEW_COUNT_REFRESH_MS = 30_000;
 
 function compact(value: number): string {
@@ -45,7 +46,14 @@ export function useNavCounts(): Partial<Record<string, NavCount>> {
       void queryClient.invalidateQueries({ queryKey: ["runs"], exact: true });
     }, RUN_COUNT_REFRESH_MS);
   };
-  useRunPhantomMessage(scheduleRunsRefresh);
+  // Only a new run id or a clear changes the count; "spans" for known runs (one per
+  // streamed batch during live capture) would otherwise refetch the full run list.
+  useRunPhantomEvent<{ runIds?: unknown } | undefined>("spans", data => {
+    const ids = Array.isArray(data?.runIds) ? data.runIds.filter((id): id is string => typeof id === "string") : [];
+    const known = queryClient.getQueryData<Run[]>(["runs"]);
+    if (!known || ids.some(id => !known.some(run => run.id === id))) scheduleRunsRefresh();
+  });
+  useRunPhantomEvent("clear", scheduleRunsRefresh);
   useEffect(() => {
     window.addEventListener("runphantom:run-removed", scheduleRunsRefresh);
     return () => {
