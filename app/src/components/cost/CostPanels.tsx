@@ -5,7 +5,7 @@ import type { CostAnalyticsReport, MetricPopulation } from "../../../../src/pric
 import { BarList, ChartFrame, Sparkline, StackedBars, compact, relativeTimeLabel, trendWord, type StackSeries } from "../charts";
 import { fmtCost } from "../../utils/costs";
 import {
-  COST_WINDOW_COPY, COST_WINDOWS, ESTIMATE_SOURCE_LABELS, comparableTotal, costBucketTitle, costBuckets, coverage, formatShare, metricText, modelRows,
+  COST_WINDOW_COPY, COST_WINDOWS, ESTIMATE_SOURCE_LABELS, comparableTotal, costBucketTitle, costBuckets, coverage, formatShare, metricText, modelRows, partialTitle,
   tokenCoverage, totalDelta, type CostBucket, type CostWindow, type EstimateSource, type ModelRow, type TileDelta,
 } from "./cost-model";
 
@@ -65,6 +65,8 @@ interface Tile {
   testId: string;
   label: string;
   value: string;
+  /** Tooltip on the value when it leaves calls out. */
+  valueTitle: string | null;
   title: string;
   detail: string;
   delta: TileDelta | null;
@@ -82,14 +84,29 @@ function metricTile({ id, testId, label, metric, previous, kind, detail, title, 
   return {
     id, testId, label, title, detail, series, partial,
     value: metricText(metric, kind),
+    valueTitle: partialTitle(metric, kind),
     delta: totalDelta(current, before, kind === "cost" ? "cost" : "count"),
     deltaUnavailable: !previous ? "No earlier window" : "Not comparable",
+  };
+}
+
+/** Takes the reported tile's place when no call in the window reported a cost, rather than showing an empty "—". */
+function callsTile(report: CostAnalyticsReport, previous: CostAnalyticsReport | null, buckets: readonly CostBucket[]): Tile {
+  const calls = report.reportedUsd.eligibleCount;
+  return {
+    id: "calls", testId: "model-calls", label: "Model calls", value: calls.toLocaleString("en-US"), valueTitle: null,
+    title: "Model calls that started in this window. Reported spend is not shown because none of them reported a cost.",
+    detail: calls === 0 ? "No model calls in this window" : "No call reported its own cost",
+    delta: totalDelta(calls, previous ? previous.reportedUsd.eligibleCount : null, "count"),
+    deltaUnavailable: "No earlier window",
+    series: buckets.map(bucket => bucket.calls), partial: buckets.map(bucket => bucket.partial),
   };
 }
 
 export function costTiles({ report, previous, source }: { report: CostAnalyticsReport; previous: CostAnalyticsReport | null; source: EstimateSource }): Tile[] {
   const buckets = costBuckets(report, source === "reported" ? "reportedUsd" : "estimatedUsd");
   const reportedBuckets = source === "reported" ? buckets : costBuckets(report, "reportedUsd");
+  const showReported = source === "reported" || report.reportedUsd.knownCount > 0;
   const partial = buckets.map(bucket => bucket.partial);
   const estimateTitle = source === "list"
     ? "Estimated from the list prices bundled with Run Phantom. Discounts, cache storage, audio and tool fees are not included."
@@ -100,12 +117,12 @@ export function costTiles({ report, previous, source }: { report: CostAnalyticsR
       detail: source === "reported" ? "Estimates are off" : coverage(report.estimatedUsd, "priced"),
       title: estimateTitle, series: source === "reported" ? [] : buckets.map(bucket => bucket.spend), partial,
     }),
-    metricTile({
+    showReported ? metricTile({
       id: "reported", testId: "reported-cost", label: "Reported spend", metric: report.reportedUsd, previous: previous?.reportedUsd ?? null, kind: "cost",
       detail: coverage(report.reportedUsd, "reported a cost"),
       title: "The cost each model call reported itself, for example in gen_ai.usage.cost_usd.",
       series: reportedBuckets.map(bucket => bucket.spend), partial,
-    }),
+    }) : callsTile(report, previous, buckets),
     metricTile({
       id: "input", testId: "input-tokens", label: "Input tokens", metric: report.tokens.input, previous: previous?.tokens.input ?? null, kind: "tokens",
       detail: tokenCoverage(report.tokens.input), title: "Prompt tokens sent to the model, including cached input where the provider counts it there.",
@@ -120,7 +137,7 @@ export function costTiles({ report, previous, source }: { report: CostAnalyticsR
 }
 
 function DeltaLine({ delta, unavailable, window, empty }: { delta: TileDelta | null; unavailable: string; window: CostWindow; empty: boolean }) {
-  if (!delta && empty) return null;
+  if (empty) return null;
   if (!delta) {
     return (
       <span className="text-rp-ink-subtle" title={unavailable === "Not comparable" ? "Some calls in this window or the previous one have no value, so the totals cannot be compared." : "The previous window could not be loaded."}>
@@ -149,7 +166,9 @@ export function CostKpis({ report, previous, source, window }: { report: CostAna
           <li key={tile.id} className="flex min-w-0 flex-col bg-rp-surface px-4 pb-3 pt-3" data-testid={tile.testId} data-kpi={tile.id} title={tile.title}>
             <span className="rp-type-eyebrow text-rp-ink-subtle">{tile.label}</span>
             <span className="mt-1.5 flex items-end justify-between gap-3">
-              <span className={cn("rp-type-kpi", tile.value === "—" ? "text-rp-ink-subtle" : "text-rp-ink")} data-kpi-value>{tile.value}</span>
+              <span className={cn("rp-type-kpi", tile.value === "—" ? "text-rp-ink-subtle" : "text-rp-ink")} data-kpi-value title={tile.valueTitle ?? undefined}>
+                {tile.value}{tile.valueTitle && <span className="sr-only"> ({tile.valueTitle})</span>}
+              </span>
               {tile.series.length > 0 && (
                 <Sparkline className="mb-1 w-[72px] shrink-0 max-sm:hidden 2xl:w-[96px]" values={tile.series} partial={tile.partial}
                   label={`${tile.label} ${COST_WINDOW_COPY[window].phrase}: ${word ?? "not enough data for a trend"}`} />
@@ -269,7 +288,12 @@ export function ModelTable({ report, source, window, modelHref }: { report: Cost
           { id: "calls", header: "Calls", cell: row => row.calls.toLocaleString("en-US") },
           { id: "tokens", header: "Tokens in / out", className: "max-sm:hidden", cell: row => <span title={row.tokenUnknown ? `${row.tokenUnknown} ${row.tokenUnknown === 1 ? "call" : "calls"} without token counts` : undefined}>{tokenPair(row.inputTokens, row.outputTokens)}{row.tokenUnknown ? "+" : ""}</span> },
           ...(showReported ? [{ id: "reported", header: "Reported", className: "max-md:hidden", cell: (row: ModelRow) => row.reported === null ? <span className="text-rp-ink-subtle">—</span> : fmtCost(row.reported) }] : []),
-          { id: "cost", header: costHeader, headerTitle: source === "reported" ? "Cost the calls reported" : "Estimated cost of the calls that could be priced", cell: row => costCellText(row.spend, row.spendUnknown, row.calls) },
+          { id: "cost", header: costHeader, headerTitle: source === "reported" ? "Cost the calls reported" : "Estimated cost of the calls that could be priced", cell: row => (
+            <>
+              {costCellText(row.spend, row.spendUnknown, row.calls)}
+              {showReported && row.reported !== null && <span className="block text-11 text-rp-ink-subtle md:hidden" data-model-reported>reported {fmtCost(row.reported)}</span>}
+            </>
+          ) },
           { id: "share", header: "Share", cell: row => formatShare(row.share) },
         ]}
         emptyLabel={`No model calls ${COST_WINDOW_COPY[window].phrase}.`}

@@ -118,7 +118,7 @@ test("cost analytics: by default real dated model ids are estimated offline at b
   expect(externalRequests).toBe(0);
 });
 
-test("cost & usage: the first number sits high, and every panel agrees with the APIs", async ({ page, runPhantom }) => {
+test("cost & usage: the first number sits high, and every panel agrees with the APIs", async ({ page, runPhantom }, info) => {
   const now = Date.now() - 1_000;
   const runs = [
     { traceId: "0000000000000000000000000000c051", agent: "refund_agent", calls: [{ model: "gpt-5-nano-2025-08-07", provider: "openai", input: 4_000, output: 2_000 }] },
@@ -142,7 +142,10 @@ test("cost & usage: the first number sits high, and every panel agrees with the 
   await expect(estimated).toContainText(usd(overview.kpis.costUsd.value));
   await expect(estimated).toContainText("All 3 calls priced");
   expect((await estimated.locator("[data-kpi-value]").boundingBox())!.y).toBeLessThanOrEqual(200);
-  await expect(page.getByTestId("reported-cost")).toContainText("None of 3 calls reported a cost");
+  await expect(page.getByTestId("reported-cost")).toHaveCount(0);
+  await expect(page.getByTestId("model-calls")).toContainText("3");
+  await expect(page.getByTestId("model-calls")).toContainText("No call reported its own cost");
+  await page.screenshot({ path: info.outputPath("cost-usage-no-reported-cost.png") });
   await expect(page.getByTestId("input-tokens")).toContainText("7,000");
   await expect(page.getByTestId("output-tokens")).toContainText("2,150");
 
@@ -308,4 +311,30 @@ teamTest("cost analytics: actual private project/UI and revoked viewer never fal
     await info.attach("Scoped request observers", { body: JSON.stringify({ probeCaughtOnActualViewer: true, ownerLocalRequests: localRequests, viewerLocalRequests, revokedAnalyticsStatus: 404, revokedCapturedContentRemoved: true }), contentType: "application/json" });
   } finally { await viewerContext.close(); }
   await info.attach("Team analytics runtime", { body: JSON.stringify({ runtime: process.env.RUNPHANTOM_TEAM_TEST_BINARY ? "copied-compiled-private-team" : "source-private-team", capture: "synthetic-stored-OTLP", providerSpendUsd: 0 }), contentType: "application/json" });
+});
+
+test("cost & usage: a partly priced run that costs the most leads Most expensive runs, past 24 cheaper runs", async ({ page, runPhantom }) => {
+  const now = Date.now() - 1_000;
+  const attributes = (values: Record<string, string | number>) => Object.entries(values).map(([key, value]) => ({ key, value: typeof value === "number" ? { doubleValue: value } : { stringValue: value } }));
+  const call = (traceId: string, spanId: string, offset: number, model: string, cost: number | null) => ({ traceId, spanId, name: "chat",
+    startTimeUnixNano: String(BigInt(now - offset) * 1_000_000n), endTimeUnixNano: String(BigInt(now - offset + 50) * 1_000_000n), status: { code: 1 },
+    attributes: attributes({ "runphantom.span.kind": "llm_call", "gen_ai.response.model": model, "gen_ai.provider.name": "openai", "gen_ai.usage.input_tokens": 10, "gen_ai.usage.output_tokens": 5, ...(cost === null ? {} : { "gen_ai.usage.cost_usd": cost }) }) });
+  const probe = "0000000000000000000000000000d0e1";
+  const spans = [
+    ...Array.from({ length: 30 }, (_, index) => call((0xd100 + index).toString(16).padStart(32, "0"), (0xd100 + index).toString(16).padStart(16, "0"), index * 10, "gpt-4o-mini", 0.001)),
+    call(probe, "00000000000d0e11", 500, "gpt-5-nano", 0.5),
+    call(probe, "00000000000d0e12", 400, "mystery-model-x", null),
+  ];
+  expect((await page.request.post(`${runPhantom.url}/v1/traces`, { data: { resourceSpans: [{ scopeSpans: [{ spans }] }] } })).ok()).toBe(true);
+  const listed = await (await page.request.get(`${runPhantom.url}/api/runs?envelope=1&sort=cost&limit=1`)).json();
+  expect(listed.runs[0]).toMatchObject({ est_cost_usd: null, known_cost_usd: 0.5, known_cost_source: "reported", cost_unknown_calls: 1 });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${runPhantom.url}/costs`);
+  const expensive = page.getByRole("region", { name: "Most expensive runs" });
+  await expect(expensive.getByRole("row").nth(1).getByRole("link")).toHaveAttribute("href", `/runs/${listed.runs[0].id}`);
+  await expect(expensive.getByRole("row").nth(1)).toContainText("$0.500+");
+  await expect(page.getByTestId("estimated-cost").locator("[data-kpi-value]")).toContainText("+");
+  await expect(page.getByTestId("reported-cost").locator("[data-kpi-value]")).toContainText("$0.530+");
+  await expect(page.locator("[data-agent-rule]")).toContainText("reported cost where a call has one, otherwise list prices");
 });

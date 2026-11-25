@@ -1,5 +1,6 @@
 import type { AnalyticsGroup, CostAnalyticsReport, CostAnalyticsRequest, MetricPopulation } from "../../../../src/pricing/analytics";
 import { PRICE_TABLE_AS_OF } from "../../../../src/pricing/list-prices";
+import { TOKEN_CATEGORIES, type CategoryRate, type FrozenRateRevision } from "../../../../src/pricing/protocol";
 import { fmtCost } from "../../utils/costs";
 import { compact } from "../charts/scale";
 
@@ -132,10 +133,22 @@ export function tokenCoverage(metric: MetricPopulation): string {
   return `${metric.unavailableCount.toLocaleString("en-US")} of ${plural(metric.eligibleCount, "call")} without a count`;
 }
 
-/** The money or token value of a metric, or "—" when no call carries one. */
+/**
+ * The money or token value of a metric, or "—" when no call carries one. A total that leaves out calls without a
+ * value ends in "+", as in the tables, so a known subtotal never reads as the complete figure.
+ */
 export function metricText(metric: MetricPopulation, kind: "cost" | "tokens"): string {
   if (metric.knownSum === null) return "—";
-  return kind === "cost" ? fmtCost(metric.knownSum) : compact(metric.knownSum);
+  const text = kind === "cost" ? fmtCost(metric.knownSum) : compact(metric.knownSum);
+  return metric.unavailableCount > 0 ? `${text}+` : text;
+}
+
+/** Tooltip for a partial metric value; null when the value covers every call. */
+export function partialTitle(metric: MetricPopulation, kind: "cost" | "tokens"): string | null {
+  if (metric.knownSum === null || metric.unavailableCount === 0) return null;
+  const value = kind === "cost" ? fmtCost(metric.knownSum) : metric.knownSum.toLocaleString("en-US");
+  const missing = `${plural(metric.unavailableCount, "call")} ${metric.unavailableCount === 1 ? "has" : "have"} no ${kind === "cost" ? "cost" : "count"}`;
+  return `At least ${value}: ${missing} and ${metric.unavailableCount === 1 ? "is" : "are"} not included`;
 }
 
 const REASON_COPY: Record<string, string> = {
@@ -212,4 +225,36 @@ export function populationSentences(population: CostAnalyticsReport["population"
   if (population.untimedGenerations) lines.push(`${plural(population.untimedGenerations, "call")} ${population.untimedGenerations === 1 ? "has" : "have"} no start time, so ${population.untimedGenerations === 1 ? "it" : "they"} may belong to this window; ${population.untimedGenerations === 1 ? "its" : "their"} cost and tokens count as unknown.`);
   if (population.ancestryUnavailable) lines.push(`${plural(population.ancestryUnavailable, "call")} could not be placed in ${population.ancestryUnavailable === 1 ? "its" : "their"} run, so ${population.ancestryUnavailable === 1 ? "its" : "their"} cost and tokens count as unknown.`);
   return lines;
+}
+
+function categoryRateText(rate: Exclude<CategoryRate, { kind: "not_applicable" }>): string {
+  switch (rate.kind) {
+    case "priced": return `$${Number(rate.usdPerMillionTokens.toPrecision(6))} per million`;
+    case "included": return "included in another category";
+    case "unavailable": return "no price, so unknown";
+  }
+}
+
+/**
+ * How a rate prices each token category, one line per context band: "input: $0.05 per million · cache read: included
+ * in another category · not applicable: reasoning, audio input". Lets a manual or catalogue estimate be audited on
+ * the page, not only in the export.
+ */
+export function ratePolicyLines(rate: Pick<FrozenRateRevision, "bands">): string[] {
+  return rate.bands.map((band, index) => {
+    const label = (category: string) => category.split("_").join(" ");
+    const parts: string[] = [];
+    const skipped: string[] = [];
+    for (const category of TOKEN_CATEGORIES) {
+      const policy = band.categories[category];
+      if (policy.kind === "not_applicable") skipped.push(label(category));
+      else parts.push(`${label(category)}: ${categoryRateText(policy)}`);
+    }
+    if (skipped.length) parts.push(`not applicable: ${skipped.join(", ")}`);
+    const policies = parts.join(" · ");
+    if (rate.bands.length === 1) return policies;
+    const lower = index === 0 ? null : rate.bands[index - 1]!.maxContextTokens;
+    const range = band.maxContextTokens === null ? `Above ${(lower ?? 0).toLocaleString("en-US")} context tokens` : `Up to ${band.maxContextTokens.toLocaleString("en-US")} context tokens`;
+    return `${range}: ${policies}`;
+  });
 }

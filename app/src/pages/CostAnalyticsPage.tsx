@@ -56,7 +56,7 @@ function AgentsPanel({ context }: { context: CostContext }) {
   const total = rows.reduce((sum, row) => sum + (row.costUsd ?? 0), 0);
   return (
     <CostPanel id="cost-by-agent" label="Cost by agent" title="By agent" meta={<span title={SHARED_RULE}>Reported, else list price</span>}
-      footer={context.source !== "list" ? "Agent totals always use reported cost, else list prices, whatever the estimate source above." : undefined}>
+      footer={<span data-agent-rule>Calls in runs that started {COST_WINDOW_COPY[context.window].phrase}, counted when this panel loaded. Cost is the reported cost where a call has one, otherwise list prices{context.source === "list" ? "" : ", whatever the estimate source above"}, so these totals can differ from the spend tiles.</span>}>
       {overview.isError ? <p role="alert" className="py-4 text-13 text-rp-danger">Spend by agent did not load: {(overview.error as Error).message}</p>
         : !overview.data ? <p className="py-4 text-13 text-rp-ink-subtle">Loading agents…</p>
         : (
@@ -91,11 +91,11 @@ function runCost(row: RunListRow) {
 function TopRunsPanel({ context }: { context: CostContext }) {
   const runs = useQuery({
     queryKey: ["costs", "top-runs", context.window, context.to],
-    queryFn: ({ signal }) => listRunsPage({ sort: "cost", limit: String(TOP_RUNS * 3), since: String(context.from) }, signal),
+    queryFn: ({ signal }) => listRunsPage({ sort: "cost", limit: String(TOP_RUNS), since: String(context.from), until: String(context.to) }, signal),
     placeholderData: keepPreviousData,
   });
-  const rows = (runs.data?.runs ?? []).filter(row => row.llm_calls > 0 && runCost(row) !== null)
-    .sort((a, b) => (runCost(b) ?? 0) - (runCost(a) ?? 0)).slice(0, TOP_RUNS);
+  // sort=cost ranks by est_cost_usd ?? known_cost_usd, the same value runCost shows, and puts runs with neither last.
+  const rows = (runs.data?.runs ?? []).filter(row => row.llm_calls > 0 && runCost(row) !== null);
   const shortIds = useShortRunIds(rows);
   const all = runsLink({ window: context.window, sort: "cost" });
   return (

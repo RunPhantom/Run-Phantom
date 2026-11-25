@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import type { AnalyticsGroup, CostAnalyticsReport, MetricPopulation } from "../src/pricing/analytics";
 import { TOKEN_CATEGORIES } from "../src/pricing/protocol";
 import {
-  comparableTotal, costBucketTitle, costBuckets, coverage, formatShare, metricText, modelRows, populationSentences, reasonLines, tokenCoverage, totalDelta,
+  comparableTotal, costBucketTitle, costBuckets, coverage, formatShare, metricText, modelRows, partialTitle, populationSentences, ratePolicyLines, reasonLines, tokenCoverage,
+  totalDelta,
 } from "../app/src/components/cost/cost-model";
-import { moneyTick } from "../app/src/components/cost/CostPanels";
+import { costTiles, moneyTick } from "../app/src/components/cost/CostPanels";
 
 const HOUR = 3_600_000;
 
@@ -52,6 +53,23 @@ describe("cost buckets", () => {
 });
 
 describe("tiles and copy", () => {
+  test("the reported tile gives way to model calls when no call reported a cost, and partial values are marked", () => {
+    const from = Date.UTC(2026, 10, 25, 10);
+    const tokens = (values: readonly (number | null)[]) => Object.fromEntries(TOKEN_CATEGORIES.map(category => [category, metric(values, "usage_missing")]));
+    const build = (reported: readonly (number | null)[]) => ({
+      window: { from, to: from + 2 * HOUR, bucket: "hour", timezone: "UTC", field: "generationStartedAt" }, byTime: [],
+      estimatedUsd: metric([0.1, null, 0.2], "rate_identity_unavailable"), reportedUsd: metric(reported), tokens: tokens([10, 20, 30]),
+    }) as never;
+    const none = costTiles({ report: build([null, null, null]), previous: null, source: "list" });
+    expect(none.map(tile => tile.id)).toEqual(["estimated", "calls", "input", "output"]);
+    expect(none[1]).toMatchObject({ value: "3", detail: "No call reported its own cost" });
+    expect(none[0]).toMatchObject({ value: "$0.300+", valueTitle: "At least $0.300: 1 call has no cost and is not included" });
+    const some = costTiles({ report: build([0.5, null, null]), previous: null, source: "list" });
+    expect(some.map(tile => tile.id)).toEqual(["estimated", "reported", "input", "output"]);
+    expect(some[1]).toMatchObject({ value: "$0.500+", detail: "1 of 3 calls reported a cost" });
+    expect(costTiles({ report: build([null, null, null]), previous: null, source: "reported" }).map(tile => tile.id)).toEqual(["estimated", "reported", "input", "output"]);
+  });
+
   test("a window with no calls is a known zero; any unknown call makes the total incomparable", () => {
     expect(comparableTotal(metric([]))).toBe(0);
     expect(comparableTotal(metric([0.1, 0.2]))).toBeCloseTo(0.3);
@@ -77,6 +95,27 @@ describe("tiles and copy", () => {
     expect(metricText(metric([null]), "cost")).toBe("—");
     expect(metricText(metric([0.00275]), "cost")).toBe("$0.0028");
     expect(metricText(metric([54_820]), "tokens")).toBe("54.8K");
+  });
+
+  test("a total that leaves calls out is marked, as the tables mark it", () => {
+    expect(metricText(metric([0.1, null]), "cost")).toBe("$0.100+");
+    expect(metricText(metric([54_820, null, null]), "tokens")).toBe("54.8K+");
+    expect(partialTitle(metric([0.1, null]), "cost")).toBe("At least $0.100: 1 call has no cost and is not included");
+    expect(partialTitle(metric([54_820, null, null]), "tokens")).toBe("At least 54,820: 2 calls have no count and are not included");
+    expect(partialTitle(metric([0.1]), "cost")).toBeNull();
+    expect(partialTitle(metric([null]), "cost")).toBeNull();
+  });
+
+  test("rate category policies read in plain words, one line per context band", () => {
+    const categories = (input: number) => Object.fromEntries(TOKEN_CATEGORIES.map(category => [category,
+      category === "input" ? { kind: "priced", usdPerMillionTokens: input } : category === "output" ? { kind: "priced", usdPerMillionTokens: 0.4 }
+        : category === "reasoning" ? { kind: "included" } : category === "cache_read" ? { kind: "unavailable" } : { kind: "not_applicable" }]));
+    const [single] = ratePolicyLines({ bands: [{ maxContextTokens: null, categories: categories(0.05) }] } as never);
+    expect(single).toBe("input: $0.05 per million · output: $0.4 per million · cache read: no price, so unknown · reasoning: included in another category"
+      + " · not applicable: cache write, cache write 5m, cache write 1h, audio input, audio output");
+    const banded = ratePolicyLines({ bands: [{ maxContextTokens: 200_000, categories: categories(3) }, { maxContextTokens: null, categories: categories(6) }] } as never);
+    expect(banded[0]).toStartWith("Up to 200,000 context tokens: input: $3 per million");
+    expect(banded[1]).toStartWith("Above 200,000 context tokens: input: $6 per million");
   });
 
   test("unknown reasons read as sentences, most common first", () => {

@@ -6,7 +6,7 @@ import { TOKEN_CATEGORIES } from "../../../../src/pricing/protocol";
 import { PRICE_TABLE_AS_OF } from "../../../../src/pricing/list-prices";
 import { Select } from "../ui/input";
 import { fmtCost } from "../../utils/costs";
-import { populationSentences, reasonLines } from "./cost-model";
+import { populationSentences, ratePolicyLines, reasonLines } from "./cost-model";
 
 const dateTime = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
@@ -143,6 +143,7 @@ export function CostAccounting({ report }: { report: CostAnalyticsReport }) {
                     <p>{rate.provider} · {rate.tier} · {rate.currency} {rate.unit}</p>
                     <p>{rate.source.name} · read {rate.source.observedAt}</p>
                     <p>Revision {rate.revision} · {rate.version}</p>
+                    {ratePolicyLines(rate).map(line => <p key={line} className="mt-1 text-12 leading-5" data-rate-policy>{line}</p>)}
                   </li>
                 ))}
               </ul>
