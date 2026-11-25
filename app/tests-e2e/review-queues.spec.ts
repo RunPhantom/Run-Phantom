@@ -49,13 +49,14 @@ test("actual review component persists A/B drafts, immediately approves newest e
     expect(fonts.heading).toContain("Syne");
     await expect.poll(() => page.evaluate(async () => { await document.fonts.ready; return { inter: [...document.fonts].some(font => font.family.replace(/["']/g, "") === "Inter Variable" && font.status === "loaded"), syne: [...document.fonts].some(font => font.family.replace(/["']/g, "") === "Syne" && font.status === "loaded") }; })).toEqual({ inter: true, syne: true });
   }
+  await page.getByRole("button",{ name:"Create a review queue",exact:true }).click();
   await page.getByRole("textbox",{ name:"New queue name" }).fill("Checkout curation");
   await page.getByRole("button",{ name:"Create queue",exact:true }).click();
   const queues = await (await request.get("/api/review-queues")).json() as ReviewQueue[];
   const queue = queues.find(value=>value.name==="Checkout curation")!;
   await page.getByRole("combobox",{ name:"Source run",exact:true }).selectOption("source-a");
   await page.getByRole("button",{ name:"Add to queue",exact:true }).click();
-  await expect(page.getByRole("region",{ name:"Frozen source",exact:true })).toContainText('"status":"paid"');
+  await expect(page.getByRole("region",{ name:"Captured run",exact:true })).toContainText('"status":"paid"');
   const items = async()=> (await (await request.get(`/api/review-queues/${queue.id}/items`)).json()).items as Array<{ id:string;name:string;revision:number;state:string }>;
   const first = (await items())[0];
   await page.getByRole("combobox",{ name:"Source run",exact:true }).selectOption("source-b");
@@ -63,10 +64,10 @@ test("actual review component persists A/B drafts, immediately approves newest e
   await expect.poll(async()=> (await items()).length).toBe(2);
   const second = (await items())[1];
   await page.getByRole("region",{ name:"Queue items",exact:true }).getByRole("button",{ name:/Checkout response/ }).click();
-  await expect(page.getByRole("region",{ name:"Frozen source",exact:true })).toContainText("Input for source-a");
+  await expect(page.getByRole("region",{ name:"Captured run",exact:true })).toContainText("Input for source-a");
   await page.getByRole("textbox",{ name:/Expected response \(required\)/ }).fill("Expected A");
   await page.getByRole("region",{ name:"Queue items",exact:true }).getByRole("button",{ name:/Refund response/ }).click();
-  await expect(page.getByRole("region",{ name:"Frozen source",exact:true })).toContainText("Input for source-b");
+  await expect(page.getByRole("region",{ name:"Captured run",exact:true })).toContainText("Input for source-b");
   await page.getByRole("textbox",{ name:/Expected response \(required\)/ }).fill("Expected B");
   const stored = async(id:string)=>(await (await request.get(`/api/review-queues/${queue.id}/window?centerId=${id}`)).json() as ReviewItem[]).find(row=>row.id===id)!;
   await expect.poll(async()=> (await stored(first.id)).draft.target.expectedOutput).toBe("Expected A");
@@ -180,7 +181,7 @@ test("explicit approval and reapply keep source frames in the displayed window",
   const second = await (await request.post(`/api/review-queues/${queue.id}/items`,{ data:{ runId:"source-b" } })).json() as ReviewItem;
   const current = async(id:string)=>(await (await request.get(`/api/review-queues/${queue.id}/window?centerId=${id}`)).json() as ReviewItem[]).find(row=>row.id===id)!;
   await page.goto(`${fixturePath}?queueId=${queue.id}&itemId=${first.id}`);
-  const source = page.getByRole("region",{ name:"Frozen source",exact:true });
+  const source = page.getByRole("region",{ name:"Captured run",exact:true });
   const target = page.getByRole("textbox",{ name:/Expected output \(required\)/ });
   const items = page.getByRole("region",{ name:"Queue items",exact:true });
   const firstButton = items.getByRole("button",{ name:/Checkout response/ }), secondButton = items.getByRole("button",{ name:/Refund response/ });
@@ -193,7 +194,7 @@ test("explicit approval and reapply keep source frames in the displayed window",
   await page.getByRole("button",{ name:"Reapply to latest revision",exact:true }).click();
   await expect.poll(async()=> (await current(first.id)).draft.target.expectedOutput).toBe("Retained first target");
   await expect(source).toContainText("Input for source-a"); await expect(target).toHaveValue("Retained first target");
-  await expect(secondButton).toBeDisabled(); await expect(page.getByRole("combobox",{ name:"Review queue",exact:true })).toBeDisabled();
+  await expect(secondButton).toBeDisabled(); await expect(page.getByRole("button",{ name:"Open queue Source window consistency",exact:true })).toBeDisabled();
   await secondButton.click({ force:true }); await expect(source).toContainText("Input for source-a");
   await expect(secondButton).toBeEnabled(); await secondButton.click(); await expect(source).toContainText("Input for source-b");
   await delayAcknowledgment(page, "**/api/review-queues");
