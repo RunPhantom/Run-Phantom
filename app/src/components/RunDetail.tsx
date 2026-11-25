@@ -53,7 +53,7 @@ import { useAnnotations } from "../hooks/use-annotations";
 import type { Annotation, AnnotationKind } from "../hooks/use-annotations";
 import { useAgentForEvent } from "../hooks/use-agents";
 import { useRunPhantomConnectionStatus, useRunPhantomEvent } from "../hooks/use-runphantom-ws";
-import { getPricingSnapshot, getRunCostRows, subscribePricing, fmtCost, fmtRate, type ModelCostRow } from "../utils/costs";
+import { getPricingSnapshot, getRunCostRows, subscribePricing, summarizeRunCost, fmtCost, fmtRate, type ModelCostRow } from "../utils/costs";
 import { PRICE_TABLE_AS_OF } from "../../../src/pricing/list-prices";
 import { usePrefersReducedMotion } from "../hooks/use-prefers-reduced-motion";
 import { useDialogFocus } from "../hooks/use-dialog-focus";
@@ -412,13 +412,10 @@ function StatsLine({ stats, model, spans, active, startedAt, completionUnavailab
   const durRemSec = durSec % 60;
   const hasTokens = inTok > 0 || outTok > 0;
   const hasCost = breakdown.length > 0;
-  const known = breakdown.filter(row => row.totalUsd !== null);
-  const unavailableCount = breakdown.length - known.length;
-  const totalCost = known.reduce((sum, row) => sum + row.totalUsd!, 0);
-  const availableTotal = known.length > 0 && Number.isFinite(totalCost);
-  const allReported = known.every(row => row.sources.listPrice === 0 && row.sources.catalogue === 0);
+  const { knownUsd: totalCost, pricedCalls, unavailableCalls, allReported } = summarizeRunCost(breakdown);
+  const availableTotal = pricedCalls > 0 && Number.isFinite(totalCost);
   const costLabel = !availableTotal ? "Estimate unavailable"
-    : unavailableCount ? `${allReported ? "Known reported cost" : "Known estimates"} ${fmtCost(totalCost)} · ${unavailableCount} unavailable`
+    : unavailableCalls ? `${allReported ? "Known reported cost" : "Known estimates"} ${fmtCost(totalCost)} · ${unavailableCalls} ${unavailableCalls === 1 ? "call" : "calls"} unavailable`
     : `${allReported ? "Reported cost" : "Estimated cost"} ${fmtCost(totalCost)}`;
 
   // Where the stats wrap, the separator after the last stat on a line has

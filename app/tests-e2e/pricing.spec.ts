@@ -79,7 +79,7 @@ test("pricing: real Settings consent refreshes an open run with exact source and
   await expect(page.getByRole("button", { name: "Estimate unavailable", exact: true })).toBeVisible();
   release();
 
-  const summary = page.getByRole("button", { name: "Known estimates $0.0051 · 1 unavailable", exact: true });
+  const summary = page.getByRole("button", { name: "Known estimates $0.0051 · 1 call unavailable", exact: true });
   await expect(summary).toBeVisible();
   await summary.focus();
   await page.keyboard.press("Enter");
@@ -171,7 +171,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 800
     await page.addInitScript(() => { localStorage.setItem("runphantom:modelPricingConsent", "1"); });
     await page.route(CATALOGUE_URL, route => route.fulfill({ contentType: "application/json", body: catalogue }));
     await page.goto(`${runPhantom.url}/runs/${RUN_ID}`);
-    const button = page.getByRole("button", { name: "Known estimates $0.0051 · 1 unavailable", exact: true });
+    const button = page.getByRole("button", { name: "Known estimates $0.0051 · 1 call unavailable", exact: true });
     await expect(button).toBeVisible();
     await button.tap();
     const region = page.getByRole("region", { name: "Cost breakdown" });

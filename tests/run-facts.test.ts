@@ -7,6 +7,8 @@ import { aggregateCostAnalytics, type AnalyticsSpan } from "../src/pricing/analy
 import { clearRunFactsCache, clip, firstSentence, loadRunRows, RUN_FACT_LIMITS, selectRunAggregates } from "../src/stats/run-facts";
 import { deriveRunStatus } from "../src/stats/run-status";
 import { seedMetricsRuns } from "./fixtures/metrics-seed";
+import { getRunCostRows, summarizeRunCost } from "../app/src/utils/costs";
+import type { Span } from "../app/src/utils/types";
 
 let directory: string;
 let oldDb: string | undefined;
@@ -154,6 +156,25 @@ describe("run cost estimates", () => {
     expect(usd("rules")).toEqual([["reported", 0.25], ["unknown", null], ["unknown", null], ["unknown", null], ["unknown", null]]);
     expect(facts("rules").generations.map(item => item.model)).toEqual(["gpt-5-nano", "gpt-5-nano", "gpt-5-nano", "gpt-5-nano", "gemini-4-carbon"]);
     expect(facts("rules")).toMatchObject({ costUsd: null, costSource: "unknown", knownCostUsd: 0.25, costUnknownCalls: 4 });
+  });
+});
+
+describe("run header agrees with the run list", () => {
+  test("a model with priced and unpriced calls adds its priced calls and counts unpriced calls", () => {
+    run("mixed"); span("mixed", "root", { type: "AGENT_ROOT" });
+    span("mixed", "bedrock", { parent: "root", start: 11, model: "claude-haiku-4-5-20251001", provider: "anthropic", input: 1_000, output: 1_000, attributes: JSON.stringify({ "gen_ai.system": "aws.bedrock" }) });
+    span("mixed", "direct", { parent: "root", start: 12, model: "claude-haiku-4-5-20251001", provider: "anthropic", input: 2_000, output: 100 });
+    span("mixed", "sonnet", { parent: "root", start: 13, model: "claude-sonnet-5-5", provider: "anthropic", input: 100_000, output: 30_000 });
+    span("mixed", "house-1", { parent: "root", start: 14, model: "in-house-model", input: 5, output: 5 });
+    span("mixed", "house-2", { parent: "root", start: 15, model: "in-house-model", input: 5, output: 5 });
+    const listed = facts("mixed");
+    // 2,000 × $1 + 100 × $5 per million, plus 100,000 × $2 + 30,000 × $10 per million.
+    expect(listed).toMatchObject({ costSource: "unknown", costUnknownCalls: 3 });
+    expect(listed.knownCostUsd).toBeCloseTo(0.0025 + 0.5, 15);
+    const spans = db().query("SELECT * FROM spans WHERE run_id = 'mixed'").all() as Span[];
+    const header = summarizeRunCost(getRunCostRows(spans, { status: "disabled", catalogue: null, error: null }));
+    expect(header).toMatchObject({ pricedCalls: 2, unavailableCalls: listed.costUnknownCalls, allReported: false });
+    expect(header.knownUsd).toBeCloseTo(listed.knownCostUsd!, 15);
   });
 });
 
