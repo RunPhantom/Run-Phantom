@@ -10,10 +10,12 @@ import { cn } from "@/lib/utils";
 import { deleteRun, type RunListRow } from "../api/runs";
 import { evaluationsApi, type DatasetCaseDraft, type DatasetRevision } from "../api/evaluations";
 import { plural, runDisplayName } from "../utils/helpers";
+import { EVALUATION_LIMITS } from "../../../src/evaluations/protocol";
 import { exportRowsJson } from "./table-model";
 
-/** Server cap on cases per test set (EXECUTION_LIMITS.MAX_CASES). */
-const MAX_CASES = 50;
+const MAX_CASES = EVALUATION_LIMITS.MAX_CASES;
+/** Deletes in flight at once; a select-all over thousands of rows must not open thousands of requests. */
+const DELETE_BATCH = 6;
 
 export function RunsBulkBar({ rows, shortIds, onCompare, onClear, onDeleted, announce }: {
   rows: readonly RunListRow[];
@@ -45,11 +47,16 @@ export function RunsBulkBar({ rows, shortIds, onCompare, onClear, onDeleted, ann
 
   const remove = async () => {
     const ids = rows.map(row => row.id);
-    const results = await Promise.allSettled(ids.map(id => deleteRun(id)));
-    const deleted = ids.filter((_, index) => results[index]!.status === "fulfilled");
+    const deleted: string[] = [];
+    for (let start = 0; start < ids.length; start += DELETE_BATCH) {
+      const batch = ids.slice(start, start + DELETE_BATCH);
+      const results = await Promise.allSettled(batch.map(id => deleteRun(id)));
+      batch.forEach((id, index) => { if (results[index]!.status === "fulfilled") deleted.push(id); });
+    }
     if (deleted.length) {
-      queryClient.setQueriesData<{ id: string }[]>({ queryKey: ["runs"], exact: true }, list => list?.filter(run => !deleted.includes(run.id)));
-      for (const runId of deleted) window.dispatchEvent(new CustomEvent("runphantom:run-removed", { detail: { runId } }));
+      const gone = new Set(deleted);
+      queryClient.setQueriesData<{ id: string }[]>({ queryKey: ["runs"], exact: true }, list => list?.filter(run => !gone.has(run.id)));
+      window.dispatchEvent(new CustomEvent("runphantom:run-removed", { detail: { runIds: deleted, ...(deleted.length === 1 ? { runId: deleted[0] } : {}) } }));
       onDeleted(deleted);
     }
     const failed = ids.length - deleted.length;
