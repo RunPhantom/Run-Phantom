@@ -14,6 +14,10 @@ export const SECRET_DEFS = {
     label: "OpenAI",
     envVars: ["OPENAI_API_KEY", "RUNPHANTOM_OPENAI_API_KEY"],
   },
+  gemini: {
+    label: "Google Gemini",
+    envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+  },
 } as const;
 
 export type SecretKey = keyof typeof SECRET_DEFS;

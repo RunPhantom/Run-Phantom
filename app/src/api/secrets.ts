@@ -1,6 +1,6 @@
 import { apiJson, jsonInit } from "./request";
 
-export type SecretKey = "anthropic" | "openai";
+export type SecretKey = "anthropic" | "openai" | "gemini";
 export type SecretSource = "env" | "store" | null;
 
 export interface SecretStatus {
