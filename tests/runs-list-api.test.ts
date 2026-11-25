@@ -6,7 +6,7 @@ import path from "node:path";
 import { clearAll, closeDb, getDbPath, getDrizzleDb, getRuns } from "../src/db";
 import { createServer } from "../src/server";
 import { clearRunFactsCache } from "../src/stats/run-facts";
-import { listRuns } from "../src/stats/runs-list";
+import { listRuns, runFacets } from "../src/stats/runs-list";
 import { FIXTURE_NOW, seedMetricsFixture } from "./fixtures/metrics-seed";
 
 const HOUR = 3_600_000;
@@ -200,6 +200,38 @@ describe("GET /api/runs over HTTP", () => {
       const found = await (await fetch(`${origin}/api/runs?${byIds}`)).json();
       expect(found.runs.map((run: { id: string }) => run.id).sort()).toEqual(["a,b", long, "r-ok"].sort());
       expect((await (await fetch(`${origin}/api/runs?envelope=1&ids=`)).json()).total).toBe(0);
+    } finally {
+      server.close();
+    }
+  });
+});
+
+describe("GET /api/runs/facets", () => {
+  test("lists every distinct agent and model of the full run list, and whether any run is the user's own", async () => {
+    const rows = list().runs;
+    const facets = runFacets(getDrizzleDb().$client, getDbPath());
+    expect(facets.agents).toEqual([...new Set(rows.map(row => row.agent).filter((agent): agent is string => !!agent))].sort());
+    expect(facets.models).toEqual([...new Set(rows.flatMap(row => row.models))].sort());
+    expect(facets.models.length).toBeGreaterThan(0);
+    expect(facets.hasOwnRuns).toBe(true);
+
+    clearAll(); clearRunFactsCache();
+    const insert = getDrizzleDb().$client.prepare("INSERT INTO runs(id,name,event_name,started_at,last_updated_at,metadata) VALUES(?,'s','s',?,?,?)");
+    insert.run("demo_one", FIXTURE_NOW, FIXTURE_NOW, null);
+    insert.run("sample-two", FIXTURE_NOW, FIXTURE_NOW, JSON.stringify({ demo: true, default: true }));
+    expect(runFacets(getDrizzleDb().$client, getDbPath()).hasOwnRuns).toBe(false);
+
+    const { server } = await createServer(0);
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    try {
+      insert.run("mine", FIXTURE_NOW, FIXTURE_NOW, null);
+      clearRunFactsCache();
+      const response = await fetch(`${origin}/api/runs/facets`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await response.json()).toEqual({ agents: expect.any(Array), models: [], hasOwnRuns: true });
     } finally {
       server.close();
     }

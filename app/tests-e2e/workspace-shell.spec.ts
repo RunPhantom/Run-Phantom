@@ -179,6 +179,33 @@ test("grouped navigation keeps pinned names and shows counts only for loaded dat
   expect(box.height).toBe(32);
 });
 
+test("live runs reach the nav count and pages without downloading the full run list", async ({ page, runPhantom }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const fullListReads: string[] = [];
+  page.on("request", request => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/runs" && !url.searchParams.has("limit") && !url.searchParams.has("ids")) fullListReads.push(url.search);
+  });
+  await page.goto(`${runPhantom.url}/`);
+  const navigation = page.getByRole("navigation", { name: "Primary navigation", exact: true });
+  const runs = navigation.getByRole("link", { name: "Runs", exact: true });
+  await expect(navigation).toBeVisible();
+
+  await seedRunPhantomFixtures(runPhantom.url);
+  await expect(runs).toHaveAccessibleDescription("3 runs", { timeout: 10_000 });
+
+  await runs.click();
+  await expect(page.getByRole("grid", { name: "Runs" }).locator("[data-run-name]")).toHaveCount(3);
+  await page.getByRole("grid", { name: "Runs" }).locator("[data-run-name]").first().click();
+  await expect(page).toHaveURL(/\/runs\/[^/]+/);
+  await expect(page.locator("[data-run-id]")).toHaveCount(3);
+  await page.waitForLoadState("networkidle");
+  await page.goBack();
+  await expect(page.getByRole("grid", { name: "Runs" }).locator("[data-run-name]")).toHaveCount(3);
+  await page.waitForLoadState("networkidle");
+  expect(fullListReads).toEqual([]);
+});
+
 test("runs page lists sample runs in the table instead of showing onboarding", async ({ page, request, runPhantom }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   expect((await request.post(`${runPhantom.url}/api/demo-traces/replay`)).ok()).toBe(true);

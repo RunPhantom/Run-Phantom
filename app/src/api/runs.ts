@@ -60,6 +60,17 @@ export async function listRunsPage(query: Record<string, string>, signal?: Abort
   return page;
 }
 
+/** GET /api/runs/facets: the Runs table's filter choices over every run. */
+export interface RunFacets {
+  agents: string[];
+  models: string[];
+  hasOwnRuns: boolean;
+}
+
+export async function getRunFacets(signal?: AbortSignal): Promise<RunFacets> {
+  return apiJson<RunFacets>("/api/runs/facets", { signal, cache: "no-store" });
+}
+
 /** Encoded `ids=` bytes per request, well under the 16 KiB request-header limit of Node's HTTP server. */
 const IDS_URL_BUDGET = 6_000;
 const IDS_PER_REQUEST = 100;

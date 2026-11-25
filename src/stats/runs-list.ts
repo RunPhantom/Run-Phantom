@@ -4,6 +4,7 @@ import { queryString, queryTime, roundUsd, runAgent, runUsesModel, StatsRequestE
 import { loadRunRows, runRowStatus, selectRunAggregates, type CostSource, type RunRow } from "./run-facts";
 import { AGENT_FILTER_CHARS } from "../run-agent";
 import { RUN_STATUS_FILTER_VALUES, runOutcome, runStatusFilterMembers, type RunOutcome, type RunStatus } from "../run-status";
+import { isSampleRun } from "../sample-runs";
 
 export const RUN_LIST_SORTS = ["last_updated_at", "started_at", "duration", "cost", "tokens", "errors"] as const;
 export type RunListSort = typeof RUN_LIST_SORTS[number];
@@ -246,4 +247,26 @@ export function listRuns(db: Database, dbPath: string, rawQuery: Record<string, 
     nextCursor: hasMore && last ? Buffer.from(JSON.stringify([1, query.filterKey, last.value, last.id])).toString("base64url") : null,
     envelope: query.envelope,
   };
+}
+
+export interface RunFacets {
+  /** Distinct agent names over every run, sorted. */
+  agents: string[];
+  /** Distinct model ids over every run, sorted. */
+  models: string[];
+  /** Whether any run is not a sample run, so the first-run setup can be put away. */
+  hasOwnRuns: boolean;
+}
+
+/** The Runs table's filter choices without sending every run row to the browser. */
+export function runFacets(db: Database, dbPath: string): RunFacets {
+  const agents = new Set<string>(), models = new Set<string>();
+  let hasOwnRuns = false;
+  for (const row of loadRunRows(db, dbPath, selectRunAggregates(db, "1 = 1", []))) {
+    const agent = runAgent(row);
+    if (agent) agents.add(agent);
+    for (const model of row.facts.models) models.add(model);
+    if (!hasOwnRuns && !isSampleRun(row)) hasOwnRuns = true;
+  }
+  return { agents: [...agents].sort(), models: [...models].sort(), hasOwnRuns };
 }
