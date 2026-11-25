@@ -36,6 +36,13 @@ test("evaluations: user creates a regression case, compares frozen candidates, r
   await page.getByRole("button", { name: "Save new revision", exact: true }).click();
   const revision = page.getByRole("combobox", { name: "Revision", exact: true });
   await expect(revision).toHaveValue("2");
+  const newDataset = page.getByRole("button", { name: "New dataset", exact: true });
+  await newDataset.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog", { name: "New dataset" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "New dataset" })).toHaveCount(0);
+  await expect(newDataset).toBeFocused();
 
   const results = page.getByRole("region", { name: "Experiment results", exact: true });
   const startFromUi = async (name: string, runId: string, outcome: "pass" | "fail" | "inconclusive") => {
@@ -55,6 +62,20 @@ test("evaluations: user creates a regression case, compares frozen candidates, r
   await expect(results).toContainText("1 / 1 case passed");
   const rejected = await startFromUi("UI rejected candidate", EVALUATION_RUNS.rejected, "fail");
   const repaired = await startFromUi("UI repaired candidate", EVALUATION_RUNS.repaired, "pass");
+  await expect(page.getByLabel("Evaluation summary", { exact: true }).locator(".evaluation-kpi").filter({ hasText: "Experiments" })).toContainText("3 finished");
+  const datasetRow = page.getByRole("region", { name: "Dataset list", exact: true }).getByRole("row").filter({ has: page.getByRole("button", { name: "Open dataset UI checkout dataset", exact: true }) });
+  await expect(datasetRow).toContainText("Revision 2 · 3 experiments");
+  await expect(datasetRow).toContainText("100% · 1/1");
+  const experimentRow = (name: string) => page.getByRole("region", { name: "Experiment list", exact: true }).getByRole("row").filter({ has: page.getByRole("button", { name: `Open experiment ${name}`, exact: true }) });
+  await expect(experimentRow("UI rejected candidate")).toContainText("1 regression");
+  await expect(experimentRow("UI repaired candidate")).toContainText("1 improvement");
+  await experimentRow("UI repaired candidate").getByRole("button", { name: "Show 1 improvement against UI rejected candidate", exact: true }).click();
+  const changes = page.getByRole("region", { name: "Experiment comparison", exact: true });
+  await expect(changes.getByRole("combobox", { name: "Compare baseline", exact: true })).toHaveValue(rejected);
+  await expect(changes.getByRole("combobox", { name: "Compare candidate", exact: true })).toHaveValue(repaired);
+  await expect(changes.getByRole("group", { name: "Show cases", exact: true }).getByRole("button", { name: "Improvements 1", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(changes.getByLabel("Comparison results", { exact: true }).getByRole("listitem")).toHaveCount(1);
+  await expect(changes.getByLabel("Comparison results", { exact: true }).getByRole("listitem")).toContainText("Checkout result: improvement");
   await startFromUi("UI missing measurements", EVALUATION_RUNS.missing, "inconclusive");
   await results.locator("summary").filter({ hasText: /^Candidate run details$/ }).click();
   const missing = results.getByRole("region", { name: "Candidate run details", exact: true });

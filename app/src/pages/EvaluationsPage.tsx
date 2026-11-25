@@ -17,11 +17,12 @@ import { ExternalEvidencePanel } from "../components/ExternalEvidencePanel";
 import { FindingComparison } from "../components/evaluations/FindingComparison";
 import { EvaluationNavigation } from "../components/evaluations/EvaluationNavigation";
 import { ExperimentIndex, type ComparisonRequest } from "../components/evaluations/ExperimentIndex";
-import { DatasetsTable, EvaluationKpis, PassRateHistogram } from "../components/evaluations/EvaluationOverview";
+import { DatasetsTable, EvaluationKpis, PassRateHistogram, runOutcome } from "../components/evaluations/EvaluationOverview";
 import { EvaluationsEmptyState } from "../components/evaluations/EvaluationsEmptyState";
 import { useRuns } from "../hooks/use-runs";
-import { ago, plural, runDisplayName, runStatus } from "../utils/helpers";
+import { ago, plural, runDisplayName } from "../utils/helpers";
 import { getRunRow } from "../api/runs";
+import { useReturnFocus } from "../hooks/use-return-focus";
 
 const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
 
@@ -82,6 +83,8 @@ export function EvaluationsPage() {
   const [experimentOpen, setExperimentOpen] = useState(false);
   const [compareRequest, setCompareRequest] = useState<ComparisonRequest | null>(null);
   const busyRef = useRef(false);
+  const createFocus = useReturnFocus(), experimentFocus = useReturnFocus();
+  const openCreate = () => { setError(""); createFocus.remember(); setCreateOpen(true); };
   const createReason = useId(), createDialogReason = useId(), experimentReason = useId(), importReason = useId();
   async function perform(work: () => Promise<void>) { if (busyRef.current) return; busyRef.current = true; setBusy(true); setError(""); try { await work(); } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not complete this operation."); } finally { busyRef.current = false; setBusy(false); } }
   function saved(next: DatasetRevision) { queryClient.setQueryData(["evaluations", "revision", next.datasetId, next.version], next); selectRevision(next.datasetId, next.version); void queryClient.invalidateQueries({ queryKey: ["evaluations", "datasets"] }); setNotice(`Saved ${next.datasetName}, revision ${next.version}.`); }
@@ -118,13 +121,13 @@ export function EvaluationsPage() {
   return <>{tabs}<div className="evaluation-workspace">
     <PageHeader eyebrow="Evaluations" title="Evaluations" description={hasDatasets || experimentList.length ? undefined : "Turn captured runs into test cases, grade new runs against them and see what changed."} actions={<>
       <Button variant="outline" disabled={datasets.isFetching || experiments.isFetching} onClick={() => void queryClient.invalidateQueries({ queryKey: ["evaluations"] })}>Refresh</Button>
-      {!emptyWorkspace && <Button onClick={() => setCreateOpen(true)}><Plus aria-hidden="true" />New dataset</Button>}
+      {!emptyWorkspace && <Button onClick={openCreate}><Plus aria-hidden="true" />New dataset</Button>}
     </>} />
     {((error && !createOpen) || selectionError || queryError) && <div role="alert" className="evaluation-alert"><span>{(!createOpen && error) || selectionError || queryError?.message}</span><Button variant="destructive-outline" size="sm" onClick={() => { setError(""); void queryClient.invalidateQueries({ queryKey: ["evaluations"] }); }}>Refresh evaluations</Button></div>}
     {notice && <p role="status" className="evaluation-notice">{notice}</p>}
     {linkedRunId && <section aria-label="Run to evaluate" className="evaluation-linked-run">
-      <div className="min-w-0 flex-1"><Eyebrow marker tone="accent">Evaluate run</Eyebrow><h2 className="mt-2">Add <span title={linkedRunId}>{linkedRunName}</span> to a dataset as a regression case</h2>
-        {linkedRun && <p className="evaluation-meta">{[linkedRun.model, runStatus(linkedRun).label, `started ${ago(linkedRun.started_at)}`].filter(Boolean).join(" · ")} · <Link to={`/runs/${encodeURIComponent(linkedRunId)}`}>Open run</Link></p>}
+      <div className="min-w-0 flex-1"><Eyebrow marker tone="accent">Evaluate run</Eyebrow><h2 className="mt-2">Add <span title={linkedRunId}>{linkedRunName}</span> to a dataset as a test case</h2>
+        {linkedRun && <p className="evaluation-meta">{[linkedRun.model, runOutcome(linkedRun), `started ${ago(linkedRun.started_at)}`].filter(Boolean).join(" · ")} · <Link to={`/runs/${encodeURIComponent(linkedRunId)}`}>Open run</Link></p>}
         <p>{hasDatasets ? `It is preselected as the source run of a new case in ${visibleRevision?.datasetName ?? "the dataset below"}. Add what a good result looks like, then save a new revision.` : "Create a dataset first. The case form then opens with this run already chosen as its source."}</p></div>
       <Button variant="ghost" size="icon-sm" className="evaluation-linked-run-dismiss" aria-label="Dismiss" onClick={() => setParams(previous => { const next = new URLSearchParams(previous); next.delete("runId"); return next; })}><X aria-hidden="true" /></Button>
       {hasDatasets ? <a className="evaluation-linked-run-action" href="#new-case">Go to the case form</a>
@@ -132,7 +135,7 @@ export function EvaluationsPage() {
     </section>}
     {datasets.isLoading ? <p role="status" className="evaluation-meta">Loading datasets…</p>
       : datasets.isError ? <p className="evaluation-meta">Datasets are unavailable. Refresh evaluations to try again.</p>
-        : emptyWorkspace ? <EvaluationsEmptyState onCreate={() => setCreateOpen(true)} />
+        : emptyWorkspace ? <EvaluationsEmptyState onCreate={openCreate} />
           : !hasDatasets && !experimentList.length ? null
           : <><EvaluationKpis datasets={datasets.data ?? []} experiments={experimentList} /><div className="evaluation-overview-grid">
             <section aria-labelledby="evaluation-datasets-title" className="evaluation-panel">
@@ -149,7 +152,7 @@ export function EvaluationsPage() {
     {hasDatasets && <section ref={datasetSection} aria-label="Selected dataset" className="evaluation-panel scroll-mt-6 space-y-4">
       <div className="evaluation-panel-head"><h2>{visibleRevision ? visibleRevision.datasetName : "Dataset"}</h2>
         <div className="evaluation-panel-actions"><Button variant="outline" disabled={busy || !visibleRevision} onClick={() => void perform(async () => { const exported = await evaluationsApi.exportDataset(datasetId, visibleRevision!.version); const url = URL.createObjectURL(new Blob([JSON.stringify(exported, null, 2)], { type: "application/json" })); const anchor = document.createElement("a"); anchor.href = url; anchor.download = `runphantom-dataset-r${visibleRevision!.version}.json`; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); setNotice("Dataset exported. Source run links are left out so the file works in another workspace."); })}>Export selected revision</Button>
-          <Button disabled={!!experimentBlocker} aria-describedby={experimentBlocker ? experimentReason : undefined} onClick={() => setExperimentOpen(true)}>New experiment</Button></div>
+          <Button disabled={!!experimentBlocker} aria-describedby={experimentBlocker ? experimentReason : undefined} onClick={() => { experimentFocus.remember(); setExperimentOpen(true); }}>New experiment</Button></div>
       </div>
       <DisabledReason id={experimentReason} reason={experimentBlocker} />
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_200px]"><Field label="Dataset"><Select value={selectionError ? "" : datasetId} onChange={event => selectRevision(event.target.value)} disabled={busy}>{selectionError && <option value="">Choose an available dataset</option>}{datasets.data?.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></Field><Field label="Revision"><Select value={selectionError ? "" : selectedVersion ?? dataset?.latestVersion ?? 1} onChange={event => { if (explicitSelection) selectRevision(datasetId, Number(event.target.value)); else setVersion(Number(event.target.value)); }} disabled={busy || !dataset}>{selectionError && <option value="">Choose an available revision</option>}{Array.from({ length: dataset?.latestVersion ?? revision.data?.version ?? 1 }, (_, index) => index + 1).map(item => <option value={item} key={item}>Revision {item}{item === dataset?.latestVersion ? " (latest)" : ""}</option>)}</Select></Field></div>
@@ -161,7 +164,7 @@ export function EvaluationsPage() {
     {(hasDatasets || experimentList.length > 0) && <div className="evaluation-analysis-grid"><CompareExperiments experiments={experimentList} request={compareRequest} /><RepeatedTrials experiments={experimentList} onOpen={setSelectedExperiment} /></div>}
   </div>
     <Dialog open={createOpen} onOpenChange={open => { if (!busy) setCreateOpen(open); }}>
-      <DialogContent title="New dataset" description="A dataset holds test cases built from captured runs. Name it now and add cases next." className="max-w-xl">
+      <DialogContent title="New dataset" description="A dataset holds test cases built from captured runs. Name it now and add cases next." className="max-w-xl" onCloseAutoFocus={createFocus.onCloseAutoFocus}>
         <div className="evaluation-dialog-body mt-5 space-y-4">
           {nameField}
           {createButton(createDialogReason)}
@@ -171,7 +174,7 @@ export function EvaluationsPage() {
       </DialogContent>
     </Dialog>
     <Dialog open={experimentOpen} onOpenChange={setExperimentOpen}>
-      <DialogContent title="New experiment" description={visibleRevision ? `${visibleRevision.datasetName} · revision ${visibleRevision.version} · ${plural(visibleRevision.cases.length, "case")}` : undefined} className="max-w-2xl">
+      <DialogContent title="New experiment" description={visibleRevision ? `${visibleRevision.datasetName} · revision ${visibleRevision.version} · ${plural(visibleRevision.cases.length, "case")}` : undefined} className="max-w-2xl" onCloseAutoFocus={experimentFocus.onCloseAutoFocus}>
         <div className="evaluation-dialog-body mt-5">{visibleRevision && <StartExperiment key={`${visibleRevision.datasetId}:${visibleRevision.version}`} revision={visibleRevision} onStarted={started} />}</div>
       </DialogContent>
     </Dialog>

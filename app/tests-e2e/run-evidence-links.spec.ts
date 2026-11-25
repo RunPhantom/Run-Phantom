@@ -14,7 +14,7 @@ test("Evaluate run opens Evaluations with that run preselected as the source of 
   await expect(page.getByRole("menuitem", { name: "Evaluate run", exact: true })).toBeVisible();
   await page.getByRole("menuitem", { name: "Evaluate run", exact: true }).click();
   const linked = page.getByRole("region", { name: "Run to evaluate", exact: true });
-  await expect(linked).toContainText("as a regression case");
+  await expect(linked).toContainText("as a test case");
   await expect(linked).toContainText("Create a dataset first");
   const name = page.getByRole("textbox", { name: "Dataset name", exact: true });
   await expect(name).toHaveValue(/ regression cases$/);
