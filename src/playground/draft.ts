@@ -105,6 +105,21 @@ function argsOf(value: unknown): Record<string, unknown> {
 
 const resultText = (value: unknown): string => typeof value === "string" ? value : value === undefined ? "" : textOf(value);
 
+/**
+ * AI SDK v5 records tool output as { type: "text" | "json" | "error-text" | "error-json" | "content", value }, and its
+ * provider adapters send only the value (JSON-encoded for the json kinds), so a replay must unwrap it the same way.
+ */
+function aiSdkOutput(value: unknown): string | null {
+  const output = record(value);
+  if (!output || !("value" in output)) return null;
+  if (output.type === "text" || output.type === "error-text") return typeof output.value === "string" ? output.value : null;
+  if (output.type === "json" || output.type === "error-json") return JSON.stringify(output.value ?? null);
+  if (output.type === "content" && Array.isArray(output.value)) return textOf(output.value);
+  return null;
+}
+
+const toolOutputText = (part: Json, captured: unknown): string => captured !== undefined ? resultText(captured) : aiSdkOutput(part.output) ?? resultText(part.output);
+
 function convertMessages(list: unknown[]): Converted {
   const out: Converted = { system: [], messages: [], warnings: new Set() };
   const pendingByName = new Map<string, string[]>();
@@ -154,7 +169,7 @@ function convertMessages(list: unknown[]): Converted {
           if (!part) continue;
           const response = record(part.functionResponse);
           if (response) pushTool(str(response.id), str(response.name), resultText(response.response));
-          else pushTool(str(part.id) ?? str(part.toolCallId), str(part.name) ?? str(part.toolName), resultText(part.response ?? part.result ?? part.output));
+          else pushTool(str(part.id) ?? str(part.toolCallId), str(part.name) ?? str(part.toolName), toolOutputText(part, part.response ?? part.result));
         }
       } else {
         pushTool(str(message.tool_call_id) ?? str(message.toolCallId) ?? str(message.id), str(message.name), plain ?? textOf(parts));
@@ -176,7 +191,7 @@ function convertMessages(list: unknown[]): Converted {
       if (functionCall) calls.push({ id: callId(functionCall.id), name: String(functionCall.name ?? ""), arguments: argsOf(functionCall.args), ...(str(part.thoughtSignature) && (part.thoughtSignature as string).length <= 64_000 ? { signature: part.thoughtSignature as string } : {}) });
       else if (functionResponse) results.push({ id: str(functionResponse.id), name: str(functionResponse.name), content: resultText(functionResponse.response) });
       else if (type === "tool_use" || type === "tool_call" || type === "tool-call" || type === "function_call") calls.push({ id: callId(part.id ?? part.toolCallId ?? part.call_id), name: String(part.name ?? part.toolName ?? ""), arguments: argsOf(part.input ?? part.arguments ?? part.args) });
-      else if (type === "tool_result" || type === "tool_call_response" || type === "tool-result" || type === "function_call_output") results.push({ id: str(part.tool_use_id) ?? str(part.id) ?? str(part.toolCallId) ?? str(part.call_id), name: str(part.name) ?? str(part.toolName), content: resultText(part.content ?? part.response ?? part.result ?? part.output) });
+      else if (type === "tool_result" || type === "tool_call_response" || type === "tool-result" || type === "function_call_output") results.push({ id: str(part.tool_use_id) ?? str(part.id) ?? str(part.toolCallId) ?? str(part.call_id), name: str(part.name) ?? str(part.toolName), content: toolOutputText(part, part.content ?? part.response ?? part.result) });
       else if (type === "thinking" || type === "redacted_thinking" || type === "reasoning" || part.thought === true) out.warnings.add("Reasoning blocks from the captured call were left out.");
       else if (type === "text" || type === "input_text" || type === "output_text" || (type === null && typeof part.text === "string")) texts.push(str(part.text) ?? str(part.content) ?? "");
       else out.warnings.add(`Content of type ${type ?? "unknown"} (for example images or files) was left out.`);

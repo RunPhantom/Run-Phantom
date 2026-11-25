@@ -143,3 +143,34 @@ describe("Open in Playground across providers", () => {
     expect(parallel[0].text).toBe("Checking stock for both items.");
   });
 });
+
+describe("draft fidelity", () => {
+  const aiSdkSpan = (messages: unknown[], model = "gpt-4.1-mini"): DraftSpanInput => ({
+    id: "span-ai", run_id: "run-ai", name: "ai.generateText.doGenerate", span_type: "LLM_GENERATION", model, provider: "openai.chat", input_payload: null,
+    attributes: JSON.stringify({ "ai.operationId": "ai.generateText.doGenerate", "ai.model.id": model, "ai.model.provider": "openai.chat", "ai.prompt.messages": JSON.stringify(messages) }),
+  });
+
+  test("AI SDK v5 tool output reaches the model as the value the SDK sent, not its wrapper", () => {
+    const draft = draftFromSpan(aiSdkSpan([
+      { role: "user", content: [{ type: "text", text: "Add 2 and 2, then greet, then fail" }] },
+      { role: "assistant", content: [
+        { type: "tool-call", toolCallId: "t1", toolName: "calc", input: { a: 2, b: 2 } },
+        { type: "tool-call", toolCallId: "t2", toolName: "greet", input: {} },
+        { type: "tool-call", toolCallId: "t3", toolName: "fetch_page", input: {} },
+        { type: "tool-call", toolCallId: "t4", toolName: "legacy", input: {} },
+      ] },
+      { role: "tool", content: [
+        { type: "tool-result", toolCallId: "t1", toolName: "calc", output: { type: "json", value: 4 } },
+        { type: "tool-result", toolCallId: "t2", toolName: "greet", output: { type: "text", value: "hello" } },
+        { type: "tool-result", toolCallId: "t3", toolName: "fetch_page", output: { type: "error-json", value: { status: 503 } } },
+        { type: "tool-result", toolCallId: "t4", toolName: "legacy", result: { total: 4 } },
+      ] },
+    ]), null);
+    expect(draft.messages.filter(message => message.role === "tool")).toEqual([
+      { role: "tool", toolCallId: "t1", content: "4" },
+      { role: "tool", toolCallId: "t2", content: "hello" },
+      { role: "tool", toolCallId: "t3", content: "{\"status\":503}" },
+      { role: "tool", toolCallId: "t4", content: "{\"total\":4}" },
+    ]);
+  });
+});
