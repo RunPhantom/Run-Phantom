@@ -25,9 +25,10 @@ import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
 import { Badge as UiBadge, badgeVariants } from "@/components/ui/badge";
 import { fieldClassName } from "@/components/ui/input";
-import { fmt, isActive, plural, replayOutcome, runDisplayName, isoTimestamp, safeDecodeParam, spanErrorReason } from "../utils/helpers";
+import { fmt, plural, runDisplayName, runStatusTone, isoTimestamp, safeDecodeParam, spanErrorReason } from "../utils/helpers";
+import { deriveRunStatus, runErrorEvidenceFromSpans, type RunStatusEvidence, type RunStatusSummary } from "../../../src/run-status";
+import { useRunStatus } from "../hooks/use-run-status";
 import { buildReplayModelOptions } from "../utils/replay-models";
-import type { RunStatus } from "../utils/helpers";
 import { captureCompletion, observationReplayUnavailable } from "../../../src/spans/normalized";
 import { useQueryClient } from "@tanstack/react-query";
 import { parseReplayMetadata } from "../utils/types";
@@ -720,13 +721,26 @@ function ReplayRegistryNotice({ status, onRetry }: {
   );
 }
 
+function runStatusEvidence(run: Run, spans: readonly Span[]): RunStatusEvidence {
+  const unavailable = run.capture_completion === "unavailable" || spans.some(span => captureCompletion(span.normalized?.capture) === "unavailable");
+  return { ...run, ...runErrorEvidenceFromSpans(spans), span_count: spans.length, capture_completion: unavailable ? "unavailable" : null };
+}
+
+/** A sub-agent has no root of its own here, so its errors are child errors of a run that is either still live or finished. */
+function subAgentStatus(runStatus: RunStatusSummary | null, spans: readonly Span[]): RunStatusSummary {
+  const live = runStatus?.status === "live";
+  const unavailable = spans.some(span => captureCompletion(span.normalized?.capture) === "unavailable");
+  const { error_count, tool_error_count } = runErrorEvidenceFromSpans(spans);
+  return deriveRunStatus({ last_updated_at: live ? Date.now() : null, finished: !live, error_count, tool_error_count, root_failed: false, capture_completion: unavailable ? "unavailable" : null });
+}
+
 function ViewHeader({
-  title, model, active, stats, allSpans, startedAt, anthropicModels,
+  title, model, status, stats, allSpans, startedAt, anthropicModels,
   run, isReplay, breadcrumb, fork, onAnnotateRun, annotationError, onDownload,
 }: {
   title: string;
   model?: string | null;
-  active: boolean;
+  status: RunStatusSummary;
   stats: { spans: number; tools: number; llms: number; errors: number; dur: number; agents?: number; inTokens?: number; outTokens?: number };
   allSpans?: Span[];
   startedAt?: number;
@@ -742,6 +756,7 @@ function ViewHeader({
   annotationError?: string | null;
   onDownload?: () => void;
 }) {
+  const active = status.status === "live";
   const onBack = breadcrumb?.onBack;
   const parentName = breadcrumb?.parentName;
   const onFork = fork?.onFork;
@@ -848,10 +863,8 @@ function ViewHeader({
   }, [optionsOpen]);
   const displayTitle = cleanTitle(title);
   const completionUnavailable = run?.capture_completion === "unavailable" || allSpans?.some(span => captureCompletion(span.normalized?.capture) === "unavailable") === true;
-  const status: RunStatus = (run && replayOutcome(run)) || (active ? "live" : stats.errors > 0 ? "failed" : "complete");
-  const statusLabel = completionUnavailable ? "Completion unavailable" : { live: "Run live", failed: "Run failed", cancelled: "Run cancelled", complete: "Run complete" }[status];
-  const statusTone = completionUnavailable ? "neutral" : status === "live" ? "success" : status === "failed" ? "danger" : "neutral";
-  const statusPillClass = badgeVariants({ tone: statusTone });
+  const statusLabel = status.label;
+  const statusPillClass = badgeVariants({ tone: runStatusTone(status.status) });
   return (
     <div className={cn("flex-shrink-0 bg-rp-surface", isReplay ? "px-4 py-2.5" : "px-4 pb-3 pt-4 sm:px-5")}>
       {parentName && onBack ? (
@@ -866,7 +879,7 @@ function ViewHeader({
               <div className="flex items-center gap-2 mb-1">
                 <h2 className="font-display text-[18px] font-semibold tracking-[-0.02em] text-rp-ink">{displayTitle}</h2>
                 {model && <UiBadge tone="neutral" mono>{model}</UiBadge>}
-                <span className={statusPillClass}>
+                <span className={statusPillClass} title={status.detail}>
                   {statusLabel}
                 </span>
               </div>
@@ -902,13 +915,14 @@ function ViewHeader({
               )}
               <span
                 data-run-status
+                data-status={status.status}
                 className={statusPillClass}
                 title={statusLabel}
               >
                 {statusLabel}
               </span>
             </div>
-            {!active && (
+            {run && (
               <div ref={optionsRef} data-run-actions className="relative flex min-w-0 flex-wrap items-center gap-1.5">
                 {onAnnotateRun && (
                   <>
@@ -992,10 +1006,11 @@ function ViewHeader({
                   return <>
                   <div className="rp-clipped-ring flex h-8 items-stretch overflow-hidden rounded-control">
                     <button
-                      disabled={replayUnavailable || agentRegistryStatus !== "success"}
+                      disabled={active || replayUnavailable || agentRegistryStatus !== "success"}
+                      title={active ? "Replay is available once the run finishes" : undefined}
                       className="rp-primary-control flex items-center gap-1.5 border border-rp-blue bg-rp-blue px-3 text-[12px] font-medium text-white transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-blue-hover hover:bg-rp-blue-hover disabled:cursor-not-allowed disabled:border-rp-line disabled:bg-[color:var(--rp-n4)] disabled:text-rp-ink-muted"
                       onClick={() => {
-                        if (replayUnavailable || agentRegistryStatus !== "success") return;
+                        if (active || replayUnavailable || agentRegistryStatus !== "success") return;
                         if (agentConfigured) {
                           onFork(undefined, forkMode, forkModel || undefined);
                         } else {
@@ -1013,10 +1028,10 @@ function ViewHeader({
                       aria-expanded={optionsOpen}
                       aria-controls={optionsOpen ? replayOptionsId : undefined}
                       aria-haspopup="dialog"
-                      disabled={replayUnavailable || agentRegistryStatus !== "success"}
+                      disabled={active || replayUnavailable || agentRegistryStatus !== "success"}
                       className="rp-primary-control flex items-center justify-center border border-l-0 border-rp-blue bg-rp-blue px-2 text-white shadow-[inset_1px_0_0_rgb(255_255_255/0.28)] transition-[background-color,border-color] duration-250 ease-standard hover:border-rp-blue-hover hover:bg-rp-blue-hover disabled:cursor-not-allowed disabled:border-rp-line disabled:bg-[color:var(--rp-n4)] disabled:text-rp-ink-muted disabled:shadow-[inset_1px_0_0_var(--rp-line)]"
                       onClick={() => {
-                        if (replayUnavailable) return;
+                        if (active || replayUnavailable) return;
                         setAnnotationPopoverOpen(false);
                         setOptionsOpen(!optionsOpen);
                       }}
@@ -1756,6 +1771,8 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
     });
   }, [runId, savedForRun, annotationsApi.loaded, annotationsApi.annotations]);
 
+  const runStatusSummary = useRunStatus(data?.run ? runStatusEvidence(data.run, data.spans) : null);
+
   if (loading) return <div role="status" className="flex h-full items-center justify-center gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-rp-ink-muted">Loading run <Dots /></div>;
   if (notFound || !data?.run) return <TraceNotFound runId={runId} backPath={routeBase ?? "/runs"} />;
 
@@ -1783,7 +1800,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
         <ViewHeader
           title={agent.name}
           model={agent.model}
-          active={isActive(run)}
+          status={subAgentStatus(runStatusSummary, agentSpans)}
           startedAt={agent.start_time_ms}
           anthropicModels={anthropicModels}
           stats={{
@@ -1818,7 +1835,8 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
 
   // Normal run view
   const replayUnavailable = spans.some(span => observationReplayUnavailable(span.normalized?.capture));
-  const active = isActive(run);
+  const status = runStatusSummary ?? deriveRunStatus(runStatusEvidence(run, spans));
+  const active = status.status === "live";
   const tools = spans.filter(s => s.span_type === "TOOL_CALL");
   const llms = spans.filter(s => s.span_type?.includes("LLM"));
   const errs = spans.filter(s => s.status === "ERROR");
@@ -1849,7 +1867,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, onForkStart
       <ViewHeader
         title={runDisplayName(run)}
         model={model}
-        active={active}
+        status={status}
         // A run stays "active" for 30s after its last live event, and the
         // header clock kept counting wall time past the run's own end ("12s"
         // for a 6.2s run). Once finished, the header shows the recorded span.

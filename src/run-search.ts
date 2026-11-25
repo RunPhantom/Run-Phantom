@@ -24,6 +24,9 @@ export interface RunSearchSummary {
   status: RunSearchStatus;
   finished: number;
   error_count: number;
+  tool_error_count: number;
+  /** 1 when the span standing for the run errored; see rootFailed in run-status.ts. */
+  root_failed: number;
   span_count: number;
   live_event_count: number;
 }
@@ -127,6 +130,11 @@ function buildQuery(input: SearchInput): { sql: string; params: (string | number
       CASE WHEN ${failed} THEN 'failed' WHEN ${finished} THEN 'completed' ELSE 'running' END AS status,
       ${finished} AS finished,
       (SELECT COUNT(*) FROM spans s WHERE s.run_id = r.id AND s.status = 'ERROR') AS error_count,
+      (SELECT COUNT(*) FROM spans s WHERE s.run_id = r.id AND s.status = 'ERROR' AND s.span_type = 'TOOL_CALL') AS tool_error_count,
+      (SELECT CASE WHEN SUM(CASE WHEN s.span_type = 'AGENT_ROOT' THEN 1 ELSE 0 END) > 0
+                   THEN SUM(CASE WHEN s.span_type = 'AGENT_ROOT' AND s.status = 'ERROR' THEN 1 ELSE 0 END) > 0
+                   ELSE COUNT(*) > 0 AND SUM(CASE WHEN s.status = 'ERROR' THEN 1 ELSE 0 END) = COUNT(*) END
+       FROM spans s WHERE s.run_id = r.id AND s.parent_span_id IS NULL) AS root_failed,
       (SELECT COUNT(*) FROM spans s WHERE s.run_id = r.id) AS span_count,
       (SELECT COUNT(*) FROM live_events e WHERE e.trace_id = r.id) AS live_event_count
       FROM matching JOIN runs r ON r.id = matching.id ORDER BY r.started_at DESC, r.id DESC`,

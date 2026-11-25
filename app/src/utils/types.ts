@@ -1,6 +1,7 @@
 import type { CapturedGuardEvidence } from "../../../src/guard-evidence-protocol";
 
 import type { HookCaptureView } from "../../../src/spans/normalized";
+import type { RunStatus } from "../../../src/run-status";
 
 export interface Run {
   id: string;
@@ -14,9 +15,14 @@ export interface Run {
   metadata: string | null;
   model?: string | null;
   finished?: number | null; // 1 if root span has OK/ERROR status
-  error_count?: number | null; // spans with ERROR status; drives the "Run failed" list label
+  error_count?: number | null;
+  tool_error_count?: number | null;
+  root_failed?: number | boolean | null;
+  span_count?: number | null;
   live_event_count?: number | null;
   capture_completion?: "unavailable" | null;
+  /** Server-derived at response time; the UI re-derives with deriveRunStatus. */
+  run_status?: RunStatus;
 }
 
 export interface ReplayMetadata {

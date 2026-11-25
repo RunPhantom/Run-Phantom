@@ -7,6 +7,7 @@ import fs from "fs";
 import { detectSubAgents } from "./agents";
 import { normalizeStoredSpan } from "./spans/normalize";
 import { captureCompletion, type NormalizedSpan } from "./spans/normalized";
+import { deriveRunStatus, rootFailed, runErrorEvidenceFromSpans } from "./run-status";
 import * as schema from "./db/schema";
 import { embeddedMigrationFiles, embeddedMigrationJournal } from "./db/migration-assets";
 import { SOURCE_MIGRATIONS_DIR } from "./source-paths";
@@ -804,20 +805,49 @@ export function getRuns(limit = 200) {
     .limit(limit)
     .all()
     .map(({ capture_attributes, ...run }) => ({ ...run, capture_completion: runCaptureCompletion(capture_attributes) }));
-  if (rows.length === 0) return rows.map((r) => ({ ...r, error_count: 0 }));
-  // The list view needs a failed/complete signal so a run with errors reads
-  // "Run failed" in the sidebar, matching the detail header. The runs_with_hints
-  // view intentionally stays lean, so derive error counts in one scoped query.
   const ids = rows.map((r) => r.id).filter((id): id is string => id != null);
-  if (ids.length === 0) return rows.map((r) => ({ ...r, error_count: 0 }));
-  const errCounts = getDrizzleDb()
-    .select({ run_id: schema.spans.run_id, n: count() })
-    .from(schema.spans)
-    .where(and(eq(schema.spans.status, "ERROR"), inArray(schema.spans.run_id, ids)))
-    .groupBy(schema.spans.run_id)
-    .all();
-  const errByRun = new Map(errCounts.map((e) => [e.run_id, e.n]));
-  return rows.map((r) => ({ ...r, error_count: r.id != null ? errByRun.get(r.id) ?? 0 : 0 }));
+  const evidence = runErrorEvidence(ids);
+  const now = Date.now();
+  return rows.map((r) => {
+    const counts = (r.id != null ? evidence.get(r.id) : undefined) ?? EMPTY_ERROR_EVIDENCE;
+    const run = { ...r, ...counts };
+    return { ...run, run_status: deriveRunStatus(run, now).status };
+  });
+}
+
+const EMPTY_ERROR_EVIDENCE = Object.freeze({ error_count: 0, tool_error_count: 0, root_failed: false });
+
+/**
+ * Error evidence for run status (src/run-status.ts). The runs_with_hints view
+ * intentionally stays lean, so the counts come from one scoped grouped query.
+ */
+function runErrorEvidence(ids: readonly string[]): Map<string, { error_count: number; tool_error_count: number; root_failed: boolean }> {
+  const result = new Map<string, { error_count: number; tool_error_count: number; root_failed: boolean }>();
+  for (let offset = 0; offset < ids.length; offset += 500) {
+    const chunk = ids.slice(offset, offset + 500);
+    const rows = getDrizzleDb()
+      .select({
+        run_id: schema.spans.run_id,
+        errors: drizzleSql<number>`SUM(CASE WHEN ${schema.spans.status} = 'ERROR' THEN 1 ELSE 0 END)`,
+        toolErrors: drizzleSql<number>`SUM(CASE WHEN ${schema.spans.status} = 'ERROR' AND ${schema.spans.span_type} = 'TOOL_CALL' THEN 1 ELSE 0 END)`,
+        roots: drizzleSql<number>`SUM(CASE WHEN ${schema.spans.parent_span_id} IS NULL THEN 1 ELSE 0 END)`,
+        rootErrors: drizzleSql<number>`SUM(CASE WHEN ${schema.spans.parent_span_id} IS NULL AND ${schema.spans.status} = 'ERROR' THEN 1 ELSE 0 END)`,
+        agentRoots: drizzleSql<number>`SUM(CASE WHEN ${schema.spans.parent_span_id} IS NULL AND ${schema.spans.span_type} = 'AGENT_ROOT' THEN 1 ELSE 0 END)`,
+        agentRootErrors: drizzleSql<number>`SUM(CASE WHEN ${schema.spans.parent_span_id} IS NULL AND ${schema.spans.span_type} = 'AGENT_ROOT' AND ${schema.spans.status} = 'ERROR' THEN 1 ELSE 0 END)`,
+      })
+      .from(schema.spans)
+      .where(inArray(schema.spans.run_id, chunk))
+      .groupBy(schema.spans.run_id)
+      .all();
+    for (const row of rows) {
+      result.set(row.run_id, {
+        error_count: Number(row.errors) || 0,
+        tool_error_count: Number(row.toolErrors) || 0,
+        root_failed: rootFailed({ roots: Number(row.roots) || 0, rootErrors: Number(row.rootErrors) || 0, agentRoots: Number(row.agentRoots) || 0, agentRootErrors: Number(row.agentRootErrors) || 0 }),
+      });
+    }
+  }
+  return result;
 }
 
 export function hasAnyRuns(): boolean {
@@ -877,7 +907,9 @@ export function getRunWithSpans(runId: string) {
   const spans = rows.map(attachNormalized);
   const root = [...spans].filter(span => span.span_type === "AGENT_ROOT" && span.parent_span_id === null)
     .sort((a, b) => a.start_time_ms - b.start_time_ms || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0];
-  return { run: run ? { ...run, capture_completion: runCaptureCompletion(root?.attributes ?? null) } : null, spans };
+  if (!run) return { run: null, spans };
+  const evidence = { ...run, capture_completion: runCaptureCompletion(root?.attributes ?? null), ...runErrorEvidenceFromSpans(spans) };
+  return { run: { ...evidence, run_status: deriveRunStatus(evidence).status }, spans };
 }
 
 /** See getSpanMeta on why an unscoped span id is ambiguous and how it resolves. */

@@ -380,7 +380,7 @@ test("Run Phantom UI: a trajectory tooltip never covers the bar it describes", a
   for (const viewport of [{ width: 1280, height: 720 }, { width: 1024, height: 640 }, { width: 1920, height: 1080 }]) {
     await page.setViewportSize(viewport);
     await page.goto(`${runPhantom.url}/runs/demo_review`);
-    await expect(page.locator("[data-run-status]")).toHaveText(/^Run (?:live|failed)$/, { timeout: 20_000 });
+    await expect(page.locator("[data-run-status]")).toHaveText("Completed · 1 tool error", { timeout: 20_000 });
 
     // Retain the exact bar-count check on the completed snapshot. Narrow error
     // spans render as a triangle button instead of a labelled bar.
@@ -611,7 +611,7 @@ test("Run Phantom UI: run ids stay distinguishable in the sidebar and whole in t
     await expect.soft(shortIdText).toHaveAttribute("title", runId);
     expect.soft(await nameText.evaluate(fitsItsBox), `${name} is shown whole at 1280px`).toBe(true);
     expect.soft(await shortIdText.evaluate(fitsItsBox), `${shortId} is shown whole at 1280px`).toBe(true);
-    await expect.soft(row.getByRole("button")).toHaveAccessibleName(new RegExp(`^${name} Run \\w+ ${shortId} `));
+    await expect.soft(row.getByRole("button")).toHaveAccessibleName(new RegExp(`^${name} (?:Run \\w+|Completed · \\d+ (?:tool )?errors?) ${shortId} `));
   }
 
   const traceId = page.locator(".rp-meta-ids span[title='demo_review']");
