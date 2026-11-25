@@ -64,6 +64,10 @@ export default {
           "danger-hover": "var(--rp-danger-solid-hover)",
           success: "var(--rp-success-solid)",
           warning: "var(--rp-warning-solid)",
+          mark: "var(--rp-blue)",
+          "mark-danger": "var(--rp-danger)",
+          "mark-success": "var(--rp-success)",
+          "mark-warning": "var(--rp-warning)",
         },
       },
       textColor: {

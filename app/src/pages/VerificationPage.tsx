@@ -248,7 +248,7 @@ export function VerificationPage() {
 
     <div className="sr-only" role="status" aria-live="polite">{busy || notice}</div>
     {queryError && <div role="alert" className="rp-fade-rise flex flex-wrap items-center justify-between gap-3 rounded-md border border-rp-danger-border bg-rp-danger-soft px-4 py-3 text-[13px] text-rp-danger"><span className="min-w-0 break-words">{queryError.message}</span><Button variant="destructive-outline" size="sm" onClick={() => void refresh()}>Retry refresh</Button></div>}
-    {notice && <p key={notice} className="rp-fade-rise flex min-w-0 items-start gap-3 break-words rounded-md border border-rp-line bg-rp-surface px-4 py-3 text-[13px] leading-5 text-rp-ink"><span aria-hidden="true" className="mt-1.5 size-1.5 shrink-0 bg-rp-blue" />{notice}</p>}
+    {notice && <p key={notice} className="rp-fade-rise flex min-w-0 items-start gap-3 break-words rounded-md border border-rp-line bg-rp-surface px-4 py-3 text-[13px] leading-5 text-rp-ink"><span aria-hidden="true" className="mt-1.5 size-1.5 shrink-0 bg-rp-mark" />{notice}</p>}
 
     <section id="verification-pair" tabIndex={-1} aria-labelledby="pair-heading" className={cn(panel, "space-y-5")}>
       <SectionHead eyebrow="Setup / Local app" title="Pair an application" id="pair-heading" aside={<Meta>Explicit connection</Meta>} />
