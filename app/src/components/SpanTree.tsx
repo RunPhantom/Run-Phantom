@@ -7,7 +7,7 @@ import { DeepLinkedText } from "../utils/deep-links";
 import { sendRunPhantomMessage } from "../hooks/use-runphantom-ws";
 import { useIsMobile } from "../hooks/use-mobile";
 import { useDialogFocus } from "../hooks/use-dialog-focus";
-import { Waterfall } from "./run-detail/Waterfall";
+import { TRACK_MIN_PANE_WIDTH, Waterfall } from "./run-detail/Waterfall";
 import { SpanDrawer, type DrawerMode } from "./run-detail/SpanDrawer";
 import { buildTraceModel, countedLlmSpans } from "./run-detail/trace-model";
 
@@ -17,7 +17,11 @@ const DRAWER_MAX = 720;
 const DRAWER_DEFAULT = 400;
 /** The drawer may shrink below its preferred minimum when the pane is too narrow for both. */
 const DRAWER_FLOOR = 280;
-const MIN_TRACE_WIDTH = 240;
+/**
+ * The docked drawer never squeezes the trace below the width that still draws the time track: at 1280px with the
+ * run list open the pane is about 760px, and a 400px drawer used to leave 360px, which hid the timeline entirely.
+ */
+const MIN_TRACE_WIDTH = TRACK_MIN_PANE_WIDTH + 20;
 
 function readDrawerWidth(): number {
   try {
@@ -180,10 +184,14 @@ export function SpanTree({
   }, [selectedId, setSelectedId]);
 
   // Docked beside the trace at every desktop width: an overlay covered rows the
-  // reader still needed to click. A narrow trace drops its time track instead.
+  // reader still needed to click. The drawer gives up width before the trace loses its time track.
   const mode: DrawerMode = isMobile ? "sheet" : "docked";
   const maxDrawer = Math.max(DRAWER_FLOOR, Math.min(DRAWER_MAX, Math.round(containerWidth - MIN_TRACE_WIDTH)));
   const effectiveDrawer = Math.max(DRAWER_FLOOR, Math.min(drawerWidth, maxDrawer));
+  const minDrawer = Math.min(DRAWER_MIN, maxDrawer);
+  // When the trace needs all the spare width the handle cannot move; a key press must not overwrite the width saved
+  // for wider windows with this squeezed one.
+  const resizeLocked = maxDrawer <= minDrawer;
   const waterfallWidth = selectedSpan && mode === "docked" ? containerWidth - effectiveDrawer : containerWidth;
 
   const setWidth = useCallback((width: number) => {
@@ -192,8 +200,13 @@ export function SpanTree({
     try { localStorage.setItem(DRAWER_WIDTH_KEY, String(next)); } catch { /* storage unavailable */ }
   }, []);
 
+  const resizeBy = (width: number) => {
+    const next = Math.round(Math.min(maxDrawer, Math.max(minDrawer, width)));
+    if (!resizeLocked && next !== effectiveDrawer) setWidth(next);
+  };
+
   const startResize = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || resizeLocked) return;
     event.preventDefault();
     const right = containerRef.current?.getBoundingClientRect().right ?? window.innerWidth;
     setDragging(true);
@@ -330,19 +343,21 @@ export function SpanTree({
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize step details"
-            aria-valuemin={Math.min(DRAWER_MIN, maxDrawer)}
+            aria-valuemin={minDrawer}
             aria-valuemax={maxDrawer}
             aria-valuenow={effectiveDrawer}
+            aria-disabled={resizeLocked || undefined}
+            title={resizeLocked ? "Widen the window or collapse the run list to resize step details" : undefined}
             tabIndex={0}
             data-dragging={dragging || undefined}
             onPointerDown={startResize}
             onKeyDown={(event) => {
-              if (event.key === "ArrowLeft") { event.preventDefault(); setWidth(Math.min(maxDrawer, effectiveDrawer + 24)); }
-              else if (event.key === "ArrowRight") { event.preventDefault(); setWidth(effectiveDrawer - 24); }
-              else if (event.key === "Home") { event.preventDefault(); setWidth(Math.min(DRAWER_MIN, maxDrawer)); }
-              else if (event.key === "End") { event.preventDefault(); setWidth(maxDrawer); }
+              if (event.key === "ArrowLeft") { event.preventDefault(); resizeBy(effectiveDrawer + 24); }
+              else if (event.key === "ArrowRight") { event.preventDefault(); resizeBy(effectiveDrawer - 24); }
+              else if (event.key === "Home") { event.preventDefault(); resizeBy(minDrawer); }
+              else if (event.key === "End") { event.preventDefault(); resizeBy(maxDrawer); }
             }}
-            className="rp-drawer-handle absolute inset-y-0 -left-[3px] z-10 w-[6px] cursor-col-resize"
+            className={`rp-drawer-handle absolute inset-y-0 -left-[3px] z-10 w-[6px] ${resizeLocked ? "cursor-default" : "cursor-col-resize"}`}
           />
           <div className="min-w-0 flex-1">{drawer}</div>
         </div>

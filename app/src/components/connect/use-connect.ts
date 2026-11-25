@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { deleteRun } from "../../api/runs";
+import { deleteRun, type RunListPage } from "../../api/runs";
+import { RECENT_RUNS_KEY, RUNS_KEY } from "../../api/run-query-keys";
 import { useRunPhantomEvent } from "../../hooks/use-runphantom-ws";
 import type { Run } from "../../utils/types";
 import { buildTestTrace, sendTestTrace } from "./test-span";
@@ -18,12 +19,15 @@ export function useNewRunArrival(): { runId: string; at: number } | null {
   const [arrival, setArrival] = useState<{ runId: string; at: number } | null>(null);
   const seen = useRef(new Set<string>());
   useRunPhantomEvent("spans", data => {
-    const known = queryClient.getQueryData<Run[]>(["runs"]);
+    // Whichever run lists are cached; the panel does not download every run just to tell new ones apart.
+    const known = new Set([
+      ...queryClient.getQueryData<Run[]>(RUNS_KEY) ?? [],
+      ...queryClient.getQueryData<RunListPage>(RECENT_RUNS_KEY)?.runs ?? [],
+    ].map(run => run.id));
     for (const runId of eventRunIds(data)) {
-      if (seen.current.has(runId) || known?.some(run => run.id === runId)) continue;
+      if (seen.current.has(runId) || known.has(runId)) continue;
       seen.current.add(runId);
       setArrival({ runId, at: Date.now() });
-      void queryClient.invalidateQueries({ queryKey: ["runs"], exact: true });
     }
   });
   return arrival;

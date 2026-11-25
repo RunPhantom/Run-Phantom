@@ -11,6 +11,8 @@ import { fmtCost } from "../utils/costs";
 import { fmt, plural } from "../utils/helpers";
 import type { RunListRow } from "../api/runs";
 
+export { isSampleRun } from "../../../src/sample-runs";
+
 export type RunsDensity = "comfortable" | "compact";
 export const ROW_HEIGHT: Record<RunsDensity, number> = { comfortable: 34, compact: 28 };
 
@@ -26,10 +28,10 @@ export interface ColumnMeta {
 }
 
 export const COLUMN_META: Record<RunsTableColumn, ColumnMeta> = {
-  status: { id: "status", label: "Status", align: "left", track: "minmax(172px, 0.6fr)" },
-  run: { id: "run", label: "Run", align: "left", track: "minmax(150px, 2fr)" },
+  status: { id: "status", label: "Status", align: "left", track: "172px" },
+  run: { id: "run", label: "Run", align: "left", track: "minmax(240px, 2fr)" },
   agent: { id: "agent", label: "Agent", align: "left", track: "minmax(100px, 1fr)" },
-  input: { id: "input", label: "Input", align: "left", track: "minmax(64px, 1.3fr)" },
+  input: { id: "input", label: "Input", align: "left", track: "minmax(120px, 1.3fr)" },
   model: { id: "model", label: "Model", align: "left", track: "minmax(104px, 0.8fr)" },
   steps: { id: "steps", label: "Steps", align: "right", track: "60px" },
   duration: { id: "duration", label: "Duration", sort: "duration", align: "right", track: "minmax(76px, 88px)" },
@@ -44,6 +46,81 @@ export const CHECKBOX_TRACK_PX = 36;
 /** Smallest width the visible columns fit in; below it the table scrolls sideways instead of squeezing cells. */
 export function minTableWidth(columns: readonly RunsTableColumn[], tracks?: Partial<Record<RunsTableColumn, string>>): number {
   return columns.reduce((sum, column) => sum + Number(/(\d+)px/.exec(tracks?.[column] ?? COLUMN_META[column].track)?.[1] ?? 0), CHECKBOX_TRACK_PX);
+}
+
+const CELL_PADDING_PX = 16;
+/** Status dot (8px) plus the gap before its label. */
+const STATUS_MARK_PX = 16;
+/** Rounding slack so a value measured to the exact pixel is not cut to an ellipsis. */
+const SUBPIXEL_SLACK_PX = 4;
+const STATUS_FONT = '12px "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif';
+const MODEL_FONT = '12px "Geist Mono", ui-monospace, monospace';
+
+export type MeasureText = (text: string, font: string) => number;
+
+let context: CanvasRenderingContext2D | null | undefined;
+/** Canvas text metrics; without a DOM, 0.6em per glyph, which is Geist Mono's advance and wider than Inter's average. */
+export const measureCellText: MeasureText = (text, font) => {
+  if (context === undefined) context = typeof document === "undefined" ? null : document.createElement("canvas").getContext("2d");
+  if (!context) return text.length * 7.2;
+  context.font = font;
+  return context.measureText(text).width;
+};
+
+const clampPx = (value: number, min: number, max: number) => Math.ceil(Math.min(max, Math.max(min, value)));
+
+export interface ContentWidths { status: number; model: number }
+
+/**
+ * Status and Model sized to the widest value on the loaded rows, so Status stays as narrow as its labels and a model
+ * id such as "claude-haiku-4-5" is not cut to "claude-haik…". The caps keep one odd value from starving Run.
+ */
+export function contentWidths(rows: readonly RunListRow[], statusLabel: (row: RunListRow) => string, measure: MeasureText = measureCellText): ContentWidths | null {
+  if (rows.length === 0) return null;
+  const statuses = new Set<string>(), models = new Set<string>();
+  for (const row of rows) {
+    statuses.add(statusLabel(row));
+    models.add(modelCell(row).text);
+  }
+  const widest = (values: Set<string>, font: string) => Math.max(...[...values].map(value => measure(value, font)));
+  return {
+    status: clampPx(CELL_PADDING_PX + STATUS_MARK_PX + SUBPIXEL_SLACK_PX + widest(statuses, STATUS_FONT), 104, 200),
+    model: clampPx(CELL_PADDING_PX + SUBPIXEL_SLACK_PX + widest(models, MODEL_FONT), 104, 220),
+  };
+}
+
+/** The wider of two measurements per column, so arriving rows widen a column but never narrow it under the reader. */
+export function widerContent(previous: ContentWidths | null, next: ContentWidths | null): ContentWidths | null {
+  if (!previous || !next) return next ?? previous;
+  if (next.status <= previous.status && next.model <= previous.model) return previous;
+  return { status: Math.max(previous.status, next.status), model: Math.max(previous.model, next.model) };
+}
+
+export function contentTracksFor(widths: ContentWidths | null): Partial<Record<RunsTableColumn, string>> {
+  return widths ? { status: `${widths.status}px`, model: `minmax(${widths.model}px, 0.8fr)` } : {};
+}
+
+export function contentTracks(rows: readonly RunListRow[], statusLabel: (row: RunListRow) => string, measure: MeasureText = measureCellText): Partial<Record<RunsTableColumn, string>> {
+  return contentTracksFor(contentWidths(rows, statusLabel, measure));
+}
+
+/**
+ * Dropped in this order when the window is too narrow for every chosen column; Run keeps its width instead. Agent goes
+ * first because it usually repeats the run name, while Input is the only column showing what the run was asked.
+ */
+const NARROW_DROP_ORDER: readonly RunsTableColumn[] = ["agent", "input"];
+
+/**
+ * The chosen columns that fit `available` px. Agent, then Input, are left out while the rest would overflow. When even
+ * that does not fit (phones), every chosen column stays and the table scrolls sideways as before.
+ */
+export function fitColumns(columns: readonly RunsTableColumn[], available: number, tracks?: Partial<Record<RunsTableColumn, string>>): RunsTableColumn[] {
+  let fitted = [...columns];
+  for (const column of NARROW_DROP_ORDER) {
+    if (minTableWidth(fitted, tracks) <= available) return fitted;
+    fitted = fitted.filter(item => item !== column);
+  }
+  return minTableWidth(fitted, tracks) <= available ? fitted : [...columns];
 }
 
 export const SORT_LABELS: Record<RunsViewSort, string> = {
@@ -188,17 +265,6 @@ export function modelCell(row: RunListRow): CellText {
   others.delete(shortModelName(model));
   const text = shortModelName(model);
   return { text: others.size > 0 ? `${text} +${others.size}` : text, title: row.models.length > 1 ? row.models.join(", ") : model };
-}
-
-export function isSampleRun(row: { id: string; metadata: string | null }): boolean {
-  if (row.id.startsWith("demo_")) return true;
-  if (!row.metadata) return false;
-  try {
-    const metadata = JSON.parse(row.metadata);
-    return metadata?.demo === true && metadata?.default === true;
-  } catch {
-    return false;
-  }
 }
 
 export function absoluteTime(ms: number): string {

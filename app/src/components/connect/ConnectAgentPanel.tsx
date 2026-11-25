@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Tab, TabList } from "@/components/ui/tabs";
 import { replayDemoTraces } from "../../api/demo-traces";
-import { useRuns } from "../../hooks/use-runs";
+import { useRunRows } from "../../hooks/use-runs";
 import { runDisplayName } from "../../utils/helpers";
 import { runPath } from "../../utils/navigation";
 import { useLocalService } from "../../shell/otlp";
@@ -255,7 +255,6 @@ export function ConnectAgentPanel({ compact = false, split = false, tab: control
 
 function LiveRow({ waitingLabel, onLoadSamples, samplesLoading, column }: { waitingLabel: string; onLoadSamples?: () => void | Promise<void>; samplesLoading?: boolean; column: boolean }) {
   const queryClient = useQueryClient();
-  const runs = useRuns();
   const arrival = useNewRunArrival();
   const test = useTestSpan();
   const [samples, setSamples] = useState<{ loading: boolean; error: string | null; firstId: string | null; count: number }>({ loading: false, error: null, firstId: null, count: 0 });
@@ -270,7 +269,7 @@ function LiveRow({ waitingLabel, onLoadSamples, samplesLoading, column }: { wait
       }
       const ids = await replayDemoTraces();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["runs"], exact: true }),
+        queryClient.invalidateQueries({ queryKey: ["runs"] }),
         queryClient.invalidateQueries({ queryKey: ["home"] }),
       ]);
       setSamples({ loading: false, error: null, firstId: ids[0] ?? null, count: ids.length });
@@ -281,7 +280,8 @@ function LiveRow({ waitingLabel, onLoadSamples, samplesLoading, column }: { wait
 
   const testRunId = "traceId" in test.state ? test.state.traceId : null;
   const latest = arrival && arrival.runId !== testRunId ? arrival : null;
-  const latestName = latest ? runs.data?.find(run => run.id === latest.runId) : undefined;
+  const latestRows = useRunRows([latest?.runId]);
+  const latestName = latest ? latestRows.data?.get(latest.runId) : undefined;
 
   return (
     <div className={column ? "mt-4" : "mt-5 border-t border-rp-line-muted pt-4"} data-connect-live>

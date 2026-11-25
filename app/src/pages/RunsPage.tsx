@@ -13,11 +13,10 @@ import { parseReplayMetadata } from "../utils/types";
 import type { Run } from "../utils/types";
 import { runDisplayName, safeDecodeParam } from "../utils/helpers";
 import { useIsMobile } from "../hooks/use-mobile";
-import { useRuns } from "../hooks/use-runs";
+import { useRunFacets, useRunRows } from "../hooks/use-runs";
 import { RunsTableView } from "../runs/RunsTableView";
 import { RunRail, useRailRows } from "../runs/RunRail";
 import { runsTablePath } from "../runs/last-search";
-import { isSampleRun } from "../runs/table-model";
 import { hasActiveFilters } from "../../../src/saved-views-protocol";
 
 const FIRST_TIME_SETUP_DISMISSED_KEY = "runphantom:firstTimeSetupDismissed";
@@ -40,9 +39,8 @@ export function RunsPage() {
   const navigate = useNavigate();
   const { runId: routeRunId } = useParams<{ runId?: string }>();
   const selectedId = routeRunId ? safeDecodeParam(routeRunId) : null;
-  const allRuns = useRuns();
   const [firstTimeSetupDismissed, setFirstTimeSetupDismissed] = useState(loadFirstTimeSetupDismissed);
-  const hasUserTraces = useMemo(() => (allRuns.data ?? []).some((run) => !isSampleRun(run)), [allRuns.data]);
+  const hasUserTraces = useRunFacets().data?.hasOwnRuns ?? false;
 
   useEffect(() => {
     if (modelPricingConsentEnabled()) void fetchPrices();
@@ -83,13 +81,19 @@ function RunDetailLayout({ selectedId }: { selectedId: string }) {
   const [railScrolled, setRailScrolled] = useState(false);
   const rail = useRailRows(railScrolled);
   const railRows = rail.data.rows;
-  const allRuns = useRuns();
+  const railIds = useMemo(() => new Set(railRows.map(run => run.id)), [railRows]);
+  const [sourceRunId, setSourceRunId] = useState<string | null>(null);
+  const looked = useRunRows([selectedId, replayOriginalId, compareBaseline, sourceRunId].filter(id => id && !railIds.has(id)));
   const knownRuns = useMemo(() => {
     const byId = new Map<string, Run>();
-    for (const run of allRuns.data ?? []) byId.set(run.id, run);
+    for (const run of looked.data?.values() ?? []) byId.set(run.id, run);
     for (const run of railRows) byId.set(run.id, run);
     return byId;
-  }, [allRuns.data, railRows]);
+  }, [looked.data, railRows]);
+  const selectedRow = knownRuns.get(selectedId);
+  useEffect(() => {
+    setSourceRunId(selectedRow ? parseReplayMetadata(selectedRow)?.replay.sourceRunId ?? null : null);
+  }, [selectedRow]);
   const runs = useMemo(() => [...knownRuns.values()], [knownRuns]);
 
   useEffect(() => {

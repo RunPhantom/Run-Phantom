@@ -66,7 +66,7 @@ import {
 } from "./db";
 import { StatsRequestError } from "./stats/common";
 import { computeOverview } from "./stats/overview";
-import { countRuns, listRuns } from "./stats/runs-list";
+import { countRuns, listRuns, runFacets } from "./stats/runs-list";
 import { createSavedView, deleteSavedView, listSavedViews, savedViewsWithCounts, updateSavedView } from "./saved-views";
 import { RunsViewError, parseSavedViewCreate, parseSavedViewUpdate } from "./saved-views-protocol";
 import { sliceSpanPayload } from "./payload-slice";
@@ -1542,6 +1542,15 @@ export async function createServer(port: number, options: { comparisons?: Compar
     try { const result = await read(req.query, { signal: cancellation.signal }); if (!res.destroyed) { res.setHeader("Cache-Control", "no-store"); res.json(result); } }
     catch (error) { if (!res.destroyed) { const status = error instanceof SearchResourceError ? error.status : 500; if (status === 503) res.setHeader("Retry-After", "1"); res.status(status).json({ error: error instanceof SearchResourceError ? error.message : "Search could not complete" }); } }
     finally { res.removeListener("close",close); }
+  });
+  app.get("/api/runs/facets", (_req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(runFacets(getDrizzleDb().$client, getDbPath()));
+    } catch (error) {
+      console.error("[runphantom] Run facets failed:", error);
+      res.status(500).json({ error: "Run facets unavailable" });
+    }
   });
   app.get("/api/runs/search-scope", (req,res) => {
     const keys = Object.keys(req.query), resource = req.query.resource;

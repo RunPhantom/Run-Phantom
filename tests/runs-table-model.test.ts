@@ -3,10 +3,14 @@ import type { RunListRow } from "../app/src/api/runs";
 import {
   agentCell,
   compactNumber,
+  contentTracks,
+  contentTracksFor,
   costCell,
   durationCell,
   errorsCell,
   exportRowsJson,
+  fitColumns,
+  widerContent,
   minTableWidth,
   modelCell,
   nextSort,
@@ -100,8 +104,47 @@ describe("runs table columns and sort", () => {
     expect(normalizeColumns("nope")).toEqual([...RUNS_TABLE_DEFAULT_COLUMNS]);
   });
 
-  test("default columns fit a 1280px window beside the sidebar", () => {
-    expect(minTableWidth(RUNS_TABLE_DEFAULT_COLUMNS)).toBeLessThanOrEqual(1280 - 240);
+  test("default columns fit a laptop window beside the sidebar by leaving out Agent, then Input", () => {
+    const rows = [row({ primary_model: "claude-haiku-4-5-20251001", models: ["claude-haiku-4-5-20251001"] })];
+    const tracks = contentTracks(rows, () => "Completed · 1 tool error");
+    const at1440 = fitColumns(RUNS_TABLE_DEFAULT_COLUMNS, 1440 - 240, tracks);
+    expect(at1440).toContain("input");
+    expect(at1440).not.toContain("agent");
+    const at1280 = fitColumns(RUNS_TABLE_DEFAULT_COLUMNS, 1280 - 240, tracks);
+    expect(at1280).not.toContain("agent");
+    expect(at1280).toEqual(expect.arrayContaining(["status", "run", "model", "duration", "tokens", "cost", "errors", "started"]));
+    expect(minTableWidth(at1280, tracks)).toBeLessThanOrEqual(1280 - 240);
+    expect(fitColumns(RUNS_TABLE_DEFAULT_COLUMNS, 1920 - 240, tracks)).toEqual([...RUNS_TABLE_DEFAULT_COLUMNS]);
+  });
+
+  test("a window too narrow even without Input and Agent keeps every chosen column and scrolls sideways", () => {
+    expect(fitColumns(RUNS_TABLE_DEFAULT_COLUMNS, 390, {})).toEqual([...RUNS_TABLE_DEFAULT_COLUMNS]);
+  });
+
+  test("Status and Model are sized to their widest value, within caps", () => {
+    // Widths measured in the browser at 12px: Inter "Completed · 1 tool error" 133px, Geist Mono 7.2px per glyph.
+    const measure = (text: string, font: string) => font.includes("Mono") ? text.length * 7.2 : text === "Completed · 1 tool error" ? 133 : text.length * 6.5;
+    const tracks = (model: string, status: string) => contentTracks([row({ primary_model: model, models: [model] })], () => status, measure);
+    const px = (track: string | undefined) => Number(/(\d+)px/.exec(track ?? "")?.[1]);
+    const long = tracks("claude-haiku-4-5-20251001", "Completed · 1 tool error");
+    expect(px(long.status)).toBe(133 + 36);
+    expect(px(long.model)).toBe(Math.ceil(16 * 7.2 + 20));
+    const short = tracks("gpt-4o", "Run complete");
+    expect(px(short.status)).toBe(Math.ceil(12 * 6.5 + 36));
+    expect(px(short.model)).toBe(104);
+    const odd = tracks("x".repeat(200), "y".repeat(200));
+    expect(px(odd.model)).toBe(220);
+    expect(px(odd.status)).toBe(200);
+    expect(contentTracks([], () => "", measure)).toEqual({});
+  });
+
+  test("measured widths only grow, so a new row cannot narrow a column under the reader", () => {
+    const wide = { status: 169, model: 135 };
+    expect(widerContent(null, wide)).toBe(wide);
+    expect(widerContent(wide, null)).toBe(wide);
+    expect(widerContent(wide, { status: 100, model: 104 })).toBe(wide);
+    expect(widerContent(wide, { status: 120, model: 180 })).toEqual({ status: 169, model: 180 });
+    expect(contentTracksFor(wide)).toEqual({ status: "169px", model: "minmax(135px, 0.8fr)" });
   });
 
   test("a header click sorts descending first, then flips", () => {

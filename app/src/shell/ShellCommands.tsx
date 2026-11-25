@@ -4,15 +4,17 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Cable, Contrast, Keyboard, Link2, PanelLeft, PlayCircle, Settings, type LucideIcon } from "lucide-react";
 import { useSidebar } from "@/components/ui/sidebar";
 import { replayDemoTraces } from "../api/demo-traces";
-import { useRuns } from "../hooks/use-runs";
+import { RECENT_RUNS_KEY, RUNS_KEY, useRecentRuns } from "../hooks/use-runs";
 import { runPath } from "../utils/navigation";
-import { recentRuns, runCommand } from "./run-commands";
+import { runCommand } from "./run-commands";
 import type { Run } from "../utils/types";
+import type { RunListPage } from "../api/runs";
 import { CONNECT_NAV, NAV_ITEMS, SETTINGS_NAV } from "./navigation";
 import { useRegisterCommands, useRegisterShortcuts, type PaletteCommand, type ShortcutDefinition } from "./commands";
 import { openCommandPalette, openShortcutSheet, paletteSession } from "./overlays";
 import { setThemePreference, toggleTheme } from "./theme";
 import { readOtlpEndpoint } from "./otlp";
+import { useRunListSync } from "./use-run-list-sync";
 
 let sampleLoad: Promise<string[]> | null = null;
 
@@ -21,9 +23,8 @@ export function ShellCommands() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { toggleSidebar } = useSidebar();
-  const runs = useRuns();
-
-  const recent = recentRuns(runs.data);
+  useRunListSync();
+  const recent = useRecentRuns().data?.runs ?? [];
   const recentKey = recent.map(run => `${run.id}:${run.last_updated_at}:${run.error_count ?? 0}:${run.display_name ?? ""}`).join("|");
 
   const goTo = useMemo<PaletteCommand[]>(() => NAV_ITEMS.map((item, index) => ({
@@ -38,7 +39,7 @@ export function ShellCommands() {
   })), []);
   useRegisterCommands(goTo, [goTo]);
 
-  const latest = (run: Run): Run => queryClient.getQueryData<Run[]>(["runs"])?.find(row => row.id === run.id) ?? run;
+  const latest = (run: Run): Run => queryClient.getQueryData<RunListPage>(RECENT_RUNS_KEY)?.runs.find(row => row.id === run.id) ?? run;
   const recentCommands = recent.map((run, index) => runCommand(run, "Recent runs", index, latest));
   useRegisterCommands(recentCommands, [recentKey]);
 
@@ -59,7 +60,10 @@ export function ShellCommands() {
         sampleLoad = replayDemoTraces();
         try {
           const ids = await sampleLoad;
-          await queryClient.invalidateQueries({ queryKey: ["runs"], exact: true });
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: RUNS_KEY, exact: true }),
+            queryClient.invalidateQueries({ queryKey: RECENT_RUNS_KEY, exact: true }),
+          ]);
           if (paletteSession() !== openedIn) return;
           close();
           go(ids[0] ? runPath(ids[0]) : "/runs");

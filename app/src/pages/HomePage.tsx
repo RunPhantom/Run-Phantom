@@ -7,9 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Eyebrow } from "@/components/ui/typography";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  DEFAULT_OVERVIEW_WINDOW, OVERVIEW_WINDOW_OPTIONS, getLatestRuns, getOverview, isOverviewWindow, type Overview, type OverviewWindow,
+  DEFAULT_OVERVIEW_WINDOW, OVERVIEW_WINDOW_OPTIONS, getOverview, isOverviewWindow, type Overview, type OverviewWindow,
 } from "../api/overview";
 import { replayDemoTraces } from "../api/demo-traces";
+import type { RunListPage } from "../api/runs";
+import { RECENT_RUN_LIMIT, RECENT_RUNS_KEY, RUNS_KEY, useRecentRuns } from "../hooks/use-runs";
 import { useRunPhantomConnectionStatus, useRunPhantomEvent } from "../hooks/use-runphantom-ws";
 import { useRegisterCommands } from "../shell/commands";
 import { KpiStrip } from "./overview/HomeKpis";
@@ -17,7 +19,6 @@ import { ActivityPanel, AgentsPanel, ModelsPanel, NeedsALookPanel, RunsOverTimeP
 import { HomeEmptyState } from "./overview/HomeEmptyState";
 import { WINDOW_COPY, headlineParts, headlineText, isWorkspaceEmpty } from "./overview/home-model";
 
-const LATEST_RUNS = 8;
 // /api/overview aggregates every run in the window (p95 ~50 ms at 5,000 runs over 30d), and a streaming
 // agent emits a WebSocket frame per token, so live refreshes are throttled harder than the Runs list's 400 ms.
 const LIVE_REFRESH_MS = 1_000;
@@ -79,11 +80,11 @@ export function HomePage() {
     placeholderData: keepPreviousData,
     refetchInterval: live ? 60_000 : false,
   });
-  const latest = useQuery({
-    queryKey: ["home", "latest-runs"],
-    queryFn: ({ signal }) => getLatestRuns(LATEST_RUNS, signal),
-    refetchInterval: live ? 60_000 : false,
-  });
+  // The shell keeps this page current from live events; Home shares it rather than reading the same 8 rows again.
+  const recent = useRecentRuns();
+  const [pausedRuns, setPausedRuns] = useState<RunListPage | undefined>();
+  useEffect(() => { setPausedRuns(live ? undefined : previous => previous ?? recent.data); }, [live, recent.data]);
+  const latest = { data: live ? recent.data : pausedRuns ?? recent.data, isPending: recent.isPending };
 
   const refresh = useCallback(() => { void queryClient.invalidateQueries({ queryKey: ["home"] }); }, [queryClient]);
   const scheduleRefresh = useThrottledRefresh(refresh, live);
@@ -115,7 +116,8 @@ export function HomePage() {
       await replayDemoTraces();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["home"] }),
-        queryClient.invalidateQueries({ queryKey: ["runs"], exact: true }),
+        queryClient.invalidateQueries({ queryKey: RUNS_KEY, exact: true }),
+        queryClient.invalidateQueries({ queryKey: RECENT_RUNS_KEY, exact: true }),
       ]);
       setSampleState({ loading: false, error: null });
     } catch (error) {
@@ -179,7 +181,7 @@ export function HomePage() {
               <AgentsPanel overview={data} />
               <ModelsPanel overview={data} />
               <div className="md:col-span-2 xl:col-span-1">
-                <ActivityPanel runs={latest.data?.runs} liveRuns={data.liveRuns} limit={LATEST_RUNS} />
+                <ActivityPanel runs={latest.data?.runs} liveRuns={data.liveRuns} limit={RECENT_RUN_LIMIT} />
               </div>
             </div>
             <p className="flex items-center gap-1.5 text-12 text-rp-ink-subtle">

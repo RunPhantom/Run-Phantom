@@ -10,7 +10,7 @@ import { EmptyState } from "../components/EmptyState";
 import { useShortRunIds } from "../components/RunList";
 import { clearRuns, listRunsPage, type RunListRow } from "../api/runs";
 import { SAVED_VIEWS_KEY, savedViewsApi, useSavedViews } from "../api/saved-views";
-import { useRuns } from "../hooks/use-runs";
+import { useRunFacets } from "../hooks/use-runs";
 import { useIsMobile } from "../hooks/use-mobile";
 import { useRegisterShortcuts } from "../shell/commands";
 import { ago, plural, runDisplayName, runStatus, runStatusTone } from "../utils/helpers";
@@ -32,6 +32,7 @@ import { costCell, durationCell, isSampleRun, loadColumns, loadDensity, modelCel
 import { useRunsTable } from "./use-runs-table";
 
 const PAUSE_SCROLL_PX = 8;
+const NO_FACETS = { agents: [], models: [] } as const;
 
 function sameColumns(a: readonly RunsTableColumn[] | null, b: readonly RunsTableColumn[]): boolean {
   return !a || (a.length === b.length && a.every((column, index) => column === b[index]));
@@ -51,6 +52,7 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
   /** A saved view's own columns, applied only while that view is open; the reader's choice stays in `ownColumns`. */
   const [viewColumns, setViewColumns] = useState<RunsTableColumn[] | null>(null);
   const columns = viewColumns ?? ownColumns;
+  const [narrowHidden, setNarrowHidden] = useState<readonly RunsTableColumn[]>([]);
   const [density, setDensity] = useState<RunsDensity>(loadDensity);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -88,16 +90,8 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
     setViewColumns(null);
   }, [viewId]);
 
-  const allRuns = useRuns();
-  const facets = useMemo(() => {
-    const agents = new Set<string>();
-    const models = new Set<string>();
-    for (const run of (allRuns.data ?? []) as Partial<RunListRow>[]) {
-      if (run.agent) agents.add(run.agent);
-      for (const model of run.models ?? []) models.add(model);
-    }
-    return { agents: [...agents].sort(), models: [...models].sort() };
-  }, [allRuns.data]);
+  const facetsQuery = useRunFacets();
+  const facets = facetsQuery.data ?? NO_FACETS;
 
   // Router navigations commit in a transition, so a render can still carry the previous URL after setParams.
   // Syncing only when the URL's filters change keeps a quick second edit from resurrecting the first one's input.
@@ -269,7 +263,7 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
             {!isMobile && (
               <>
                 {liveState}
-                <ColumnChooser columns={columns} onToggle={changeColumns} />
+                <ColumnChooser columns={columns} narrowHidden={narrowHidden} onToggle={changeColumns} />
                 <DensityToggle density={density} onChange={changeDensity} />
                 <span aria-hidden="true" className="mx-1 h-5 w-px bg-rp-line" />
               </>
@@ -363,6 +357,7 @@ export function RunsTableView({ onLoadSamples }: { onLoadSamples: () => Promise<
             rows={rows}
             total={data.total}
             columns={columns}
+            onNarrowHiddenChange={setNarrowHidden}
             density={density}
             filters={filters}
             shortIds={shortIds}
