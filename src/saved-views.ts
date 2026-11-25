@@ -45,26 +45,48 @@ function parseStoredView(value: unknown): SavedView | null {
   }
 }
 
-function readViews(file: string | null): SavedView[] {
-  if (file === null) return memory.get(":memory:") ?? [];
+interface StoredViews {
+  views: SavedView[];
+  /** Entries this version could not read; the file is copied aside before a write would drop them. */
+  dropped: number;
+  /** The file came from a newer Run Phantom; writing it could lose fields this version does not know. */
+  newer: boolean;
+}
+
+function readStored(file: string | null): StoredViews {
+  if (file === null) return { views: memory.get(":memory:") ?? [], dropped: 0, newer: false };
   let raw: string;
   try {
     raw = fs.readFileSync(file, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { views: [], dropped: 0, newer: false };
     throw error;
   }
   try {
-    const parsed = JSON.parse(raw) as Partial<SavedViewsFile>;
+    const parsed = JSON.parse(raw) as Partial<SavedViewsFile> & { version?: unknown };
     if (!Array.isArray(parsed.views)) throw new Error("views missing");
-    return parsed.views.map(parseStoredView).filter((view): view is SavedView => view !== null);
+    const views = parsed.views.map(parseStoredView).filter((view): view is SavedView => view !== null);
+    const newer = typeof parsed.version === "number" && parsed.version > FILE_VERSION;
+    return { views, dropped: parsed.views.length - views.length, newer };
   } catch {
     // Keep the unreadable file for the user instead of overwriting it with an empty list on the next save.
     const aside = `${file}.unreadable-${Date.now()}`;
     try { fs.renameSync(file, aside); } catch {}
     console.warn(`[runphantom] Saved views file was unreadable; moved it to ${aside}`);
-    return [];
+    return { views: [], dropped: 0, newer: false };
   }
+}
+
+/** Read for a write: refuses a newer file and keeps a copy of entries the write is about to drop. */
+function readForWrite(file: string | null): SavedView[] {
+  const stored = readStored(file);
+  if (stored.newer) throw new RunsViewError("Saved views were changed by a newer version of Run Phantom. Update Run Phantom to edit them.", 409);
+  if (file !== null && stored.dropped > 0) {
+    const aside = `${file}.invalid-entries-${Date.now()}`;
+    fs.copyFileSync(file, aside);
+    console.warn(`[runphantom] ${stored.dropped} saved view(s) could not be read and will be dropped; the original file is kept at ${aside}`);
+  }
+  return stored.views;
 }
 
 function writeViews(file: string | null, views: SavedView[]): void {
@@ -81,12 +103,12 @@ function sameName(a: string, b: string): boolean {
 }
 
 export function listSavedViews(dbPath: string): SavedView[] {
-  return readViews(savedViewsPath(dbPath));
+  return readStored(savedViewsPath(dbPath)).views;
 }
 
 export function createSavedView(dbPath: string, input: SavedViewInput, now = Date.now()): SavedView {
   const file = savedViewsPath(dbPath);
-  const views = readViews(file);
+  const views = readForWrite(file);
   if (views.length >= RUNS_VIEW_LIMITS.maxViews) throw new RunsViewError(`You can keep up to ${RUNS_VIEW_LIMITS.maxViews} saved views; delete one first`, 409);
   if (views.some(view => sameName(view.name, input.name))) throw new RunsViewError(`A view named "${input.name}" already exists`, 409);
   const view: SavedView = { id: randomUUID().replace(/-/g, "").slice(0, 16), name: input.name, filters: input.filters, columns: input.columns, createdAt: now, updatedAt: now };
@@ -96,7 +118,7 @@ export function createSavedView(dbPath: string, input: SavedViewInput, now = Dat
 
 export function updateSavedView(dbPath: string, id: string, update: Partial<SavedViewInput>, now = Date.now()): SavedView {
   const file = savedViewsPath(dbPath);
-  const views = readViews(file);
+  const views = readForWrite(file);
   const index = views.findIndex(view => view.id === id);
   if (index < 0) throw new RunsViewError("Saved view not found", 404);
   if (update.name !== undefined && views.some(view => view.id !== id && sameName(view.name, update.name!))) {
@@ -109,7 +131,7 @@ export function updateSavedView(dbPath: string, id: string, update: Partial<Save
 
 export function deleteSavedView(dbPath: string, id: string): void {
   const file = savedViewsPath(dbPath);
-  const views = readViews(file);
+  const views = readForWrite(file);
   if (!views.some(view => view.id === id)) throw new RunsViewError("Saved view not found", 404);
   writeViews(file, views.filter(view => view.id !== id));
 }

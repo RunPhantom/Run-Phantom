@@ -155,6 +155,33 @@ describe("saved views store", () => {
     rmSync(path.join(directory, aside!));
   });
 
+  test("keeps a copy of entries it cannot read before a write drops them", () => {
+    const dbPath = getDbPath();
+    const file = savedViewsPath(dbPath)!;
+    const valid = { id: "keep1", name: "Kept", filters: {}, columns: null, createdAt: 1, updatedAt: 1 };
+    const original = JSON.stringify({ version: 1, views: [valid, { id: "bad", name: "Future", filters: { colour: "red" }, createdAt: 1, updatedAt: 1 }] });
+    writeFileSync(file, original);
+    expect(listSavedViews(dbPath)).toEqual([valid]);
+    expect(readdirSync(directory).filter(name => name.includes(".invalid-entries-"))).toEqual([]);
+    createSavedView(dbPath, { name: "New", filters: {}, columns: null });
+    const aside = readdirSync(directory).filter(name => name.startsWith("saved-views.json.invalid-entries-"));
+    expect(aside).toHaveLength(1);
+    expect(readFileSync(path.join(directory, aside[0]!), "utf8")).toBe(original);
+    expect(listSavedViews(dbPath).map(view => view.name)).toEqual(["Kept", "New"]);
+    rmSync(path.join(directory, aside[0]!));
+  });
+
+  test("refuses to overwrite a file from a newer version", () => {
+    const dbPath = getDbPath();
+    const file = savedViewsPath(dbPath)!;
+    const original = JSON.stringify({ version: 2, views: [{ id: "next1", name: "Next", filters: {}, columns: null, createdAt: 1, updatedAt: 1 }] });
+    writeFileSync(file, original);
+    expect(listSavedViews(dbPath).map(view => view.name)).toEqual(["Next"]);
+    expect(() => createSavedView(dbPath, { name: "New", filters: {}, columns: null })).toThrow("newer version");
+    expect(() => deleteSavedView(dbPath, "next1")).toThrow("newer version");
+    expect(readFileSync(file, "utf8")).toBe(original);
+  });
+
   test("counts match the run list totals for the same filters", () => {
     const db = getDrizzleDb().$client;
     const dbPath = getDbPath();
