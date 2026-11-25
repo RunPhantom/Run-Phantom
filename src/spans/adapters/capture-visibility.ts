@@ -256,7 +256,9 @@ export function captureVisibility(input: AdapterInput): CaptureVisibilityV1 | un
   const usageAliases = { cacheRead: COUNT_ATTRIBUTES.cache_read, cacheCreation: COUNT_ATTRIBUTES.cache_write,
     reasoning: ["gen_ai.usage.reasoning_tokens", "gen_ai.usage.completion_tokens_details.reasoning", ...COUNT_ATTRIBUTES.reasoning] };
   const usageKeys = [...usageAliases.cacheRead, ...usageAliases.cacheCreation, ...usageAliases.reasoning];
-  if (!retrievalKind && !embeddingKind && !hasStream && !usageKeys.some(key => attrs[key] !== undefined || input.attrs[key] !== undefined)) return undefined;
+  // Usage is gated on the same flat map usageNumber reads: receipt *_tokens
+  // values are withheld, so a key present only there yields no usable row.
+  if (!retrievalKind && !embeddingKind && !hasStream && !usageKeys.some(key => input.attrs[key] !== undefined)) return undefined;
   const reasons = new Set<CaptureReason>();
   if (!evidence) reasons.add("missing-source-evidence");
   const number = (...keys: string[]): number | null => {
