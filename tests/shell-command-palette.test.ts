@@ -121,6 +121,14 @@ describe("shortcut matching", () => {
     expect(palette.kind === "fire" && palette.shortcut.id).toBe("palette");
   });
 
+  test("inside a pass-through dialog only shortcuts that opt in fire", () => {
+    const withPane = [...shortcuts, shortcut("ask", "mod+j", { allowInInputs: true, allowInDialogs: true })];
+    expect(matchShortcut(key("k", { metaKey: true }), [], withPane, true, false, true).kind).toBe("none");
+    expect(matchShortcut(key("g"), [], withPane, true, false, true).kind).toBe("none");
+    const ask = matchShortcut(key("j", { metaKey: true }), [], withPane, true, true, true);
+    expect(ask.kind === "fire" && ask.shortcut.id).toBe("ask");
+  });
+
   test("documented-only and disabled shortcuts never fire", () => {
     expect(matchShortcut(key("b", { metaKey: true }), [], shortcuts, true, false).kind).toBe("none");
     expect(matchShortcut(key("x"), [], shortcuts, true, false).kind).toBe("none");

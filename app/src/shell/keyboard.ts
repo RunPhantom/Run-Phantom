@@ -70,12 +70,25 @@ export function isEditingTarget(target: EventTarget | null): boolean {
   if (target instanceof HTMLInputElement) return TEXT_INPUT_TYPES.has(target.type);
   if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
   if (target instanceof HTMLElement && target.isContentEditable) return true;
-  return target.closest('[role="textbox"], [role="combobox"], [role="searchbox"], [contenteditable="true"]') !== null;
+  return target.closest('[role="textbox"], [role="searchbox"], [contenteditable="true"]') !== null;
 }
 
-/** Shortcuts stand down while any dialog is open; the dialog owns the keyboard. */
+const DIALOG_SELECTOR = '[role="dialog"], [role="alertdialog"], dialog[open]';
+
+/**
+ * "none": no dialog. "pass-through": every open dialog is marked data-shortcut-passthrough
+ * (the compact Ask pane), so shortcuts with allowInDialogs may still fire. "modal": the
+ * dialog owns the keyboard and nothing fires.
+ */
+export function openDialogState(): "none" | "pass-through" | "modal" {
+  const dialogs = document.querySelectorAll(DIALOG_SELECTOR);
+  if (dialogs.length === 0) return "none";
+  for (const dialog of dialogs) if (!dialog.hasAttribute("data-shortcut-passthrough")) return "modal";
+  return "pass-through";
+}
+
 export function hasOpenDialog(): boolean {
-  return document.querySelector('[role="dialog"], [role="alertdialog"], dialog[open]') !== null;
+  return openDialogState() !== "none";
 }
 
 export type SequenceResult =
@@ -93,12 +106,14 @@ export function matchShortcut(
   shortcuts: readonly ShortcutDefinition[],
   mac: boolean,
   editing: boolean,
+  inDialog = false,
 ): SequenceResult {
   const attempt = (prefix: readonly Chord[]): SequenceResult => {
     let next: Chord | null = null;
     for (const shortcut of shortcuts) {
       if (!shortcut.handler) continue;
       if (editing && !shortcut.allowInInputs) continue;
+      if (inDialog && !shortcut.allowInDialogs) continue;
       if (shortcut.when && !shortcut.when()) continue;
       const chords = parseKeys(shortcut.keys);
       if (chords.length <= prefix.length) continue;
@@ -129,9 +144,10 @@ export function useShortcutDispatcher(): void {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.key === "Process") return;
       if (["Shift", "Control", "Meta", "Alt", "CapsLock"].includes(event.key)) return;
-      if (hasOpenDialog()) { pending = []; return; }
+      const dialogs = openDialogState();
+      if (dialogs === "modal") { pending = []; return; }
       if (pending.length && Date.now() - pendingAt > SEQUENCE_TIMEOUT_MS) pending = [];
-      const result = matchShortcut(event, pending, listShortcuts(), mac, isEditingTarget(event.target));
+      const result = matchShortcut(event, pending, listShortcuts(), mac, isEditingTarget(event.target), dialogs === "pass-through");
       if (result.kind === "fire") {
         pending = [];
         if (event.repeat && !result.shortcut.allowInInputs) return;

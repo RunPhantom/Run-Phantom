@@ -54,6 +54,11 @@ export interface ShortcutDefinition {
   scope: string;
   /** Allow while focus is in a text field. Only modified chords should set this. */
   allowInInputs?: boolean;
+  /**
+   * Allow while a pass-through dialog (marked data-shortcut-passthrough, e.g. the compact
+   * Ask pane) is open. Modal dialogs such as the palette always block every shortcut.
+   */
+  allowInDialogs?: boolean;
   when?: () => boolean;
   /** Omit to document a shortcut that another component already handles. */
   handler?: (event: KeyboardEvent) => void;
