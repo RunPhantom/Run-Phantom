@@ -171,7 +171,7 @@ function PaletteBody() {
         </div>
         {nothingMatches && (
           <p className="px-5 pb-1 pt-4 text-[13px] text-rp-ink-muted">
-            {query.trim() ? <>No pages, runs or commands match “{query.trim()}”.</> : "No commands available."}
+            {query.trim() ? <>No pages, commands or recent runs match “{query.trim()}”. Search below looks through every run and step.</> : "No commands available."}
           </p>
         )}
         <p role="status" aria-live="polite" className="sr-only">
@@ -213,7 +213,7 @@ function PaletteBody() {
                       )}
                       <span className="min-w-0 flex-1 truncate">
                         <Highlighted text={command.label} indices={row.indices} />
-                        {status && <span className="sr-only">, {status.label}</span>}
+                        {status && <span className="sr-only"> {status.label}</span>}
                       </span>
                       {detail && <span className="max-w-[45%] shrink-0 truncate font-mono text-[12px] text-rp-ink-subtle">{detail}</span>}
                       {command.shortcut && <kbd aria-hidden="true" className="rp-kbd shrink-0">{formatKeys(command.shortcut, mac)}</kbd>}
