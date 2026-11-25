@@ -7,16 +7,14 @@
   font-family: var(--font-sans);
   font-size: 14px;
   line-height: 20px;
-  padding: 44px 40px 96px;
+  padding: var(--rp-page-pt) var(--rp-page-px) var(--rp-page-pb);
   min-height: 100%;
 }
 .evidence-workspace > * { max-width: 1280px; }
-.evidence-workspace h1, .evidence-workspace h2, .evidence-workspace h3 { font-family: var(--font-display); color: var(--rp-ink); font-weight: 600; }
-.evidence-workspace h1 { font-size: clamp(28px, 1.25vw + 18px, 36px); line-height: 1.12; letter-spacing: -0.039em; margin: 12px 0 12px; text-wrap: balance; }
+.evidence-workspace h2, .evidence-workspace h3 { font-family: var(--font-display); color: var(--rp-ink); font-weight: 600; }
 .evidence-workspace h2 { font-size: 17px; line-height: 1.35; letter-spacing: -0.02em; margin: 0 0 6px; }
 .evidence-workspace h3 { font-size: 15px; line-height: 22px; letter-spacing: -0.01em; margin: 0; }
 .evidence-intro { padding: 0 0 32px; }
-.evidence-intro > p:last-child { max-width: 70ch; color: var(--rp-ink-muted); line-height: 1.7; }
 .evidence-eyebrow { display: inline-flex; align-items: center; gap: 8px; color: var(--rp-ink-muted); font-family: var(--font-mono); font-size: 11px; line-height: 16px; font-weight: 500; letter-spacing: .14em; text-transform: uppercase; }
 .evidence-eyebrow::before { content: ""; flex: none; width: 7px; height: 7px; background: var(--rp-blue); }
 .evidence-intro .evidence-eyebrow { color: var(--rp-blue); }
@@ -71,7 +69,6 @@
 .evidence-leaves pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 12px; line-height: 18px; color: var(--rp-ink-muted); margin-top: 8px; padding: 10px 12px; background: var(--rp-canvas-blue); border: 1px solid var(--rp-line-muted); border-radius: var(--rp-radius-sm); }
 .evidence-confirm { padding: 16px; border: 1px solid var(--rp-danger-border); border-radius: var(--rp-radius-md); background: var(--rp-danger-soft); margin-top: 20px; animation: rp-fade-rise var(--rp-dur-rise) var(--rp-ease-standard) both; }
 @media (max-width: 640px) {
-  .evidence-workspace { padding: 32px 20px 96px; }
   .evidence-panel { padding: 20px; }
   .evidence-coverage { grid-template-columns: 1fr; gap: 12px; }
   .evidence-actions > button { flex: 1 1 130px; }
