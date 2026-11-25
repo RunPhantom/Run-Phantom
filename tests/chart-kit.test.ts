@@ -4,7 +4,7 @@ import {
   areaPath, binValues, chartKeyStep, columnPath, compact, endpointIndices, linePath, linear, nearestPoint, niceTicks, relativeTimeLabel, slotAt, trendWord,
 } from "../app/src/components/charts/scale";
 import { ChartFrame } from "../app/src/components/charts/ChartFrame";
-import { CellBar } from "../app/src/components/charts/BarList";
+import { BarList, CellBar } from "../app/src/components/charts/BarList";
 import { Sparkline } from "../app/src/components/charts/Sparkline";
 import { StackedBars, stackReadout } from "../app/src/components/charts/StackedBars";
 import { TimeSeries, seriesReadout } from "../app/src/components/charts/TimeSeries";
@@ -247,5 +247,28 @@ describe("sparkline gaps and partial buckets", () => {
     expect(count(html, "data-partial-point")).toBe(1);
     const end = /<circle cx="([\d.]+)"[^>]*data-sparkline-end/.exec(html)?.[1];
     expect(Number(end)).toBeLessThan(90);
+  });
+});
+
+describe("bar list links", () => {
+  const { MemoryRouter } = appRequire("react-router-dom");
+
+  test("rows a filter can select link to it; rows without a name are plain text", () => {
+    const rows = [{ name: "triage", runs: 4 }, { name: null, runs: 2 }];
+    const html = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(BarList, {
+      caption: "Agents",
+      rows,
+      rowKey: (row: { name: string | null }) => row.name ?? "none",
+      nameHeader: "Agent",
+      name: (row: { name: string | null }) => row.name ?? "Unnamed agent",
+      href: (row: { name: string | null }) => (row.name ? `/runs?agent=${row.name}` : undefined),
+      bar: { header: "Runs", value: (row: { runs: number }) => row.runs },
+      columns: [],
+      emptyLabel: "None",
+    }))) as string;
+    expect(count(html, "<a ")).toBe(1);
+    expect(html).toContain('href="/runs?agent=triage"');
+    expect(html).toContain("Unnamed agent");
+    expect(count(html, "cursor-pointer")).toBe(1);
   });
 });

@@ -195,8 +195,8 @@ export function AgentsPanel({ overview }: { overview: Overview }) {
         rowKey={row => row.agent ?? "\0unnamed"}
         nameHeader="Agent"
         name={row => row.agent ?? <span className="italic text-rp-ink-subtle">Unnamed agent</span>}
-        nameTitle={row => row.agent ?? "Runs with no agent name"}
-        href={row => runsLink({ agent: row.agent, window })}
+        nameTitle={row => row.agent ?? "Runs that reported no agent name. The Runs page has no filter for them, so this row is not a link."}
+        href={row => (row.agent ? runsLink({ agent: row.agent, window }) : undefined)}
         bar={{ header: "Runs", value: row => row.runs }}
         barPlacement="under"
         columns={[
@@ -233,8 +233,8 @@ export function ModelsPanel({ overview }: { overview: Overview }) {
         rowKey={row => row.model ?? "\0unknown"}
         nameHeader="Model"
         name={row => row.model ? <span className="font-mono text-12">{row.model}</span> : <span className="italic text-rp-ink-subtle">Unknown model</span>}
-        nameTitle={row => [row.model ?? "Unknown model", row.provider].filter(Boolean).join(" · ")}
-        href={row => runsLink({ model: row.model, window })}
+        nameTitle={row => row.model ? [row.model, row.provider].filter(Boolean).join(" · ") : "Model calls that reported no model name. The Runs page has no filter for them, so this row is not a link."}
+        href={row => (row.model ? runsLink({ model: row.model, window }) : undefined)}
         bar={{ header: "Calls", value: row => row.calls }}
         barPlacement="under"
         columns={[

@@ -25,9 +25,10 @@ export interface BarListColumn<T> {
 }
 
 /**
- * A ranked table whose first numeric measure is drawn as an in-cell bar. Every row
- * links somewhere: the name is a real link for keyboard and screen readers, and
- * the rest of the row forwards clicks to it.
+ * A ranked table whose first numeric measure is drawn as an in-cell bar. A row with
+ * an `href` links there: the name is a real link for keyboard and screen readers,
+ * and the rest of the row forwards clicks to it. Rows without one are plain text,
+ * for groups no filter can select.
  */
 export function BarList<T>({ caption, rows, rowKey, nameHeader, name, nameTitle, href, bar, columns, emptyLabel, className, barPlacement = "column" }: {
   caption: string;
@@ -36,7 +37,7 @@ export function BarList<T>({ caption, rows, rowKey, nameHeader, name, nameTitle,
   nameHeader: string;
   name: (row: T) => ReactNode;
   nameTitle?: (row: T) => string | undefined;
-  href: (row: T) => string;
+  href: (row: T) => string | undefined;
   bar: { header: string; value: (row: T) => number; max?: number; tone?: (row: T) => "accent" | "danger" };
   columns: readonly BarListColumn<T>[];
   emptyLabel: string;
@@ -65,16 +66,18 @@ export function BarList<T>({ caption, rows, rowKey, nameHeader, name, nameTitle,
           return (
             <tr
               key={rowKey(row)}
-              className="group cursor-pointer border-t border-rp-line-muted transition-colors duration-fast hover:bg-rp-row-hover"
-              onClick={event => {
+              className={cn("group border-t border-rp-line-muted", target && "cursor-pointer transition-colors duration-fast hover:bg-rp-row-hover")}
+              onClick={target ? event => {
                 if ((event.target as HTMLElement).closest("a")) return;
                 navigate(target);
-              }}
+              } : undefined}
             >
               <th scope="row" className={cn("max-w-0 pr-3 text-left font-normal", barPlacement === "under" ? "py-1.5" : "h-8")}>
-                <Link to={target} title={nameTitle?.(row)} className="block truncate rounded-control text-rp-ink underline-offset-4 group-hover:text-rp-blue group-hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]">
-                  {name(row)}
-                </Link>
+                {target ? (
+                  <Link to={target} title={nameTitle?.(row)} className="block truncate rounded-control text-rp-ink underline-offset-4 group-hover:text-rp-blue group-hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--rp-focus)]">
+                    {name(row)}
+                  </Link>
+                ) : <span title={nameTitle?.(row)} className="block truncate text-rp-ink">{name(row)}</span>}
                 {barPlacement === "under" && <CellBar className="mt-1 h-1" value={bar.value(row)} max={max} tone={bar.tone?.(row)} />}
               </th>
               {barPlacement === "column" && <td className="w-12 min-w-12"><CellBar value={bar.value(row)} max={max} tone={bar.tone?.(row)} /></td>}
