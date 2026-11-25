@@ -268,6 +268,16 @@ describe("run matching beyond the recent list", () => {
     expect(sections.map(section => section.group)).toEqual(["Runs", "Search"]);
   });
 
+  test("matches query words in any order, across every name a run is known by, and keeps those rows in the palette", () => {
+    const older = [...runs, run(4, "Customer support triage", { display_name: "triage_agent" })];
+    expect(matchingRunCommands(older, "conflict ledger").map(command => command.id)).toEqual(["run:run-002", "run:run-001"]);
+    expect(matchingRunCommands(older, "ledger support_agent").map(command => command.id)).toEqual(["run:run-001"]);
+    const triage = matchingRunCommands(older, "support triage customer");
+    expect(triage.map(command => [command.id, command.label])).toEqual([["run:run-004", "triage_agent"]]);
+    expect(buildSections(triage, "support triage customer").flatMap(section => section.rows.map(row => row.command.id))).toEqual(["run:run-004"]);
+    expect(buildSections(matchingRunCommands(older, "conflict ledger"), "conflict ledger").flatMap(section => section.rows)).toHaveLength(2);
+  });
+
   test("never repeats a recent run, skips scattered-letter matches and caps the list", () => {
     expect(matchingRunCommands(runs, "Order lookup 21")).toEqual([]);
     expect(matchingRunCommands(runs, "lgr")).toEqual([]);
