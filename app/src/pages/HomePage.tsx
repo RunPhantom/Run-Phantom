@@ -196,7 +196,7 @@ function Headline({ overview }: { overview: Overview }) {
       <span aria-hidden="true">
         {parts.map((part, index) => (
           <span key={index} className={cn(part.tone === "danger" && "text-rp-danger")}>
-            {part.text.split(/(\d[\d.,:]*)/).map((piece, pieceIndex) => pieceIndex % 2 ? <span key={pieceIndex} className="rp-digits">{piece}</span> : piece)}
+            {(part.tone === "danger" ? part.text.replace(/^ /, "\u00a0") : part.text).split(/(\d[\d.,:]*)/).map((piece, pieceIndex) => pieceIndex % 2 ? <span key={pieceIndex} className="rp-digits">{piece}</span> : piece)}
           </span>
         ))}
       </span>
