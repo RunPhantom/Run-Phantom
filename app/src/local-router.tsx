@@ -21,6 +21,7 @@ import { EvaluationsPage } from "./pages/EvaluationsPage";
 import { ReviewQueuesRoute } from "./components/review-queues/ReviewQueuesRoute";
 import { PromptsPage } from "./pages/PromptsPage";
 import { PlaygroundPage } from "./pages/PlaygroundPage";
+import { ConnectPage } from "./pages/ConnectPage";
 import { openInPlaygroundAction } from "./components/playground/open-in-playground";
 import { registerSpanAction } from "./components/run-detail/span-actions";
 import { RouteError } from "./components/RouteError";
@@ -179,6 +180,7 @@ export const localRoutes: RouteObject[] = [
       { path: "saved/:runId", element: <SavedPage />, errorElement: <RouteError /> },
       { path: "saved", element: <SavedPage />, errorElement: <RouteError /> },
       { path: "settings", element: <SettingsPage />, errorElement: <RouteError /> },
+      { path: "connect", element: <ConnectPage />, errorElement: <RouteError /> },
       { path: "verification", element: <VerificationPage />, errorElement: <RouteError /> },
       { path: "evaluations", element: <EvaluationsPage />, errorElement: <RouteError /> },
       { path: "costs", element: <CostAnalyticsPage />, errorElement: <RouteError /> },

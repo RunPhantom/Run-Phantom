@@ -1,14 +1,14 @@
 import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { Contrast, Keyboard, Link2, PanelLeft, PlayCircle, Settings, type LucideIcon } from "lucide-react";
+import { Cable, Contrast, Keyboard, Link2, PanelLeft, PlayCircle, Settings, type LucideIcon } from "lucide-react";
 import { useSidebar } from "@/components/ui/sidebar";
 import { replayDemoTraces } from "../api/demo-traces";
 import { useRuns } from "../hooks/use-runs";
 import { ago, runDisplayName, runStatus, type RunStatus } from "../utils/helpers";
 import { runPath } from "../utils/navigation";
 import type { Run } from "../utils/types";
-import { NAV_ITEMS, SETTINGS_NAV } from "./navigation";
+import { CONNECT_NAV, NAV_ITEMS, SETTINGS_NAV } from "./navigation";
 import { useRegisterCommands, useRegisterShortcuts, type PaletteCommand, type PaletteStatus, type ShortcutDefinition } from "./commands";
 import { openCommandPalette, openShortcutSheet, paletteSession } from "./overlays";
 import { setThemePreference, toggleTheme } from "./theme";
@@ -79,6 +79,7 @@ export function ShellCommands() {
 
   const action = (command: Omit<PaletteCommand, "group"> & { icon: LucideIcon }): PaletteCommand => ({ group: "Actions", ...command });
   useRegisterCommands([
+    action({ id: "action:connect-agent", label: CONNECT_NAV.label, keywords: CONNECT_NAV.keywords, icon: Cable, order: -1, run: ({ navigate: go }) => go(CONNECT_NAV.path) }),
     action({
       id: "action:load-samples",
       label: "Load sample runs",
