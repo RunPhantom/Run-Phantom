@@ -167,7 +167,7 @@ import {
   deleteStoredSecret,
 } from "./secret-store";
 import { maskSecret } from "./provider-connection-protocol";
-import { checkProviderConnection, type ProviderCheckFetch } from "./provider-connection";
+import { createProviderChecker, type ProviderCheckFetch } from "./provider-connection";
 import { getDataSummary, writeDatabaseBackup } from "./data-admin";
 
 function parseAnnotationSource(value: unknown): AnnotationSource | null {
@@ -1647,20 +1647,17 @@ export async function createServer(port: number, options: { comparisons?: Compar
     res.json({ keys, hints });
   });
 
-  const providerChecks = new Map<string, Promise<unknown>>();
+  const providerChecker = createProviderChecker({ fetch: options.providerCheckFetch });
   app.post("/api/secrets/:key/test", localOriginGuard, (req, res) => {
     const key = parseSecretKey(req.params.key);
     if (!key) {
       res.status(404).json({ error: "unknown secret key" });
       return;
     }
-    // A double click shares one upstream request instead of sending two.
-    let check = providerChecks.get(key);
-    if (!check) {
-      check = checkProviderConnection(key, { fetch: options.providerCheckFetch }).finally(() => providerChecks.delete(key));
-      providerChecks.set(key, check);
-    }
-    void check.then(result => res.json(result), () => res.status(500).json({ error: "Connection check failed." }));
+    void providerChecker.check(key).then(result => {
+      if (result.reusedUntil) res.set("Retry-After", String(Math.max(1, Math.ceil((result.reusedUntil - Date.now()) / 1000))));
+      res.json(result);
+    }, () => res.status(500).json({ error: "Connection check failed." }));
   });
 
   app.get("/api/data", localOriginGuard, (_req, res) => {
@@ -1702,11 +1699,13 @@ export async function createServer(port: number, options: { comparisons?: Compar
     const value = input.value;
     if (!value) {
       deleteStoredSecret(key);
+      providerChecker.forget(key);
       broadcast("secrets_updated", { key, status: getSecretStatus(key) });
       res.json({ key, status: getSecretStatus(key) });
       return;
     }
     setStoredSecret(key, value);
+    providerChecker.forget(key);
     broadcast("secrets_updated", { key, status: getSecretStatus(key) });
     res.json({ key, status: getSecretStatus(key) });
   });
@@ -1718,6 +1717,7 @@ export async function createServer(port: number, options: { comparisons?: Compar
       return;
     }
     deleteStoredSecret(key);
+    providerChecker.forget(key);
     broadcast("secrets_updated", { key, status: getSecretStatus(key) });
     res.json({ key, status: getSecretStatus(key) });
   });

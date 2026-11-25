@@ -18,9 +18,17 @@ export interface ProviderCheckResult {
   httpStatus: number | null;
   /** The provider's own error text with anything shaped like a key removed. */
   providerMessage: string | null;
+  /** Set when this is an earlier answer reused inside the cooldown rather than a new request. */
+  reusedUntil?: number;
 }
 
 export const PROVIDER_CHECK_TIMEOUT_MS = 10_000;
+
+/**
+ * Repeat checks of the same key inside this window reuse the last answer, so repeated clicks or a script
+ * cannot push the user's key into provider rate limits that would then hit Playground and Ask Agent calls.
+ */
+export const PROVIDER_CHECK_COOLDOWN_MS = 15_000;
 
 /**
  * Every provider check is a single GET to the provider's models list, which none of the three providers bill for.

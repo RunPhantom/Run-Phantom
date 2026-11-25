@@ -37,7 +37,7 @@ import { plural } from "../utils/helpers";
 import "./settings.css";
 import { fetchPrices, modelPricingConsentEnabled, setModelPricingConsent } from "../utils/costs";
 import { LIST_PRICES, PRICE_TABLE_AS_OF } from "../../../src/pricing/list-prices";
-import type { ProviderCheckResult } from "../../../src/provider-connection-protocol";
+import { PROVIDER_CHECK_COOLDOWN_MS, type ProviderCheckResult } from "../../../src/provider-connection-protocol";
 
 type Tab = "agents" | "keys" | "debug";
 
@@ -421,6 +421,19 @@ type CheckState = { status: "checking" } | { status: "done"; result: ProviderChe
 function ConnectionCheck({ label, configured, state, onCheck }: { label: string; configured: boolean; state: CheckState | undefined; onCheck: () => void }) {
   const checking = state?.status === "checking";
   const result = state?.status === "done" ? state.result : null;
+  const readyAt = result?.source ? result.reusedUntil ?? result.checkedAt + PROVIDER_CHECK_COOLDOWN_MS : 0;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (readyAt <= Date.now()) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => {
+      const current = Date.now();
+      setNow(current);
+      if (current >= readyAt) window.clearInterval(timer);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [readyAt]);
+  const waitSeconds = readyAt > now ? Math.ceil((readyAt - now) / 1000) : 0;
   if (!configured && !result) return null;
   return (
     <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -429,13 +442,13 @@ function ConnectionCheck({ label, configured, state, onCheck }: { label: string;
         variant="outline"
         size="sm"
         aria-label={`Test ${label} connection`}
-        title={configured ? `Ask ${label} to list its models. This request is free.` : `Add a ${label} key first`}
-        disabled={!configured || checking}
+        title={!configured ? `Add a ${label} key first` : waitSeconds ? `You can test again in ${waitSeconds} s` : `Ask ${label} to list its models. This request is free.`}
+        disabled={!configured || checking || waitSeconds > 0}
         onClick={onCheck}
         className="self-start"
       >
         {checking ? <Loader2 aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Plug aria-hidden="true" />}
-        {checking ? "Testing…" : "Test connection"}
+        {checking ? "Testing…" : waitSeconds ? `Test again in ${waitSeconds} s` : "Test connection"}
       </Button>
       <p role="status" aria-live="polite" className="min-w-0 text-12 leading-5">
         {checking ? <span className="text-rp-ink-muted">Asking {label} to list its models…</span>
@@ -446,7 +459,7 @@ function ConnectionCheck({ label, configured, state, onCheck }: { label: string;
               <span className="min-w-0 break-words">
                 <span className="text-rp-ink">{result.message}</span>
                 {result.latencyMs !== null && <span className="ml-1.5 font-mono text-rp-ink-muted">{result.latencyMs} ms</span>}
-                <span className="ml-1.5 text-rp-ink-muted">· checked {new Date(result.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                <span className="ml-1.5 text-rp-ink-muted">· checked {new Date(result.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}{result.reusedUntil ? " (repeat checks within a few seconds reuse this answer)" : ""}</span>
                 {result.providerMessage && <span className="mt-0.5 block text-rp-ink-muted">{label} said: {result.providerMessage}</span>}
               </span>
             </span>

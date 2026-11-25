@@ -65,6 +65,28 @@ describe.serial("settings provider and data endpoints", () => {
     expect((await fetch(`${base}/api/secrets/mistral/test`, { method: "POST" })).status).toBe(404);
   });
 
+  test("a repeat check inside the cooldown reuses the answer until the key changes", async () => {
+    upstream.length = 0;
+    await fetch(`${base}/api/secrets/openai`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value: "sk-proj-cool-a-9Kd2" }) });
+    const first = await (await fetch(`${base}/api/secrets/openai/test`, { method: "POST" })).json();
+    const repeat = await fetch(`${base}/api/secrets/openai/test`, { method: "POST" });
+    const repeated = await repeat.json();
+    expect(upstream).toHaveLength(1);
+    expect(repeated.checkedAt).toBe(first.checkedAt);
+    expect(repeated.reusedUntil).toBeGreaterThan(first.checkedAt);
+    expect(Number(repeat.headers.get("Retry-After"))).toBeGreaterThan(0);
+
+    await fetch(`${base}/api/secrets/openai`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value: "sk-proj-cool-b-4Hq8" }) });
+    const replaced = await (await fetch(`${base}/api/secrets/openai/test`, { method: "POST" })).json();
+    expect(upstream).toHaveLength(2);
+    expect(replaced.reusedUntil).toBeUndefined();
+
+    await fetch(`${base}/api/secrets/openai`, { method: "DELETE" });
+    const removed = await (await fetch(`${base}/api/secrets/openai/test`, { method: "POST" })).json();
+    expect(removed).toMatchObject({ ok: false, failure: "missing_key" });
+    expect(upstream).toHaveLength(2);
+  });
+
   test("a foreign page cannot trigger a check or read the data summary", async () => {
     const headers = { Origin: "https://example.test" };
     expect((await fetch(`${base}/api/secrets/openai/test`, { method: "POST", headers })).status).toBe(403);

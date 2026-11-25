@@ -272,7 +272,7 @@ test("settings shows each provider's key source, a masked hint and a connection 
   const calls: string[] = [];
   await page.route("**/api/secrets/openai/test", async route => {
     calls.push(route.request().method());
-    await route.fulfill({ json: { provider: "openai", ok: false, source: "store", checkedAt: Date.now(), latencyMs: 212, modelCount: null, modelCountComplete: false, failure: "auth", message: "OpenAI rejected this key (HTTP 401). Paste a new key to replace it.", httpStatus: 401, providerMessage: "Incorrect API key provided." } });
+    await route.fulfill({ json: { provider: "openai", ok: false, source: "store", checkedAt: Date.now() - 60_000, latencyMs: 212, modelCount: null, modelCountComplete: false, failure: "auth", message: "OpenAI rejected this key (HTTP 401). Paste a new key to replace it.", httpStatus: 401, providerMessage: "Incorrect API key provided." } });
   });
   const test = panel.getByRole("button", { name: "Test OpenAI connection", exact: true });
   await test.click();
@@ -285,6 +285,8 @@ test("settings shows each provider's key source, a masked hint and a connection 
   await page.route("**/api/secrets/openai/test", route => route.fulfill({ json: { provider: "openai", ok: true, source: "store", checkedAt: Date.now(), latencyMs: 180, modelCount: 103, modelCountComplete: true, failure: null, message: "OpenAI accepted the key and listed 103 models.", httpStatus: 200, providerMessage: null } }));
   await test.click();
   await expect(panel.getByRole("status").filter({ hasText: "OpenAI accepted the key and listed 103 models." })).toBeVisible();
+  await expect(test).toBeDisabled();
+  await expect(test).toHaveText(/^Test again in \d+ s$/);
 
   await panel.getByRole("button", { name: "Clear saved OpenAI key" }).click();
   await expect(panel.getByText("Not set", { exact: true })).toHaveCount(3);

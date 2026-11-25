@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { getEnvSecret, getStoredSecret } from "./secret-store";
 import { classifyHttpError, sanitizeProviderMessage } from "./playground/providers";
 import {
+  PROVIDER_CHECK_COOLDOWN_MS,
   PROVIDER_CHECK_TIMEOUT_MS,
   PROVIDER_MODELS_ENDPOINT,
   type ProviderCheckFailure,
@@ -83,5 +85,45 @@ export async function checkProviderConnection(provider: ProviderId, options: { f
   return {
     ...base, ok: true, latencyMs, failure: null, httpStatus: response.status, modelCount: count, modelCountComplete: count !== null && complete,
     message: `${LABEL[provider]} accepted the key${listed}.`,
+  };
+}
+
+function keyFingerprint(provider: ProviderId): string | null {
+  const key = getEnvSecret(provider)?.value ?? getStoredSecret(provider);
+  return key ? createHash("sha256").update(key).digest("hex") : null;
+}
+
+/**
+ * Concurrent checks share one upstream request, and a repeat check of the same key inside the cooldown reuses the
+ * last answer. A different effective key (saved, replaced, removed or changed in the environment) always checks again.
+ */
+export function createProviderChecker(options: { fetch?: ProviderCheckFetch; now?: () => number; cooldownMs?: number } = {}) {
+  const now = options.now ?? Date.now;
+  const cooldownMs = options.cooldownMs ?? PROVIDER_CHECK_COOLDOWN_MS;
+  const inFlight = new Map<ProviderId, { fingerprint: string | null; promise: Promise<ProviderCheckResult> }>();
+  const recent = new Map<ProviderId, { fingerprint: string; at: number; result: ProviderCheckResult }>();
+
+  return {
+    check(provider: ProviderId): Promise<ProviderCheckResult> {
+      const fingerprint = keyFingerprint(provider);
+      const last = recent.get(provider);
+      if (last && fingerprint && last.fingerprint === fingerprint && now() - last.at < cooldownMs) {
+        return Promise.resolve({ ...last.result, reusedUntil: last.at + cooldownMs });
+      }
+      const pending = inFlight.get(provider);
+      if (pending && pending.fingerprint === fingerprint) return pending.promise;
+      const promise = checkProviderConnection(provider, { fetch: options.fetch, now }).then(result => {
+        if (fingerprint && result.source) recent.set(provider, { fingerprint, at: now(), result });
+        else recent.delete(provider);
+        return result;
+      }).finally(() => {
+        if (inFlight.get(provider)?.promise === promise) inFlight.delete(provider);
+      });
+      inFlight.set(provider, { fingerprint, promise });
+      return promise;
+    },
+    forget(provider: ProviderId): void {
+      recent.delete(provider);
+    },
   };
 }
