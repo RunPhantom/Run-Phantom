@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { literalPromptCompilation, promptId, promptInteger, promptObject, promptText, boundedPromptResult, type PromptRevision } from "./protocol";
-import { COMPARISON_MODELS, COMPARISON_TARGET_LIMIT, comparisonModelSettings, type ComparisonTarget, type ComparisonRequest, type FrozenComparisonRequest, type ComparisonFamily } from "./comparison-types";
+import { COMPARISON_MODELS, COMPARISON_OUTPUT_TOKEN_LIMIT, COMPARISON_TARGET_LIMIT, comparisonModelSettings, type ComparisonTarget, type ComparisonRequest, type FrozenComparisonRequest, type ComparisonFamily } from "./comparison-types";
 
 export const COMPARISON_POLICY = "runphantom-model-comparison/v1" as const;
 export const COMPARISON_LIMITS = Object.freeze({ targets: COMPARISON_TARGET_LIMIT, active: 2, queued: 8, inputBytes: 16384, providerResponseBytes: 65536,
   frozenRequestBytes: 24576, attemptPayloadBytes: 8192, responseBytes: 65536, requestBytes: 65536,
-  outputTokens: 1024, attemptMs: 30000, operationsPerScope: 100, operationsGlobal: 1000, attemptsGlobal: 4000,
+  outputTokens: COMPARISON_OUTPUT_TOKEN_LIMIT, attemptMs: 30000, operationsPerScope: 100, operationsGlobal: 1000, attemptsGlobal: 4000,
   controlsGlobal: 1000, retainedBytes: 33554432, operationBudgetMicrousd: 1000000, providerBudgetMicrousd: 30000000, listPage: 50 });
 export { COMPARISON_MODELS } from "./comparison-types";
 export type { ComparisonProvider, ComparisonTarget, ComparisonOptions, ComparisonRequest, FrozenComparisonRequest, ComparisonFamily } from "./comparison-types";

@@ -31,7 +31,27 @@ const attemptContent = ["status", "reason", "payload", "accounting_state", "obse
 // nano-USD decimal instead. Charges are derived from the float total, never from this text.
 const usdText = (total: number) => { const fixed = total.toFixed(9); return fixed.includes("e") ? String(total) : fixed.replace(/\.?0+$/, ""); };
 const contentBytes = (...values: (string | null)[]) => values.reduce((total, value) => total + (value === null ? 0 : Buffer.byteLength(value)), 0);
-const reasons = new Set(["provider_error", "invalid_response", "response_limit", "protected_content", "cancelled", "timeout", "authority_lost"]);
+const limitRefused = (error: unknown) => error instanceof Error && "code" in error && error.code === "limit_refused";
+/**
+ * Accounting and usage are retained whole; only the answer text is cut, at a code point boundary, to the longest
+ * prefix that fits one attempt payload. retention.outputBytes records the full answer size so the UI can say so.
+ * Returns null when even an empty answer does not fit.
+ */
+function shortenedPayload(result: ComparisonProviderResult, priced: object): string | null {
+  const points = Array.from(result.output), retention = { outputTruncated: true, outputBytes: Buffer.byteLength(result.output) };
+  const fit = (count: number): string | null => {
+    try {
+      const output = points.slice(0, count).join("");
+      promptText(output, L.providerResponseBytes);
+      return comparisonJson({ ...result, output, ...priced, retention }, L.attemptPayloadBytes);
+    } catch (error) { if (limitRefused(error) || error instanceof Error && "code" in error && error.code === "credentials") return null; throw error; }
+  };
+  if (fit(0) === null) return null;
+  let low = 0, high = points.length;
+  while (low < high) { const middle = Math.ceil((low + high) / 2); if (fit(middle) !== null) low = middle; else high = middle - 1; }
+  return fit(low);
+}
+const reasons = new Set(["provider_error", "provider_auth", "provider_rate_limited", "provider_refused", "invalid_response", "response_limit", "protected_content", "cancelled", "timeout", "authority_lost"]);
 const terminal = new Set<ComparisonAttemptStatus>(["completed", "failed", "timeout", "cancelled", "unavailable", "budget_refused", "interrupted", "authority_lost"]);
 const headColumns = [cell("id", 36), cell("operation_key", 36), cell("request_digest", 64), cell("frozen_request", L.frozenRequestBytes), integer("tombstone", 0, 1), integer("target_count", 1, 4), integer("created_at"), integer("prompt_generation", 1), integer("evidence_generation", 1), integer("comparison_generation", 1),
   `CASE WHEN frozen_request IS NULL OR typeof(frozen_request)='text' AND ${bytes("frozen_request")}<=${L.frozenRequestBytes} THEN 1 ELSE 0 END AS bounded`].join(",");
@@ -264,7 +284,7 @@ export class ComparisonStore {
       let charge = row.reserveMicrousd, state = "conservative", observed: string | null = null, breach = 0, payload: string | null = null, reason: string | null = null;
       let status: ComparisonAttemptStatus = outcome.status;
       if (outcome.status === "completed") {
-        promptText(outcome.result.output, L.attemptPayloadBytes); const priced = estimateComparisonUsage(receipt.request!.targets[position], outcome.result.usage, receipt.request!.rates[position]);
+        promptText(outcome.result.output, L.providerResponseBytes); const priced = estimateComparisonUsage(receipt.request!.targets[position], outcome.result.usage, receipt.request!.rates[position]);
         const total = priced.estimate.totalUsd;
         const observations = outcome.result.usage, reservation = reserveComparisonAttempt(receipt.request!.compiled, receipt.request!.targets[position], receipt.request!.options.maxOutputTokens);
         const known = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -278,8 +298,10 @@ export class ComparisonStore {
         }
         try { payload = comparisonJson({ ...outcome.result, ...priced }, L.attemptPayloadBytes); }
         catch (error) {
-          if (!(error instanceof ComparisonError) || error.code !== "limit_refused") throw error;
-          status = "failed"; reason = "response_limit";
+          if (!limitRefused(error)) throw error;
+          // The provider billed the whole answer, so keep as much of it as one attempt payload allows.
+          payload = shortenedPayload(outcome.result, priced);
+          if (payload === null) { status = "failed"; reason = "response_limit"; }
         }
       } else {
         if (!reasons.has(outcome.reason)) throw new ComparisonError("invalid_request"); reason = outcome.reason;

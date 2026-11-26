@@ -9,7 +9,8 @@ export type ProviderFailure = "unavailable" | "cancelled" | "timeout" | "provide
 const messages: Record<ProviderFailure, string> = { unavailable: "Provider credentials are unavailable.", cancelled: "Provider request was cancelled.", timeout: "Provider request timed out.", provider_error: "Provider request failed.", invalid_response: "Provider response was invalid.", response_limit: "Provider response exceeded its limit.", protected_content: "Provider response contains protected credentials." };
 export class ComparisonProviderError extends Error {
   /** billable=false only when the provider cannot have metered the request: it was never sent, or it was refused before generation. */
-  constructor(readonly code: ProviderFailure, readonly requestMayHaveBeenSent: boolean, readonly billable: boolean = requestMayHaveBeenSent) { super(messages[code]); this.name = "ComparisonProviderError"; }
+  /** httpStatus is set only when the provider answered with a non-2xx status. */
+  constructor(readonly code: ProviderFailure, readonly requestMayHaveBeenSent: boolean, readonly billable: boolean = requestMayHaveBeenSent, readonly httpStatus: number | null = null) { super(messages[code]); this.name = "ComparisonProviderError"; }
 }
 export interface ComparisonProviderResult { output: string; usage: ComparisonUsage; finishReason: string; provenance: ComparisonProvenance }
 type Transport = (url: string | URL, init: RequestInit) => Promise<Response>;
@@ -88,7 +89,7 @@ export function createComparisonProviderClient(client: ClientOptions = {}) {
       try {
         sent = true;
         const response = await transport(endpoints[target.provider], { method: "POST", headers, body: JSON.stringify(body), signal, redirect: "error" });
-        if (!response.ok) { void response.body?.cancel().catch(() => {}); throw new ComparisonProviderError("provider_error", true, !refusedBeforeGeneration.has(response.status)); }
+        if (!response.ok) { void response.body?.cancel().catch(() => {}); throw new ComparisonProviderError("provider_error", true, !refusedBeforeGeneration.has(response.status), response.status); }
         const raw = object(await responseJson(response, signal));
         let output: string, finishReason: string;
         if (target.provider === "openai") {
@@ -100,10 +101,11 @@ export function createComparisonProviderClient(client: ClientOptions = {}) {
           if (!Array.isArray(raw.content) || raw.content.length > 16 || !["end_turn", "max_tokens", "stop_sequence"].includes(String(raw.stop_reason))) throw new ComparisonProviderError("invalid_response", true);
           output = raw.content.map(value => { const content = object(value); if (content.type !== "text" || typeof content.text !== "string") throw new ComparisonProviderError("invalid_response", true); return content.text; }).join(""); finishReason = String(raw.stop_reason);
         }
-        try { output = promptText(output, COMPARISON_LIMITS.attemptPayloadBytes); }
+        // The store retains a shortened prefix when an answer outgrows one attempt payload; the response bound applies here.
+        try { output = promptText(output, COMPARISON_LIMITS.providerResponseBytes); }
         catch (error) { throw new ComparisonProviderError(error instanceof Error && "code" in error && error.code === "credentials" ? "protected_content" : "response_limit", true); }
         const result: ComparisonProviderResult = { output, finishReason, provenance, usage: providerResponseUsage(target.provider, raw) };
-        try { comparisonJson(result, COMPARISON_LIMITS.attemptPayloadBytes); } catch { throw new ComparisonProviderError("response_limit", true); }
+        try { comparisonJson(result, COMPARISON_LIMITS.providerResponseBytes); } catch { throw new ComparisonProviderError("response_limit", true); }
         // Pattern redaction misses keys without a vendor prefix (gateways, proxies), so never retain an echo of the configured one.
         if (JSON.stringify(result).includes(JSON.stringify(token).slice(1, -1))) throw new ComparisonProviderError("protected_content", true);
         return result;
